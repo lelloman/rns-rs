@@ -1,0 +1,58 @@
+[
+  {
+    "description": "32_bytes_with_salt",
+    "length": 32,
+    "ikm": "696e707574206b6579206d6174657269616c",
+    "salt": "73616c742076616c7565",
+    "context": null,
+    "derived": "07de1c43d78dd571793886fa2363880bf65d60367881d6fb9f67ea4cb6c5adbe"
+  },
+  {
+    "description": "64_bytes_with_salt",
+    "length": 64,
+    "ikm": "696e707574206b6579206d6174657269616c",
+    "salt": "73616c742076616c7565",
+    "context": null,
+    "derived": "07de1c43d78dd571793886fa2363880bf65d60367881d6fb9f67ea4cb6c5adbe306fe629d67e7a61657fecab490f53d3524ec3138967f4c9fce50575cdce4336"
+  },
+  {
+    "description": "32_bytes_with_context",
+    "length": 32,
+    "ikm": "696e707574206b6579206d6174657269616c",
+    "salt": "73616c74",
+    "context": "636f6e7465787420696e666f",
+    "derived": "37347d9cf71fa97e772200b0b7fae93c56f47e0ccc09678c64ccec7a110172c3"
+  },
+  {
+    "description": "32_bytes_none_salt",
+    "length": 32,
+    "ikm": "696e707574206b6579206d6174657269616c",
+    "salt": null,
+    "context": null,
+    "derived": "d8f0bede4b652933c32a92eccf7723f7eeb4701744c81325dc3f0fa9fda24499"
+  },
+  {
+    "description": "32_bytes_empty_salt",
+    "length": 32,
+    "ikm": "696e707574206b6579206d6174657269616c",
+    "salt": "",
+    "context": null,
+    "derived": "d8f0bede4b652933c32a92eccf7723f7eeb4701744c81325dc3f0fa9fda24499"
+  },
+  {
+    "description": "16_bytes",
+    "length": 16,
+    "ikm": "73686f727420696b6d2068657265",
+    "salt": "73616c74",
+    "context": null,
+    "derived": "a15bf37641c36e7a4bfaff6f2125e198"
+  },
+  {
+    "description": "48_bytes",
+    "length": 48,
+    "ikm": "6d656469756d206c656e67746820696e707574206b6579206d6174657269616c",
+    "salt": "6c6f6e6765722073616c742076616c7565",
+    "context": "637478",
+    "derived": "b08292aa99ae1fb0f21937c942646973ccf8e70961f21fb48077f454c5601fa3ec7f69d154c44ea42b99c307f74be65c"
+  }
+]

@@ -1,0 +1,13 @@
+[package]
+name = "rns-crypto"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+
+# No runtime dependencies at all
+
+[dev-dependencies]
+serde_json = "1"

@@ -1,0 +1,23 @@
+[
+  {
+    "description": "nist_vector",
+    "key": "2b7e151628aed2a6abf7158809cf4f3c",
+    "iv": "000102030405060708090a0b0c0d0e0f",
+    "plaintext": "6bc1bee22e409f96e93d7e117393172a",
+    "ciphertext": "7649abac8119b246cee98e9b12e9197d"
+  },
+  {
+    "description": "zeros",
+    "key": "00000000000000000000000000000000",
+    "iv": "00000000000000000000000000000000",
+    "plaintext": "00000000000000000000000000000000",
+    "ciphertext": "66e94bd4ef8a2c3b884cfa59ca342b2e"
+  },
+  {
+    "description": "two_blocks",
+    "key": "01020304050607080102030405060708",
+    "iv": "0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d",
+    "plaintext": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+    "ciphertext": "8b387e47c22a3714aaf922b76ac4c9b3203ffd302cf8b2fd702cc485d0cfd59c"
+  }
+]

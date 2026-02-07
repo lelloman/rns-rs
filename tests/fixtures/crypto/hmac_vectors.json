@@ -1,0 +1,38 @@
+[
+  {
+    "description": "basic",
+    "key": "7365637265745f6b6579",
+    "data": "6d657373616765",
+    "digest": "ebb8d2ee5dcad6e9d6fc0b606811f9f03036bdd419a364d1a1ce1afa1bea61fd"
+  },
+  {
+    "description": "empty_msg",
+    "key": "6b6579",
+    "data": "",
+    "digest": "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0"
+  },
+  {
+    "description": "long_key",
+    "key": "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+    "data": "64617461",
+    "digest": "09380ee4b802da2363bc96e8e0d133ba275458ea8ddbc564f986fc12b31f8cb1"
+  },
+  {
+    "description": "short_key",
+    "key": "6b",
+    "data": "64617461",
+    "digest": "98755ce7a0d431b5d7b8ec8e343ada3bcaa4f6c44ca468cffcbaa9c273634dd7"
+  },
+  {
+    "description": "rfc4231_1",
+    "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "data": "4869205468657265",
+    "digest": "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+  },
+  {
+    "description": "rfc4231_2",
+    "key": "4a656665",
+    "data": "7768617420646f2079612077616e7420666f72206e6f7468696e673f",
+    "digest": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+  }
+]

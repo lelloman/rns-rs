@@ -1,0 +1,37 @@
+[
+  {
+    "description": "hello_16",
+    "input": "68656c6c6f",
+    "block_size": 16,
+    "padded": "68656c6c6f0b0b0b0b0b0b0b0b0b0b0b",
+    "unpadded": "68656c6c6f"
+  },
+  {
+    "description": "empty_16",
+    "input": "",
+    "block_size": 16,
+    "padded": "10101010101010101010101010101010",
+    "unpadded": ""
+  },
+  {
+    "description": "aligned_16",
+    "input": "30313233343536373839616263646566",
+    "block_size": 16,
+    "padded": "3031323334353637383961626364656610101010101010101010101010101010",
+    "unpadded": "30313233343536373839616263646566"
+  },
+  {
+    "description": "short_16",
+    "input": "61",
+    "block_size": 16,
+    "padded": "610f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "unpadded": "61"
+  },
+  {
+    "description": "two_blocks",
+    "input": "3031323334353637383961626364656630",
+    "block_size": 16,
+    "padded": "30313233343536373839616263646566300f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "unpadded": "3031323334353637383961626364656630"
+  }
+]
