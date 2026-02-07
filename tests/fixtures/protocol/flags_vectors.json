@@ -1,0 +1,83 @@
+[
+  {
+    "description": "h1_data_single_broadcast",
+    "header_type": 0,
+    "context_flag": 0,
+    "transport_type": 0,
+    "destination_type": 0,
+    "packet_type": 0,
+    "packed": 0
+  },
+  {
+    "description": "h2_announce_single_transport",
+    "header_type": 1,
+    "context_flag": 0,
+    "transport_type": 1,
+    "destination_type": 0,
+    "packet_type": 1,
+    "packed": 81
+  },
+  {
+    "description": "h1_announce_single_broadcast",
+    "header_type": 0,
+    "context_flag": 0,
+    "transport_type": 0,
+    "destination_type": 0,
+    "packet_type": 1,
+    "packed": 1
+  },
+  {
+    "description": "h1_data_plain_broadcast",
+    "header_type": 0,
+    "context_flag": 0,
+    "transport_type": 0,
+    "destination_type": 2,
+    "packet_type": 0,
+    "packed": 8
+  },
+  {
+    "description": "h1_linkrequest_single",
+    "header_type": 0,
+    "context_flag": 0,
+    "transport_type": 0,
+    "destination_type": 0,
+    "packet_type": 2,
+    "packed": 2
+  },
+  {
+    "description": "h1_proof_link",
+    "header_type": 0,
+    "context_flag": 0,
+    "transport_type": 0,
+    "destination_type": 3,
+    "packet_type": 3,
+    "packed": 15
+  },
+  {
+    "description": "h1_announce_context_set",
+    "header_type": 0,
+    "context_flag": 1,
+    "transport_type": 0,
+    "destination_type": 0,
+    "packet_type": 1,
+    "packed": 33
+  },
+  {
+    "description": "h2_announce_context_set",
+    "header_type": 1,
+    "context_flag": 1,
+    "transport_type": 1,
+    "destination_type": 0,
+    "packet_type": 1,
+    "packed": 113
+  },
+  {
+    "description": "all_bits_set",
+    "header_type": 1,
+    "context_flag": 1,
+    "transport_type": 1,
+    "destination_type": 3,
+    "packet_type": 3,
+    "packed": 127
+  }
+]

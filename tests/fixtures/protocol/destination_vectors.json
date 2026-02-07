@@ -1,0 +1,58 @@
+[
+  {
+    "description": "app_aspect",
+    "app_name": "app",
+    "aspects": [
+      "aspect"
+    ],
+    "identity_hash": null,
+    "expanded_name": "app.aspect",
+    "name_hash": "4b789e95ce3b6e81131b",
+    "destination_hash": "1a9c81928377f13973d475c0a1dcc5b3"
+  },
+  {
+    "description": "app_a_b",
+    "app_name": "app",
+    "aspects": [
+      "a",
+      "b"
+    ],
+    "identity_hash": null,
+    "expanded_name": "app.a.b",
+    "name_hash": "3a8e13631121bdc6463a",
+    "destination_hash": "4690cbd33fe3f4094bffa8a8690061d1"
+  },
+  {
+    "description": "with_identity",
+    "app_name": "app",
+    "aspects": [
+      "aspect"
+    ],
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "expanded_name": "app.aspect.aca31af0441d81dbec71e82da0b4b5f5",
+    "name_hash": "4b789e95ce3b6e81131b",
+    "destination_hash": "e246e72c1cc4c414f117c4d9630b9444"
+  },
+  {
+    "description": "lxmf_delivery",
+    "app_name": "lxmf",
+    "aspects": [
+      "delivery"
+    ],
+    "identity_hash": null,
+    "expanded_name": "lxmf.delivery",
+    "name_hash": "6ec60bc318e2c0f0d908",
+    "destination_hash": "9497d16c52ac5faec04c36db5c301e8e"
+  },
+  {
+    "description": "lxmf_with_id",
+    "app_name": "lxmf",
+    "aspects": [
+      "delivery"
+    ],
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "expanded_name": "lxmf.delivery.aca31af0441d81dbec71e82da0b4b5f5",
+    "name_hash": "6ec60bc318e2c0f0d908",
+    "destination_hash": "fae321c442e3c9bdcd7a3e79d850e03c"
+  }
+]

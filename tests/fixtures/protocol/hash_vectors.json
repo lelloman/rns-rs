@@ -1,0 +1,75 @@
+[
+  {
+    "description": "empty",
+    "input": "",
+    "full_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "truncated_hash": "e3b0c44298fc1c149afbf4c8996fb924"
+  },
+  {
+    "description": "test",
+    "input": "74657374",
+    "full_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "truncated_hash": "9f86d081884c7d659a2feaa0c55ad015"
+  },
+  {
+    "description": "hello_world",
+    "input": "48656c6c6f2c20576f726c6421",
+    "full_hash": "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
+    "truncated_hash": "dffd6021bb2bd5b0af676290809ec3a5"
+  },
+  {
+    "description": "app_aspect",
+    "input": "6170702e617370656374",
+    "full_hash": "4b789e95ce3b6e81131b4ee10dac10fdb5e2cf68f214cc1f2a4fb33d36c8c52b",
+    "truncated_hash": "4b789e95ce3b6e81131b4ee10dac10fd"
+  },
+  {
+    "description": "app_a_b",
+    "input": "6170702e612e62",
+    "full_hash": "3a8e13631121bdc6463a9f3ec0341abc5e2aaf63cec5fa72383a98dfd54a92ac",
+    "truncated_hash": "3a8e13631121bdc6463a9f3ec0341abc"
+  },
+  {
+    "description": "long_data",
+    "input": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "full_hash": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "truncated_hash": "40aff2e9d2d8922e47afd4648e696749"
+  },
+  {
+    "description": "name_hash_app_aspect",
+    "app_name": "app",
+    "aspects": [
+      "aspect"
+    ],
+    "name_string": "app.aspect",
+    "name_hash": "4b789e95ce3b6e81131b"
+  },
+  {
+    "description": "name_hash_app_a_b",
+    "app_name": "app",
+    "aspects": [
+      "a",
+      "b"
+    ],
+    "name_string": "app.a.b",
+    "name_hash": "3a8e13631121bdc6463a"
+  },
+  {
+    "description": "name_hash_testapp_test",
+    "app_name": "testapp",
+    "aspects": [
+      "test"
+    ],
+    "name_string": "testapp.test",
+    "name_hash": "15a62dd29d18e939f2b5"
+  },
+  {
+    "description": "name_hash_lxmf_delivery",
+    "app_name": "lxmf",
+    "aspects": [
+      "delivery"
+    ],
+    "name_string": "lxmf.delivery",
+    "name_hash": "6ec60bc318e2c0f0d908"
+  }
+]

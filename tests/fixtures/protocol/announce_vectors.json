@@ -1,0 +1,82 @@
+[
+  {
+    "description": "no_ratchet_no_appdata",
+    "private_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "public_key": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "app_name": "testapp",
+    "aspects": [
+      "aspect"
+    ],
+    "name_hash": "675555a31d5cc7a9cfd6",
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "random_hash": "aaaaaaaaaaaaaaaaaaaa",
+    "ratchet": null,
+    "app_data": null,
+    "has_ratchet": false,
+    "signed_data": "452471d74137d6380aa232f1ea1765cf8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaa",
+    "signature": "e3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "valid": true
+  },
+  {
+    "description": "no_ratchet_with_appdata",
+    "private_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "public_key": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "app_name": "testapp",
+    "aspects": [
+      "aspect"
+    ],
+    "name_hash": "675555a31d5cc7a9cfd6",
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "random_hash": "aaaaaaaaaaaaaaaaaaaa",
+    "ratchet": null,
+    "app_data": "48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "has_ratchet": false,
+    "signed_data": "452471d74137d6380aa232f1ea1765cf8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaa48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "signature": "c813a8101b3b36a13c810d5202431999de127007f91ab2dea7d00b2fa0bd83388a6118588110c855f4d550cd30155dab8c23b67257253341d652a493c5c2b80c",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaac813a8101b3b36a13c810d5202431999de127007f91ab2dea7d00b2fa0bd83388a6118588110c855f4d550cd30155dab8c23b67257253341d652a493c5c2b80c48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "valid": true
+  },
+  {
+    "description": "with_ratchet_no_appdata",
+    "private_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "public_key": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "app_name": "testapp",
+    "aspects": [
+      "aspect"
+    ],
+    "name_hash": "675555a31d5cc7a9cfd6",
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "random_hash": "aaaaaaaaaaaaaaaaaaaa",
+    "ratchet": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "app_data": null,
+    "has_ratchet": true,
+    "signed_data": "452471d74137d6380aa232f1ea1765cf8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "signature": "8a5897971eb493b991385bb6d0318666ad845051f60312be7860377d30fd643017386d3fc552bc96232811394ff80af8ed60f71ed05ff9bd24c8a85db905000b",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8a5897971eb493b991385bb6d0318666ad845051f60312be7860377d30fd643017386d3fc552bc96232811394ff80af8ed60f71ed05ff9bd24c8a85db905000b",
+    "valid": true
+  },
+  {
+    "description": "with_ratchet_and_appdata",
+    "private_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "public_key": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+    "identity_hash": "aca31af0441d81dbec71e82da0b4b5f5",
+    "app_name": "testapp",
+    "aspects": [
+      "aspect"
+    ],
+    "name_hash": "675555a31d5cc7a9cfd6",
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "random_hash": "aaaaaaaaaaaaaaaaaaaa",
+    "ratchet": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "app_data": "48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "has_ratchet": true,
+    "signed_data": "452471d74137d6380aa232f1ea1765cf8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "signature": "3eac6da85547021cb78b44cccdd9587bd225cd3463500f68132e73135de8ae47f1aed8967bb35a5617456c8b1f1a38dcf6fc496c1a4553e684675a6a3714de0d",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3eac6da85547021cb78b44cccdd9587bd225cd3463500f68132e73135de8ae47f1aed8967bb35a5617456c8b1f1a38dcf6fc496c1a4553e684675a6a3714de0d48656c6c6f2066726f6d207465737420616e6e6f756e6365",
+    "valid": true
+  }
+]

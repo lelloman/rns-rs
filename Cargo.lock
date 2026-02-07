@@ -33,6 +33,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-core"
+version = "0.1.0"
+dependencies = [
+ "rns-crypto",
+ "serde_json",
+]
+
+[[package]]
 name = "rns-crypto"
 version = "0.1.0"
 dependencies = [

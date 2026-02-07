@@ -34,6 +34,9 @@ from RNS.Cryptography.Token import Token
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'crypto')
 os.makedirs(FIXTURE_DIR, exist_ok=True)
 
+PROTOCOL_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'protocol')
+os.makedirs(PROTOCOL_DIR, exist_ok=True)
+
 
 def to_hex(data):
     if isinstance(data, (bytes, bytearray)):
@@ -402,6 +405,506 @@ def generate_identity():
     write_fixture("identity_vectors.json", vectors)
 
 
+def write_protocol_fixture(name, data):
+    path = os.path.join(PROTOCOL_DIR, name)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f"  Written {path} ({len(data)} vectors)")
+
+
+def generate_hash_vectors():
+    """Generate hash test vectors for rns-core hash module."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    test_cases = [
+        ("empty", b""),
+        ("test", b"test"),
+        ("hello_world", b"Hello, World!"),
+        ("app_aspect", b"app.aspect"),
+        ("app_a_b", b"app.a.b"),
+        ("long_data", bytes(range(256))),
+    ]
+
+    for desc, data in test_cases:
+        full = rns_sha256(data)
+        truncated = full[:16]
+        vectors.append({
+            "description": desc,
+            "input": to_hex(data),
+            "full_hash": to_hex(full),
+            "truncated_hash": to_hex(truncated),
+        })
+
+    # Name hash vectors
+    name_hash_cases = [
+        ("app_aspect", "app", ["aspect"]),
+        ("app_a_b", "app", ["a", "b"]),
+        ("testapp_test", "testapp", ["test"]),
+        ("lxmf_delivery", "lxmf", ["delivery"]),
+    ]
+
+    for desc, app_name, aspects in name_hash_cases:
+        name_str = app_name + "." + ".".join(aspects)
+        full = rns_sha256(name_str.encode("utf-8"))
+        name_hash = full[:10]
+        vectors.append({
+            "description": "name_hash_" + desc,
+            "app_name": app_name,
+            "aspects": aspects,
+            "name_string": name_str,
+            "name_hash": to_hex(name_hash),
+        })
+
+    write_protocol_fixture("hash_vectors.json", vectors)
+
+
+def generate_flags_vectors():
+    """Generate packet flags test vectors."""
+    import struct
+
+    vectors = []
+
+    test_cases = [
+        # (desc, header_type, context_flag, transport_type, dest_type, pkt_type)
+        ("h1_data_single_broadcast", 0x00, 0x00, 0x00, 0x00, 0x00),
+        ("h2_announce_single_transport", 0x01, 0x00, 0x01, 0x00, 0x01),
+        ("h1_announce_single_broadcast", 0x00, 0x00, 0x00, 0x00, 0x01),
+        ("h1_data_plain_broadcast", 0x00, 0x00, 0x00, 0x02, 0x00),
+        ("h1_linkrequest_single", 0x00, 0x00, 0x00, 0x00, 0x02),
+        ("h1_proof_link", 0x00, 0x00, 0x00, 0x03, 0x03),
+        ("h1_announce_context_set", 0x00, 0x01, 0x00, 0x00, 0x01),
+        ("h2_announce_context_set", 0x01, 0x01, 0x01, 0x00, 0x01),
+        ("all_bits_set", 0x01, 0x01, 0x01, 0x03, 0x03),
+    ]
+
+    for desc, ht, cf, tt, dt, pt in test_cases:
+        packed = (ht << 6) | (cf << 5) | (tt << 4) | (dt << 2) | pt
+        vectors.append({
+            "description": desc,
+            "header_type": ht,
+            "context_flag": cf,
+            "transport_type": tt,
+            "destination_type": dt,
+            "packet_type": pt,
+            "packed": packed,
+        })
+
+    write_protocol_fixture("flags_vectors.json", vectors)
+
+
+def generate_packet_vectors():
+    """Generate packet pack/unpack test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Helper to build raw packet bytes and compute hash
+    def make_packet(header_type, context_flag, transport_type, dest_type, pkt_type,
+                    hops, dest_hash, transport_id, context, data):
+        flags = (header_type << 6) | (context_flag << 5) | (transport_type << 4) | (dest_type << 2) | pkt_type
+        raw = bytes([flags, hops])
+        if header_type == 0x01:  # HEADER_2
+            raw += transport_id
+        raw += dest_hash
+        raw += bytes([context])
+        raw += data
+
+        # Compute hashable part
+        hashable = bytes([raw[0] & 0x0F])
+        if header_type == 0x01:
+            hashable += raw[18:]  # skip flags + hops + transport_id (16 bytes)
+        else:
+            hashable += raw[2:]   # skip flags + hops
+
+        packet_hash = rns_sha256(hashable)
+        truncated = packet_hash[:16]
+
+        return raw, hashable, packet_hash, truncated
+
+    # Test case 1: HEADER_1 DATA
+    dest_hash = bytes([0x11] * 16)
+    data = b"hello world"
+    raw, hashable, phash, thash = make_packet(0x00, 0x00, 0x00, 0x00, 0x00, 0, dest_hash, None, 0x00, data)
+    vectors.append({
+        "description": "h1_data_single",
+        "header_type": 0x00,
+        "context_flag": 0x00,
+        "transport_type": 0x00,
+        "destination_type": 0x00,
+        "packet_type": 0x00,
+        "hops": 0,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": None,
+        "context": 0x00,
+        "data": to_hex(data),
+        "raw": to_hex(raw),
+        "hashable_part": to_hex(hashable),
+        "packet_hash": to_hex(phash),
+        "truncated_hash": to_hex(thash),
+    })
+
+    # Test case 2: HEADER_1 ANNOUNCE with context_flag set
+    dest_hash = bytes([0x22] * 16)
+    data = b"announce data payload"
+    raw, hashable, phash, thash = make_packet(0x00, 0x01, 0x00, 0x00, 0x01, 3, dest_hash, None, 0x00, data)
+    vectors.append({
+        "description": "h1_announce_context_set",
+        "header_type": 0x00,
+        "context_flag": 0x01,
+        "transport_type": 0x00,
+        "destination_type": 0x00,
+        "packet_type": 0x01,
+        "hops": 3,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": None,
+        "context": 0x00,
+        "data": to_hex(data),
+        "raw": to_hex(raw),
+        "hashable_part": to_hex(hashable),
+        "packet_hash": to_hex(phash),
+        "truncated_hash": to_hex(thash),
+    })
+
+    # Test case 3: HEADER_2 ANNOUNCE with transport
+    dest_hash = bytes([0x33] * 16)
+    transport_id = bytes([0x44] * 16)
+    data = b"transported announce"
+    raw, hashable, phash, thash = make_packet(0x01, 0x00, 0x01, 0x00, 0x01, 5, dest_hash, transport_id, 0x00, data)
+    vectors.append({
+        "description": "h2_announce_transport",
+        "header_type": 0x01,
+        "context_flag": 0x00,
+        "transport_type": 0x01,
+        "destination_type": 0x00,
+        "packet_type": 0x01,
+        "hops": 5,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": to_hex(transport_id),
+        "context": 0x00,
+        "data": to_hex(data),
+        "raw": to_hex(raw),
+        "hashable_part": to_hex(hashable),
+        "packet_hash": to_hex(phash),
+        "truncated_hash": to_hex(thash),
+    })
+
+    # Test case 4: HEADER_1 with RESOURCE context
+    dest_hash = bytes([0x55] * 16)
+    data = b"resource data"
+    raw, hashable, phash, thash = make_packet(0x00, 0x00, 0x00, 0x00, 0x00, 10, dest_hash, None, 0x01, data)
+    vectors.append({
+        "description": "h1_data_resource_context",
+        "header_type": 0x00,
+        "context_flag": 0x00,
+        "transport_type": 0x00,
+        "destination_type": 0x00,
+        "packet_type": 0x00,
+        "hops": 10,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": None,
+        "context": 0x01,
+        "data": to_hex(data),
+        "raw": to_hex(raw),
+        "hashable_part": to_hex(hashable),
+        "packet_hash": to_hex(phash),
+        "truncated_hash": to_hex(thash),
+    })
+
+    # Test case 5: HEADER_2 with context_flag set (ratchet announce)
+    dest_hash = bytes([0x66] * 16)
+    transport_id = bytes([0x77] * 16)
+    data = b"ratchet announce"
+    raw, hashable, phash, thash = make_packet(0x01, 0x01, 0x01, 0x00, 0x01, 2, dest_hash, transport_id, 0x00, data)
+    vectors.append({
+        "description": "h2_announce_context_flag_set",
+        "header_type": 0x01,
+        "context_flag": 0x01,
+        "transport_type": 0x01,
+        "destination_type": 0x00,
+        "packet_type": 0x01,
+        "hops": 2,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": to_hex(transport_id),
+        "context": 0x00,
+        "data": to_hex(data),
+        "raw": to_hex(raw),
+        "hashable_part": to_hex(hashable),
+        "packet_hash": to_hex(phash),
+        "truncated_hash": to_hex(thash),
+    })
+
+    write_protocol_fixture("packet_vectors.json", vectors)
+
+
+def generate_destination_vectors():
+    """Generate destination hash test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Build identity from known key
+    x25519_prv_bytes = bytes(range(32))
+    ed25519_seed = bytes(range(32, 64))
+    x25519_prv = X25519PrivateKey.from_private_bytes(x25519_prv_bytes)
+    ed25519_prv = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
+    pub_key = x25519_prv.public_key().public_bytes() + ed25519_prv.public_key().public_bytes()
+    identity_hash = rns_sha256(pub_key)[:16]
+
+    # expand_name tests
+    expand_cases = [
+        ("app_aspect", "app", ["aspect"], None),
+        ("app_a_b", "app", ["a", "b"], None),
+        ("with_identity", "app", ["aspect"], identity_hash),
+        ("lxmf_delivery", "lxmf", ["delivery"], None),
+        ("lxmf_with_id", "lxmf", ["delivery"], identity_hash),
+    ]
+
+    for desc, app_name, aspects, id_hash in expand_cases:
+        name = app_name
+        for aspect in aspects:
+            name += "." + aspect
+        if id_hash is not None:
+            name += "." + id_hash.hex()
+
+        name_hash = rns_sha256((app_name + "." + ".".join(aspects)).encode("utf-8"))[:10]
+
+        if id_hash is not None:
+            addr_material = name_hash + id_hash
+        else:
+            addr_material = name_hash
+
+        dest_hash = rns_sha256(addr_material)[:16]
+
+        vectors.append({
+            "description": desc,
+            "app_name": app_name,
+            "aspects": aspects,
+            "identity_hash": to_hex(id_hash) if id_hash is not None else None,
+            "expanded_name": name,
+            "name_hash": to_hex(name_hash),
+            "destination_hash": to_hex(dest_hash),
+        })
+
+    write_protocol_fixture("destination_vectors.json", vectors)
+
+
+def generate_announce_vectors():
+    """Generate announce pack/unpack/validate test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Identity from known key
+    x25519_prv_bytes = bytes(range(32))
+    ed25519_seed = bytes(range(32, 64))
+    prv_key = x25519_prv_bytes + ed25519_seed
+
+    x25519_prv = X25519PrivateKey.from_private_bytes(x25519_prv_bytes)
+    ed25519_prv = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
+    x25519_pub = x25519_prv.public_key()
+    ed25519_pub = ed25519_prv.public_key()
+
+    pub_key = x25519_pub.public_bytes() + ed25519_pub.public_bytes()
+    identity_hash = rns_sha256(pub_key)[:16]
+
+    # Test 1: Announce without ratchet, without app_data
+    app_name, aspects = "testapp", ["aspect"]
+    name_str = app_name + "." + ".".join(aspects)
+    name_hash = rns_sha256(name_str.encode("utf-8"))[:10]
+    addr_material = name_hash + identity_hash
+    dest_hash = rns_sha256(addr_material)[:16]
+    random_hash = bytes([0xAA] * 10)
+
+    signed_data = dest_hash + pub_key + name_hash + random_hash
+    signature = ed25519_prv.sign(signed_data)
+    announce_data = pub_key + name_hash + random_hash + signature
+
+    vectors.append({
+        "description": "no_ratchet_no_appdata",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "identity_hash": to_hex(identity_hash),
+        "app_name": app_name,
+        "aspects": aspects,
+        "name_hash": to_hex(name_hash),
+        "destination_hash": to_hex(dest_hash),
+        "random_hash": to_hex(random_hash),
+        "ratchet": None,
+        "app_data": None,
+        "has_ratchet": False,
+        "signed_data": to_hex(signed_data),
+        "signature": to_hex(signature),
+        "announce_data": to_hex(announce_data),
+        "valid": True,
+    })
+
+    # Test 2: Announce with app_data, no ratchet
+    app_data = b"Hello from test announce"
+    signed_data2 = dest_hash + pub_key + name_hash + random_hash + app_data
+    signature2 = ed25519_prv.sign(signed_data2)
+    announce_data2 = pub_key + name_hash + random_hash + signature2 + app_data
+
+    vectors.append({
+        "description": "no_ratchet_with_appdata",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "identity_hash": to_hex(identity_hash),
+        "app_name": app_name,
+        "aspects": aspects,
+        "name_hash": to_hex(name_hash),
+        "destination_hash": to_hex(dest_hash),
+        "random_hash": to_hex(random_hash),
+        "ratchet": None,
+        "app_data": to_hex(app_data),
+        "has_ratchet": False,
+        "signed_data": to_hex(signed_data2),
+        "signature": to_hex(signature2),
+        "announce_data": to_hex(announce_data2),
+        "valid": True,
+    })
+
+    # Test 3: Announce with ratchet
+    ratchet = bytes([0xCC] * 32)
+    signed_data3 = dest_hash + pub_key + name_hash + random_hash + ratchet
+    signature3 = ed25519_prv.sign(signed_data3)
+    announce_data3 = pub_key + name_hash + random_hash + ratchet + signature3
+
+    vectors.append({
+        "description": "with_ratchet_no_appdata",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "identity_hash": to_hex(identity_hash),
+        "app_name": app_name,
+        "aspects": aspects,
+        "name_hash": to_hex(name_hash),
+        "destination_hash": to_hex(dest_hash),
+        "random_hash": to_hex(random_hash),
+        "ratchet": to_hex(ratchet),
+        "app_data": None,
+        "has_ratchet": True,
+        "signed_data": to_hex(signed_data3),
+        "signature": to_hex(signature3),
+        "announce_data": to_hex(announce_data3),
+        "valid": True,
+    })
+
+    # Test 4: Announce with ratchet AND app_data
+    signed_data4 = dest_hash + pub_key + name_hash + random_hash + ratchet + app_data
+    signature4 = ed25519_prv.sign(signed_data4)
+    announce_data4 = pub_key + name_hash + random_hash + ratchet + signature4 + app_data
+
+    vectors.append({
+        "description": "with_ratchet_and_appdata",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "identity_hash": to_hex(identity_hash),
+        "app_name": app_name,
+        "aspects": aspects,
+        "name_hash": to_hex(name_hash),
+        "destination_hash": to_hex(dest_hash),
+        "random_hash": to_hex(random_hash),
+        "ratchet": to_hex(ratchet),
+        "app_data": to_hex(app_data),
+        "has_ratchet": True,
+        "signed_data": to_hex(signed_data4),
+        "signature": to_hex(signature4),
+        "announce_data": to_hex(announce_data4),
+        "valid": True,
+    })
+
+    write_protocol_fixture("announce_vectors.json", vectors)
+
+
+def generate_proof_vectors():
+    """Generate proof validation test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Identity from known key
+    x25519_prv_bytes = bytes(range(32))
+    ed25519_seed = bytes(range(32, 64))
+    prv_key = x25519_prv_bytes + ed25519_seed
+
+    ed25519_prv = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
+    ed25519_pub = ed25519_prv.public_key()
+
+    x25519_pub = X25519PrivateKey.from_private_bytes(x25519_prv_bytes).public_key()
+    pub_key = x25519_pub.public_bytes() + ed25519_pub.public_bytes()
+
+    packet_hash = rns_sha256(b"test packet data for proof")
+
+    # Test 1: Valid explicit proof
+    signature = ed25519_prv.sign(packet_hash)
+    explicit_proof = packet_hash + signature
+
+    vectors.append({
+        "description": "valid_explicit",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "packet_hash": to_hex(packet_hash),
+        "proof": to_hex(explicit_proof),
+        "proof_type": "explicit",
+        "result": "valid",
+    })
+
+    # Test 2: Valid implicit proof
+    implicit_proof = signature
+
+    vectors.append({
+        "description": "valid_implicit",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "packet_hash": to_hex(packet_hash),
+        "proof": to_hex(implicit_proof),
+        "proof_type": "implicit",
+        "result": "valid",
+    })
+
+    # Test 3: Explicit proof with wrong hash
+    wrong_hash = rns_sha256(b"wrong data")
+    wrong_proof = wrong_hash + signature
+
+    vectors.append({
+        "description": "explicit_wrong_hash",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "packet_hash": to_hex(packet_hash),
+        "proof": to_hex(wrong_proof),
+        "proof_type": "explicit",
+        "result": "invalid_hash",
+    })
+
+    # Test 4: Explicit proof with bad signature
+    bad_sig = bytes([0xFF] * 64)
+    bad_proof = packet_hash + bad_sig
+
+    vectors.append({
+        "description": "explicit_bad_signature",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "packet_hash": to_hex(packet_hash),
+        "proof": to_hex(bad_proof),
+        "proof_type": "explicit",
+        "result": "invalid_signature",
+    })
+
+    # Test 5: Wrong length
+    vectors.append({
+        "description": "wrong_length",
+        "private_key": to_hex(prv_key),
+        "public_key": to_hex(pub_key),
+        "packet_hash": to_hex(packet_hash),
+        "proof": to_hex(bytes([0] * 50)),
+        "proof_type": "unknown",
+        "result": "invalid_length",
+    })
+
+    write_protocol_fixture("proof_vectors.json", vectors)
+
+
 def main():
     print("Generating test vectors from Python RNS crypto...")
     generate_pkcs7()
@@ -415,6 +918,13 @@ def main():
     generate_x25519()
     generate_ed25519()
     generate_identity()
+    print("\nGenerating Phase 2 protocol test vectors...")
+    generate_hash_vectors()
+    generate_flags_vectors()
+    generate_packet_vectors()
+    generate_destination_vectors()
+    generate_announce_vectors()
+    generate_proof_vectors()
     print("Done! All vectors generated successfully.")
 
 

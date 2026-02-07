@@ -38,22 +38,27 @@ Each phase has three layers of tests:
 
 ```
 rns-rs/
-├── Cargo.toml                       # Workspace root
-├── rns-crypto/                      # no_std — cryptographic primitives
-├── rns-core/                        # no_std — protocol logic
-├── rns-net/                         # std — networking, config, I/O
-├── rns-cli/                         # std — CLI binaries
+├── Cargo.toml                       # Workspace root (members: rns-crypto, rns-core)
+├── rns-crypto/                      # no_std — cryptographic primitives [DONE]
+│   ├── src/
+│   │   ├── lib.rs                   # Rng trait, FixedRng, OsRng
+│   │   ├── bigint.rs, pkcs7.rs, sha256.rs, sha512.rs
+│   │   ├── hmac.rs, hkdf.rs, aes.rs, aes128.rs, aes256.rs
+│   │   └── token.rs, x25519.rs, ed25519.rs, identity.rs
+│   └── tests/interop.rs            # 11 interop tests
+├── rns-core/                        # no_std — protocol logic [DONE]
+│   ├── src/
+│   │   ├── lib.rs
+│   │   ├── constants.rs, hash.rs, packet.rs
+│   │   └── destination.rs, announce.rs, receipt.rs
+│   └── tests/interop.rs            # 7 interop tests (incl. milestone)
+├── rns-net/                         # std — networking, config, I/O [PLANNED]
+├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
-    ├── generate_vectors.py          # Python script to produce test fixtures
-    ├── fixtures/                    # Generated binary test data
-    │   ├── crypto/                  # Token, HKDF, PKCS7 vectors
-    │   ├── packet/                  # Packed packets
-    │   ├── identity/                # Encryption, signing, announces
-    │   ├── destination/             # Hash computations
-    │   ├── link/                    # Handshake sequences
-    │   ├── channel/                 # Envelope framing
-    │   └── resource/                # Advertisement, hashmap
-    └── wire_compat/                 # Rust interop test harnesses
+    ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
+    └── fixtures/
+        ├── crypto/                  # 11 JSON fixture files (Phase 1)
+        └── protocol/               # 6 JSON fixture files (Phase 2)
 ```
 
 ### Crate Graph
@@ -65,9 +70,11 @@ rns-cli → rns-net → rns-core → rns-crypto
 
 ---
 
-## Phase 1: Cryptographic Primitives (`rns-crypto`)
+## Phase 1: Cryptographic Primitives (`rns-crypto`) — COMPLETE ✓
 
 **Milestone**: Rust can encrypt/decrypt/sign/verify identically to Python. A ciphertext produced by Python's `Token.encrypt()` can be decrypted by Rust, and vice versa.
+
+**Result**: 65 unit tests + 11 interop tests = 76 tests passing. Zero external dependencies, pure Rust, `no_std` compatible. All crypto ops produce byte-identical output to Python PROVIDER_INTERNAL.
 
 ### TDD Sequence
 
@@ -141,9 +148,13 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 
 ---
 
-## Phase 2: Core Protocol Types (`rns-core`)
+## Phase 2: Core Protocol Types (`rns-core`) — COMPLETE ✓
 
 **Milestone**: Rust can pack/unpack every packet type, compute destination hashes, and validate announces — all producing byte-identical results to Python.
+
+**Result**: 39 unit tests + 7 interop tests = 46 tests passing. Modules: constants, hash, packet (flags + pack/unpack + hashable part), destination (expand_name + hash), announce (pack/unpack/validate with signature + dest hash verification), receipt (explicit/implicit proof validation). Milestone test confirms: Python-generated announce → Rust unpack → signature valid → destination hash verified → identity extracted, all byte-identical to Python.
+
+**Intentional scope limits**: This crate handles wire-format operations only. Higher-level concerns left for future phases: encryption/decryption during pack (handled by caller), LRPROOF destination type special-case in flag packing, PacketReceipt state management, Link/Channel/Resource protocols.
 
 ### TDD Sequence
 
@@ -492,14 +503,14 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 
 ## Milestone Summary
 
-| Phase | Crate | Milestone Gate | Interop Proof |
-|-------|-------|---------------|---------------|
-| **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | `Python Token.encrypt() → Rust decrypt()` ✓ |
-| **2** | `rns-core` | Packet pack/unpack, Identity, Destination wire-compatible | `Python pack() → Rust unpack()` ✓ |
-| **3** | `rns-core` | Transport routes packets identically to Python | Routing decision parity for same packet sequences |
-| **4** | `rns-core` | Link handshake, Channel, Resource protocols complete | `Python Link ↔ Rust Link` handshake succeeds |
-| **5** | `rns-net` | Daemon joins Python network, routes real traffic | Docker: mixed Rust+Python network operates |
-| **6** | `rns-cli` | CLI tools produce equivalent output | `rnsd-rs` replaces `rnsd` on live network |
+| Phase | Crate | Milestone Gate | Status |
+|-------|-------|---------------|--------|
+| **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | **DONE** — 76 tests, `Python Token.encrypt() → Rust decrypt()` ✓ |
+| **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 46 tests, `Python announce → Rust validate()` ✓ |
+| **3** | `rns-core` | Transport routes packets identically to Python | Planned |
+| **4** | `rns-core` | Link handshake, Channel, Resource protocols complete | Planned |
+| **5** | `rns-net` | Daemon joins Python network, routes real traffic | Planned |
+| **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
@@ -509,72 +520,72 @@ Each phase is self-contained: it has its own detailed plan (to be written before
 
 ### `tests/generate_vectors.py`
 
-A Python script that imports RNS and generates all test fixtures:
+A Python script that imports RNS (with PROVIDER_INTERNAL forced) and generates JSON test fixtures with hex-encoded byte fields.
 
 ```
-# Phase 1 vectors
-- pkcs7_vectors.bin        # Known pad/unpad pairs
-- hmac_vectors.bin         # Known HMAC outputs
-- hkdf_vectors.bin         # Custom HKDF outputs
-- token_vectors.bin        # Token encrypt with fixed IV
-- x25519_vectors.bin       # Known key exchanges
-- ed25519_vectors.bin      # Known signatures
-- identity_encrypt.bin     # Full Identity.encrypt() pipeline
+# Phase 1 vectors (tests/fixtures/crypto/)
+- pkcs7_vectors.json       # 5 Known pad/unpad pairs
+- sha256_vectors.json      # 7 SHA-256 digests
+- sha512_vectors.json      # 6 SHA-512 digests
+- hmac_vectors.json        # 6 HMAC-SHA256 outputs
+- hkdf_vectors.json        # 7 Custom HKDF outputs
+- aes128_vectors.json      # 3 AES-128-CBC test cases
+- aes256_vectors.json      # 3 AES-256-CBC test cases
+- token_vectors.json       # 4 Token encrypt with fixed IV
+- x25519_vectors.json      # 5 Key exchange vectors
+- ed25519_vectors.json     # 3 Signature vectors
+- identity_vectors.json    # 1 Full encrypt/decrypt/sign/verify milestone
 
-# Phase 2 vectors
-- packet_header1.bin       # Packed HEADER_1 packets
-- packet_header2.bin       # Packed HEADER_2 packets
-- destination_hashes.bin   # Hash computations
-- announce_packets.bin     # Full announce payloads
-- announce_with_ratchet.bin
+# Phase 2 vectors (tests/fixtures/protocol/)
+- hash_vectors.json        # 10 full_hash, truncated_hash, name_hash
+- flags_vectors.json       # 9 Packed/unpacked flag bytes
+- packet_vectors.json      # 5 HEADER_1/HEADER_2 pack/unpack with hashes
+- destination_vectors.json # 5 expand_name, name_hash, destination_hash
+- announce_vectors.json    # 4 Announce pack/unpack/validate (±ratchet, ±app_data)
+- proof_vectors.json       # 5 Explicit/implicit proof validation
 
-# Phase 4 vectors
-- link_request.bin         # LINKREQUEST payload
-- link_proof.bin           # LRPROOF payload
-- channel_envelope.bin     # Channel message framing
-- resource_advertisement.bin
+# Future phases (not yet generated)
+- link_request, link_proof, channel_envelope, resource_advertisement
 ```
 
-Each fixture file contains: `[input_params | expected_output]` as msgpack or length-prefixed binary, loadable from both Python and Rust.
+### Fixture format
 
-### Fixture format (simple length-prefixed binary)
+JSON arrays of objects with hex-encoded byte fields:
+```json
+[
+  {
+    "description": "test_case_name",
+    "input": "deadbeef",
+    "expected": "cafebabe"
+  }
+]
+```
 
-```
-[u32 num_vectors]
-For each vector:
-  [u32 input_len] [input_bytes...]
-  [u32 output_len] [output_bytes...]
-```
+Loaded in Rust via `serde_json` (dev-dependency only).
 
 ---
 
-## Key Crate Dependencies
+## Crate Dependencies
 
-### rns-crypto (no_std)
-- `x25519-dalek`, `ed25519-dalek` — Key exchange, signatures
-- `aes`, `cbc` — AES-CBC encryption
-- `sha2` — SHA-256/512
-- `hmac` — HMAC-SHA256
-- `rand_core` — RNG trait
-- `zeroize` — Secure memory clearing
+### rns-crypto (no_std) — ZERO external dependencies
+All crypto is implemented in pure Rust with no third-party crates:
+- BigUint arithmetic, SHA-256/512, HMAC, HKDF, PKCS7
+- AES-128/256-CBC, Token (modified Fernet)
+- X25519 (Curve25519 ECDH), Ed25519 (signatures)
+- `Rng` trait for caller-provided randomness; `OsRng` via getrandom(2) syscall
+- Dev-only: `serde_json` for test fixture loading
 
 ### rns-core (no_std, uses alloc)
-- `rns-crypto`
-- `heapless` — Fixed-capacity collections for constrained targets
-- `hashbrown` — no_std HashMap (behind feature flag)
+- `rns-crypto` (path dependency, only runtime dep)
+- Dev-only: `serde_json` for test fixture loading
 
-### rns-net (std)
+### rns-net (std) — PLANNED
 - `rns-core`, `rns-crypto`
-- `tokio` — Async runtime
-- `serde`, `rmp-serde` — Serialization (msgpack compat with Python)
-- `configparser` — INI config parsing
-- `socket2` — Low-level sockets
-- `log`, `env_logger` — Logging
-- `thiserror` — Error types
+- External deps TBD (tokio, serde, socket2, etc.)
 
-### rns-cli (std)
+### rns-cli (std) — PLANNED
 - `rns-net`
-- `clap` — Argument parsing
+- External deps TBD (clap, etc.)
 
 ---
 
