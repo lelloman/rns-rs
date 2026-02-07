@@ -50,15 +50,29 @@ rns-rs/
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── constants.rs, hash.rs, packet.rs
-│   │   └── destination.rs, announce.rs, receipt.rs
-│   └── tests/interop.rs            # 7 interop tests (incl. milestone)
+│   │   ├── destination.rs, announce.rs, receipt.rs
+│   │   └── transport/              # Phase 3: Routing engine
+│   │       ├── mod.rs              # TransportEngine struct, public API, dispatch
+│   │       ├── types.rs            # InterfaceId, InterfaceInfo, TransportAction, TransportConfig
+│   │       ├── tables.rs           # PathEntry, AnnounceEntry, ReverseEntry, LinkEntry, RateEntry
+│   │       ├── dedup.rs            # PacketHashlist (double-buffered dedup)
+│   │       ├── pathfinder.rs       # Path update decisions, timebase extraction
+│   │       ├── announce_proc.rs    # Announce retransmit building, path entry creation
+│   │       ├── inbound.rs          # Inbound packet dispatch, transport forwarding
+│   │       ├── outbound.rs         # Outbound header rewriting, interface selection
+│   │       ├── rate_limit.rs       # Per-destination announce rate limiting
+│   │       └── jobs.rs             # Periodic maintenance: cull tables, retransmit
+│   └── tests/
+│       ├── interop.rs              # 7 interop tests (incl. milestone)
+│       └── transport_integration.rs # 15 integration tests for transport engine
 ├── rns-net/                         # std — networking, config, I/O [PLANNED]
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
     └── fixtures/
         ├── crypto/                  # 11 JSON fixture files (Phase 1)
-        └── protocol/               # 6 JSON fixture files (Phase 2)
+        ├── protocol/               # 6 JSON fixture files (Phase 2)
+        └── transport/              # 4 JSON fixture files (Phase 3)
 ```
 
 ### Crate Graph
@@ -233,9 +247,17 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 
 ---
 
-## Phase 3: Transport & Routing (`rns-core`)
+## Phase 3: Transport & Routing (`rns-core`) — COMPLETE ✓
 
 **Milestone**: Rust Transport can process inbound/outbound packets, maintain routing tables, and make identical routing decisions to Python for the same packet sequences.
+
+**Result**: 121 unit tests + 7 interop tests + 15 integration tests = 143 tests passing (219 total across workspace). Action queue model: `handle_inbound()`/`handle_outbound()`/`tick()` return `Vec<TransportAction>` — no callbacks, no I/O. All tables use `BTreeMap` for `no_std` compatibility. `InterfaceId(u64)` instead of trait objects. Explicit `now: f64` and `rng` parameters for deterministic testing.
+
+**Bugs found and fixed during review:**
+1. `outbound.rs` broadcast exclude logic was dead code (always `None`) — fixed to match Python Transport.py:1037-1038
+2. `jobs.rs` local rebroadcast limit checked wrong field (`local_rebroadcasts` instead of `retries`) — fixed to match Python Transport.py:523
+
+**Out of scope (deferred):** Tunnels, shared-instance/local-client handling, IFAC masking, packet caching to disk, per-interface announce bandwidth queuing, management destinations, blackhole support, Discovery.
 
 ### TDD Sequence
 
@@ -507,7 +529,7 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 |-------|-------|---------------|--------|
 | **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | **DONE** — 76 tests, `Python Token.encrypt() → Rust decrypt()` ✓ |
 | **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 46 tests, `Python announce → Rust validate()` ✓ |
-| **3** | `rns-core` | Transport routes packets identically to Python | Planned |
+| **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — 143 tests, `Python announce → Rust route + retransmit` ✓ |
 | **4** | `rns-core` | Link handshake, Channel, Resource protocols complete | Planned |
 | **5** | `rns-net` | Daemon joins Python network, routes real traffic | Planned |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
@@ -544,6 +566,12 @@ A Python script that imports RNS (with PROVIDER_INTERNAL forced) and generates J
 - announce_vectors.json    # 4 Announce pack/unpack/validate (±ratchet, ±app_data)
 - proof_vectors.json       # 5 Explicit/implicit proof validation
 
+# Phase 3 vectors (tests/fixtures/transport/)
+- pathfinder_vectors.json          # Timebase extraction, path update decisions
+- announce_retransmit_vectors.json # Retransmitted announce raw bytes
+- transport_routing_vectors.json   # HEADER_2 rewrite scenarios
+- full_pipeline_vectors.json       # End-to-end announce → route → retransmit
+
 # Future phases (not yet generated)
 - link_request, link_proof, channel_envelope, resource_advertisement
 ```
@@ -577,6 +605,7 @@ All crypto is implemented in pure Rust with no third-party crates:
 
 ### rns-core (no_std, uses alloc)
 - `rns-crypto` (path dependency, only runtime dep)
+- Wire protocol types (packet, destination, announce, receipt) + transport routing engine
 - Dev-only: `serde_json` for test fixture loading
 
 ### rns-net (std) — PLANNED
