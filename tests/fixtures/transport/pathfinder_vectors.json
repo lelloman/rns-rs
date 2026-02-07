@@ -1,0 +1,27 @@
+[
+  {
+    "description": "zero_timebase",
+    "random_blob": "aabbccddee0000000000",
+    "timebase": 0
+  },
+  {
+    "description": "small_timebase",
+    "random_blob": "11223344550000000001",
+    "timebase": 1
+  },
+  {
+    "description": "medium_timebase",
+    "random_blob": "ffffffffff0000010000",
+    "timebase": 65536
+  },
+  {
+    "description": "large_timebase",
+    "random_blob": "0102030405ffffffffff",
+    "timebase": 1099511627775
+  },
+  {
+    "description": "typical_timestamp",
+    "random_blob": "aabbccddee00000060d8",
+    "timebase": 24792
+  }
+]

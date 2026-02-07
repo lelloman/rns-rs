@@ -132,6 +132,102 @@ pub const TRANSPORT_TUNNEL: u8 = 0x03;
 /// Maximum hops
 pub const PATHFINDER_M: u8 = 128;
 
+// --- PATHFINDER algorithm ---
+
+/// Retransmit retries (total sends = PATHFINDER_R + 1)
+pub const PATHFINDER_R: u8 = 1;
+
+/// Grace period between retries (seconds)
+pub const PATHFINDER_G: f64 = 5.0;
+
+/// Random window for announce rebroadcast (seconds)
+pub const PATHFINDER_RW: f64 = 0.5;
+
+/// Path expiry = 7 days (seconds)
+pub const PATHFINDER_E: f64 = 604800.0;
+
+// --- Path expiry by interface mode ---
+
+/// Access Point path expiry = 1 day
+pub const AP_PATH_TIME: f64 = 86400.0;
+
+/// Roaming path expiry = 6 hours
+pub const ROAMING_PATH_TIME: f64 = 21600.0;
+
+// --- Table limits ---
+
+/// How many local rebroadcasts of an announce is allowed
+pub const LOCAL_REBROADCASTS_MAX: u8 = 2;
+
+/// Maximum number of random blobs per destination to keep in memory
+pub const MAX_RANDOM_BLOBS: usize = 64;
+
+/// Maximum number of announce timestamps to keep per destination
+pub const MAX_RATE_TIMESTAMPS: usize = 16;
+
+/// Maximum packet hashlist size before rotation
+pub const HASHLIST_MAXSIZE: usize = 1_000_000;
+
+// --- Timeouts ---
+
+/// Reverse table entry timeout (8 minutes)
+pub const REVERSE_TIMEOUT: f64 = 480.0;
+
+/// Destination table entry timeout (7 days)
+pub const DESTINATION_TIMEOUT: f64 = 604800.0;
+
+/// Link stale time = 2 * KEEPALIVE(360) = 720 seconds
+pub const LINK_STALE_TIME: f64 = 720.0;
+
+/// Link timeout = STALE_TIME * 1.25 = 900 seconds
+pub const LINK_TIMEOUT: f64 = 900.0;
+
+/// Link establishment timeout per hop (seconds)
+pub const LINK_ESTABLISHMENT_TIMEOUT_PER_HOP: f64 = 6.0;
+
+// --- Path request ---
+
+/// Default timeout for path requests (seconds)
+pub const PATH_REQUEST_TIMEOUT: f64 = 15.0;
+
+/// Grace time before a path announcement is made (seconds)
+pub const PATH_REQUEST_GRACE: f64 = 0.4;
+
+/// Extra grace time for roaming-mode interfaces (seconds)
+pub const PATH_REQUEST_RG: f64 = 1.5;
+
+/// Minimum interval for automated path requests (seconds)
+pub const PATH_REQUEST_MI: f64 = 20.0;
+
+/// Maximum amount of unique path request tags to remember
+pub const MAX_PR_TAGS: usize = 32000;
+
+// --- Job intervals ---
+
+/// Announce check interval (seconds)
+pub const ANNOUNCES_CHECK_INTERVAL: f64 = 1.0;
+
+/// Table culling interval (seconds)
+pub const TABLES_CULL_INTERVAL: f64 = 5.0;
+
+/// Link check interval (seconds)
+pub const LINKS_CHECK_INTERVAL: f64 = 1.0;
+
+// --- Interface modes (from Interface.py) ---
+
+pub const MODE_FULL: u8 = 0x01;
+pub const MODE_POINT_TO_POINT: u8 = 0x02;
+pub const MODE_ACCESS_POINT: u8 = 0x03;
+pub const MODE_ROAMING: u8 = 0x04;
+pub const MODE_BOUNDARY: u8 = 0x05;
+pub const MODE_GATEWAY: u8 = 0x06;
+
+// --- Path states ---
+
+pub const STATE_UNKNOWN: u8 = 0x00;
+pub const STATE_UNRESPONSIVE: u8 = 0x01;
+pub const STATE_RESPONSIVE: u8 = 0x02;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +269,29 @@ mod tests {
 
         // TRUNCATED_HASHLENGTH = 128 bits = 16 bytes
         assert_eq!(TRUNCATED_HASHLENGTH / 8, 16);
+    }
+
+    #[test]
+    fn test_transport_constants() {
+        // PATHFINDER_E = 7 days in seconds
+        assert_eq!(PATHFINDER_E, 60.0 * 60.0 * 24.0 * 7.0);
+
+        // AP_PATH_TIME = 1 day
+        assert_eq!(AP_PATH_TIME, 60.0 * 60.0 * 24.0);
+
+        // ROAMING_PATH_TIME = 6 hours
+        assert_eq!(ROAMING_PATH_TIME, 60.0 * 60.0 * 6.0);
+
+        // LINK_STALE_TIME = 2 * 360
+        assert_eq!(LINK_STALE_TIME, 720.0);
+
+        // LINK_TIMEOUT = STALE_TIME * 1.25
+        assert_eq!(LINK_TIMEOUT, LINK_STALE_TIME * 1.25);
+
+        // REVERSE_TIMEOUT = 8 minutes
+        assert_eq!(REVERSE_TIMEOUT, 8.0 * 60.0);
+
+        // DESTINATION_TIMEOUT = 7 days
+        assert_eq!(DESTINATION_TIMEOUT, 60.0 * 60.0 * 24.0 * 7.0);
     }
 }

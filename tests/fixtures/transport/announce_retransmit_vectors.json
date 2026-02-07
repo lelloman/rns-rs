@@ -1,0 +1,38 @@
+[
+  {
+    "description": "basic_retransmit",
+    "original_raw": "0102452471d74137d6380aa232f1ea1765cf008f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "original_flags": 1,
+    "original_hops": 2,
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "transport_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "retransmit_flags": 81,
+    "retransmit_raw": "5102bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb452471d74137d6380aa232f1ea1765cf008f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "context": 0
+  },
+  {
+    "description": "retransmit_path_response",
+    "original_raw": "0102452471d74137d6380aa232f1ea1765cf008f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "original_flags": 1,
+    "original_hops": 2,
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "transport_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "retransmit_flags": 81,
+    "retransmit_raw": "5102bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb452471d74137d6380aa232f1ea1765cf0b8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "context": 11
+  },
+  {
+    "description": "retransmit_with_context_flag",
+    "original_raw": "2103452471d74137d6380aa232f1ea1765cf008f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "original_flags": 33,
+    "original_hops": 3,
+    "destination_hash": "452471d74137d6380aa232f1ea1765cf",
+    "announce_data": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "transport_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "retransmit_flags": 113,
+    "retransmit_raw": "7103bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb452471d74137d6380aa232f1ea1765cf008f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7675555a31d5cc7a9cfd6aaaaaaaaaaaaaaaaaaaae3003008aff37426520812471d887f8b6125cd6e32b1e3561bc42a63ff04b08f5d9c45429fda01876298f4659b51aa30f02c8c71d3a0980de7821b8f2cfc630b",
+    "context": 0
+  }
+]

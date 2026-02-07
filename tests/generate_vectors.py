@@ -905,6 +905,285 @@ def generate_proof_vectors():
     write_protocol_fixture("proof_vectors.json", vectors)
 
 
+TRANSPORT_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'transport')
+os.makedirs(TRANSPORT_DIR, exist_ok=True)
+
+
+def write_transport_fixture(name, data):
+    path = os.path.join(TRANSPORT_DIR, name)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f"  Written {path} ({len(data)} vectors)")
+
+
+def generate_pathfinder_vectors():
+    """Generate pathfinder/timebase extraction test vectors."""
+    import struct
+
+    vectors = []
+
+    # Timebase extraction: random_blob bytes [5:10] as big-endian u64
+    # In Python: Transport.py:2930-2952
+    # announce_emitted = int.from_bytes(random_hash[5:10], "big")
+    test_blobs = [
+        ("zero_timebase", bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00, 0x00, 0x00, 0x00, 0x00])),
+        ("small_timebase", bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x00, 0x00, 0x00, 0x00, 0x01])),
+        ("medium_timebase", bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x00])),
+        ("large_timebase", bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])),
+        ("typical_timestamp", bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x00, 0x00, 0x00, 0x60, 0xD8])),
+    ]
+
+    for desc, blob in test_blobs:
+        timebase = int.from_bytes(blob[5:10], "big")
+        vectors.append({
+            "description": desc,
+            "random_blob": to_hex(blob),
+            "timebase": timebase,
+        })
+
+    write_transport_fixture("pathfinder_vectors.json", vectors)
+
+
+def generate_announce_retransmit_vectors():
+    """Generate announce retransmit packet building test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Identity from known key
+    x25519_prv_bytes = bytes(range(32))
+    ed25519_seed = bytes(range(32, 64))
+
+    x25519_prv = X25519PrivateKey.from_private_bytes(x25519_prv_bytes)
+    ed25519_prv = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
+    x25519_pub = x25519_prv.public_key()
+    ed25519_pub = ed25519_prv.public_key()
+
+    pub_key = x25519_pub.public_bytes() + ed25519_pub.public_bytes()
+    identity_hash = rns_sha256(pub_key)[:16]
+
+    # Build a real announce to retransmit
+    app_name, aspects = "testapp", ["aspect"]
+    name_str = app_name + "." + ".".join(aspects)
+    name_hash = rns_sha256(name_str.encode("utf-8"))[:10]
+    addr_material = name_hash + identity_hash
+    dest_hash = rns_sha256(addr_material)[:16]
+    random_hash = bytes([0xAA] * 10)
+
+    signed_data = dest_hash + pub_key + name_hash + random_hash
+    signature = ed25519_prv.sign(signed_data)
+    announce_data = pub_key + name_hash + random_hash + signature
+
+    # Build the original HEADER_1 announce packet
+    original_flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x00 << 2) | 0x01  # H1, broadcast, single, announce
+    original_hops = 2
+    original_raw = bytes([original_flags, original_hops]) + dest_hash + bytes([0x00]) + announce_data
+
+    # Build retransmit: HEADER_2, TRANSPORT, preserve lower bits
+    transport_id = bytes([0xBB] * 16)
+    retransmit_flags = (0x01 << 6) | (0x00 << 5) | (0x01 << 4) | (original_flags & 0x0F)
+    retransmit_raw = bytes([retransmit_flags, original_hops]) + transport_id + dest_hash + bytes([0x00]) + announce_data
+
+    vectors.append({
+        "description": "basic_retransmit",
+        "original_raw": to_hex(original_raw),
+        "original_flags": original_flags,
+        "original_hops": original_hops,
+        "destination_hash": to_hex(dest_hash),
+        "announce_data": to_hex(announce_data),
+        "transport_id": to_hex(transport_id),
+        "retransmit_flags": retransmit_flags,
+        "retransmit_raw": to_hex(retransmit_raw),
+        "context": 0x00,
+    })
+
+    # Build retransmit with block_rebroadcasts (PATH_RESPONSE context = 0x0B)
+    retransmit_raw_pr = bytes([retransmit_flags, original_hops]) + transport_id + dest_hash + bytes([0x0B]) + announce_data
+    vectors.append({
+        "description": "retransmit_path_response",
+        "original_raw": to_hex(original_raw),
+        "original_flags": original_flags,
+        "original_hops": original_hops,
+        "destination_hash": to_hex(dest_hash),
+        "announce_data": to_hex(announce_data),
+        "transport_id": to_hex(transport_id),
+        "retransmit_flags": retransmit_flags,
+        "retransmit_raw": to_hex(retransmit_raw_pr),
+        "context": 0x0B,
+    })
+
+    # Build retransmit with context_flag set (ratchet announce)
+    ratchet_flags = (0x00 << 6) | (0x01 << 5) | (0x00 << 4) | (0x00 << 2) | 0x01  # H1, ctx=1, broadcast, single, announce
+    ratchet_retransmit_flags = (0x01 << 6) | (0x01 << 5) | (0x01 << 4) | (ratchet_flags & 0x0F)
+    ratchet_raw = bytes([ratchet_retransmit_flags, 3]) + transport_id + dest_hash + bytes([0x00]) + announce_data
+
+    vectors.append({
+        "description": "retransmit_with_context_flag",
+        "original_raw": to_hex(bytes([ratchet_flags, 3]) + dest_hash + bytes([0x00]) + announce_data),
+        "original_flags": ratchet_flags,
+        "original_hops": 3,
+        "destination_hash": to_hex(dest_hash),
+        "announce_data": to_hex(announce_data),
+        "transport_id": to_hex(transport_id),
+        "retransmit_flags": ratchet_retransmit_flags,
+        "retransmit_raw": to_hex(ratchet_raw),
+        "context": 0x00,
+    })
+
+    write_transport_fixture("announce_retransmit_vectors.json", vectors)
+
+
+def generate_transport_routing_vectors():
+    """Generate transport routing (H1->H2 rewrite) test vectors."""
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Test 1: HEADER_1 -> HEADER_2 rewrite for multi-hop routing
+    dest_hash = bytes([0x11] * 16)
+    next_hop = bytes([0xAA] * 16)
+    data = b"hello transport"
+
+    # Original H1 packet
+    h1_flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x00 << 2) | 0x00  # H1, broadcast, single, data
+    h1_raw = bytes([h1_flags, 0]) + dest_hash + bytes([0x00]) + data
+
+    # Rewritten H2 packet (transport type = TRANSPORT)
+    h2_flags = (0x01 << 6) | (0x00 << 5) | (0x01 << 4) | (h1_flags & 0x0F)
+    h2_raw = bytes([h2_flags, 0]) + next_hop + dest_hash + bytes([0x00]) + data
+
+    # Compute hashes
+    h1_hashable = bytes([h1_raw[0] & 0x0F]) + h1_raw[2:]
+    h1_hash = rns_sha256(h1_hashable)
+
+    vectors.append({
+        "description": "h1_to_h2_rewrite",
+        "original_flags": h1_flags,
+        "original_hops": 0,
+        "destination_hash": to_hex(dest_hash),
+        "next_hop": to_hex(next_hop),
+        "data": to_hex(data),
+        "original_raw": to_hex(h1_raw),
+        "rewritten_flags": h2_flags,
+        "rewritten_raw": to_hex(h2_raw),
+        "original_hash": to_hex(h1_hash),
+    })
+
+    # Test 2: H2 forward (replace transport_id, keep dest)
+    old_transport = bytes([0x22] * 16)
+    new_transport = bytes([0x33] * 16)
+
+    h2_fwd_flags = (0x01 << 6) | (0x00 << 5) | (0x01 << 4) | (0x00 << 2) | 0x00  # H2, transport, single, data
+    h2_original = bytes([h2_fwd_flags, 3]) + old_transport + dest_hash + bytes([0x00]) + data
+    h2_forwarded = bytes([h2_fwd_flags, 3]) + new_transport + dest_hash + bytes([0x00]) + data
+
+    vectors.append({
+        "description": "h2_forward_replace_transport",
+        "original_flags": h2_fwd_flags,
+        "original_hops": 3,
+        "destination_hash": to_hex(dest_hash),
+        "old_transport_id": to_hex(old_transport),
+        "new_transport_id": to_hex(new_transport),
+        "data": to_hex(data),
+        "original_raw": to_hex(h2_original),
+        "rewritten_raw": to_hex(h2_forwarded),
+    })
+
+    # Test 3: H2 to H1 strip (last hop)
+    h2_strip_flags = (0x01 << 6) | (0x00 << 5) | (0x01 << 4) | (0x00 << 2) | 0x00  # H2, transport, single, data
+    h2_strip_raw = bytes([h2_strip_flags, 4]) + old_transport + dest_hash + bytes([0x00]) + data
+    h1_stripped_flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x00 << 2) | 0x00  # H1, broadcast, single, data
+    h1_stripped = bytes([h1_stripped_flags, 4]) + dest_hash + bytes([0x00]) + data
+
+    vectors.append({
+        "description": "h2_to_h1_strip_last_hop",
+        "original_flags": h2_strip_flags,
+        "original_hops": 4,
+        "destination_hash": to_hex(dest_hash),
+        "transport_id": to_hex(old_transport),
+        "data": to_hex(data),
+        "original_raw": to_hex(h2_strip_raw),
+        "stripped_flags": h1_stripped_flags,
+        "stripped_raw": to_hex(h1_stripped),
+    })
+
+    write_transport_fixture("transport_routing_vectors.json", vectors)
+
+
+def generate_full_announce_pipeline_vector():
+    """Generate an end-to-end transport announce pipeline test vector.
+
+    This creates a complete announce packet that the Rust TransportEngine
+    can ingest via handle_inbound(), verifying:
+    1. Packet unpacking
+    2. Announce validation (signature check)
+    3. Path table update
+    4. Announce retransmission scheduling
+    """
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # Identity from known key
+    x25519_prv_bytes = bytes(range(32))
+    ed25519_seed = bytes(range(32, 64))
+
+    x25519_prv = X25519PrivateKey.from_private_bytes(x25519_prv_bytes)
+    ed25519_prv = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
+    x25519_pub = x25519_prv.public_key()
+    ed25519_pub = ed25519_prv.public_key()
+
+    pub_key = x25519_pub.public_bytes() + ed25519_pub.public_bytes()
+    identity_hash = rns_sha256(pub_key)[:16]
+
+    # Build announce
+    app_name, aspects = "testapp", ["aspect"]
+    name_str = app_name + "." + ".".join(aspects)
+    name_hash = rns_sha256(name_str.encode("utf-8"))[:10]
+    addr_material = name_hash + identity_hash
+    dest_hash = rns_sha256(addr_material)[:16]
+
+    # Create random_hash with known timebase
+    # timebase is encoded in bytes [5:10] as big-endian
+    timebase = 1000000
+    timebase_bytes = timebase.to_bytes(5, "big")
+    random_hash = bytes([0xAA, 0xBB, 0xCC, 0xDD, 0xEE]) + timebase_bytes
+
+    # Sign and pack announce data
+    signed_data = dest_hash + pub_key + name_hash + random_hash
+    signature = ed25519_prv.sign(signed_data)
+    announce_data = pub_key + name_hash + random_hash + signature
+
+    # Build HEADER_1 announce packet
+    flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x00 << 2) | 0x01  # H1, broadcast, single, announce
+    hops = 0  # Original announce, no hops yet
+    context = 0x00  # CONTEXT_NONE
+    raw_packet = bytes([flags, hops]) + dest_hash + bytes([context]) + announce_data
+
+    # Compute packet hash
+    hashable = bytes([raw_packet[0] & 0x0F]) + raw_packet[2:]
+    packet_hash = rns_sha256(hashable)
+
+    vectors.append({
+        "description": "full_pipeline_announce",
+        "private_key": to_hex(x25519_prv_bytes + ed25519_seed),
+        "public_key": to_hex(pub_key),
+        "identity_hash": to_hex(identity_hash),
+        "destination_hash": to_hex(dest_hash),
+        "name_hash": to_hex(name_hash),
+        "random_hash": to_hex(random_hash),
+        "timebase": timebase,
+        "announce_data": to_hex(announce_data),
+        "flags": flags,
+        "hops": hops,
+        "context": context,
+        "raw_packet": to_hex(raw_packet),
+        "packet_hash": to_hex(packet_hash),
+    })
+
+    write_transport_fixture("full_pipeline_vectors.json", vectors)
+
+
 def main():
     print("Generating test vectors from Python RNS crypto...")
     generate_pkcs7()
@@ -925,6 +1204,11 @@ def main():
     generate_destination_vectors()
     generate_announce_vectors()
     generate_proof_vectors()
+    print("\nGenerating Phase 3 transport test vectors...")
+    generate_pathfinder_vectors()
+    generate_announce_retransmit_vectors()
+    generate_transport_routing_vectors()
+    generate_full_announce_pipeline_vector()
     print("Done! All vectors generated successfully.")
 
 
