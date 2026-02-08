@@ -24,6 +24,12 @@ pub trait Callbacks: Send {
     fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8);
 
     fn on_local_delivery(&mut self, dest_hash: [u8; 16], raw: Vec<u8>, packet_hash: [u8; 32]);
+
+    /// Called when an interface comes online.
+    fn on_interface_up(&mut self, _id: InterfaceId) {}
+
+    /// Called when an interface goes offline.
+    fn on_interface_down(&mut self, _id: InterfaceId) {}
 }
 
 /// The driver loop. Owns the engine and all interface entries.
@@ -73,20 +79,48 @@ impl Driver {
                     let actions = self.engine.tick(time::now(), &mut self.rng);
                     self.dispatch_all(actions);
                 }
-                Event::InterfaceUp(id, new_writer) => {
-                    if let Some(entry) = self.interfaces.get_mut(&id) {
+                Event::InterfaceUp(id, new_writer, info) => {
+                    if let Some(info) = info {
+                        // New dynamic interface (e.g., TCP server client connection)
+                        log::info!("[{}] dynamic interface registered", id.0);
+                        self.engine.register_interface(info.clone());
+                        if let Some(writer) = new_writer {
+                            self.interfaces.insert(
+                                id,
+                                InterfaceEntry {
+                                    id,
+                                    info,
+                                    writer,
+                                    online: true,
+                                    dynamic: true,
+                                },
+                            );
+                        }
+                        self.callbacks.on_interface_up(id);
+                    } else if let Some(entry) = self.interfaces.get_mut(&id) {
+                        // Existing interface reconnected
                         log::info!("[{}] interface online", id.0);
                         entry.online = true;
                         if let Some(writer) = new_writer {
                             log::info!("[{}] writer refreshed after reconnect", id.0);
                             entry.writer = writer;
                         }
+                        self.callbacks.on_interface_up(id);
                     }
                 }
                 Event::InterfaceDown(id) => {
-                    if let Some(entry) = self.interfaces.get_mut(&id) {
-                        log::info!("[{}] interface offline", id.0);
-                        entry.online = false;
+                    if let Some(entry) = self.interfaces.get(&id) {
+                        if entry.dynamic {
+                            // Dynamic interfaces are removed entirely
+                            log::info!("[{}] dynamic interface removed", id.0);
+                            self.engine.deregister_interface(id);
+                            self.interfaces.remove(&id);
+                        } else {
+                            // Static interfaces are just marked offline
+                            log::info!("[{}] interface offline", id.0);
+                            self.interfaces.get_mut(&id).unwrap().online = false;
+                        }
+                        self.callbacks.on_interface_down(id);
                     }
                 }
                 Event::Shutdown => break,
@@ -182,6 +216,8 @@ mod tests {
         announces: Arc<Mutex<Vec<([u8; 16], u8)>>>,
         paths: Arc<Mutex<Vec<([u8; 16], u8)>>>,
         deliveries: Arc<Mutex<Vec<[u8; 16]>>>,
+        iface_ups: Arc<Mutex<Vec<InterfaceId>>>,
+        iface_downs: Arc<Mutex<Vec<InterfaceId>>>,
     }
 
     impl MockCallbacks {
@@ -190,19 +226,27 @@ mod tests {
             Arc<Mutex<Vec<([u8; 16], u8)>>>,
             Arc<Mutex<Vec<([u8; 16], u8)>>>,
             Arc<Mutex<Vec<[u8; 16]>>>,
+            Arc<Mutex<Vec<InterfaceId>>>,
+            Arc<Mutex<Vec<InterfaceId>>>,
         ) {
             let announces = Arc::new(Mutex::new(Vec::new()));
             let paths = Arc::new(Mutex::new(Vec::new()));
             let deliveries = Arc::new(Mutex::new(Vec::new()));
+            let iface_ups = Arc::new(Mutex::new(Vec::new()));
+            let iface_downs = Arc::new(Mutex::new(Vec::new()));
             (
                 MockCallbacks {
                     announces: announces.clone(),
                     paths: paths.clone(),
                     deliveries: deliveries.clone(),
+                    iface_ups: iface_ups.clone(),
+                    iface_downs: iface_downs.clone(),
                 },
                 announces,
                 paths,
                 deliveries,
+                iface_ups,
+                iface_downs,
             )
         }
     }
@@ -225,6 +269,14 @@ mod tests {
 
         fn on_local_delivery(&mut self, dest_hash: [u8; 16], _raw: Vec<u8>, _packet_hash: [u8; 32]) {
             self.deliveries.lock().unwrap().push(dest_hash);
+        }
+
+        fn on_interface_up(&mut self, id: InterfaceId) {
+            self.iface_ups.lock().unwrap().push(id);
+        }
+
+        fn on_interface_down(&mut self, id: InterfaceId) {
+            self.iface_downs.lock().unwrap().push(id);
         }
     }
 
@@ -276,7 +328,7 @@ mod tests {
     #[test]
     fn process_inbound_frame() {
         let (tx, rx) = event::channel();
-        let (cbs, announces, _, _) = MockCallbacks::new();
+        let (cbs, announces, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -290,6 +342,7 @@ mod tests {
             info,
             writer: Box::new(writer),
             online: true,
+            dynamic: false,
         });
 
         let identity = Identity::new(&mut OsRng);
@@ -306,7 +359,7 @@ mod tests {
     #[test]
     fn dispatch_send() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -319,6 +372,7 @@ mod tests {
             info,
             writer: Box::new(writer),
             online: true,
+            dynamic: false,
         });
 
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
@@ -335,7 +389,7 @@ mod tests {
     #[test]
     fn dispatch_broadcast() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -347,10 +401,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true,
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false,
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
         });
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
@@ -367,7 +421,7 @@ mod tests {
     #[test]
     fn dispatch_broadcast_exclude() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -379,10 +433,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true,
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false,
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
         });
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
@@ -399,7 +453,7 @@ mod tests {
     #[test]
     fn tick_event() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]) },
             rx,
@@ -409,7 +463,7 @@ mod tests {
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true,
+            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false,
         });
 
         // Send Tick then Shutdown
@@ -422,7 +476,7 @@ mod tests {
     #[test]
     fn shutdown_event() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -436,7 +490,7 @@ mod tests {
     #[test]
     fn announce_callback() {
         let (tx, rx) = event::channel();
-        let (cbs, announces, paths, _) = MockCallbacks::new();
+        let (cbs, announces, paths, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -446,7 +500,7 @@ mod tests {
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true,
+            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false,
         });
 
         let identity = Identity::new(&mut OsRng);
@@ -468,7 +522,7 @@ mod tests {
     #[test]
     fn dispatch_skips_offline_interface() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -480,10 +534,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: false, // offline
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: false, dynamic: false, // offline
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
         });
 
         // Direct send to offline interface: should be skipped
@@ -507,7 +561,7 @@ mod tests {
     #[test]
     fn interface_up_refreshes_writer() {
         let (tx, rx) = event::channel();
-        let (cbs, _, _, _) = MockCallbacks::new();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
@@ -517,12 +571,12 @@ mod tests {
         let (w_old, sent_old) = MockWriter::new();
         let info = make_interface_info(1);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(w_old), online: false,
+            id: InterfaceId(1), info, writer: Box::new(w_old), online: false, dynamic: false,
         });
 
         // Simulate reconnect: InterfaceUp with new writer
         let (w_new, sent_new) = MockWriter::new();
-        tx.send(Event::InterfaceUp(InterfaceId(1), Some(Box::new(w_new)))).unwrap();
+        tx.send(Event::InterfaceUp(InterfaceId(1), Some(Box::new(w_new)), None)).unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -542,5 +596,108 @@ mod tests {
         assert_eq!(sent_new.lock().unwrap()[0], vec![0xFF]);
 
         drop(tx);
+    }
+
+    #[test]
+    fn dynamic_interface_register() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, iface_ups, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let info = make_interface_info(100);
+        let (writer, sent) = MockWriter::new();
+
+        // InterfaceUp with InterfaceInfo = new dynamic interface
+        tx.send(Event::InterfaceUp(
+            InterfaceId(100),
+            Some(Box::new(writer)),
+            Some(info),
+        ))
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should be registered and online
+        assert!(driver.interfaces.contains_key(&InterfaceId(100)));
+        assert!(driver.interfaces[&InterfaceId(100)].online);
+        assert!(driver.interfaces[&InterfaceId(100)].dynamic);
+
+        // Callback should have fired
+        assert_eq!(iface_ups.lock().unwrap().len(), 1);
+        assert_eq!(iface_ups.lock().unwrap()[0], InterfaceId(100));
+
+        // Can send to it
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(100),
+            raw: vec![0x42],
+        }]);
+        assert_eq!(sent.lock().unwrap().len(), 1);
+
+        drop(tx);
+    }
+
+    #[test]
+    fn dynamic_interface_deregister() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, iface_downs) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        // Register a dynamic interface
+        let info = make_interface_info(200);
+        driver.engine.register_interface(info.clone());
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(200), InterfaceEntry {
+            id: InterfaceId(200),
+            info,
+            writer: Box::new(writer),
+            online: true,
+            dynamic: true,
+        });
+
+        // InterfaceDown for dynamic → should be removed entirely
+        tx.send(Event::InterfaceDown(InterfaceId(200))).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(!driver.interfaces.contains_key(&InterfaceId(200)));
+        assert_eq!(iface_downs.lock().unwrap().len(), 1);
+        assert_eq!(iface_downs.lock().unwrap()[0], InterfaceId(200));
+    }
+
+    #[test]
+    fn interface_callbacks_fire() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, iface_ups, iface_downs) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        // Static interface
+        let info = make_interface_info(1);
+        let (writer, _) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
+            id: InterfaceId(1), info, writer: Box::new(writer), online: false, dynamic: false,
+        });
+
+        tx.send(Event::InterfaceUp(InterfaceId(1), None, None)).unwrap();
+        tx.send(Event::InterfaceDown(InterfaceId(1))).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert_eq!(iface_ups.lock().unwrap().len(), 1);
+        assert_eq!(iface_downs.lock().unwrap().len(), 1);
+        // Static interface should still exist but be offline
+        assert!(driver.interfaces.contains_key(&InterfaceId(1)));
+        assert!(!driver.interfaces[&InterfaceId(1)].online);
     }
 }

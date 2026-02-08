@@ -160,7 +160,7 @@ pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Wri
 
     let id = config.interface_id;
     // Initial connect: writer is None because it's returned directly to the caller
-    let _ = tx.send(Event::InterfaceUp(id, None));
+    let _ = tx.send(Event::InterfaceUp(id, None, None));
 
     // Spawn reader thread
     let reader_config = config;
@@ -260,7 +260,7 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
                 log::info!("[{}] reconnected", config.name);
                 // Send new writer to the driver so it can replace the stale one
                 let new_writer: Box<dyn Writer> = Box::new(TcpWriter { stream: writer_stream });
-                let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer)));
+                let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
                 return Some(new_stream);
             }
             Err(e) => {
@@ -311,7 +311,7 @@ mod tests {
 
         // Should receive InterfaceUp event
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, Event::InterfaceUp(InterfaceId(1), _)));
+        assert!(matches!(event, Event::InterfaceUp(InterfaceId(1), _, _)));
     }
 
     #[test]
@@ -458,7 +458,7 @@ mod tests {
 
         // Should get InterfaceUp again
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, Event::InterfaceUp(InterfaceId(1), _)));
+        assert!(matches!(event, Event::InterfaceUp(InterfaceId(1), _, _)));
     }
 
     #[test]

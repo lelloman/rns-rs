@@ -84,19 +84,25 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, I/O [Phase 5a DONE]
+├── rns-net/                         # std — networking, I/O [Phase 5b DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Public API, re-exports
 │   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
-│   │   ├── event.rs                 # Event enum, channel helpers
+│   │   ├── event.rs                 # Event enum (Frame, InterfaceUp/Down, Tick, Shutdown)
 │   │   ├── time.rs                  # now() → f64 Unix epoch
+│   │   ├── config.rs                # ConfigObj parser for Python RNS config files
+│   │   ├── storage.rs               # Identity + known destinations persistence
 │   │   ├── driver.rs                # Callbacks trait, Driver event loop + dispatch
-│   │   ├── node.rs                  # RnsNode start/shutdown lifecycle
+│   │   ├── node.rs                  # RnsNode start/shutdown/from_config lifecycle
 │   │   └── interface/
 │   │       ├── mod.rs               # Writer trait, InterfaceEntry
-│   │       └── tcp.rs               # TCP client: connect, reconnect, reader thread
+│   │       ├── tcp.rs               # TCP client: connect, reconnect, reader thread
+│   │       ├── tcp_server.rs        # TCP server: accept, per-client reader threads
+│   │       ├── udp.rs               # UDP broadcast: no HDLC framing
+│   │       └── local.rs             # Unix abstract socket + TCP fallback
 │   ├── examples/
-│   │   └── tcp_connect.rs           # Connect to Python RNS, log announces
+│   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
+│   │   └── rnsd.rs                  # Rust rnsd daemon (config-driven)
 │   └── tests/
 │       └── python_interop.rs        # Rust↔Python announce reception
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
@@ -697,9 +703,9 @@ New fixtures in `tests/fixtures/resource/`:
 
 **Milestone**: A Rust process connects to a Python RNS TCP server, receives HDLC-framed packets, processes announces, discovers paths. Proves the full stack works end-to-end.
 
-**Result**: 35 unit tests + 1 interop test = 36 tests (487 total workspace). Thread model: single Driver thread owns TransportEngine, per-interface Reader threads decode HDLC and send events, Timer thread sends periodic ticks. All communication via single mpsc channel. Writer refresh on reconnect ensures the driver always holds a live socket.
+**Result**: 35 unit tests + 1 interop test = 36 tests. Thread model: single Driver thread owns TransportEngine, per-interface Reader threads decode HDLC and send events, Timer thread sends periodic ticks. All communication via single mpsc channel. Writer refresh on reconnect ensures the driver always holds a live socket.
 
-**Modules**:
+**Modules (initial)**:
 - `hdlc.rs` — HDLC escape/unescape/frame + streaming Decoder (matches TCPInterface.py)
 - `event.rs` — Event enum (Frame, InterfaceUp with optional writer, InterfaceDown, Tick, Shutdown)
 - `time.rs` — `now()` → f64 Unix epoch
@@ -710,67 +716,60 @@ New fixtures in `tests/fixtures/resource/`:
 
 **Dependencies**: `rns-core`, `rns-crypto`, `log`, `libc`. Dev: `env_logger`, `serde_json`, `ctrlc`.
 
-**Not included**: Config file parsing, Local/shared instance interface, UDP/Auto/Serial/KISS/RNode interfaces, IFAC, identity persistence, RPC, tunnel synthesis, compression.
+---
+
+## Phase 5b: Full Networking & Interfaces (`rns-net`) — COMPLETE ✓
+
+**Milestone**: A Rust `rnsd` daemon reads standard Python RNS config files, opens TCP server/client, UDP, and Local interfaces, persists identity and known destinations, and interoperates with Python nodes.
+
+**Result**: 79 unit tests + 1 interop test = 80 tests (531 total workspace). All interface types implemented (TCP client/server, UDP, Local with Unix abstract socket + TCP fallback). ConfigObj parser handles nested `[[sections]]`, `Yes`/`No` booleans, `interface_mode`/`mode` fallback. Identity and known destinations persistence via msgpack. Dynamic interface registration for TCP server and Local server clients.
+
+**New modules**:
+- `config.rs` — ConfigObj parser for Python RNS config files (14 tests)
+- `interface/tcp_server.rs` — TCP server, spawns per-client reader threads with dynamic InterfaceId (6 tests)
+- `interface/udp.rs` — UDP broadcast interface, no HDLC framing (5 tests)
+- `interface/local.rs` — Unix abstract socket (`\0rns/{name}`) on Linux with TCP fallback (5 tests)
+- `storage.rs` — Identity save/load (64 bytes), known destinations msgpack, storage dir creation (7 tests)
+- `examples/rnsd.rs` — Rust rnsd daemon (config-driven)
+
+**Extended modules**:
+- `event.rs` — `InterfaceUp` now has 3 fields: `(InterfaceId, Option<Writer>, Option<InterfaceInfo>)` for dynamic registration
+- `driver.rs` — Dynamic interface register/deregister, `on_interface_up`/`on_interface_down` callbacks (3 new tests)
+- `node.rs` — `InterfaceConfig` struct with `variant: InterfaceVariant` + `mode: u8`, `from_config()` reads config + creates/loads identity, `parse_interface_mode()` maps mode strings to constants (4 new tests)
+- `interface/mod.rs` — `InterfaceEntry` gained `dynamic: bool` field
+
+**Not included (deferred to Phase 5c)**: Serial/KISS/RNode interfaces (need hardware), AutoInterface (complex multicast discovery), IFAC (Interface Access Codes), RPC control port, I2P interface.
 
 ---
 
-## Phase 5b+: Full Networking & Interfaces (`rns-net`) — PLANNED
+## Phase 5c: Additional Interfaces & Features (`rns-net`) — PLANNED
 
-**Milestone**: A Rust `rnsd` daemon can join an existing Python Reticulum network, discover paths, and route packets.
+**Milestone**: Serial, KISS, RNode, AutoInterface, IFAC, and full network interop tests.
 
 ### TDD Sequence
 
-#### 5b.1 Config Parsing
-1. Test: parse minimal config → correct defaults
-2. Test: parse `[reticulum]` section → enable_transport, share_instance, etc.
-3. Test: parse `[logging]` section → loglevel
-4. Test: parse `[[Interface_Name]]` → interface type + params extracted
-5. Test: parse Python's example config (from rnsd --exampleconfig) without error
-6. Test: missing config file → defaults created
-
-#### 5b.2 LocalInterface
-1. Test: server binds to Unix socket (or TCP fallback)
-2. Test: client connects to server
-3. Test: data sent from client arrives at server (and vice versa)
-4. Test: HDLC framing round-trip
-5. Test: Rust LocalClient connects to Python LocalServer (interop)
-
-#### 5b.3 TCPServerInterface
-1. Test: TCP server accepts connection
-2. Test: multiple clients connect simultaneously
-3. Test: Rust TCP server accepts Python TCP client (interop)
-
-#### 5b.4 UDPInterface
-1. Test: UDP broadcast send/receive on loopback
-2. Test: packet framing round-trip
-3. Test: Rust UDP ↔ Python UDP on same broadcast domain (interop)
-
-#### 5b.5 SerialInterface
+#### 5c.1 SerialInterface
 1. Test: write/read over virtual serial port pair
 2. Test: framing (HDLC) round-trip
 
-#### 5b.6 KISSInterface
+#### 5c.2 KISSInterface
 1. Test: KISS frame encoding/decoding
 2. Test: preamble, txtail, persistence parameters applied
 
-#### 5b.7 RNodeInterface
+#### 5c.3 RNodeInterface
 1. Test: RNode serial protocol command/response framing
 2. Test: frequency/bandwidth/SF/CR configuration
 3. Test: data send/receive via RNode (requires hardware or mock)
 
-#### 5b.8 Master Instance (Reticulum)
-1. Test: init with config → interfaces started, Transport running
-2. Test: shared instance mode → LocalServer listening
-3. Test: client mode → connects to existing shared instance
-4. Test: graceful shutdown cleans up interfaces and Transport
+#### 5c.4 AutoInterface
+1. Test: multicast discovery on loopback
+2. Test: peer-to-peer data exchange
 
-#### 5b.9 Storage & Persistence
-1. Test: save/load known_destinations round-trip
-2. Test: save/load ratchets round-trip
-3. Test: cache write/read/clean
-4. Test: file format compatible with Python (msgpack)
+#### 5c.5 IFAC (Interface Access Codes)
+1. Test: IFAC masking/unmasking round-trip
+2. Test: packets with wrong IFAC dropped
 
-#### 5b.10 Full Network Interop
+#### 5c.6 Full Network Interop
 1. Test: Rust rnsd + Python rnsd on Docker network → path discovery works
 2. Test: Python node announces → Rust node discovers path
 3. Test: Rust node sends packet → Python node receives
@@ -782,6 +781,8 @@ New fixtures in `tests/fixtures/resource/`:
 - `RNS/Reticulum.py` — Config, lifecycle, shared instance
 - `RNS/Interfaces/Interface.py` — Base class
 - `RNS/Interfaces/TCPInterface.py`, `UDPInterface.py`, `LocalInterface.py`
+- `RNS/Interfaces/SerialInterface.py`, `KISSInterface.py`, `RNodeInterface.py`
+- `RNS/Interfaces/AutoInterface.py`
 
 ---
 
@@ -822,7 +823,8 @@ New fixtures in `tests/fixtures/resource/`:
 | **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — 248 tests, full 4-way handshake + encrypted channel + buffer streaming ✓ |
 | **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — 375 tests (rns-core), full sender↔receiver cycle + HMU + interop ✓ |
 | **5a** | `rns-net` | TCP connect → receive announces → discover paths | **DONE** — 36 tests, Rust connects to Python TCP server, processes HDLC-framed announces ✓ |
-| **5b+** | `rns-net` | Full daemon: config, all interfaces, persistence | Planned |
+| **5b** | `rns-net` | Config, TCP server, UDP, Local, persistence | **DONE** — 80 tests, full `rnsd` daemon reads config, opens all interfaces ✓ |
+| **5c** | `rns-net` | Serial, KISS, RNode, AutoInterface, IFAC, interop | Planned |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
@@ -914,7 +916,7 @@ All crypto is implemented in pure Rust with no third-party crates:
 ### rns-net (std)
 - `rns-core`, `rns-crypto` (path dependencies)
 - `log` (logging facade), `libc` (socket options via setsockopt)
-- Dev-only: `env_logger`, `serde_json`, `ctrlc`
+- Dev-only: `env_logger`, `serde_json`, `ctrlc`, `tempfile`
 - No tokio — std threads are sufficient for the interface count we handle
 
 ### rns-cli (std) — PLANNED

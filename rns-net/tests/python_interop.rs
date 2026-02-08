@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use rns_net::{Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpClientConfig};
+use rns_net::{Callbacks, InterfaceConfig, InterfaceId, InterfaceVariant, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
 
 struct TestCallbacks {
     announce_tx: Sender<([u8; 16], u8)>,
@@ -131,15 +131,18 @@ except (KeyboardInterrupt, SystemExit):
         NodeConfig {
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig::TcpClient(TcpClientConfig {
-                name: "interop-tcp".into(),
-                target_host: "127.0.0.1".into(),
-                target_port: port,
-                interface_id: InterfaceId(1),
-                reconnect_wait: Duration::from_millis(500),
-                max_reconnect_tries: Some(3),
-                connect_timeout: Duration::from_secs(5),
-            })],
+            interfaces: vec![InterfaceConfig {
+                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                    name: "interop-tcp".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: port,
+                    interface_id: InterfaceId(1),
+                    reconnect_wait: Duration::from_millis(500),
+                    max_reconnect_tries: Some(3),
+                    connect_timeout: Duration::from_secs(5),
+                }),
+                mode: MODE_FULL,
+            }],
         },
         Box::new(TestCallbacks { announce_tx }),
     )

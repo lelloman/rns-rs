@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::mpsc;
 
-use rns_core::transport::types::InterfaceId;
+use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::interface::Writer;
 
@@ -13,7 +13,8 @@ pub enum Event {
     Frame { interface_id: InterfaceId, data: Vec<u8> },
     /// An interface came online after (re)connecting.
     /// Carries a new writer if the connection was re-established.
-    InterfaceUp(InterfaceId, Option<Box<dyn Writer>>),
+    /// Carries InterfaceInfo if this is a new dynamic interface (e.g. TCP server client).
+    InterfaceUp(InterfaceId, Option<Box<dyn Writer>>, Option<InterfaceInfo>),
     /// An interface went offline (socket closed, error).
     InterfaceDown(InterfaceId),
     /// Periodic maintenance tick (1s interval).
@@ -31,10 +32,11 @@ impl fmt::Debug for Event {
                     .field("data_len", &data.len())
                     .finish()
             }
-            Event::InterfaceUp(id, writer) => {
+            Event::InterfaceUp(id, writer, info) => {
                 f.debug_tuple("InterfaceUp")
                     .field(id)
                     .field(&writer.is_some())
+                    .field(&info.is_some())
                     .finish()
             }
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),

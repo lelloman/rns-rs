@@ -1,6 +1,9 @@
 //! Network interface abstractions.
 
 pub mod tcp;
+pub mod tcp_server;
+pub mod udp;
+pub mod local;
 
 use std::io;
 
@@ -19,6 +22,9 @@ pub struct InterfaceEntry {
     pub info: InterfaceInfo,
     pub writer: Box<dyn Writer>,
     pub online: bool,
+    /// True for dynamically spawned interfaces (e.g. TCP server clients).
+    /// These are fully removed on InterfaceDown rather than just marked offline.
+    pub dynamic: bool,
 }
 
 #[cfg(test)]
@@ -59,9 +65,11 @@ mod tests {
             },
             writer: Box::new(MockWriter::new()),
             online: false,
+            dynamic: false,
         };
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);
+        assert!(!entry.dynamic);
     }
 
     #[test]
