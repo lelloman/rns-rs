@@ -1,0 +1,66 @@
+[
+  {
+    "description": "simple_msg",
+    "msgtype": 1,
+    "sequence": 0,
+    "data": "68656c6c6f",
+    "data_length": 5,
+    "packed": "00010000000568656c6c6f"
+  },
+  {
+    "description": "empty_payload",
+    "msgtype": 2,
+    "sequence": 5,
+    "data": "",
+    "data_length": 0,
+    "packed": "000200050000"
+  },
+  {
+    "description": "seq_wrap",
+    "msgtype": 4660,
+    "sequence": 65535,
+    "data": "010203",
+    "data_length": 3,
+    "packed": "1234ffff0003010203"
+  },
+  {
+    "description": "max_user_msgtype",
+    "msgtype": 61439,
+    "sequence": 100,
+    "data": "746573742064617461207061796c6f6164",
+    "data_length": 17,
+    "packed": "efff00640011746573742064617461207061796c6f6164"
+  },
+  {
+    "description": "system_stream_data",
+    "msgtype": 65280,
+    "sequence": 42,
+    "data": "73747265616d206279746573",
+    "data_length": 12,
+    "packed": "ff00002a000c73747265616d206279746573"
+  },
+  {
+    "description": "zero_all",
+    "msgtype": 0,
+    "sequence": 0,
+    "data": "",
+    "data_length": 0,
+    "packed": "000000000000"
+  },
+  {
+    "description": "binary_payload",
+    "msgtype": 16,
+    "sequence": 1000,
+    "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "data_length": 256,
+    "packed": "001003e80100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+  },
+  {
+    "description": "single_byte",
+    "msgtype": 1,
+    "sequence": 1,
+    "data": "42",
+    "data_length": 1,
+    "packed": "00010001000142"
+  }
+]

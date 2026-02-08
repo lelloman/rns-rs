@@ -1,0 +1,37 @@
+[
+  {
+    "description": "aes256_short",
+    "derived_key": "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+    "fixed_iv": "dddddddddddddddddddddddddddddddd",
+    "plaintext": "48656c6c6f204c696e6b21",
+    "ciphertext": "dddddddddddddddddddddddddddddddd37b2576e9963afc8397aad37e9319ead072d3f8d489aeb61cf117c0bbdb957eaf9b22b7c249882e7dcf24e8589d9cca1"
+  },
+  {
+    "description": "aes256_empty",
+    "derived_key": "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+    "fixed_iv": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "plaintext": "",
+    "ciphertext": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee79998d55b41c6f40478e52b86234bc3b56955edc0cae184652443441d16314a8e7b3ba06040fe6923f06a16ab5998c30"
+  },
+  {
+    "description": "aes256_block_aligned",
+    "derived_key": "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+    "fixed_iv": "ffffffffffffffffffffffffffffffff",
+    "plaintext": "41414141414141414141414141414141",
+    "ciphertext": "ffffffffffffffffffffffffffffffffdace573207b29f35f1cfee4d70ed099e5a1b8e4de1a8adc9a39cb11cf8d01c322de9258703f5833925afc040f08d55239914edf41f864d20c8d3e95870595fbf"
+  },
+  {
+    "description": "aes256_multi_block",
+    "derived_key": "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+    "fixed_iv": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "plaintext": "42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242",
+    "ciphertext": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad224952df73f8da164d75048405103b6a236ccda6ccbd3bfa520b885cb95a67bdd19c3cc3450bca474946d05a167f5204a91a28975e737edbb5e76931bb9af4b8d1b98a7a675db3ac4b9771c3e665b44535aa5610155a897b88cbcbb907411aa45e483acea3c54d43fe29241c09a228a9d7501e8f5489dfd07ef5780e508a3bd6399c8f9bf91ee5e929745908bd4c882"
+  },
+  {
+    "description": "aes128_short",
+    "derived_key": "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4",
+    "fixed_iv": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "plaintext": "4145532d313238206c696e6b2064617461",
+    "ciphertext": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb8de0f8d278ee5e2862ba0eb0de1acfe43b3ffd8ff061a30c34dc8e1bd97bec2cc1315056c3d579576efb323693949f6b9e9bccce295d2755e94044b62a79ee6a"
+  }
+]

@@ -1184,6 +1184,506 @@ def generate_full_announce_pipeline_vector():
     write_transport_fixture("full_pipeline_vectors.json", vectors)
 
 
+LINK_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'link')
+os.makedirs(LINK_DIR, exist_ok=True)
+
+
+def write_link_fixture(name, data):
+    path = os.path.join(LINK_DIR, name)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f"  Written {path} ({len(data)} vectors)")
+
+
+def generate_link_handshake_vectors():
+    """Generate link handshake test vectors.
+
+    Simulates both initiator and responder sides of the Link handshake:
+    1. Initiator builds LINKREQUEST with ephemeral X25519+Ed25519 pub keys
+    2. link_id is computed from the LINKREQUEST packet's hashable part
+    3. Responder does ECDH + HKDF to derive session key
+    4. Responder builds LRPROOF (signature + ephemeral pub + signalling)
+    5. Initiator validates proof, does same ECDH + HKDF (keys must match)
+    6. Initiator sends encrypted RTT via Token
+
+    References:
+      Link.py:148-151  signalling_bytes()
+      Link.py:340-347  link_id_from_lr_packet() / set_link_id()
+      Link.py:353-366  handshake() - ECDH + HKDF
+      Link.py:371-378  prove() - builds LRPROOF
+      Link.py:396-457  validate_proof()
+      Link.py:459-474  identify()
+      Link.py:1191-1213 encrypt/decrypt via Token
+    """
+    import struct
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    # ---- Protocol constants (from Link.py) ----
+    ECPUBSIZE = 32 + 32        # X25519 pub (32) + Ed25519 pub (32) = 64
+    KEYSIZE = 32
+    LINK_MTU_SIZE = 3
+    MTU_BYTEMASK = 0x1FFFFF
+    MODE_BYTEMASK = 0xE0
+    SIGLENGTH_BYTES = 64       # Ed25519 signature = 512 bits / 8
+    TRUNCATED_HASH_LEN = 16    # 128 bits / 8
+
+    MODE_AES128_CBC = 0x00
+    MODE_AES256_CBC = 0x01
+
+    def signalling_bytes(mtu, mode):
+        signalling_value = (mtu & MTU_BYTEMASK) + (((mode << 5) & MODE_BYTEMASK) << 16)
+        return struct.pack(">I", signalling_value)[1:]
+
+    # ---- Fixed keys for initiator ----
+    init_x25519_prv_bytes = bytes(range(32))
+    init_ed25519_seed = bytes(range(32, 64))
+    init_x25519_prv = X25519PrivateKey.from_private_bytes(init_x25519_prv_bytes)
+    init_ed25519_prv = Ed25519PrivateKey.from_private_bytes(init_ed25519_seed)
+    init_x25519_pub = init_x25519_prv.public_key()
+    init_ed25519_pub = init_ed25519_prv.public_key()
+    init_pub_bytes = init_x25519_pub.public_bytes()        # 32 bytes
+    init_sig_pub_bytes = init_ed25519_pub.public_bytes()   # 32 bytes
+
+    # ---- Fixed keys for responder/owner identity (destination) ----
+    owner_x25519_prv_bytes = bytes([0xAA] * 32)
+    owner_ed25519_seed = bytes([0xBB] * 32)
+    owner_x25519_prv = X25519PrivateKey.from_private_bytes(owner_x25519_prv_bytes)
+    owner_ed25519_prv = Ed25519PrivateKey.from_private_bytes(owner_ed25519_seed)
+    owner_x25519_pub = owner_x25519_prv.public_key()
+    owner_ed25519_pub = owner_ed25519_prv.public_key()
+    owner_pub_key = owner_x25519_pub.public_bytes() + owner_ed25519_pub.public_bytes()
+    owner_identity_hash = rns_sha256(owner_pub_key)[:TRUNCATED_HASH_LEN]
+
+    # Build destination hash for the owner
+    app_name = "testapp"
+    aspects = ["link"]
+    name_str = app_name + "." + ".".join(aspects)
+    name_hash = rns_sha256(name_str.encode("utf-8"))[:10]
+    addr_material = name_hash + owner_identity_hash
+    dest_hash = rns_sha256(addr_material)[:TRUNCATED_HASH_LEN]
+
+    # ---- Fixed keys for responder ephemeral X25519 ----
+    resp_x25519_prv_bytes = bytes([0xCC] * 32)
+    resp_x25519_prv = X25519PrivateKey.from_private_bytes(resp_x25519_prv_bytes)
+    resp_x25519_pub = resp_x25519_prv.public_key()
+    resp_pub_bytes = resp_x25519_pub.public_bytes()
+
+    # ---- Test both AES modes ----
+    for mode_desc, mode, derived_key_length in [
+        ("aes256_cbc", MODE_AES256_CBC, 64),
+        ("aes128_cbc", MODE_AES128_CBC, 32),
+    ]:
+        MTU = 500
+        sig_bytes = signalling_bytes(MTU, mode)
+
+        # ==== Step 1: Build LINKREQUEST data (initiator side) ====
+        # Link.__init__: self.request_data = self.pub_bytes + self.sig_pub_bytes + signalling_bytes
+        request_data = init_pub_bytes + init_sig_pub_bytes + sig_bytes
+        assert len(request_data) == ECPUBSIZE + LINK_MTU_SIZE
+
+        # ==== Step 2: Build LINKREQUEST packet ====
+        # Packet type LINKREQUEST=0x02, HEADER_1, broadcast, SINGLE dest
+        lr_flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x00 << 2) | 0x02
+        lr_hops = 0
+        lr_context = 0x00  # NONE
+        lr_raw = bytes([lr_flags, lr_hops]) + dest_hash + bytes([lr_context]) + request_data
+
+        # ==== Step 3: Compute link_id ====
+        # Packet.get_hashable_part() for HEADER_1:
+        #   hashable_part = bytes([raw[0] & 0x0F]) + raw[2:]
+        hashable_part = bytes([lr_raw[0] & 0x0F]) + lr_raw[2:]
+
+        # Link.link_id_from_lr_packet():
+        #   if len(packet.data) > ECPUBSIZE:
+        #       diff = len(packet.data) - ECPUBSIZE
+        #       hashable_part = hashable_part[:-diff]
+        lr_data = request_data  # this is what Packet.data would be after unpack
+        if len(lr_data) > ECPUBSIZE:
+            diff = len(lr_data) - ECPUBSIZE
+            hashable_for_linkid = hashable_part[:-diff]
+        else:
+            hashable_for_linkid = hashable_part
+
+        # link_id = Identity.truncated_hash(hashable_part) = SHA256(...)[:16]
+        link_id = rns_sha256(hashable_for_linkid)[:TRUNCATED_HASH_LEN]
+
+        # ==== Step 4: Responder-side ECDH + HKDF ====
+        # Link.handshake(): shared_key = self.prv.exchange(self.peer_pub)
+        # Responder prv = resp_x25519_prv, peer_pub = initiator's init_x25519_pub
+        shared_key = resp_x25519_prv.exchange(init_x25519_pub)
+
+        # Link.handshake(): derived_key = hkdf(length=..., derive_from=shared_key,
+        #                                      salt=self.get_salt(), context=self.get_context())
+        # get_salt() -> self.link_id, get_context() -> None
+        derived_key = hkdf(length=derived_key_length, derive_from=shared_key,
+                           salt=link_id, context=None)
+
+        # ==== Step 5: Build LRPROOF (responder side) ====
+        # Link.prove():
+        #   signalling_bytes = Link.signalling_bytes(self.mtu, self.mode)
+        #   signed_data = self.link_id + self.pub_bytes + self.sig_pub_bytes + signalling_bytes
+        #   signature = self.owner.identity.sign(signed_data)
+        #   proof_data = signature + self.pub_bytes + signalling_bytes
+        proof_sig_bytes = signalling_bytes(MTU, mode)
+        proof_signed_data = link_id + resp_pub_bytes + owner_ed25519_pub.public_bytes() + proof_sig_bytes
+        proof_signature = owner_ed25519_prv.sign(proof_signed_data)
+        proof_data = proof_signature + resp_pub_bytes + proof_sig_bytes
+
+        assert len(proof_data) == SIGLENGTH_BYTES + ECPUBSIZE // 2 + LINK_MTU_SIZE
+
+        # ==== Step 6: Build LRPROOF packet ====
+        # Packet context=LRPROOF (0xFF), type=PROOF (0x03)
+        # get_packed_flags for LRPROOF forces dest_type=LINK (0x03)
+        # Packet.pack for LRPROOF: header += self.destination.link_id (not dest hash)
+        lrp_flags = (0x00 << 6) | (0x00 << 5) | (0x00 << 4) | (0x03 << 2) | 0x03
+        lrp_hops = 0
+        lrp_context = 0xFF  # LRPROOF
+        lrp_raw = bytes([lrp_flags, lrp_hops]) + link_id + bytes([lrp_context]) + proof_data
+
+        # ==== Step 7: Initiator-side ECDH + HKDF (must match) ====
+        # Initiator extracts peer_pub_bytes from proof_data
+        peer_pub_from_proof = proof_data[SIGLENGTH_BYTES:SIGLENGTH_BYTES + ECPUBSIZE // 2]
+        peer_pub_obj = X25519PublicKey.from_public_bytes(peer_pub_from_proof)
+        shared_key_init = init_x25519_prv.exchange(peer_pub_obj)
+        assert shared_key_init == shared_key, "Shared keys must match!"
+
+        derived_key_init = hkdf(length=derived_key_length, derive_from=shared_key_init,
+                                salt=link_id, context=None)
+        assert derived_key_init == derived_key, "Derived keys must match!"
+
+        # Initiator validates proof signature
+        # validate_proof: signed_data = link_id + peer_pub_bytes + peer_sig_pub_bytes + signalling_bytes
+        peer_sig_pub_bytes = owner_pub_key[ECPUBSIZE // 2:ECPUBSIZE]
+        verify_signed_data = link_id + peer_pub_from_proof + peer_sig_pub_bytes + proof_sig_bytes
+        owner_ed25519_pub.verify(proof_signature, verify_signed_data)
+
+        # ==== Step 8: Encrypt RTT using Token with fixed IV ====
+        fixed_iv = bytes([0xDD] * 16)
+        rtt_value = 0.125
+        # Python uses umsgpack.packb(self.rtt) -> 9 bytes for float64
+        # cb 3f c0 00 00 00 00 00 00
+        rtt_data = bytes([0xcb]) + struct.pack(">d", rtt_value)
+        assert len(rtt_data) == 9
+
+        token = Token(derived_key)
+        original_urandom = os.urandom
+        os.urandom = lambda n, _iv=fixed_iv: _iv[:n]
+        try:
+            encrypted_rtt = token.encrypt(rtt_data)
+        finally:
+            os.urandom = original_urandom
+
+        # Verify decrypt
+        decrypted_rtt = token.decrypt(encrypted_rtt)
+        assert decrypted_rtt == rtt_data, "RTT roundtrip failed!"
+
+        vectors.append({
+            "description": "handshake_" + mode_desc,
+            "mode": mode,
+            "mtu": MTU,
+            "derived_key_length": derived_key_length,
+            # Initiator keys
+            "initiator_x25519_prv": to_hex(init_x25519_prv_bytes),
+            "initiator_x25519_pub": to_hex(init_pub_bytes),
+            "initiator_ed25519_seed": to_hex(init_ed25519_seed),
+            "initiator_ed25519_pub": to_hex(init_sig_pub_bytes),
+            # Owner (responder destination) keys
+            "owner_x25519_prv": to_hex(owner_x25519_prv_bytes),
+            "owner_x25519_pub": to_hex(owner_x25519_pub.public_bytes()),
+            "owner_ed25519_seed": to_hex(owner_ed25519_seed),
+            "owner_ed25519_pub": to_hex(owner_ed25519_pub.public_bytes()),
+            "owner_pub_key": to_hex(owner_pub_key),
+            "owner_identity_hash": to_hex(owner_identity_hash),
+            # Destination
+            "app_name": app_name,
+            "aspects": aspects,
+            "dest_hash": to_hex(dest_hash),
+            # Responder ephemeral keys
+            "responder_x25519_prv": to_hex(resp_x25519_prv_bytes),
+            "responder_x25519_pub": to_hex(resp_pub_bytes),
+            # Signalling
+            "signalling_bytes": to_hex(sig_bytes),
+            # LINKREQUEST
+            "request_data": to_hex(request_data),
+            "lr_flags": lr_flags,
+            "lr_hops": lr_hops,
+            "lr_context": lr_context,
+            "lr_raw": to_hex(lr_raw),
+            "hashable_part": to_hex(hashable_part),
+            "hashable_for_linkid": to_hex(hashable_for_linkid),
+            "link_id": to_hex(link_id),
+            # Handshake
+            "shared_key": to_hex(shared_key),
+            "derived_key": to_hex(derived_key),
+            # LRPROOF
+            "proof_signed_data": to_hex(proof_signed_data),
+            "proof_signature": to_hex(proof_signature),
+            "proof_data": to_hex(proof_data),
+            "lrp_flags": lrp_flags,
+            "lrp_hops": lrp_hops,
+            "lrp_context": lrp_context,
+            "lrp_raw": to_hex(lrp_raw),
+            # RTT encryption
+            "fixed_iv": to_hex(fixed_iv),
+            "rtt_value": rtt_value,
+            "rtt_data_msgpack": to_hex(rtt_data),
+            "encrypted_rtt": to_hex(encrypted_rtt),
+        })
+
+    write_link_fixture("link_handshake_vectors.json", vectors)
+
+
+def generate_link_crypto_vectors():
+    """Generate link session encryption/decryption test vectors.
+
+    Tests the Token-based encrypt/decrypt used for link traffic
+    (Link.encrypt/decrypt at Link.py:1191-1213).
+
+    Uses derived keys from the handshake to encrypt various payloads.
+    """
+    vectors = []
+
+    # Test multiple key sizes and payloads
+    test_cases = [
+        # (desc, derived_key_hex, fixed_iv_hex, plaintext)
+        ("aes256_short",
+         "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+         "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+         "dd" * 16, b"Hello Link!"),
+        ("aes256_empty",
+         "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+         "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+         "ee" * 16, b""),
+        ("aes256_block_aligned",
+         "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+         "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+         "ff" * 16, b"A" * 16),
+        ("aes256_multi_block",
+         "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+         "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3",
+         "aa" * 16, b"B" * 100),
+        ("aes128_short",
+         "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4",
+         "bb" * 16, b"AES-128 link data"),
+    ]
+
+    for desc, key_hex, iv_hex, plaintext in test_cases:
+        key = bytes.fromhex(key_hex)
+        iv = bytes.fromhex(iv_hex)
+
+        token = Token(key)
+        original_urandom = os.urandom
+        os.urandom = lambda n, _iv=iv: _iv[:n]
+        try:
+            ciphertext = token.encrypt(plaintext)
+        finally:
+            os.urandom = original_urandom
+
+        # Verify roundtrip
+        decrypted = token.decrypt(ciphertext)
+        assert decrypted == plaintext, f"Link crypto roundtrip failed for {desc}"
+
+        vectors.append({
+            "description": desc,
+            "derived_key": key_hex,
+            "fixed_iv": iv_hex,
+            "plaintext": to_hex(plaintext),
+            "ciphertext": to_hex(ciphertext),
+        })
+
+    write_link_fixture("link_crypto_vectors.json", vectors)
+
+
+def generate_link_identify_vectors():
+    """Generate LINKIDENTIFY test vectors.
+
+    Tests the identify() method at Link.py:459-474:
+      signed_data = self.link_id + identity.get_public_key()
+      signature = identity.sign(signed_data)
+      proof_data = identity.get_public_key() + signature
+
+    The proof_data is then encrypted via Token and sent as a DATA packet
+    with context LINKIDENTIFY.
+
+    On the receiving side (Link.py:1014-1032):
+      plaintext is decrypted, then:
+      public_key = plaintext[:KEYSIZE//8]
+      signed_data = self.link_id + public_key
+      signature = plaintext[KEYSIZE//8:KEYSIZE//8+SIGLENGTH//8]
+      identity.validate(signature, signed_data)
+    """
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    KEYSIZE_BYTES = 64     # Identity.KEYSIZE // 8 = 512 // 8 = 64
+    SIGLENGTH_BYTES = 64   # Identity.SIGLENGTH // 8 = 512 // 8 = 64
+
+    # Use a fixed link_id
+    link_id = bytes.fromhex("0eed4280e7770b8157cd66fac3f9b8d0")
+
+    # Use a fixed derived key (from the AES-256 handshake above)
+    derived_key = bytes.fromhex(
+        "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+        "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3"
+    )
+    fixed_iv = bytes([0xDD] * 16)
+
+    # Identity that will identify itself
+    test_identities = [
+        ("identity_range", bytes(range(32)), bytes(range(32, 64))),
+        ("identity_aa", bytes([0xAA] * 32), bytes([0x55] * 32)),
+    ]
+
+    for desc, x_prv_bytes, ed_seed in test_identities:
+        x_prv = X25519PrivateKey.from_private_bytes(x_prv_bytes)
+        ed_prv = Ed25519PrivateKey.from_private_bytes(ed_seed)
+        x_pub = x_prv.public_key()
+        ed_pub = ed_prv.public_key()
+        pub_key = x_pub.public_bytes() + ed_pub.public_bytes()
+        assert len(pub_key) == KEYSIZE_BYTES
+
+        # identify():
+        #   signed_data = self.link_id + identity.get_public_key()
+        #   signature = identity.sign(signed_data)
+        #   proof_data = identity.get_public_key() + signature
+        signed_data = link_id + pub_key
+        signature = ed_prv.sign(signed_data)
+        proof_data = pub_key + signature
+        assert len(proof_data) == KEYSIZE_BYTES + SIGLENGTH_BYTES
+
+        # The proof_data is sent encrypted over the link
+        token = Token(derived_key)
+        original_urandom = os.urandom
+        os.urandom = lambda n, _iv=fixed_iv: _iv[:n]
+        try:
+            encrypted = token.encrypt(proof_data)
+        finally:
+            os.urandom = original_urandom
+
+        # Verify roundtrip
+        decrypted = token.decrypt(encrypted)
+        assert decrypted == proof_data
+
+        vectors.append({
+            "description": desc,
+            "link_id": to_hex(link_id),
+            "derived_key": to_hex(derived_key),
+            "fixed_iv": to_hex(fixed_iv),
+            "x25519_prv": to_hex(x_prv_bytes),
+            "ed25519_seed": to_hex(ed_seed),
+            "public_key": to_hex(pub_key),
+            "signed_data": to_hex(signed_data),
+            "signature": to_hex(signature),
+            "proof_data_plaintext": to_hex(proof_data),
+            "proof_data_encrypted": to_hex(encrypted),
+        })
+
+    write_link_fixture("link_identify_vectors.json", vectors)
+
+
+def generate_channel_envelope_vectors():
+    """Generate Channel Envelope pack/unpack test vectors.
+
+    The Envelope format (Channel.py:192-198):
+      packed = struct.pack(">HHH", msgtype, sequence, len(data)) + data
+
+    Where:
+      - msgtype: u16 big-endian, the message class MSGTYPE
+      - sequence: u16 big-endian, the envelope sequence number
+      - len(data): u16 big-endian, length of the packed message payload
+      - data: the packed message bytes
+
+    Total header overhead: 6 bytes (3 x u16)
+    """
+    import struct
+
+    vectors = []
+
+    test_cases = [
+        # (desc, msgtype, sequence, payload_bytes)
+        ("simple_msg", 0x0001, 0, b"hello"),
+        ("empty_payload", 0x0002, 5, b""),
+        ("seq_wrap", 0x1234, 0xFFFF, b"\x01\x02\x03"),
+        ("max_user_msgtype", 0xEFFF, 100, b"test data payload"),
+        ("system_stream_data", 0xFF00, 42, b"stream bytes"),
+        ("zero_all", 0x0000, 0, b""),
+        ("binary_payload", 0x0010, 1000, bytes(range(256))),
+        ("single_byte", 0x0001, 1, b"\x42"),
+    ]
+
+    for desc, msgtype, seq, data in test_cases:
+        packed = struct.pack(">HHH", msgtype, seq, len(data)) + data
+        vectors.append({
+            "description": desc,
+            "msgtype": msgtype,
+            "sequence": seq,
+            "data": to_hex(data),
+            "data_length": len(data),
+            "packed": to_hex(packed),
+        })
+
+    write_link_fixture("channel_envelope_vectors.json", vectors)
+
+
+def generate_stream_data_vectors():
+    """Generate StreamDataMessage pack/unpack test vectors.
+
+    The StreamDataMessage format (Buffer.py:80-95):
+      header_val = (0x3fff & stream_id)
+                 | (0x8000 if eof else 0x0000)
+                 | (0x4000 if compressed else 0x0000)
+      packed = struct.pack(">H", header_val) + data
+
+    Header is a big-endian u16 with:
+      - bits 0-13: stream_id (0x3FFF mask, max 16383)
+      - bit 14: compressed flag (0x4000)
+      - bit 15: eof flag (0x8000)
+
+    On unpack (Buffer.py:87-95):
+      raw_header = struct.unpack(">H", raw[:2])[0]
+      eof = (0x8000 & raw_header) > 0
+      compressed = (0x4000 & raw_header) > 0
+      stream_id = raw_header & 0x3fff
+      data = raw[2:]
+    """
+    import struct
+
+    vectors = []
+
+    test_cases = [
+        # (desc, stream_id, eof, compressed, data)
+        ("basic", 0, False, False, b"hello world"),
+        ("eof_set", 1, True, False, b"last chunk"),
+        ("compressed_set", 2, False, True, b"compressed data"),
+        ("eof_and_compressed", 100, True, True, b"final"),
+        ("empty_eof", 0, True, False, b""),
+        ("max_stream_id", 0x3FFF, False, False, b"max id"),
+        ("zero_stream_data", 0, False, False, b""),
+        ("binary_data", 42, False, False, bytes(range(64))),
+        ("large_stream_id_eof", 16383, True, False, b"\xff\xfe\xfd"),
+    ]
+
+    for desc, stream_id, eof, compressed, data in test_cases:
+        header_val = (0x3FFF & stream_id) \
+                   | (0x8000 if eof else 0x0000) \
+                   | (0x4000 if compressed else 0x0000)
+        packed = struct.pack(">H", header_val) + data
+        vectors.append({
+            "description": desc,
+            "stream_id": stream_id,
+            "eof": eof,
+            "compressed": compressed,
+            "data": to_hex(data),
+            "header_value": header_val,
+            "packed": to_hex(packed),
+        })
+
+    write_link_fixture("stream_data_vectors.json", vectors)
+
+
 def main():
     print("Generating test vectors from Python RNS crypto...")
     generate_pkcs7()
@@ -1209,6 +1709,12 @@ def main():
     generate_announce_retransmit_vectors()
     generate_transport_routing_vectors()
     generate_full_announce_pipeline_vector()
+    print("\nGenerating Phase 4a link/channel/buffer test vectors...")
+    generate_link_handshake_vectors()
+    generate_link_crypto_vectors()
+    generate_link_identify_vectors()
+    generate_channel_envelope_vectors()
+    generate_stream_data_vectors()
     print("Done! All vectors generated successfully.")
 
 

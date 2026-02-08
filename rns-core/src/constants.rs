@@ -228,6 +228,114 @@ pub const STATE_UNKNOWN: u8 = 0x00;
 pub const STATE_UNRESPONSIVE: u8 = 0x01;
 pub const STATE_RESPONSIVE: u8 = 0x02;
 
+// --- From Link.py ---
+
+/// Link ephemeral public key size: 32 (X25519) + 32 (Ed25519)
+pub const LINK_ECPUBSIZE: usize = 64;
+
+/// Link key size in bytes
+pub const LINK_KEYSIZE: usize = 32;
+
+/// Link MTU signalling bytes size
+pub const LINK_MTU_SIZE: usize = 3;
+
+/// Maximum keepalive interval in seconds
+pub const LINK_KEEPALIVE_MAX: f64 = 360.0;
+
+/// Minimum keepalive interval in seconds
+pub const LINK_KEEPALIVE_MIN: f64 = 5.0;
+
+/// Maximum RTT used for keepalive scaling
+pub const LINK_KEEPALIVE_MAX_RTT: f64 = 1.75;
+
+/// RTT timeout factor for stale→close transition
+pub const LINK_KEEPALIVE_TIMEOUT_FACTOR: f64 = 4.0;
+
+/// Grace period for stale→close transition
+pub const LINK_STALE_GRACE: f64 = 5.0;
+
+/// Factor to compute stale_time from keepalive
+pub const LINK_STALE_FACTOR: f64 = 2.0;
+
+/// Traffic timeout factor
+pub const LINK_TRAFFIC_TIMEOUT_FACTOR: f64 = 6.0;
+
+/// Link MDU: floor((MTU - IFAC_MIN_SIZE - HEADER_MINSIZE - TOKEN_OVERHEAD) / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+pub const LINK_MDU: usize = {
+    let numerator = MTU - IFAC_MIN_SIZE - HEADER_MINSIZE - TOKEN_OVERHEAD;
+    (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
+};
+
+/// Link MTU bytemask (21-bit MTU field)
+pub const LINK_MTU_BYTEMASK: u32 = 0x1FFFFF;
+
+/// Link mode bytemask (3-bit mode field in upper byte)
+pub const LINK_MODE_BYTEMASK: u8 = 0xE0;
+
+// --- From Channel.py ---
+
+/// Initial window size at channel setup
+pub const CHANNEL_WINDOW: u16 = 2;
+
+/// Absolute minimum window size
+pub const CHANNEL_WINDOW_MIN: u16 = 2;
+
+/// Minimum window limit for slow links
+pub const CHANNEL_WINDOW_MIN_LIMIT_SLOW: u16 = 2;
+
+/// Minimum window limit for medium-speed links
+pub const CHANNEL_WINDOW_MIN_LIMIT_MEDIUM: u16 = 5;
+
+/// Minimum window limit for fast links
+pub const CHANNEL_WINDOW_MIN_LIMIT_FAST: u16 = 16;
+
+/// Maximum window size for slow links
+pub const CHANNEL_WINDOW_MAX_SLOW: u16 = 5;
+
+/// Maximum window size for medium-speed links
+pub const CHANNEL_WINDOW_MAX_MEDIUM: u16 = 12;
+
+/// Maximum window size for fast links
+pub const CHANNEL_WINDOW_MAX_FAST: u16 = 48;
+
+/// Minimum flexibility between window_max and window_min
+pub const CHANNEL_WINDOW_FLEXIBILITY: u16 = 4;
+
+/// Maximum sequence number
+pub const CHANNEL_SEQ_MAX: u16 = 0xFFFF;
+
+/// Sequence number modulus
+pub const CHANNEL_SEQ_MODULUS: u32 = 0x10000;
+
+/// Maximum number of send tries per envelope
+pub const CHANNEL_MAX_TRIES: u8 = 5;
+
+/// RTT threshold for fast links
+pub const CHANNEL_RTT_FAST: f64 = 0.18;
+
+/// RTT threshold for medium links
+pub const CHANNEL_RTT_MEDIUM: f64 = 0.75;
+
+/// RTT threshold for slow links
+pub const CHANNEL_RTT_SLOW: f64 = 1.45;
+
+/// Number of consecutive fast rounds to upgrade window
+pub const CHANNEL_FAST_RATE_THRESHOLD: u16 = 10;
+
+/// Channel envelope overhead: msgtype(2) + seq(2) + len(2)
+pub const CHANNEL_ENVELOPE_OVERHEAD: usize = 6;
+
+// --- From Buffer.py ---
+
+/// System message type for stream data
+pub const STREAM_DATA_MSGTYPE: u16 = 0xFF00;
+
+/// Maximum stream ID (14 bits)
+pub const STREAM_ID_MAX: u16 = 0x3FFF;
+
+/// Stream data overhead: 2 (stream header) + 6 (channel envelope)
+pub const STREAM_DATA_OVERHEAD: usize = 2 + CHANNEL_ENVELOPE_OVERHEAD;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +377,17 @@ mod tests {
 
         // TRUNCATED_HASHLENGTH = 128 bits = 16 bytes
         assert_eq!(TRUNCATED_HASHLENGTH / 8, 16);
+    }
+
+    #[test]
+    fn test_link_constants() {
+        assert_eq!(LINK_ECPUBSIZE, 64);
+        assert_eq!(LINK_MTU_SIZE, 3);
+        // LINK_MDU = floor((500 - 1 - 19 - 48) / 16) * 16 - 1 = floor(432/16)*16 - 1 = 27*16 - 1 = 431
+        assert_eq!(LINK_MDU, 431);
+        assert_eq!(CHANNEL_ENVELOPE_OVERHEAD, 6);
+        assert_eq!(STREAM_DATA_OVERHEAD, 8);
+        assert_eq!(STREAM_ID_MAX, 0x3FFF);
     }
 
     #[test]

@@ -51,20 +51,28 @@ rns-rs/
 │   │   ├── lib.rs
 │   │   ├── constants.rs, hash.rs, packet.rs
 │   │   ├── destination.rs, announce.rs, receipt.rs
-│   │   └── transport/              # Phase 3: Routing engine
-│   │       ├── mod.rs              # TransportEngine struct, public API, dispatch
-│   │       ├── types.rs            # InterfaceId, InterfaceInfo, TransportAction, TransportConfig
-│   │       ├── tables.rs           # PathEntry, AnnounceEntry, ReverseEntry, LinkEntry, RateEntry
-│   │       ├── dedup.rs            # PacketHashlist (double-buffered dedup)
-│   │       ├── pathfinder.rs       # Path update decisions, timebase extraction
-│   │       ├── announce_proc.rs    # Announce retransmit building, path entry creation
-│   │       ├── inbound.rs          # Inbound packet dispatch, transport forwarding
-│   │       ├── outbound.rs         # Outbound header rewriting, interface selection
-│   │       ├── rate_limit.rs       # Per-destination announce rate limiting
-│   │       └── jobs.rs             # Periodic maintenance: cull tables, retransmit
+│   │   ├── transport/              # Phase 3: Routing engine
+│   │   │   ├── mod.rs, types.rs, tables.rs, dedup.rs
+│   │   │   ├── pathfinder.rs, announce_proc.rs
+│   │   │   ├── inbound.rs, outbound.rs, rate_limit.rs, jobs.rs
+│   │   ├── link/                   # Phase 4a: Link engine
+│   │   │   ├── mod.rs              # LinkEngine struct, state machine
+│   │   │   ├── types.rs            # LinkId, LinkState, LinkMode, LinkAction, LinkError
+│   │   │   ├── handshake.rs        # LINKREQUEST/LRPROOF/LRRTT building & validation
+│   │   │   ├── crypto.rs           # Session key derivation, encrypt/decrypt via Token
+│   │   │   ├── keepalive.rs        # Keepalive timing, stale detection
+│   │   │   └── identify.rs         # LINKIDENTIFY build/validate
+│   │   ├── channel/                # Phase 4a: Channel messaging
+│   │   │   ├── mod.rs              # Channel struct, send/receive/tick, window mgmt
+│   │   │   ├── types.rs            # ChannelAction, ChannelError
+│   │   │   └── envelope.rs         # 6-byte header pack/unpack
+│   │   └── buffer/                 # Phase 4a: Buffer streaming
+│   │       ├── mod.rs              # StreamDataMessage, BufferWriter, BufferReader
+│   │       └── types.rs            # StreamId, Compressor trait, BufferError
 │   └── tests/
 │       ├── interop.rs              # 7 interop tests (incl. milestone)
-│       └── transport_integration.rs # 15 integration tests for transport engine
+│       ├── transport_integration.rs # 15 integration tests for transport engine
+│       └── link_integration.rs     # 9 integration tests for link/channel/buffer
 ├── rns-net/                         # std — networking, config, I/O [PLANNED]
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
@@ -72,7 +80,8 @@ rns-rs/
     └── fixtures/
         ├── crypto/                  # 11 JSON fixture files (Phase 1)
         ├── protocol/               # 6 JSON fixture files (Phase 2)
-        └── transport/              # 4 JSON fixture files (Phase 3)
+        ├── transport/              # 4 JSON fixture files (Phase 3)
+        └── link/                   # 5 JSON fixture files (Phase 4a)
 ```
 
 ### Crate Graph
@@ -322,99 +331,58 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 
 ---
 
-## Phase 4: Links & Higher Protocols (`rns-core`)
+## Phase 4a: Link, Channel & Buffer (`rns-core`) — COMPLETE ✓
 
-**Milestone**: Rust can establish an encrypted link with a Python node, exchange channel messages, and transfer resources.
+**Milestone**: Two Rust `LinkEngine` instances complete a full 4-way handshake, derive identical session keys, exchange encrypted Channel messages, and stream data via Buffer — all producing byte-identical wire output to Python for the same inputs.
+
+**Result**: 105 unit tests + 9 integration tests = 114 new tests (248 total rns-core, 324 total workspace). Action queue model matching transport: `LinkEngine`, `Channel`, and `BufferWriter` return `Vec<Action>`. No callbacks, no I/O. Composition via actions, not references. All wire formats validated against Python-generated test vectors.
+
+**Modules added**:
+- `link/` — LinkEngine state machine (Pending→Handshake→Active→Stale→Closed), 4-way handshake (LINKREQUEST/LRPROOF/LRRTT), session crypto (AES-128/AES-256 via Token), keepalive/stale timing, LINKIDENTIFY
+- `channel/` — Window-based flow control with RTT adaptation (fast/medium/slow), envelope framing, retry with exponential backoff, sequence wrapping at 0xFFFF
+- `buffer/` — StreamDataMessage with 14-bit stream_id + EOF/compressed flags, BufferWriter chunking, BufferReader reassembly, Compressor trait for `no_std`
+
+**Key design decisions**:
+1. Minimal msgpack: only float64 encoding (0xcb + 8 BE bytes) for LRRTT — no full msgpack dependency
+2. Explicit time (`now: f64`) and RNG (`&mut dyn Rng`) for deterministic testing
+3. `Compressor` trait with `NoopCompressor` default for `no_std`; `std` users can provide bz2
+
+### Python Reference Files
+- `RNS/Link.py` — Handshake, encryption, keepalive
+- `RNS/Channel.py` — Messaging, flow control
+- `RNS/Buffer.py` — Stream I/O
+
+---
+
+## Phase 4b: Resource Transfer (`rns-core`)
+
+**Milestone**: Rust can advertise, segment, transfer, and reassemble Resources with windowed flow control, producing byte-identical wire output to Python.
 
 ### TDD Sequence
 
-#### 4.1 Link — State Machine
-1. Test: new Link starts in PENDING
-2. Test: valid state transitions (PENDING→HANDSHAKE→ACTIVE→STALE→CLOSED)
-3. Test: invalid transitions are rejected
-4. Test: CLOSED is terminal
-
-#### 4.2 Link — Handshake (Initiator)
-1. Test: `create_request()` produces LINKREQUEST with ephemeral pub(32) + ed25519 pub(32) + signalling(3)
-2. Test: `validate_proof(python_lrproof)` → transitions to ACTIVE, derives correct session key
-3. Test: session key matches what Python derived for same handshake
-4. Test: `validate_proof(bad_signature)` → link closed
-
-#### 4.3 Link — Handshake (Responder)
-1. Test: `validate_request(linkrequest_data)` → creates link in HANDSHAKE
-2. Test: `prove()` → produces LRPROOF with signature + pub key
-3. Test: LRPROOF verifiable by Python initiator
-
-#### 4.4 Link — Session Encryption
-1. Test: `encrypt(plaintext)` with known session key → Python can decrypt
-2. Test: Python `encrypt(plaintext)` → Rust `decrypt` recovers original
-3. Test: token mode selection (AES-128 vs AES-256) based on derived key length
-
-#### 4.5 Link — Keepalive & Timeout
-1. Test: no activity for keepalive interval → keepalive sent
-2. Test: no activity for stale_time → status becomes STALE
-3. Test: stale + grace period elapsed → CLOSED
-4. Test: activity resets timers
-
-#### 4.6 Link — Identify
-1. Test: `identify(identity)` sends identity proof over link
-2. Test: receiving identity proof → `remote_identity` populated
-
-#### 4.7 Channel — Envelope Framing
-1. Test: pack envelope → `msgtype(2) | sequence(2) | length(2) | payload`
-2. Test: unpack envelope → correct fields
-3. Test: sequence wraps at 0xFFFF → 0x0000
-
-#### 4.8 Channel — Send/Receive
-1. Test: send message → envelope created with next sequence
-2. Test: receive in-order message → delivered to handler
-3. Test: receive out-of-order → buffered until gap filled
-4. Test: message type registry → correct factory called
-
-#### 4.9 Channel — Flow Control
-1. Test: window starts at 2
-2. Test: successful delivery → window grows (up to max)
-3. Test: timeout → window shrinks (down to min)
-4. Test: window_max adapts to RTT (fast/medium/slow thresholds)
-
-#### 4.10 Channel — Retry
-1. Test: unacknowledged envelope retransmitted after timeout
-2. Test: max retries (5) exceeded → message FAILED
-3. Test: timeout formula: `1.5^(tries-1) * max(rtt*2.5, 0.025) * (ring_len+1.5)`
-
-#### 4.11 Buffer — Stream I/O
-1. Test: stream header encodes `stream_id(14) | compressed(1) | eof(1)` correctly
-2. Test: writer chunks data to fit channel MDU
-3. Test: reader accumulates chunks, returns complete data
-4. Test: EOF flag terminates stream
-5. Test: compression applied when beneficial (payload > 32 bytes, compressed < original)
-
-#### 4.12 Resource — Advertisement
+#### 4b.1 Resource — Advertisement
 1. Test: pack advertisement msgpack matches Python format
 2. Test: unpack Python-generated advertisement → correct fields
 3. Test: hashmap contains correct 4-byte part hashes
 
-#### 4.13 Resource — Transfer State Machine
+#### 4b.2 Resource — Transfer State Machine
 1. Test: NONE → QUEUED → ADVERTISED on advertise()
 2. Test: receiver accepts → TRANSFERRING
 3. Test: all parts received → ASSEMBLING → COMPLETE
 4. Test: hash mismatch → CORRUPT
 5. Test: timeout → FAILED
 
-#### 4.14 Resource — Selective Retransmission
+#### 4b.3 Resource — Selective Retransmission
 1. Test: receiver requests missing parts by hash
 2. Test: sender retransmits only requested parts
 3. Test: hashmap exhaustion triggers new hashmap from sender
 
-#### 4.15 Resource — Window Adaptation
+#### 4b.4 Resource — Window Adaptation
 1. Test: window starts at 4
 2. Test: fast rate → window grows to WINDOW_MAX_FAST (75)
 3. Test: slow rate → window shrinks to WINDOW_MAX_SLOW (10)
 
 ### Python Reference Files
-- `RNS/Link.py` — Handshake, encryption, keepalive
-- `RNS/Channel.py` — Messaging, flow control
-- `RNS/Buffer.py` — Stream I/O
 - `RNS/Resource.py` — Transfer protocol
 
 ---
@@ -530,7 +498,8 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 | **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | **DONE** — 76 tests, `Python Token.encrypt() → Rust decrypt()` ✓ |
 | **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 46 tests, `Python announce → Rust validate()` ✓ |
 | **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — 143 tests, `Python announce → Rust route + retransmit` ✓ |
-| **4** | `rns-core` | Link handshake, Channel, Resource protocols complete | Planned |
+| **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — 248 tests, full 4-way handshake + encrypted channel + buffer streaming ✓ |
+| **4b** | `rns-core` | Resource segmented transfer with windowed flow control | Planned |
 | **5** | `rns-net` | Daemon joins Python network, routes real traffic | Planned |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
@@ -572,8 +541,15 @@ A Python script that imports RNS (with PROVIDER_INTERNAL forced) and generates J
 - transport_routing_vectors.json   # HEADER_2 rewrite scenarios
 - full_pipeline_vectors.json       # End-to-end announce → route → retransmit
 
+# Phase 4a vectors (tests/fixtures/link/)
+- link_handshake_vectors.json     # 2 Full handshake (AES-128 + AES-256)
+- link_crypto_vectors.json        # 5 Session encryption with fixed IVs
+- link_identify_vectors.json      # 2 LINKIDENTIFY plaintext/encrypted
+- channel_envelope_vectors.json   # 8 Envelope pack/unpack
+- stream_data_vectors.json        # 9 StreamDataMessage pack/unpack
+
 # Future phases (not yet generated)
-- link_request, link_proof, channel_envelope, resource_advertisement
+- resource_advertisement, resource_transfer
 ```
 
 ### Fixture format

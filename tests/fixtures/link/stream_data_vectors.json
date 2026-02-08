@@ -1,0 +1,83 @@
+[
+  {
+    "description": "basic",
+    "stream_id": 0,
+    "eof": false,
+    "compressed": false,
+    "data": "68656c6c6f20776f726c64",
+    "header_value": 0,
+    "packed": "000068656c6c6f20776f726c64"
+  },
+  {
+    "description": "eof_set",
+    "stream_id": 1,
+    "eof": true,
+    "compressed": false,
+    "data": "6c617374206368756e6b",
+    "header_value": 32769,
+    "packed": "80016c617374206368756e6b"
+  },
+  {
+    "description": "compressed_set",
+    "stream_id": 2,
+    "eof": false,
+    "compressed": true,
+    "data": "636f6d707265737365642064617461",
+    "header_value": 16386,
+    "packed": "4002636f6d707265737365642064617461"
+  },
+  {
+    "description": "eof_and_compressed",
+    "stream_id": 100,
+    "eof": true,
+    "compressed": true,
+    "data": "66696e616c",
+    "header_value": 49252,
+    "packed": "c06466696e616c"
+  },
+  {
+    "description": "empty_eof",
+    "stream_id": 0,
+    "eof": true,
+    "compressed": false,
+    "data": "",
+    "header_value": 32768,
+    "packed": "8000"
+  },
+  {
+    "description": "max_stream_id",
+    "stream_id": 16383,
+    "eof": false,
+    "compressed": false,
+    "data": "6d6178206964",
+    "header_value": 16383,
+    "packed": "3fff6d6178206964"
+  },
+  {
+    "description": "zero_stream_data",
+    "stream_id": 0,
+    "eof": false,
+    "compressed": false,
+    "data": "",
+    "header_value": 0,
+    "packed": "0000"
+  },
+  {
+    "description": "binary_data",
+    "stream_id": 42,
+    "eof": false,
+    "compressed": false,
+    "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "header_value": 42,
+    "packed": "002a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+  {
+    "description": "large_stream_id_eof",
+    "stream_id": 16383,
+    "eof": true,
+    "compressed": false,
+    "data": "fffefd",
+    "header_value": 49151,
+    "packed": "bffffffefd"
+  }
+]
