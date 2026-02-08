@@ -84,14 +84,18 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, I/O [Phase 5b DONE]
+├── rns-net/                         # std — networking, I/O [Phase 5d DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Public API, re-exports
 │   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
+│   │   ├── kiss.rs                  # KISS framing (FEND/FESC) + streaming Decoder
+│   │   ├── rnode_kiss.rs            # RNode KISS commands + streaming RNodeDecoder
 │   │   ├── event.rs                 # Event enum (Frame, InterfaceUp/Down, Tick, Shutdown)
 │   │   ├── time.rs                  # now() → f64 Unix epoch
 │   │   ├── config.rs                # ConfigObj parser for Python RNS config files
 │   │   ├── storage.rs               # Identity + known destinations persistence
+│   │   ├── ifac.rs                  # IFAC derive/mask/unmask (Interface Access Codes)
+│   │   ├── serial.rs                # Raw serial I/O via libc termios
 │   │   ├── driver.rs                # Callbacks trait, Driver event loop + dispatch
 │   │   ├── node.rs                  # RnsNode start/shutdown/from_config lifecycle
 │   │   └── interface/
@@ -99,12 +103,18 @@ rns-rs/
 │   │       ├── tcp.rs               # TCP client: connect, reconnect, reader thread
 │   │       ├── tcp_server.rs        # TCP server: accept, per-client reader threads
 │   │       ├── udp.rs               # UDP broadcast: no HDLC framing
-│   │       └── local.rs             # Unix abstract socket + TCP fallback
+│   │       ├── local.rs             # Unix abstract socket + TCP fallback
+│   │       ├── serial_iface.rs      # Serial + HDLC framing, reconnect
+│   │       ├── kiss_iface.rs        # KISS + flow control, TNC config
+│   │       ├── pipe.rs              # Subprocess stdin/stdout + HDLC, auto-respawn
+│   │       ├── rnode.rs             # RNode LoRa radio, multi-sub, flow control
+│   │       └── backbone.rs          # TCP mesh backbone, Linux epoll
 │   ├── examples/
 │   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
 │   │   └── rnsd.rs                  # Rust rnsd daemon (config-driven)
 │   └── tests/
-│       └── python_interop.rs        # Rust↔Python announce reception
+│       ├── python_interop.rs        # Rust↔Python announce reception
+│       └── ifac_interop.rs          # IFAC mask/unmask vs Python vectors
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
@@ -113,7 +123,8 @@ rns-rs/
         ├── protocol/               # 6 JSON fixture files (Phase 2)
         ├── transport/              # 4 JSON fixture files (Phase 3)
         ├── link/                   # 5 JSON fixture files (Phase 4a)
-        └── resource/               # 5 JSON fixture files (Phase 4b)
+        ├── resource/               # 5 JSON fixture files (Phase 4b)
+        └── ifac/                   # 1 JSON fixture file (Phase 5c)
 ```
 
 ### Crate Graph
@@ -742,47 +753,40 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
-## Phase 5c: Additional Interfaces & Features (`rns-net`) — PLANNED
+## Phase 5c: IFAC, KISS & Serial Interfaces (`rns-net`) — COMPLETE ✓
 
-**Milestone**: Serial, KISS, RNode, AutoInterface, IFAC, and full network interop tests.
+**Milestone**: IFAC masking/unmasking, raw serial I/O, Serial interface with HDLC framing, KISS interface with flow control, and TNC configuration — all validated against Python-generated test vectors.
 
-### TDD Sequence
+**Result**: 117 unit tests + 2 interop tests = 119 tests (570 total workspace). IFAC key derivation matches Python's HKDF(SHA256(SHA256(netname)||SHA256(netkey)), IFAC_SALT). Serial I/O via libc termios with PTY pairs for testing. KISS framing with FEND/FESC escaping. KISS interface with flow control (CMD_READY), TNC config commands after 2s init delay, and reconnect pattern. Default IFAC sizes: 8 bytes for Serial/KISS/RNode, 16 for TCP/UDP/Auto/Local.
 
-#### 5c.1 SerialInterface
-1. Test: write/read over virtual serial port pair
-2. Test: framing (HDLC) round-trip
+**New modules**:
+- `ifac.rs` — IFAC derive/mask/unmask with HKDF key derivation (7 tests + 1 interop)
+- `serial.rs` — Raw serial I/O via libc termios, `open_pty_pair()` for testing (4 tests)
+- `kiss.rs` — KISS framing (FEND=0xC0, FESC=0xDB) + streaming Decoder (10 tests)
+- `interface/serial_iface.rs` — Serial + HDLC framing, reader thread, reconnect (5 tests)
+- `interface/kiss_iface.rs` — KISS + flow control, TNC config, beacon support (8 tests)
 
-#### 5c.2 KISSInterface
-1. Test: KISS frame encoding/decoding
-2. Test: preamble, txtail, persistence parameters applied
+**Deferred**: AutoInterface (IPv6 multicast, cross-platform interface enumeration), I2P (SAM client), RNode/Pipe/Backbone (Phase 5d).
 
-#### 5c.3 RNodeInterface
-1. Test: RNode serial protocol command/response framing
-2. Test: frequency/bandwidth/SF/CR configuration
-3. Test: data send/receive via RNode (requires hardware or mock)
+---
 
-#### 5c.4 AutoInterface
-1. Test: multicast discovery on loopback
-2. Test: peer-to-peer data exchange
+## Phase 5d: RNode, Pipe & Backbone Interfaces (`rns-net`) — COMPLETE ✓
 
-#### 5c.5 IFAC (Interface Access Codes)
-1. Test: IFAC masking/unmasking round-trip
-2. Test: packets with wrong IFAC dropped
+**Milestone**: RNode LoRa radio modem interface with multi-subinterface support, Pipe subprocess interface, and Backbone TCP mesh interface using Linux epoll — all matching Python reference implementations.
 
-#### 5c.6 Full Network Interop
-1. Test: Rust rnsd + Python rnsd on Docker network → path discovery works
-2. Test: Python node announces → Rust node discovers path
-3. Test: Rust node sends packet → Python node receives
-4. Test: Link establishment: Python initiator → Rust responder
-5. Test: Link establishment: Rust initiator → Python responder
-6. Test: Resource transfer across implementations
+**Result**: 152 unit tests + 2 interop tests = 154 tests (605 total workspace). RNode KISS protocol module with streaming decoder and 12-subinterface data routing. Pipe interface spawns subprocess via `sh -c`, communicates over stdin/stdout with HDLC framing, auto-respawns on failure. RNode interface manages serial connection to hardware, runs detect/configure sequence, creates per-subinterface writers with flow control. Backbone interface uses single epoll thread to multiplex listener + all client sockets, creates dynamic per-peer interfaces.
 
-### Python Reference Files
-- `RNS/Reticulum.py` — Config, lifecycle, shared instance
-- `RNS/Interfaces/Interface.py` — Base class
-- `RNS/Interfaces/TCPInterface.py`, `UDPInterface.py`, `LocalInterface.py`
-- `RNS/Interfaces/SerialInterface.py`, `KISSInterface.py`, `RNodeInterface.py`
-- `RNS/Interfaces/AutoInterface.py`
+**New modules**:
+- `rnode_kiss.rs` — RNode-specific KISS commands, RNodeDecoder, subinterface data routing (10 tests)
+- `interface/pipe.rs` — Subprocess stdin/stdout + HDLC framing, auto-respawn (5 tests)
+- `interface/rnode.rs` — RNode LoRa radio, detect/configure, multi-sub writers, flow control (8 tests)
+- `interface/backbone.rs` — TCP mesh backbone, Linux epoll, dynamic per-client interfaces (8 tests)
+
+**Extended modules**:
+- `node.rs` — `InterfaceVariant::Pipe/RNode/Backbone`, config parsing, start handling (4 tests)
+- `lib.rs` — Re-exports for `PipeConfig`, `RNodeConfig`, `RNodeSubConfig`, `BackboneConfig`
+
+**Deferred**: AutoInterface, I2P, RNodeMultiInterface config nesting (`[[[triple-bracket]]]`).
 
 ---
 
@@ -824,7 +828,8 @@ New fixtures in `tests/fixtures/resource/`:
 | **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — 375 tests (rns-core), full sender↔receiver cycle + HMU + interop ✓ |
 | **5a** | `rns-net` | TCP connect → receive announces → discover paths | **DONE** — 36 tests, Rust connects to Python TCP server, processes HDLC-framed announces ✓ |
 | **5b** | `rns-net` | Config, TCP server, UDP, Local, persistence | **DONE** — 80 tests, full `rnsd` daemon reads config, opens all interfaces ✓ |
-| **5c** | `rns-net` | Serial, KISS, RNode, AutoInterface, IFAC, interop | Planned |
+| **5c** | `rns-net` | IFAC, Serial, KISS interfaces | **DONE** — 119 tests, IFAC mask/unmask + Serial + KISS with flow control ✓ |
+| **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 154 tests, RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
