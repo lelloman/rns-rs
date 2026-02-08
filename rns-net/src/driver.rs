@@ -7,6 +7,7 @@ use rns_core::transport::TransportEngine;
 use rns_crypto::OsRng;
 
 use crate::event::{Event, EventReceiver};
+use crate::ifac;
 use crate::interface::InterfaceEntry;
 use crate::time;
 
@@ -67,8 +68,31 @@ impl Driver {
 
             match event {
                 Event::Frame { interface_id, data } => {
+                    // IFAC inbound processing
+                    let packet = if let Some(entry) = self.interfaces.get(&interface_id) {
+                        if let Some(ref ifac_state) = entry.ifac {
+                            // Interface has IFAC enabled — unmask
+                            match ifac::unmask_inbound(&data, ifac_state) {
+                                Some(unmasked) => unmasked,
+                                None => {
+                                    log::debug!("[{}] IFAC rejected packet", interface_id.0);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            // No IFAC — drop if IFAC flag is set
+                            if data.len() > 2 && data[0] & 0x80 == 0x80 {
+                                log::debug!("[{}] dropping packet with IFAC flag on non-IFAC interface", interface_id.0);
+                                continue;
+                            }
+                            data
+                        }
+                    } else {
+                        data
+                    };
+
                     let actions = self.engine.handle_inbound(
-                        &data,
+                        &packet,
                         interface_id,
                         time::now(),
                         &mut self.rng,
@@ -93,6 +117,7 @@ impl Driver {
                                     writer,
                                     online: true,
                                     dynamic: true,
+                                    ifac: None,
                                 },
                             );
                         }
@@ -135,7 +160,12 @@ impl Driver {
                 TransportAction::SendOnInterface { interface, raw } => {
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
-                            if let Err(e) = entry.writer.send_frame(&raw) {
+                            let data = if let Some(ref ifac_state) = entry.ifac {
+                                ifac::mask_outbound(&raw, ifac_state)
+                            } else {
+                                raw
+                            };
+                            if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] send failed: {}", entry.info.id.0, e);
                             }
                         }
@@ -144,7 +174,12 @@ impl Driver {
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
                     for entry in self.interfaces.values_mut() {
                         if entry.online && Some(entry.id) != exclude {
-                            if let Err(e) = entry.writer.send_frame(&raw) {
+                            let data = if let Some(ref ifac_state) = entry.ifac {
+                                ifac::mask_outbound(&raw, ifac_state)
+                            } else {
+                                raw.clone()
+                            };
+                            if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] broadcast failed: {}", entry.info.id.0, e);
                             }
                         }
@@ -343,6 +378,7 @@ mod tests {
             writer: Box::new(writer),
             online: true,
             dynamic: false,
+            ifac: None,
         });
 
         let identity = Identity::new(&mut OsRng);
@@ -373,6 +409,7 @@ mod tests {
             writer: Box::new(writer),
             online: true,
             dynamic: false,
+            ifac: None,
         });
 
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
@@ -401,10 +438,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false,
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false, ifac: None,
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
         });
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
@@ -433,10 +470,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false,
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false, ifac: None,
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
         });
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
@@ -463,7 +500,7 @@ mod tests {
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false,
+            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false, ifac: None,
         });
 
         // Send Tick then Shutdown
@@ -500,7 +537,7 @@ mod tests {
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false,
+            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false, ifac: None,
         });
 
         let identity = Identity::new(&mut OsRng);
@@ -534,10 +571,10 @@ mod tests {
         let info1 = make_interface_info(1);
         let info2 = make_interface_info(2);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: false, dynamic: false, // offline
+            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: false, dynamic: false, ifac: None, // offline
         });
         driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false,
+            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
         });
 
         // Direct send to offline interface: should be skipped
@@ -571,7 +608,7 @@ mod tests {
         let (w_old, sent_old) = MockWriter::new();
         let info = make_interface_info(1);
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(w_old), online: false, dynamic: false,
+            id: InterfaceId(1), info, writer: Box::new(w_old), online: false, dynamic: false, ifac: None,
         });
 
         // Simulate reconnect: InterfaceUp with new writer
@@ -660,6 +697,7 @@ mod tests {
             writer: Box::new(writer),
             online: true,
             dynamic: true,
+            ifac: None,
         });
 
         // InterfaceDown for dynamic → should be removed entirely
@@ -686,7 +724,7 @@ mod tests {
         let info = make_interface_info(1);
         let (writer, _) = MockWriter::new();
         driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: false, dynamic: false,
+            id: InterfaceId(1), info, writer: Box::new(writer), online: false, dynamic: false, ifac: None,
         });
 
         tx.send(Event::InterfaceUp(InterfaceId(1), None, None)).unwrap();

@@ -142,6 +142,7 @@ except (KeyboardInterrupt, SystemExit):
                     connect_timeout: Duration::from_secs(5),
                 }),
                 mode: MODE_FULL,
+                ifac: None,
             }],
         },
         Box::new(TestCallbacks { announce_tx }),

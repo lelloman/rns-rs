@@ -1976,6 +1976,149 @@ def generate_resource_hmu_vectors():
     write_resource_fixture("hmu_vectors.json", vectors)
 
 
+# --- Phase 5c: IFAC vectors ---
+
+IFAC_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'ifac')
+os.makedirs(IFAC_DIR, exist_ok=True)
+
+
+def write_ifac_fixture(name, data):
+    path = os.path.join(IFAC_DIR, name)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f"  Written {path} ({len(data)} vectors)")
+
+
+def generate_ifac_vectors():
+    """Generate IFAC mask/unmask test vectors matching Reticulum.py and Transport.py."""
+    import RNS
+
+    # Force internal provider
+    cp.PROVIDER = cp.PROVIDER_INTERNAL
+    import importlib
+    importlib.reload(RNS.Cryptography)
+
+    IFAC_SALT = bytes.fromhex("adf54d882c9a9b80771eb4995d702d4a3e733391b2a0f53f416d9f907e55cff8")
+
+    vectors = []
+
+    test_cases = [
+        {
+            "description": "netname_only_size8",
+            "netname": "testnet",
+            "netkey": None,
+            "ifac_size": 8,
+            "raw_packet": bytes([0x00, 0x01]) + bytes(range(32)),
+        },
+        {
+            "description": "netkey_only_size16",
+            "netname": None,
+            "netkey": "secretpassword",
+            "ifac_size": 16,
+            "raw_packet": bytes([0x40, 0x03]) + bytes([0xAA] * 50),
+        },
+        {
+            "description": "both_size8",
+            "netname": "mynetwork",
+            "netkey": "mypassphrase",
+            "ifac_size": 8,
+            "raw_packet": bytes([0x10, 0x00]) + bytes([i ^ 0x55 for i in range(100)]),
+        },
+        {
+            "description": "both_size16_large_packet",
+            "netname": "production",
+            "netkey": "strongkey123",
+            "ifac_size": 16,
+            "raw_packet": bytes([0x20, 0x05]) + bytes([(i * 7 + 13) & 0xFF for i in range(400)]),
+        },
+    ]
+
+    for tc in test_cases:
+        netname = tc["netname"]
+        netkey = tc["netkey"]
+        ifac_size = tc["ifac_size"]
+        raw_packet = tc["raw_packet"]
+
+        # Derive IFAC key (same as Reticulum.py:811-828)
+        ifac_origin = b""
+        if netname is not None:
+            ifac_origin += RNS.Identity.full_hash(netname.encode("utf-8"))
+        if netkey is not None:
+            ifac_origin += RNS.Identity.full_hash(netkey.encode("utf-8"))
+
+        ifac_origin_hash = RNS.Identity.full_hash(ifac_origin)
+        ifac_key = RNS.Cryptography.hkdf(
+            length=64,
+            derive_from=ifac_origin_hash,
+            salt=IFAC_SALT,
+            context=None,
+        )
+        ifac_identity = RNS.Identity.from_bytes(ifac_key)
+
+        # Mask outbound (Transport.py:894-930)
+        ifac = ifac_identity.sign(raw_packet)[-ifac_size:]
+
+        mask = RNS.Cryptography.hkdf(
+            length=len(raw_packet) + ifac_size,
+            derive_from=ifac,
+            salt=ifac_key,
+            context=None,
+        )
+
+        new_header = bytes([raw_packet[0] | 0x80, raw_packet[1]])
+        new_raw = new_header + ifac + raw_packet[2:]
+
+        i = 0; masked_raw = b""
+        for byte in new_raw:
+            if i == 0:
+                masked_raw += bytes([byte ^ mask[i] | 0x80])
+            elif i == 1 or i > ifac_size + 1:
+                masked_raw += bytes([byte ^ mask[i]])
+            else:
+                masked_raw += bytes([byte])
+            i += 1
+
+        # Verify unmask works (Transport.py:1241-1303)
+        # Extract IFAC from masked
+        extracted_ifac = masked_raw[2:2+ifac_size]
+
+        verify_mask = RNS.Cryptography.hkdf(
+            length=len(masked_raw),
+            derive_from=extracted_ifac,
+            salt=ifac_key,
+            context=None,
+        )
+
+        i = 0; unmasked_raw = b""
+        for byte in masked_raw:
+            if i <= 1 or i > ifac_size + 1:
+                unmasked_raw += bytes([byte ^ verify_mask[i]])
+            else:
+                unmasked_raw += bytes([byte])
+            i += 1
+
+        new_header_u = bytes([unmasked_raw[0] & 0x7f, unmasked_raw[1]])
+        recovered = new_header_u + unmasked_raw[2+ifac_size:]
+
+        assert recovered == raw_packet, f"Roundtrip failed for {tc['description']}: {recovered.hex()} != {raw_packet.hex()}"
+
+        # Get the identity hash for verification
+        identity_hash = RNS.Identity.truncated_hash(ifac_identity.get_public_key())
+
+        vectors.append({
+            "description": tc["description"],
+            "netname": netname,
+            "netkey": netkey,
+            "ifac_size": ifac_size,
+            "raw_packet": to_hex(raw_packet),
+            "masked_packet": to_hex(masked_raw),
+            "ifac_key": to_hex(ifac_key),
+            "identity_hash": to_hex(identity_hash),
+        })
+
+    write_ifac_fixture("ifac_vectors.json", vectors)
+
+
 def main():
     print("Generating test vectors from Python RNS crypto...")
     generate_pkcs7()
@@ -2013,6 +2156,8 @@ def main():
     generate_resource_proof_vectors()
     generate_resource_advertisement_vectors()
     generate_resource_hmu_vectors()
+    print("\nGenerating Phase 5c IFAC test vectors...")
+    generate_ifac_vectors()
     print("Done! All vectors generated successfully.")
 
 

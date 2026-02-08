@@ -4,10 +4,13 @@ pub mod tcp;
 pub mod tcp_server;
 pub mod udp;
 pub mod local;
+pub mod serial_iface;
+pub mod kiss_iface;
 
 use std::io;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
+use crate::ifac::IfacState;
 
 /// Writable end of an interface. Held by the driver.
 ///
@@ -25,6 +28,8 @@ pub struct InterfaceEntry {
     /// True for dynamically spawned interfaces (e.g. TCP server clients).
     /// These are fully removed on InterfaceDown rather than just marked offline.
     pub dynamic: bool,
+    /// IFAC state for this interface, if access codes are enabled.
+    pub ifac: Option<IfacState>,
 }
 
 #[cfg(test)]
@@ -66,6 +71,7 @@ mod tests {
             writer: Box::new(MockWriter::new()),
             online: false,
             dynamic: false,
+            ifac: None,
         };
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);

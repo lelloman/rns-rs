@@ -210,6 +210,11 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
+/// Parse a string as a boolean (ConfigObj style). Public API for use by node.rs.
+pub fn parse_bool_pub(value: &str) -> Option<bool> {
+    parse_bool(value)
+}
+
 /// Parse a string as a boolean (ConfigObj style).
 fn parse_bool(value: &str) -> Option<bool> {
     match value.to_lowercase().as_str() {
@@ -569,5 +574,94 @@ instance_name = test
         let config = parse(input).unwrap();
         assert_eq!(config.interfaces.len(), 1);
         assert!(!config.interfaces[0].enabled);
+    }
+
+    #[test]
+    fn parse_serial_interface() {
+        let input = r#"
+[interfaces]
+  [[Serial Port]]
+    type = SerialInterface
+    enabled = Yes
+    port = /dev/ttyUSB0
+    speed = 115200
+    databits = 8
+    parity = N
+    stopbits = 1
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.interfaces.len(), 1);
+        let iface = &config.interfaces[0];
+        assert_eq!(iface.name, "Serial Port");
+        assert_eq!(iface.interface_type, "SerialInterface");
+        assert!(iface.enabled);
+        assert_eq!(iface.params.get("port").unwrap(), "/dev/ttyUSB0");
+        assert_eq!(iface.params.get("speed").unwrap(), "115200");
+        assert_eq!(iface.params.get("databits").unwrap(), "8");
+        assert_eq!(iface.params.get("parity").unwrap(), "N");
+        assert_eq!(iface.params.get("stopbits").unwrap(), "1");
+    }
+
+    #[test]
+    fn parse_kiss_interface() {
+        let input = r#"
+[interfaces]
+  [[KISS TNC]]
+    type = KISSInterface
+    enabled = Yes
+    port = /dev/ttyUSB1
+    speed = 9600
+    preamble = 350
+    txtail = 20
+    persistence = 64
+    slottime = 20
+    flow_control = True
+    id_interval = 600
+    id_callsign = MYCALL
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.interfaces.len(), 1);
+        let iface = &config.interfaces[0];
+        assert_eq!(iface.name, "KISS TNC");
+        assert_eq!(iface.interface_type, "KISSInterface");
+        assert_eq!(iface.params.get("port").unwrap(), "/dev/ttyUSB1");
+        assert_eq!(iface.params.get("speed").unwrap(), "9600");
+        assert_eq!(iface.params.get("preamble").unwrap(), "350");
+        assert_eq!(iface.params.get("txtail").unwrap(), "20");
+        assert_eq!(iface.params.get("persistence").unwrap(), "64");
+        assert_eq!(iface.params.get("slottime").unwrap(), "20");
+        assert_eq!(iface.params.get("flow_control").unwrap(), "True");
+        assert_eq!(iface.params.get("id_interval").unwrap(), "600");
+        assert_eq!(iface.params.get("id_callsign").unwrap(), "MYCALL");
+    }
+
+    #[test]
+    fn parse_ifac_networkname() {
+        let input = r#"
+[interfaces]
+  [[TCP Client]]
+    type = TCPClientInterface
+    target_host = 10.0.0.1
+    target_port = 4242
+    networkname = testnet
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.interfaces[0].params.get("networkname").unwrap(), "testnet");
+    }
+
+    #[test]
+    fn parse_ifac_passphrase() {
+        let input = r#"
+[interfaces]
+  [[TCP Client]]
+    type = TCPClientInterface
+    target_host = 10.0.0.1
+    target_port = 4242
+    passphrase = secret123
+    ifac_size = 64
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.interfaces[0].params.get("passphrase").unwrap(), "secret123");
+        assert_eq!(config.interfaces[0].params.get("ifac_size").unwrap(), "64");
     }
 }

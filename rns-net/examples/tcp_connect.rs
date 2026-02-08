@@ -67,6 +67,7 @@ fn main() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                ifac: None,
             }],
         },
         Box::new(LoggingCallbacks),

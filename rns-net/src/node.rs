@@ -16,11 +16,15 @@ use rns_crypto::OsRng;
 use crate::config;
 use crate::driver::{Callbacks, Driver};
 use crate::event::{self, Event, EventSender};
+use crate::ifac;
 use crate::interface::tcp::TcpClientConfig;
 use crate::interface::tcp_server::TcpServerConfig;
 use crate::interface::udp::UdpConfig;
 use crate::interface::local::{LocalServerConfig, LocalClientConfig};
+use crate::interface::serial_iface::SerialIfaceConfig;
+use crate::interface::kiss_iface::KissIfaceConfig;
 use crate::interface::InterfaceEntry;
+use crate::serial::Parity;
 use crate::storage;
 
 /// Parse an interface mode string to the corresponding constant.
@@ -37,6 +41,38 @@ fn parse_interface_mode(mode: &str) -> u8 {
     }
 }
 
+/// Parse a parity string from config. Matches Python's serial.PARITY_*.
+fn parse_parity(s: &str) -> Parity {
+    match s.to_lowercase().as_str() {
+        "e" | "even" => Parity::Even,
+        "o" | "odd" => Parity::Odd,
+        _ => Parity::None,
+    }
+}
+
+/// Extract IFAC configuration from interface params, if present.
+/// Returns None if neither networkname/network_name nor passphrase/pass_phrase is set.
+fn extract_ifac_config(params: &std::collections::HashMap<String, String>, default_size: usize) -> Option<IfacConfig> {
+    let netname = params.get("networkname")
+        .or_else(|| params.get("network_name"))
+        .cloned();
+    let netkey = params.get("passphrase")
+        .or_else(|| params.get("pass_phrase"))
+        .cloned();
+
+    if netname.is_none() && netkey.is_none() {
+        return None;
+    }
+
+    // ifac_size is specified in bits in config, divide by 8 for bytes
+    let size = params.get("ifac_size")
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|bits| (bits / 8).max(1))
+        .unwrap_or(default_size);
+
+    Some(IfacConfig { netname, netkey, size })
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -49,6 +85,15 @@ pub struct InterfaceConfig {
     pub variant: InterfaceVariant,
     /// Interface mode (MODE_FULL, MODE_ACCESS_POINT, etc.)
     pub mode: u8,
+    /// IFAC (Interface Access Code) configuration, if enabled.
+    pub ifac: Option<IfacConfig>,
+}
+
+/// IFAC configuration for an interface.
+pub struct IfacConfig {
+    pub netname: Option<String>,
+    pub netkey: Option<String>,
+    pub size: usize,
 }
 
 /// The specific interface type and its parameters.
@@ -58,6 +103,8 @@ pub enum InterfaceVariant {
     Udp(UdpConfig),
     LocalServer(LocalServerConfig),
     LocalClient(LocalClientConfig),
+    Serial(SerialIfaceConfig),
+    Kiss(KissIfaceConfig),
 }
 
 /// A running RNS node.
@@ -117,6 +164,14 @@ impl RnsNode {
 
             let iface_mode = parse_interface_mode(&iface.mode);
 
+            // Default IFAC size depends on interface type:
+            // 8 bytes for Serial/KISS/RNode, 16 for TCP/UDP/Auto/Local
+            let default_ifac_size = match iface.interface_type.as_str() {
+                "SerialInterface" | "KISSInterface" | "RNodeInterface" => 8,
+                _ => 16,
+            };
+            let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
+
             match iface.interface_type.as_str() {
                 "TCPClientInterface" => {
                     let target_host = iface
@@ -139,6 +194,7 @@ impl RnsNode {
                             ..TcpClientConfig::default()
                         }),
                         mode: iface_mode,
+                        ifac: ifac_config,
                     });
                 }
                 "TCPServerInterface" => {
@@ -161,6 +217,7 @@ impl RnsNode {
                             interface_id: iface_id,
                         }),
                         mode: iface_mode,
+                        ifac: ifac_config,
                     });
                 }
                 "UDPInterface" => {
@@ -190,6 +247,103 @@ impl RnsNode {
                             interface_id: iface_id,
                         }),
                         mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "SerialInterface" => {
+                    let port = match iface.params.get("port") {
+                        Some(p) => p.clone(),
+                        None => {
+                            log::warn!("No port specified for SerialInterface '{}'", iface.name);
+                            continue;
+                        }
+                    };
+                    let speed = iface.params.get("speed")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(9600);
+                    let databits = iface.params.get("databits")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(8);
+                    let parity = iface.params.get("parity")
+                        .map(|v| parse_parity(v))
+                        .unwrap_or(Parity::None);
+                    let stopbits = iface.params.get("stopbits")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1);
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::Serial(SerialIfaceConfig {
+                            name: iface.name.clone(),
+                            port,
+                            speed,
+                            data_bits: databits,
+                            parity,
+                            stop_bits: stopbits,
+                            interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "KISSInterface" => {
+                    let port = match iface.params.get("port") {
+                        Some(p) => p.clone(),
+                        None => {
+                            log::warn!("No port specified for KISSInterface '{}'", iface.name);
+                            continue;
+                        }
+                    };
+                    let speed = iface.params.get("speed")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(9600);
+                    let databits = iface.params.get("databits")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(8);
+                    let parity = iface.params.get("parity")
+                        .map(|v| parse_parity(v))
+                        .unwrap_or(Parity::None);
+                    let stopbits = iface.params.get("stopbits")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1);
+                    let preamble = iface.params.get("preamble")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(350);
+                    let txtail = iface.params.get("txtail")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(20);
+                    let persistence = iface.params.get("persistence")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(64);
+                    let slottime = iface.params.get("slottime")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(20);
+                    let flow_control = iface.params.get("flow_control")
+                        .and_then(|v| config::parse_bool_pub(v))
+                        .unwrap_or(false);
+                    let beacon_interval = iface.params.get("id_interval")
+                        .and_then(|v| v.parse().ok());
+                    let beacon_data = iface.params.get("id_callsign")
+                        .map(|v| v.as_bytes().to_vec());
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::Kiss(KissIfaceConfig {
+                            name: iface.name.clone(),
+                            port,
+                            speed,
+                            data_bits: databits,
+                            parity,
+                            stop_bits: stopbits,
+                            preamble,
+                            txtail,
+                            persistence,
+                            slottime,
+                            flow_control,
+                            beacon_interval,
+                            beacon_data,
+                            interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
                     });
                 }
                 _ => {
@@ -231,6 +385,20 @@ impl RnsNode {
         // Start each interface
         for iface_config in config.interfaces {
             let iface_mode = iface_config.mode;
+
+            // Derive IFAC state if configured
+            let ifac_state = iface_config.ifac.and_then(|ic| {
+                if ic.netname.is_some() || ic.netkey.is_some() {
+                    Some(ifac::derive_ifac(
+                        ic.netname.as_deref(),
+                        ic.netkey.as_deref(),
+                        ic.size,
+                    ))
+                } else {
+                    None
+                }
+            });
+
             match iface_config.variant {
                 InterfaceVariant::TcpClient(tcp_config) => {
                     let id = tcp_config.interface_id;
@@ -255,8 +423,9 @@ impl RnsNode {
                             id,
                             info,
                             writer,
-                            online: false, // InterfaceUp event will set this
+                            online: false,
                             dynamic: false,
+                            ifac: ifac_state,
                         },
                     );
                 }
@@ -296,8 +465,9 @@ impl RnsNode {
                                 id,
                                 info,
                                 writer: w,
-                                online: in_capable || out_capable, // Online if it can send or receive
+                                online: in_capable || out_capable,
                                 dynamic: false,
+                                ifac: ifac_state,
                             },
                         );
                     }
@@ -308,7 +478,6 @@ impl RnsNode {
                         tx.clone(),
                         next_dynamic_id.clone(),
                     )?;
-                    // Per-client interfaces registered dynamically
                 }
                 InterfaceVariant::LocalClient(local_config) => {
                     let id = local_config.interface_id;
@@ -317,7 +486,7 @@ impl RnsNode {
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
-                        bitrate: Some(1_000_000_000), // 1 Gbps
+                        bitrate: Some(1_000_000_000),
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
@@ -335,6 +504,66 @@ impl RnsNode {
                             writer,
                             online: false,
                             dynamic: false,
+                            ifac: ifac_state,
+                        },
+                    );
+                }
+                InterfaceVariant::Serial(serial_config) => {
+                    let id = serial_config.interface_id;
+                    let bitrate = serial_config.speed;
+                    let info = InterfaceInfo {
+                        id,
+                        mode: iface_mode,
+                        out_capable: true,
+                        in_capable: true,
+                        bitrate: Some(bitrate as u64),
+                        announce_rate_target: None,
+                        announce_rate_grace: 0,
+                        announce_rate_penalty: 0.0,
+                    };
+
+                    let writer =
+                        crate::interface::serial_iface::start(serial_config, tx.clone())?;
+
+                    driver.engine.register_interface(info.clone());
+                    driver.interfaces.insert(
+                        id,
+                        InterfaceEntry {
+                            id,
+                            info,
+                            writer,
+                            online: false,
+                            dynamic: false,
+                            ifac: ifac_state,
+                        },
+                    );
+                }
+                InterfaceVariant::Kiss(kiss_config) => {
+                    let id = kiss_config.interface_id;
+                    let info = InterfaceInfo {
+                        id,
+                        mode: iface_mode,
+                        out_capable: true,
+                        in_capable: true,
+                        bitrate: Some(1200), // BITRATE_GUESS from Python
+                        announce_rate_target: None,
+                        announce_rate_grace: 0,
+                        announce_rate_penalty: 0.0,
+                    };
+
+                    let writer =
+                        crate::interface::kiss_iface::start(kiss_config, tx.clone())?;
+
+                    driver.engine.register_interface(info.clone());
+                    driver.interfaces.insert(
+                        id,
+                        InterfaceEntry {
+                            id,
+                            info,
+                            writer,
+                            online: false,
+                            dynamic: false,
+                            ifac: ifac_state,
                         },
                     );
                 }
@@ -544,5 +773,145 @@ enable_transport = False
         assert_eq!(parse_interface_mode("gw"), MODE_GATEWAY);
         // Unknown defaults to FULL
         assert_eq!(parse_interface_mode("invalid"), MODE_FULL);
+    }
+
+    #[test]
+    fn to_node_config_serial() {
+        // Verify from_config parses SerialInterface correctly.
+        // The serial port won't exist, so start() will fail, but the config
+        // parsing path is exercised. We verify via the error (not a config error).
+        let dir = std::env::temp_dir().join(format!("rns-test-serial-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = r#"
+[reticulum]
+enable_transport = False
+
+[interfaces]
+  [[Test Serial Port]]
+    type = SerialInterface
+    port = /dev/nonexistent_rns_test_serial
+    speed = 115200
+    databits = 8
+    parity = E
+    stopbits = 1
+    interface_mode = ptp
+    networkname = testnet
+"#;
+        fs::write(dir.join("config"), config).unwrap();
+
+        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
+        // Should fail because the serial port doesn't exist, not because of config parsing
+        match result {
+            Ok(node) => {
+                node.shutdown();
+                panic!("Expected error from non-existent serial port");
+            }
+            Err(err) => {
+                let msg = format!("{}", err);
+                assert!(
+                    !msg.contains("Unsupported") && !msg.contains("parse"),
+                    "Error should be from serial open, got: {}",
+                    msg
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn to_node_config_kiss() {
+        // Verify from_config parses KISSInterface correctly.
+        let dir = std::env::temp_dir().join(format!("rns-test-kiss-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = r#"
+[reticulum]
+enable_transport = False
+
+[interfaces]
+  [[Test KISS TNC]]
+    type = KISSInterface
+    port = /dev/nonexistent_rns_test_kiss
+    speed = 9600
+    preamble = 500
+    txtail = 30
+    persistence = 128
+    slottime = 40
+    flow_control = True
+    id_interval = 600
+    id_callsign = TEST0
+    interface_mode = full
+    passphrase = secretkey
+"#;
+        fs::write(dir.join("config"), config).unwrap();
+
+        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
+        // Should fail because the serial port doesn't exist
+        match result {
+            Ok(node) => {
+                node.shutdown();
+                panic!("Expected error from non-existent serial port");
+            }
+            Err(err) => {
+                let msg = format!("{}", err);
+                assert!(
+                    !msg.contains("Unsupported") && !msg.contains("parse"),
+                    "Error should be from serial open, got: {}",
+                    msg
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_ifac_config() {
+        use std::collections::HashMap;
+
+        // No IFAC params → None
+        let params: HashMap<String, String> = HashMap::new();
+        assert!(extract_ifac_config(&params, 16).is_none());
+
+        // networkname only
+        let mut params = HashMap::new();
+        params.insert("networkname".into(), "testnet".into());
+        let ifac = extract_ifac_config(&params, 16).unwrap();
+        assert_eq!(ifac.netname.as_deref(), Some("testnet"));
+        assert!(ifac.netkey.is_none());
+        assert_eq!(ifac.size, 16);
+
+        // passphrase only with custom size (in bits)
+        let mut params = HashMap::new();
+        params.insert("passphrase".into(), "secret".into());
+        params.insert("ifac_size".into(), "64".into()); // 64 bits = 8 bytes
+        let ifac = extract_ifac_config(&params, 16).unwrap();
+        assert!(ifac.netname.is_none());
+        assert_eq!(ifac.netkey.as_deref(), Some("secret"));
+        assert_eq!(ifac.size, 8);
+
+        // Both with alternate key names
+        let mut params = HashMap::new();
+        params.insert("network_name".into(), "mynet".into());
+        params.insert("pass_phrase".into(), "mykey".into());
+        let ifac = extract_ifac_config(&params, 8).unwrap();
+        assert_eq!(ifac.netname.as_deref(), Some("mynet"));
+        assert_eq!(ifac.netkey.as_deref(), Some("mykey"));
+        assert_eq!(ifac.size, 8);
+    }
+
+    #[test]
+    fn test_parse_parity() {
+        assert_eq!(parse_parity("E"), Parity::Even);
+        assert_eq!(parse_parity("even"), Parity::Even);
+        assert_eq!(parse_parity("O"), Parity::Odd);
+        assert_eq!(parse_parity("odd"), Parity::Odd);
+        assert_eq!(parse_parity("N"), Parity::None);
+        assert_eq!(parse_parity("none"), Parity::None);
+        assert_eq!(parse_parity("unknown"), Parity::None);
     }
 }
