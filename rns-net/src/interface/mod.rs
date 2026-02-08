@@ -6,6 +6,9 @@ pub mod udp;
 pub mod local;
 pub mod serial_iface;
 pub mod kiss_iface;
+pub mod pipe;
+pub mod rnode;
+pub mod backbone;
 
 use std::io;
 

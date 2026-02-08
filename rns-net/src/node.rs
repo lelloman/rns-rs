@@ -23,6 +23,9 @@ use crate::interface::udp::UdpConfig;
 use crate::interface::local::{LocalServerConfig, LocalClientConfig};
 use crate::interface::serial_iface::SerialIfaceConfig;
 use crate::interface::kiss_iface::KissIfaceConfig;
+use crate::interface::pipe::PipeConfig;
+use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
+use crate::interface::backbone::BackboneConfig;
 use crate::interface::InterfaceEntry;
 use crate::serial::Parity;
 use crate::storage;
@@ -105,6 +108,9 @@ pub enum InterfaceVariant {
     LocalClient(LocalClientConfig),
     Serial(SerialIfaceConfig),
     Kiss(KissIfaceConfig),
+    Pipe(PipeConfig),
+    RNode(RNodeConfig),
+    Backbone(BackboneConfig),
 }
 
 /// A running RNS node.
@@ -346,6 +352,117 @@ impl RnsNode {
                         ifac: ifac_config,
                     });
                 }
+                "RNodeInterface" => {
+                    let port = match iface.params.get("port") {
+                        Some(p) => p.clone(),
+                        None => {
+                            log::warn!("No port specified for RNodeInterface '{}'", iface.name);
+                            continue;
+                        }
+                    };
+                    let speed = iface.params.get("speed")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(115200);
+                    let frequency = iface.params.get("frequency")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(868_000_000);
+                    let bandwidth = iface.params.get("bandwidth")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(125_000);
+                    let txpower = iface.params.get("txpower")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(7);
+                    let spreading_factor = iface.params.get("spreadingfactor")
+                        .or_else(|| iface.params.get("spreading_factor"))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(8);
+                    let coding_rate = iface.params.get("codingrate")
+                        .or_else(|| iface.params.get("coding_rate"))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5);
+                    let flow_control = iface.params.get("flow_control")
+                        .and_then(|v| config::parse_bool_pub(v))
+                        .unwrap_or(false);
+                    let st_alock = iface.params.get("st_alock")
+                        .and_then(|v| v.parse().ok());
+                    let lt_alock = iface.params.get("lt_alock")
+                        .and_then(|v| v.parse().ok());
+                    let id_interval = iface.params.get("id_interval")
+                        .and_then(|v| v.parse().ok());
+                    let id_callsign = iface.params.get("id_callsign")
+                        .map(|v| v.as_bytes().to_vec());
+
+                    let sub = RNodeSubConfig {
+                        name: iface.name.clone(),
+                        frequency,
+                        bandwidth,
+                        txpower,
+                        spreading_factor,
+                        coding_rate,
+                        flow_control,
+                        st_alock,
+                        lt_alock,
+                    };
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::RNode(RNodeConfig {
+                            name: iface.name.clone(),
+                            port,
+                            speed,
+                            subinterfaces: vec![sub],
+                            id_interval,
+                            id_callsign,
+                            base_interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "PipeInterface" => {
+                    let command = match iface.params.get("command") {
+                        Some(c) => c.clone(),
+                        None => {
+                            log::warn!("No command specified for PipeInterface '{}'", iface.name);
+                            continue;
+                        }
+                    };
+                    let respawn_delay = iface.params.get("respawn_delay")
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(Duration::from_millis)
+                        .unwrap_or(Duration::from_secs(5));
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::Pipe(PipeConfig {
+                            name: iface.name.clone(),
+                            command,
+                            respawn_delay,
+                            interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "BackboneInterface" => {
+                    let listen_ip = iface.params.get("listen_ip")
+                        .or_else(|| iface.params.get("device"))
+                        .cloned()
+                        .unwrap_or_else(|| "0.0.0.0".into());
+                    let listen_port = iface.params.get("listen_port")
+                        .or_else(|| iface.params.get("port"))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(4242);
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::Backbone(BackboneConfig {
+                            name: iface.name.clone(),
+                            listen_ip,
+                            listen_port,
+                            interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
                 _ => {
                     log::warn!(
                         "Unsupported interface type '{}' for '{}'",
@@ -385,9 +502,10 @@ impl RnsNode {
         // Start each interface
         for iface_config in config.interfaces {
             let iface_mode = iface_config.mode;
+            let ifac_cfg = iface_config.ifac;
 
             // Derive IFAC state if configured
-            let ifac_state = iface_config.ifac.and_then(|ic| {
+            let mut ifac_state = ifac_cfg.as_ref().and_then(|ic| {
                 if ic.netname.is_some() || ic.netkey.is_some() {
                     Some(ifac::derive_ifac(
                         ic.netname.as_deref(),
@@ -566,6 +684,91 @@ impl RnsNode {
                             ifac: ifac_state,
                         },
                     );
+                }
+                InterfaceVariant::Pipe(pipe_config) => {
+                    let id = pipe_config.interface_id;
+                    let info = InterfaceInfo {
+                        id,
+                        mode: iface_mode,
+                        out_capable: true,
+                        in_capable: true,
+                        bitrate: Some(1_000_000), // 1 Mbps guess
+                        announce_rate_target: None,
+                        announce_rate_grace: 0,
+                        announce_rate_penalty: 0.0,
+                    };
+
+                    let writer =
+                        crate::interface::pipe::start(pipe_config, tx.clone())?;
+
+                    driver.engine.register_interface(info.clone());
+                    driver.interfaces.insert(
+                        id,
+                        InterfaceEntry {
+                            id,
+                            info,
+                            writer,
+                            online: false,
+                            dynamic: false,
+                            ifac: ifac_state,
+                        },
+                    );
+                }
+                InterfaceVariant::RNode(rnode_config) => {
+                    let sub_writers =
+                        crate::interface::rnode::start(rnode_config, tx.clone())?;
+
+                    // For multi-subinterface RNodes, we need an IfacState per sub.
+                    // Re-derive from the original config for each beyond the first.
+                    let mut first = true;
+                    for (sub_id, writer) in sub_writers {
+                        let info = InterfaceInfo {
+                            id: sub_id,
+                            mode: iface_mode,
+                            out_capable: true,
+                            in_capable: true,
+                            bitrate: None, // LoRa bitrate depends on SF/BW, set dynamically
+                            announce_rate_target: None,
+                            announce_rate_grace: 0,
+                            announce_rate_penalty: 0.0,
+                        };
+
+                        let sub_ifac = if first {
+                            first = false;
+                            ifac_state.take()
+                        } else if let Some(ref ic) = ifac_cfg {
+                            Some(ifac::derive_ifac(
+                                ic.netname.as_deref(),
+                                ic.netkey.as_deref(),
+                                ic.size,
+                            ))
+                        } else {
+                            None
+                        };
+
+                        driver.engine.register_interface(info.clone());
+                        driver.interfaces.insert(
+                            sub_id,
+                            InterfaceEntry {
+                                id: sub_id,
+                                info,
+                                writer,
+                                online: false,
+                                dynamic: false,
+                                ifac: sub_ifac,
+                            },
+                        );
+                    }
+
+                }
+                InterfaceVariant::Backbone(backbone_config) => {
+                    crate::interface::backbone::start(
+                        backbone_config,
+                        tx.clone(),
+                        next_dynamic_id.clone(),
+                    )?;
+                    // Like TcpServer/LocalServer, backbone itself doesn't register
+                    // as an interface; per-client interfaces are registered via InterfaceUp
                 }
             }
         }
@@ -913,5 +1116,156 @@ enable_transport = False
         assert_eq!(parse_parity("N"), Parity::None);
         assert_eq!(parse_parity("none"), Parity::None);
         assert_eq!(parse_parity("unknown"), Parity::None);
+    }
+
+    #[test]
+    fn to_node_config_rnode() {
+        // Verify from_config parses RNodeInterface correctly.
+        // The serial port won't exist, so start() will fail at open time.
+        let dir = std::env::temp_dir().join(format!("rns-test-rnode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = r#"
+[reticulum]
+enable_transport = False
+
+[interfaces]
+  [[Test RNode]]
+    type = RNodeInterface
+    port = /dev/nonexistent_rns_test_rnode
+    frequency = 867200000
+    bandwidth = 125000
+    txpower = 7
+    spreadingfactor = 8
+    codingrate = 5
+    flow_control = True
+    st_alock = 5.0
+    lt_alock = 2.5
+    interface_mode = full
+    networkname = testnet
+"#;
+        fs::write(dir.join("config"), config).unwrap();
+
+        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
+        // Should fail because the serial port doesn't exist, not because of config parsing
+        match result {
+            Ok(node) => {
+                node.shutdown();
+                panic!("Expected error from non-existent serial port");
+            }
+            Err(err) => {
+                let msg = format!("{}", err);
+                assert!(
+                    !msg.contains("Unsupported") && !msg.contains("parse"),
+                    "Error should be from serial open, got: {}",
+                    msg
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn to_node_config_pipe() {
+        // Verify from_config parses PipeInterface correctly.
+        // Use `cat` as a real command so it actually starts.
+        let dir = std::env::temp_dir().join(format!("rns-test-pipe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let config = r#"
+[reticulum]
+enable_transport = False
+
+[interfaces]
+  [[Test Pipe]]
+    type = PipeInterface
+    command = cat
+    respawn_delay = 5000
+    interface_mode = full
+"#;
+        fs::write(dir.join("config"), config).unwrap();
+
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+        // If we got here, config parsing and start() succeeded
+        node.shutdown();
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn to_node_config_backbone() {
+        // Verify from_config parses BackboneInterface correctly.
+        let dir = std::env::temp_dir().join(format!("rns-test-backbone-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let config = format!(
+            r#"
+[reticulum]
+enable_transport = False
+
+[interfaces]
+  [[Test Backbone]]
+    type = BackboneInterface
+    listen_ip = 127.0.0.1
+    listen_port = {}
+    interface_mode = full
+"#,
+            port
+        );
+
+        fs::write(dir.join("config"), config).unwrap();
+
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+
+        // Give server time to start
+        thread::sleep(Duration::from_millis(100));
+
+        // Should be able to connect
+        {
+            let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+            // client drops here, closing the connection cleanly
+        }
+
+        // Small delay to let epoll process the disconnect
+        thread::sleep(Duration::from_millis(50));
+
+        node.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rnode_config_defaults() {
+        use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
+
+        let config = RNodeConfig::default();
+        assert_eq!(config.speed, 115200);
+        assert!(config.subinterfaces.is_empty());
+        assert!(config.id_interval.is_none());
+        assert!(config.id_callsign.is_none());
+
+        let sub = RNodeSubConfig {
+            name: "test".into(),
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        };
+        assert_eq!(sub.frequency, 868_000_000);
+        assert_eq!(sub.bandwidth, 125_000);
+        assert!(!sub.flow_control);
     }
 }

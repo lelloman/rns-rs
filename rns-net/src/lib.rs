@@ -6,6 +6,7 @@
 
 pub mod hdlc;
 pub mod kiss;
+pub mod rnode_kiss;
 pub mod event;
 pub mod time;
 pub mod interface;
@@ -25,6 +26,9 @@ pub use interface::udp::UdpConfig;
 pub use interface::local::{LocalServerConfig, LocalClientConfig};
 pub use interface::serial_iface::SerialIfaceConfig;
 pub use interface::kiss_iface::KissIfaceConfig;
+pub use interface::pipe::PipeConfig;
+pub use interface::rnode::{RNodeConfig, RNodeSubConfig};
+pub use interface::backbone::BackboneConfig;
 pub use config::RnsConfig;
 pub use ifac::IfacState;
 pub use serial::Parity;
