@@ -38,7 +38,7 @@ Each phase has three layers of tests:
 
 ```
 rns-rs/
-├── Cargo.toml                       # Workspace root (members: rns-crypto, rns-core)
+├── Cargo.toml                       # Workspace root (members: rns-crypto, rns-core, rns-net)
 ├── rns-crypto/                      # no_std — cryptographic primitives [DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Rng trait, FixedRng, OsRng
@@ -84,7 +84,21 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, config, I/O [PLANNED]
+├── rns-net/                         # std — networking, I/O [Phase 5a DONE]
+│   ├── src/
+│   │   ├── lib.rs                   # Public API, re-exports
+│   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
+│   │   ├── event.rs                 # Event enum, channel helpers
+│   │   ├── time.rs                  # now() → f64 Unix epoch
+│   │   ├── driver.rs                # Callbacks trait, Driver event loop + dispatch
+│   │   ├── node.rs                  # RnsNode start/shutdown lifecycle
+│   │   └── interface/
+│   │       ├── mod.rs               # Writer trait, InterfaceEntry
+│   │       └── tcp.rs               # TCP client: connect, reconnect, reader thread
+│   ├── examples/
+│   │   └── tcp_connect.rs           # Connect to Python RNS, log announces
+│   └── tests/
+│       └── python_interop.rs        # Rust↔Python announce reception
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
@@ -679,13 +693,34 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
-## Phase 5: Networking & Interfaces (`rns-net`)
+## Phase 5a: Minimum Viable Network Node (`rns-net`) — COMPLETE ✓
+
+**Milestone**: A Rust process connects to a Python RNS TCP server, receives HDLC-framed packets, processes announces, discovers paths. Proves the full stack works end-to-end.
+
+**Result**: 35 unit tests + 1 interop test = 36 tests (487 total workspace). Thread model: single Driver thread owns TransportEngine, per-interface Reader threads decode HDLC and send events, Timer thread sends periodic ticks. All communication via single mpsc channel. Writer refresh on reconnect ensures the driver always holds a live socket.
+
+**Modules**:
+- `hdlc.rs` — HDLC escape/unescape/frame + streaming Decoder (matches TCPInterface.py)
+- `event.rs` — Event enum (Frame, InterfaceUp with optional writer, InterfaceDown, Tick, Shutdown)
+- `time.rs` — `now()` → f64 Unix epoch
+- `interface/mod.rs` — Writer trait, InterfaceEntry struct
+- `interface/tcp.rs` — TCP client with socket options (TCP_NODELAY, keepalive, Linux TCP_USER_TIMEOUT), reader thread, reconnect with writer refresh
+- `driver.rs` — Callbacks trait, Driver event loop dispatching TransportActions
+- `node.rs` — RnsNode start/shutdown lifecycle wiring
+
+**Dependencies**: `rns-core`, `rns-crypto`, `log`, `libc`. Dev: `env_logger`, `serde_json`, `ctrlc`.
+
+**Not included**: Config file parsing, Local/shared instance interface, UDP/Auto/Serial/KISS/RNode interfaces, IFAC, identity persistence, RPC, tunnel synthesis, compression.
+
+---
+
+## Phase 5b+: Full Networking & Interfaces (`rns-net`) — PLANNED
 
 **Milestone**: A Rust `rnsd` daemon can join an existing Python Reticulum network, discover paths, and route packets.
 
 ### TDD Sequence
 
-#### 5.1 Config Parsing
+#### 5b.1 Config Parsing
 1. Test: parse minimal config → correct defaults
 2. Test: parse `[reticulum]` section → enable_transport, share_instance, etc.
 3. Test: parse `[logging]` section → loglevel
@@ -693,55 +728,49 @@ New fixtures in `tests/fixtures/resource/`:
 5. Test: parse Python's example config (from rnsd --exampleconfig) without error
 6. Test: missing config file → defaults created
 
-#### 5.2 Interface Trait & Mock
-1. Test: mock interface implements trait
-2. Test: mock interface receives outbound data
-3. Test: mock interface pushes inbound data to Transport
-
-#### 5.3 LocalInterface
+#### 5b.2 LocalInterface
 1. Test: server binds to Unix socket (or TCP fallback)
 2. Test: client connects to server
 3. Test: data sent from client arrives at server (and vice versa)
 4. Test: HDLC framing round-trip
 5. Test: Rust LocalClient connects to Python LocalServer (interop)
 
-#### 5.4 TCPInterface
+#### 5b.3 TCPServerInterface
 1. Test: TCP server accepts connection
-2. Test: TCP client connects, sends data, receives response
-3. Test: reconnection after disconnect
-4. Test: Rust TCP client connects to Python TCP server (interop)
+2. Test: multiple clients connect simultaneously
+3. Test: Rust TCP server accepts Python TCP client (interop)
 
-#### 5.5 UDPInterface
+#### 5b.4 UDPInterface
 1. Test: UDP broadcast send/receive on loopback
 2. Test: packet framing round-trip
 3. Test: Rust UDP ↔ Python UDP on same broadcast domain (interop)
 
-#### 5.6 SerialInterface
+#### 5b.5 SerialInterface
 1. Test: write/read over virtual serial port pair
 2. Test: framing (HDLC) round-trip
 
-#### 5.7 KISSInterface
+#### 5b.6 KISSInterface
 1. Test: KISS frame encoding/decoding
 2. Test: preamble, txtail, persistence parameters applied
 
-#### 5.8 RNodeInterface
+#### 5b.7 RNodeInterface
 1. Test: RNode serial protocol command/response framing
 2. Test: frequency/bandwidth/SF/CR configuration
 3. Test: data send/receive via RNode (requires hardware or mock)
 
-#### 5.9 Master Instance (Reticulum)
+#### 5b.8 Master Instance (Reticulum)
 1. Test: init with config → interfaces started, Transport running
 2. Test: shared instance mode → LocalServer listening
 3. Test: client mode → connects to existing shared instance
 4. Test: graceful shutdown cleans up interfaces and Transport
 
-#### 5.10 Storage & Persistence
+#### 5b.9 Storage & Persistence
 1. Test: save/load known_destinations round-trip
 2. Test: save/load ratchets round-trip
 3. Test: cache write/read/clean
 4. Test: file format compatible with Python (msgpack)
 
-#### 5.11 Full Network Interop
+#### 5b.10 Full Network Interop
 1. Test: Rust rnsd + Python rnsd on Docker network → path discovery works
 2. Test: Python node announces → Rust node discovers path
 3. Test: Rust node sends packet → Python node receives
@@ -792,7 +821,8 @@ New fixtures in `tests/fixtures/resource/`:
 | **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — 143 tests, `Python announce → Rust route + retransmit` ✓ |
 | **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — 248 tests, full 4-way handshake + encrypted channel + buffer streaming ✓ |
 | **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — 375 tests (rns-core), full sender↔receiver cycle + HMU + interop ✓ |
-| **5** | `rns-net` | Daemon joins Python network, routes real traffic | Planned |
+| **5a** | `rns-net` | TCP connect → receive announces → discover paths | **DONE** — 36 tests, Rust connects to Python TCP server, processes HDLC-framed announces ✓ |
+| **5b+** | `rns-net` | Full daemon: config, all interfaces, persistence | Planned |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
@@ -881,9 +911,11 @@ All crypto is implemented in pure Rust with no third-party crates:
 - Wire protocol types (packet, destination, announce, receipt) + transport routing engine
 - Dev-only: `serde_json` for test fixture loading
 
-### rns-net (std) — PLANNED
-- `rns-core`, `rns-crypto`
-- External deps TBD (tokio, serde, socket2, etc.)
+### rns-net (std)
+- `rns-core`, `rns-crypto` (path dependencies)
+- `log` (logging facade), `libc` (socket options via setsockopt)
+- Dev-only: `env_logger`, `serde_json`, `ctrlc`
+- No tokio — std threads are sufficient for the interface count we handle
 
 ### rns-cli (std) — PLANNED
 - `rns-net`

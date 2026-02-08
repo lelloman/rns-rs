@@ -1,0 +1,167 @@
+//! Integration test: Rust node connects to Python RNS TCP server.
+//!
+//! Starts a Python RNS instance with TCPServerInterface, creates a
+//! destination, announces it, and verifies the Rust node receives the announce.
+//!
+//! Requires Python 3 with RNS installed (run from repo root).
+//! Skipped if Python or RNS is not available.
+
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
+
+use rns_net::{Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpClientConfig};
+
+struct TestCallbacks {
+    announce_tx: Sender<([u8; 16], u8)>,
+}
+
+impl Callbacks for TestCallbacks {
+    fn on_announce(
+        &mut self,
+        dest_hash: [u8; 16],
+        _identity_hash: [u8; 16],
+        _public_key: [u8; 64],
+        _app_data: Option<Vec<u8>>,
+        hops: u8,
+    ) {
+        let _ = self.announce_tx.send((dest_hash, hops));
+    }
+
+    fn on_path_updated(&mut self, _: [u8; 16], _: u8) {}
+    fn on_local_delivery(&mut self, _: [u8; 16], _: Vec<u8>, _: [u8; 32]) {}
+}
+
+/// Check if Python with RNS is available.
+fn rns_available() -> bool {
+    Command::new("python3")
+        .args(["-c", "import RNS; print('ok')"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn python_announce_received() {
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
+    }
+
+    // Python script that:
+    // 1. Starts RNS with TCPServerInterface on a random port
+    // 2. Prints the port and destination hash
+    // 3. Announces the destination
+    // 4. Waits for SIGTERM
+    let python_script = r#"
+import sys, os, time, signal, json, tempfile, socket
+
+# Find a free port
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(('127.0.0.1', 0))
+port = sock.getsockname()[1]
+sock.close()
+
+# Write config
+config_dir = tempfile.mkdtemp()
+config_path = os.path.join(config_dir, "config")
+with open(config_path, "w") as f:
+    f.write(f"""[reticulum]
+enable_transport = false
+share_instance = false
+
+[interfaces]
+  [[TCP Server]]
+    type = TCPServerInterface
+    listen_ip = 127.0.0.1
+    listen_port = {port}
+""")
+
+import RNS
+reticulum = RNS.Reticulum(configpath=config_dir)
+identity = RNS.Identity()
+destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "test")
+
+dest_hash = destination.hash.hex()
+print(json.dumps({"port": port, "dest_hash": dest_hash}), flush=True)
+
+time.sleep(1)  # let server start
+destination.announce()
+
+# Wait for signal
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+try:
+    while True:
+        time.sleep(1)
+except (KeyboardInterrupt, SystemExit):
+    pass
+"#;
+
+    // Start Python process
+    let mut child = Command::new("python3")
+        .args(["-c", python_script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start Python");
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+
+    // Read the port and dest_hash from Python
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("Failed to read from Python");
+    let info: serde_json::Value = serde_json::from_str(line.trim()).expect("Failed to parse JSON");
+    let port = info["port"].as_u64().unwrap() as u16;
+    let expected_dest_hash_hex = info["dest_hash"].as_str().unwrap().to_string();
+
+    eprintln!("Python server on port {}, dest_hash={}", port, expected_dest_hash_hex);
+
+    // Give Python a moment to announce
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Start Rust node
+    let (announce_tx, announce_rx): (Sender<([u8; 16], u8)>, Receiver<([u8; 16], u8)>) =
+        mpsc::channel();
+
+    let node = RnsNode::start(
+        NodeConfig {
+            transport_enabled: false,
+            identity: None,
+            interfaces: vec![InterfaceConfig::TcpClient(TcpClientConfig {
+                name: "interop-tcp".into(),
+                target_host: "127.0.0.1".into(),
+                target_port: port,
+                interface_id: InterfaceId(1),
+                reconnect_wait: Duration::from_millis(500),
+                max_reconnect_tries: Some(3),
+                connect_timeout: Duration::from_secs(5),
+            })],
+        },
+        Box::new(TestCallbacks { announce_tx }),
+    )
+    .expect("Failed to start Rust node");
+
+    // Wait for announce
+    let result = announce_rx.recv_timeout(Duration::from_secs(10));
+
+    // Cleanup
+    node.shutdown();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    match result {
+        Ok((dest_hash, hops)) => {
+            let received_hex: String = dest_hash.iter().map(|b| format!("{:02x}", b)).collect();
+            eprintln!("Received announce: dest={} hops={}", received_hex, hops);
+            assert_eq!(received_hex, expected_dest_hash_hex);
+        }
+        Err(_) => {
+            // Read stderr for debugging
+            panic!("Timed out waiting for announce from Python");
+        }
+    }
+}
