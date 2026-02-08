@@ -1684,6 +1684,298 @@ def generate_stream_data_vectors():
     write_link_fixture("stream_data_vectors.json", vectors)
 
 
+RESOURCE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'resource')
+os.makedirs(RESOURCE_DIR, exist_ok=True)
+
+
+def write_resource_fixture(name, data):
+    path = os.path.join(RESOURCE_DIR, name)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f"  Written {path} ({len(data)} vectors)")
+
+
+def generate_msgpack_vectors():
+    """Generate msgpack encode/decode test vectors.
+
+    Uses Python's umsgpack (vendored in RNS) to produce reference encodings.
+    """
+    import RNS.vendor.umsgpack as umsgpack
+
+    vectors = []
+
+    test_cases = [
+        ("nil", None),
+        ("true", True),
+        ("false", False),
+        ("fixint_0", 0),
+        ("fixint_1", 1),
+        ("fixint_127", 127),
+        ("uint8_200", 200),
+        ("uint16_1000", 1000),
+        ("uint32_100000", 100000),
+        ("uint64_large", 2**40),
+        ("negfixint_minus1", -1),
+        ("negfixint_minus32", -32),
+        ("int8_minus100", -100),
+        ("int16_minus1000", -1000),
+        ("fixstr_empty", ""),
+        ("fixstr_hello", "hello"),
+        ("str8_long", "a" * 40),
+        ("bin8_short", umsgpack.Ext(0, b"")),  # Use raw bytes via special handling
+        ("fixarray_empty", []),
+        ("fixarray_ints", [1, 2, 3]),
+        ("fixmap_empty", {}),
+        ("fixmap_str_keys", {"a": 1, "b": 2}),
+    ]
+
+    for desc, value in test_cases:
+        # Special handling for binary data (umsgpack uses Ext for bin in some modes)
+        if desc == "bin8_short":
+            # Pack raw bytes using umsgpack
+            raw_value = b"\x01\x02\x03\x04"
+            packed = umsgpack.packb(raw_value)
+            vectors.append({
+                "description": desc,
+                "type": "bin",
+                "bin_value": to_hex(raw_value),
+                "packed": to_hex(packed),
+            })
+            continue
+
+        packed = umsgpack.packb(value)
+        entry = {
+            "description": desc,
+            "packed": to_hex(packed),
+        }
+
+        if value is None:
+            entry["type"] = "nil"
+        elif isinstance(value, bool):
+            entry["type"] = "bool"
+            entry["bool_value"] = value
+        elif isinstance(value, int):
+            entry["type"] = "int"
+            entry["int_value"] = value
+        elif isinstance(value, str):
+            entry["type"] = "str"
+            entry["str_value"] = value
+        elif isinstance(value, list):
+            entry["type"] = "array"
+            entry["array_value"] = value
+        elif isinstance(value, dict):
+            entry["type"] = "map"
+            entry["map_value"] = value
+
+        vectors.append(entry)
+
+    # Add binary vectors directly
+    for desc, data in [
+        ("bin8_empty", b""),
+        ("bin8_4bytes", b"\x01\x02\x03\x04"),
+        ("bin8_32bytes", bytes(range(32))),
+        ("bin16_300bytes", bytes([i % 256 for i in range(300)])),
+    ]:
+        packed = umsgpack.packb(data)
+        vectors.append({
+            "description": desc,
+            "type": "bin",
+            "bin_value": to_hex(data),
+            "packed": to_hex(packed),
+        })
+
+    write_resource_fixture("msgpack_vectors.json", vectors)
+
+
+def generate_resource_part_hash_vectors():
+    """Generate resource map_hash test vectors.
+
+    map_hash = SHA-256(part_data + random_hash)[:4]
+    """
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    test_cases = [
+        ("small_part", b"hello world part data", bytes([0xAA, 0xBB, 0xCC, 0xDD])),
+        ("empty_part", b"", bytes([0x11, 0x22, 0x33, 0x44])),
+        ("full_sdu", bytes(range(256)) * 2, bytes([0xFF, 0xEE, 0xDD, 0xCC])),  # 512 bytes > SDU
+        ("repeated_data", b"\xAB" * 464, bytes([0x01, 0x02, 0x03, 0x04])),
+    ]
+
+    for desc, part_data, random_hash in test_cases:
+        full_hash = rns_sha256(part_data + random_hash)
+        map_hash = full_hash[:4]
+        vectors.append({
+            "description": desc,
+            "part_data": to_hex(part_data),
+            "random_hash": to_hex(random_hash),
+            "map_hash": to_hex(map_hash),
+            "full_hash": to_hex(full_hash),
+        })
+
+    write_resource_fixture("part_hash_vectors.json", vectors)
+
+
+def generate_resource_proof_vectors():
+    """Generate resource hash and proof computation test vectors.
+
+    resource_hash = SHA-256(unencrypted_data + random_hash)  (32 bytes)
+    expected_proof = SHA-256(unencrypted_data + resource_hash)  (32 bytes)
+    """
+    from RNS.Cryptography.Hashes import sha256 as rns_sha256
+
+    vectors = []
+
+    test_cases = [
+        ("small_data", b"resource data", bytes([0xAA, 0xBB, 0xCC, 0xDD])),
+        ("empty_data", b"", bytes([0x11, 0x22, 0x33, 0x44])),
+        ("large_data", bytes(range(256)) * 4, bytes([0xFF, 0xEE, 0xDD, 0xCC])),
+        ("with_metadata_prefix",
+         bytes([0x00, 0x00, 0x08]) + b"metadata" + b"actual data",
+         bytes([0x55, 0x66, 0x77, 0x88])),
+    ]
+
+    for desc, data, random_hash in test_cases:
+        resource_hash = rns_sha256(data + random_hash)
+        expected_proof = rns_sha256(data + resource_hash)
+        proof_data = resource_hash + expected_proof  # 64 bytes
+
+        vectors.append({
+            "description": desc,
+            "data": to_hex(data),
+            "random_hash": to_hex(random_hash),
+            "resource_hash": to_hex(resource_hash),
+            "expected_proof": to_hex(expected_proof),
+            "proof_data": to_hex(proof_data),
+        })
+
+    write_resource_fixture("resource_proof_vectors.json", vectors)
+
+
+def generate_resource_advertisement_vectors():
+    """Generate ResourceAdvertisement msgpack test vectors.
+
+    Advertisement is a msgpack map with keys: t, d, n, h, r, o, i, l, q, f, m
+    (Python: Resource.py advertise() builds this dict)
+    """
+    import RNS.vendor.umsgpack as umsgpack
+
+    vectors = []
+
+    test_cases = [
+        {
+            "description": "simple_advertisement",
+            "t": 1000,         # transfer_size
+            "d": 900,          # data_size
+            "n": 3,            # num_parts
+            "h": bytes([0x11] * 32),  # resource_hash
+            "r": bytes([0xAA, 0xBB, 0xCC, 0xDD]),  # random_hash
+            "o": bytes([0x11] * 32),  # original_hash
+            "f": 0b00000001,   # flags: encrypted=1
+            "i": 1,            # segment_index
+            "l": 1,            # total_segments
+            "q": None,         # request_id
+            "m": bytes([0x01, 0x02, 0x03, 0x04] * 3),  # hashmap (3 * 4 bytes)
+        },
+        {
+            "description": "with_request_id",
+            "t": 5000,
+            "d": 4800,
+            "n": 11,
+            "h": bytes(range(32)),
+            "r": bytes([0x55, 0x66, 0x77, 0x88]),
+            "o": bytes(range(32)),
+            "f": 0b00010001,   # flags: encrypted=1, is_request=1
+            "i": 1,
+            "l": 1,
+            "q": bytes([0xDE, 0xAD, 0xBE, 0xEF]),  # request_id
+            "m": bytes([i % 256 for i in range(44)]),  # 11 * 4 bytes hashmap
+        },
+        {
+            "description": "multi_segment",
+            "t": 50000,
+            "d": 48000,
+            "n": 108,
+            "h": bytes([0x33] * 32),
+            "r": bytes([0xCC, 0xDD, 0xEE, 0xFF]),
+            "o": bytes([0x22] * 32),
+            "f": 0b00000101,   # flags: encrypted=1, split=1
+            "i": 2,
+            "l": 3,
+            "q": None,
+            "m": bytes([i % 256 for i in range(296)]),  # 74 * 4 = 296 bytes (max segment)
+        },
+    ]
+
+    for tc in test_cases:
+        adv_dict = {
+            "t": tc["t"],
+            "d": tc["d"],
+            "n": tc["n"],
+            "h": tc["h"],
+            "r": tc["r"],
+            "o": tc["o"],
+            "f": tc["f"],
+            "i": tc["i"],
+            "l": tc["l"],
+            "q": tc["q"],
+            "m": tc["m"],
+        }
+        packed = umsgpack.packb(adv_dict)
+
+        vectors.append({
+            "description": tc["description"],
+            "transfer_size": tc["t"],
+            "data_size": tc["d"],
+            "num_parts": tc["n"],
+            "resource_hash": to_hex(tc["h"]),
+            "random_hash": to_hex(tc["r"]),
+            "original_hash": to_hex(tc["o"]),
+            "flags": tc["f"],
+            "segment_index": tc["i"],
+            "total_segments": tc["l"],
+            "request_id": to_hex(tc["q"]) if tc["q"] is not None else None,
+            "hashmap": to_hex(tc["m"]),
+            "packed": to_hex(packed),
+        })
+
+    write_resource_fixture("advertisement_vectors.json", vectors)
+
+
+def generate_resource_hmu_vectors():
+    """Generate hashmap update (HMU) msgpack test vectors.
+
+    HMU payload (after 32-byte resource_hash prefix):
+      msgpack([segment_index, hashmap_bytes])
+    """
+    import RNS.vendor.umsgpack as umsgpack
+
+    vectors = []
+
+    test_cases = [
+        ("segment_1", 1, bytes([0x01, 0x02, 0x03, 0x04] * 10)),  # 10 hashes
+        ("segment_2", 2, bytes([0xAA, 0xBB, 0xCC, 0xDD] * 5)),   # 5 hashes
+        ("segment_0_full", 0, bytes([i % 256 for i in range(296)])),  # 74 hashes
+    ]
+
+    for desc, segment, hashmap_bytes in test_cases:
+        resource_hash = bytes([0x11] * 32)
+        payload = umsgpack.packb([segment, hashmap_bytes])
+        full_hmu = resource_hash + payload
+
+        vectors.append({
+            "description": desc,
+            "resource_hash": to_hex(resource_hash),
+            "segment": segment,
+            "hashmap_bytes": to_hex(hashmap_bytes),
+            "payload": to_hex(payload),
+            "full_hmu": to_hex(full_hmu),
+        })
+
+    write_resource_fixture("hmu_vectors.json", vectors)
+
+
 def main():
     print("Generating test vectors from Python RNS crypto...")
     generate_pkcs7()
@@ -1715,6 +2007,12 @@ def main():
     generate_link_identify_vectors()
     generate_channel_envelope_vectors()
     generate_stream_data_vectors()
+    print("\nGenerating Phase 4b resource test vectors...")
+    generate_msgpack_vectors()
+    generate_resource_part_hash_vectors()
+    generate_resource_proof_vectors()
+    generate_resource_advertisement_vectors()
+    generate_resource_hmu_vectors()
     print("Done! All vectors generated successfully.")
 
 

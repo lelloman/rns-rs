@@ -1,0 +1,164 @@
+[
+  {
+    "description": "nil",
+    "packed": "c0",
+    "type": "nil"
+  },
+  {
+    "description": "true",
+    "packed": "c3",
+    "type": "bool",
+    "bool_value": true
+  },
+  {
+    "description": "false",
+    "packed": "c2",
+    "type": "bool",
+    "bool_value": false
+  },
+  {
+    "description": "fixint_0",
+    "packed": "00",
+    "type": "int",
+    "int_value": 0
+  },
+  {
+    "description": "fixint_1",
+    "packed": "01",
+    "type": "int",
+    "int_value": 1
+  },
+  {
+    "description": "fixint_127",
+    "packed": "7f",
+    "type": "int",
+    "int_value": 127
+  },
+  {
+    "description": "uint8_200",
+    "packed": "ccc8",
+    "type": "int",
+    "int_value": 200
+  },
+  {
+    "description": "uint16_1000",
+    "packed": "cd03e8",
+    "type": "int",
+    "int_value": 1000
+  },
+  {
+    "description": "uint32_100000",
+    "packed": "ce000186a0",
+    "type": "int",
+    "int_value": 100000
+  },
+  {
+    "description": "uint64_large",
+    "packed": "cf0000010000000000",
+    "type": "int",
+    "int_value": 1099511627776
+  },
+  {
+    "description": "negfixint_minus1",
+    "packed": "ff",
+    "type": "int",
+    "int_value": -1
+  },
+  {
+    "description": "negfixint_minus32",
+    "packed": "e0",
+    "type": "int",
+    "int_value": -32
+  },
+  {
+    "description": "int8_minus100",
+    "packed": "d09c",
+    "type": "int",
+    "int_value": -100
+  },
+  {
+    "description": "int16_minus1000",
+    "packed": "d1fc18",
+    "type": "int",
+    "int_value": -1000
+  },
+  {
+    "description": "fixstr_empty",
+    "packed": "a0",
+    "type": "str",
+    "str_value": ""
+  },
+  {
+    "description": "fixstr_hello",
+    "packed": "a568656c6c6f",
+    "type": "str",
+    "str_value": "hello"
+  },
+  {
+    "description": "str8_long",
+    "packed": "d92861616161616161616161616161616161616161616161616161616161616161616161616161616161",
+    "type": "str",
+    "str_value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "description": "bin8_short",
+    "type": "bin",
+    "bin_value": "01020304",
+    "packed": "c40401020304"
+  },
+  {
+    "description": "fixarray_empty",
+    "packed": "90",
+    "type": "array",
+    "array_value": []
+  },
+  {
+    "description": "fixarray_ints",
+    "packed": "93010203",
+    "type": "array",
+    "array_value": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "description": "fixmap_empty",
+    "packed": "80",
+    "type": "map",
+    "map_value": {}
+  },
+  {
+    "description": "fixmap_str_keys",
+    "packed": "82a16101a16202",
+    "type": "map",
+    "map_value": {
+      "a": 1,
+      "b": 2
+    }
+  },
+  {
+    "description": "bin8_empty",
+    "type": "bin",
+    "bin_value": "",
+    "packed": "c400"
+  },
+  {
+    "description": "bin8_4bytes",
+    "type": "bin",
+    "bin_value": "01020304",
+    "packed": "c40401020304"
+  },
+  {
+    "description": "bin8_32bytes",
+    "type": "bin",
+    "bin_value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "packed": "c420000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  },
+  {
+    "description": "bin16_300bytes",
+    "type": "bin",
+    "bin_value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b",
+    "packed": "c5012c000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b"
+  }
+]

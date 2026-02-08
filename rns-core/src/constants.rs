@@ -336,6 +336,109 @@ pub const STREAM_ID_MAX: u16 = 0x3FFF;
 /// Stream data overhead: 2 (stream header) + 6 (channel envelope)
 pub const STREAM_DATA_OVERHEAD: usize = 2 + CHANNEL_ENVELOPE_OVERHEAD;
 
+// --- From Resource.py ---
+
+/// Initial window size at beginning of transfer
+pub const RESOURCE_WINDOW: usize = 4;
+
+/// Absolute minimum window size during transfer
+pub const RESOURCE_WINDOW_MIN: usize = 2;
+
+/// Maximum window size for slow links
+pub const RESOURCE_WINDOW_MAX_SLOW: usize = 10;
+
+/// Maximum window size for very slow links
+pub const RESOURCE_WINDOW_MAX_VERY_SLOW: usize = 4;
+
+/// Maximum window size for fast links
+pub const RESOURCE_WINDOW_MAX_FAST: usize = 75;
+
+/// Global maximum window (for calculations)
+pub const RESOURCE_WINDOW_MAX: usize = RESOURCE_WINDOW_MAX_FAST;
+
+/// Minimum flexibility between window_max and window_min
+pub const RESOURCE_WINDOW_FLEXIBILITY: usize = 4;
+
+/// Sustained fast-rate rounds before enabling fast window
+/// = WINDOW_MAX_SLOW - WINDOW - 2 = 10 - 4 - 2 = 4
+pub const RESOURCE_FAST_RATE_THRESHOLD: usize = RESOURCE_WINDOW_MAX_SLOW - RESOURCE_WINDOW - 2;
+
+/// Sustained very-slow-rate rounds before capping to very slow
+pub const RESOURCE_VERY_SLOW_RATE_THRESHOLD: usize = 2;
+
+/// Fast rate threshold: 50 Kbps in bytes/sec = 50000 / 8 = 6250.0
+pub const RESOURCE_RATE_FAST: f64 = (50 * 1000) as f64 / 8.0;
+
+/// Very slow rate threshold: 2 Kbps in bytes/sec = 2000 / 8 = 250.0
+pub const RESOURCE_RATE_VERY_SLOW: f64 = (2 * 1000) as f64 / 8.0;
+
+/// Number of bytes in a map hash
+pub const RESOURCE_MAPHASH_LEN: usize = 4;
+
+/// Resource SDU = Packet.MDU (NOT ENCRYPTED_MDU)
+pub const RESOURCE_SDU: usize = MDU;
+
+/// Random hash size prepended to resource data
+pub const RESOURCE_RANDOM_HASH_SIZE: usize = 4;
+
+/// Maximum efficient resource size (1 MB - 1)
+pub const RESOURCE_MAX_EFFICIENT_SIZE: usize = 1 * 1024 * 1024 - 1;
+
+/// Maximum metadata size (16 MB - 1)
+pub const RESOURCE_METADATA_MAX_SIZE: usize = 16 * 1024 * 1024 - 1;
+
+/// Maximum auto-compress size (64 MB)
+pub const RESOURCE_AUTO_COMPRESS_MAX_SIZE: usize = 64 * 1024 * 1024;
+
+/// Part timeout factor (before RTT measured)
+pub const RESOURCE_PART_TIMEOUT_FACTOR: f64 = 4.0;
+
+/// Part timeout factor (after first RTT measured)
+pub const RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT: f64 = 2.0;
+
+/// Proof timeout factor (reduced when awaiting proof)
+pub const RESOURCE_PROOF_TIMEOUT_FACTOR: f64 = 3.0;
+
+/// Maximum retries for part transfers
+pub const RESOURCE_MAX_RETRIES: usize = 16;
+
+/// Maximum retries for advertisement
+pub const RESOURCE_MAX_ADV_RETRIES: usize = 4;
+
+/// Sender grace time (seconds)
+pub const RESOURCE_SENDER_GRACE_TIME: f64 = 10.0;
+
+/// Processing grace for advertisement response (seconds)
+pub const RESOURCE_PROCESSING_GRACE: f64 = 1.0;
+
+/// Retry grace time (seconds)
+pub const RESOURCE_RETRY_GRACE_TIME: f64 = 0.25;
+
+/// Per-retry delay (seconds)
+pub const RESOURCE_PER_RETRY_DELAY: f64 = 0.5;
+
+/// Maximum watchdog sleep interval (seconds)
+pub const RESOURCE_WATCHDOG_MAX_SLEEP: f64 = 1.0;
+
+/// Response max grace time (seconds)
+pub const RESOURCE_RESPONSE_MAX_GRACE_TIME: f64 = 10.0;
+
+/// Advertisement overhead in bytes (fixed msgpack overhead)
+pub const RESOURCE_ADVERTISEMENT_OVERHEAD: usize = 134;
+
+/// Maximum hashmap entries per advertisement segment
+/// = floor((LINK_MDU - ADVERTISEMENT_OVERHEAD) / MAPHASH_LEN)
+pub const RESOURCE_HASHMAP_MAX_LEN: usize = (LINK_MDU - RESOURCE_ADVERTISEMENT_OVERHEAD) / RESOURCE_MAPHASH_LEN;
+
+/// Collision guard size = 2 * WINDOW_MAX + HASHMAP_MAX_LEN
+pub const RESOURCE_COLLISION_GUARD_SIZE: usize = 2 * RESOURCE_WINDOW_MAX + RESOURCE_HASHMAP_MAX_LEN;
+
+/// Hashmap not exhausted flag
+pub const RESOURCE_HASHMAP_IS_NOT_EXHAUSTED: u8 = 0x00;
+
+/// Hashmap exhausted flag
+pub const RESOURCE_HASHMAP_IS_EXHAUSTED: u8 = 0xFF;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +515,36 @@ mod tests {
 
         // DESTINATION_TIMEOUT = 7 days
         assert_eq!(DESTINATION_TIMEOUT, 60.0 * 60.0 * 24.0 * 7.0);
+    }
+
+    #[test]
+    fn test_resource_constants() {
+        // SDU = MDU = 464 (NOT ENCRYPTED_MDU)
+        assert_eq!(RESOURCE_SDU, 464);
+        assert_eq!(RESOURCE_SDU, MDU);
+
+        // FAST_RATE_THRESHOLD = WINDOW_MAX_SLOW - WINDOW - 2 = 10 - 4 - 2 = 4
+        assert_eq!(RESOURCE_FAST_RATE_THRESHOLD, 4);
+
+        // RATE_FAST = 50000 / 8 = 6250.0
+        assert_eq!(RESOURCE_RATE_FAST, 6250.0);
+
+        // RATE_VERY_SLOW = 2000 / 8 = 250.0
+        assert_eq!(RESOURCE_RATE_VERY_SLOW, 250.0);
+
+        // HASHMAP_MAX_LEN = floor((431 - 134) / 4) = floor(297/4) = 74
+        assert_eq!(RESOURCE_HASHMAP_MAX_LEN, 74);
+
+        // COLLISION_GUARD_SIZE = 2 * 75 + 74 = 224
+        assert_eq!(RESOURCE_COLLISION_GUARD_SIZE, 224);
+
+        // Window constants
+        assert_eq!(RESOURCE_WINDOW, 4);
+        assert_eq!(RESOURCE_WINDOW_MIN, 2);
+        assert_eq!(RESOURCE_WINDOW_MAX_SLOW, 10);
+        assert_eq!(RESOURCE_WINDOW_MAX_VERY_SLOW, 4);
+        assert_eq!(RESOURCE_WINDOW_MAX_FAST, 75);
+        assert_eq!(RESOURCE_WINDOW_MAX, 75);
+        assert_eq!(RESOURCE_WINDOW_FLEXIBILITY, 4);
     }
 }

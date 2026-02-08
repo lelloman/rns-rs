@@ -66,13 +66,24 @@ rns-rs/
 │   │   │   ├── mod.rs              # Channel struct, send/receive/tick, window mgmt
 │   │   │   ├── types.rs            # ChannelAction, ChannelError
 │   │   │   └── envelope.rs         # 6-byte header pack/unpack
-│   │   └── buffer/                 # Phase 4a: Buffer streaming
-│   │       ├── mod.rs              # StreamDataMessage, BufferWriter, BufferReader
-│   │       └── types.rs            # StreamId, Compressor trait, BufferError
+│   │   ├── buffer/                 # Phase 4a: Buffer streaming
+│   │   │   ├── mod.rs              # StreamDataMessage, BufferWriter, BufferReader
+│   │   │   └── types.rs            # StreamId, Compressor trait, BufferError
+│   │   ├── msgpack.rs              # Phase 4b: Minimal msgpack encode/decode
+│   │   └── resource/               # Phase 4b: Resource transfer
+│   │       ├── mod.rs              # Re-exports, top-level docs
+│   │       ├── types.rs            # ResourceState, ResourceAction, ResourceError
+│   │       ├── advertisement.rs    # ResourceAdvertisement pack/unpack (msgpack)
+│   │       ├── parts.rs            # Part hashing, hashmap, collision guard
+│   │       ├── window.rs           # Window adaptation, rate tracking
+│   │       ├── sender.rs           # ResourceSender state machine
+│   │       ├── receiver.rs         # ResourceReceiver state machine
+│   │       └── proof.rs            # Resource proof generation/validation
 │   └── tests/
-│       ├── interop.rs              # 7 interop tests (incl. milestone)
+│       ├── interop.rs              # 12 interop tests (incl. milestone + resource)
 │       ├── transport_integration.rs # 15 integration tests for transport engine
-│       └── link_integration.rs     # 9 integration tests for link/channel/buffer
+│       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
+│       └── resource_integration.rs # Integration tests for resource transfer
 ├── rns-net/                         # std — networking, config, I/O [PLANNED]
 ├── rns-cli/                         # std — CLI binaries [PLANNED]
 └── tests/
@@ -81,7 +92,8 @@ rns-rs/
         ├── crypto/                  # 11 JSON fixture files (Phase 1)
         ├── protocol/               # 6 JSON fixture files (Phase 2)
         ├── transport/              # 4 JSON fixture files (Phase 3)
-        └── link/                   # 5 JSON fixture files (Phase 4a)
+        ├── link/                   # 5 JSON fixture files (Phase 4a)
+        └── resource/               # 5 JSON fixture files (Phase 4b)
 ```
 
 ### Crate Graph
@@ -354,36 +366,316 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 
 ---
 
-## Phase 4b: Resource Transfer (`rns-core`)
+## Phase 4b: Resource Transfer (`rns-core`) — COMPLETE ✓
 
-**Milestone**: Rust can advertise, segment, transfer, and reassemble Resources with windowed flow control, producing byte-identical wire output to Python.
+**Milestone**: Rust can advertise, segment, transfer, and reassemble Resources with windowed flow control, producing byte-identical wire output to Python. A Rust `ResourceSender` can create an advertisement that Python unpacks correctly, and a Rust `ResourceReceiver` can unpack a Python-generated advertisement and drive the full request→parts→proof cycle.
+
+**Result**: 82 unit tests + 12 interop tests + 8 integration tests = 102 new tests (375 total rns-core, 451 total workspace). Modules: msgpack (minimal encode/decode with depth limit), resource/types (states, actions, errors, flags), resource/parts (map_hash, split, hashmap, collision guard), resource/advertisement (msgpack pack/unpack), resource/proof (resource_hash, expected_proof), resource/window (adaptation, rate tracking), resource/sender (state machine with deduped sent_parts tracking), resource/receiver (state machine with EIFR tracking). All wire formats validated against Python-generated test vectors. Post-implementation review fixed: sent_parts dedup, EIFR persistence, timeout calculations, proof validation matching Python, msgpack recursion depth limit, sdu==0 guard.
+
+### Architecture
+
+**Action queue model** (matching transport/link/channel): `ResourceSender` and `ResourceReceiver` return `Vec<ResourceAction>`. No callbacks, no I/O. The caller (future `rns-net`) dispatches actions to the link layer.
+
+**Two separate structs** instead of Python's single `Resource` class:
+- `ResourceSender` — creates advertisement, handles part requests, sends parts, validates proof
+- `ResourceReceiver` — unpacks advertisement, requests parts, receives parts, assembles data, sends proof
+
+**Minimal msgpack** — Resource advertisements use msgpack dicts. A `msgpack.rs` module in rns-core implements the subset needed: fixmap/map16, fixstr/str8, fixint/uint/int, bin8/bin16/bin32, fixarray/array16, nil. No external dependency.
+
+**Compression** — Reuses `Compressor` trait from buffer module. Resource data is compressed before encryption. `NoopCompressor` for `no_std`; `std` users provide bz2.
+
+**Encryption boundary** — In Python, `Resource.__init__` calls `link.encrypt(data)` to encrypt the entire resource data blob, then splits into SDU-sized parts. Parts are NOT individually encrypted. In Rust, `ResourceSender` accepts **already-encrypted** data from the caller (the caller handles link-level encryption). Similarly, `ResourceReceiver` returns encrypted assembled data for the caller to decrypt. The resource hash and proof are computed on the **unencrypted** data (before the caller encrypts), so the caller must provide both encrypted and unencrypted forms, or the Resource must handle encryption itself. **Decision**: ResourceSender takes unencrypted data + an encryption function (closure/trait), matching Python's design where Resource calls `link.encrypt()`.
+
+**Metadata** — In Python, `Resource` calls `umsgpack.packb(metadata)` itself. In Rust, metadata is accepted as pre-serialized `Vec<u8>` — the caller uses the `msgpack` module to encode. This is an intentional API simplification; the Rust `msgpack` module must be public for callers. The 3-byte big-endian length prefix is added/stripped by the Resource code.
+
+### Module Structure
+
+```
+rns-core/src/
+├── msgpack.rs                  # Minimal msgpack encode/decode
+└── resource/
+    ├── mod.rs                  # Re-exports, top-level docs
+    ├── types.rs                # ResourceState, ResourceAction, ResourceError, ResourceConfig
+    ├── advertisement.rs        # ResourceAdvertisement pack/unpack (msgpack wire format)
+    ├── parts.rs                # Part hashing (map_hash), hashmap construction, collision guard
+    ├── window.rs               # Window adaptation, rate tracking, EIFR
+    ├── sender.rs               # ResourceSender state machine + request handling
+    ├── receiver.rs             # ResourceReceiver state machine + part assembly
+    └── proof.rs                # Resource completion proof generation/validation
+```
+
+### Constants (from Resource.py)
+
+```
+# Window sizes
+WINDOW               = 4         # Initial window size
+WINDOW_MIN           = 2         # Absolute minimum
+WINDOW_MAX_SLOW      = 10        # Slow link max
+WINDOW_MAX_VERY_SLOW = 4         # Very slow link max
+WINDOW_MAX_FAST      = 75        # Fast link max
+WINDOW_MAX           = 75        # Global max for calculations
+WINDOW_FLEXIBILITY   = 4         # Ratchet flexibility
+
+# Rate thresholds
+FAST_RATE_THRESHOLD      = 4     # = WINDOW_MAX_SLOW - WINDOW - 2 = 10 - 4 - 2
+VERY_SLOW_RATE_THRESHOLD = 2     # Rounds before capping to very slow
+RATE_FAST            = 6250.0    # 50000 bps / 8 (bytes/s)
+RATE_VERY_SLOW       = 250.0     # 2000 bps / 8 (bytes/s)
+
+# Timeout and retry
+PART_TIMEOUT_FACTOR           = 4
+PART_TIMEOUT_FACTOR_AFTER_RTT = 2   # After first RTT measured
+PROOF_TIMEOUT_FACTOR          = 3   # Reduced timeout when awaiting proof
+MAX_RETRIES          = 16
+MAX_ADV_RETRIES      = 4
+SENDER_GRACE_TIME    = 10.0     # seconds
+PROCESSING_GRACE     = 1.0      # seconds, grace for advertisement response
+RETRY_GRACE_TIME     = 0.25     # seconds
+PER_RETRY_DELAY      = 0.5      # seconds
+WATCHDOG_MAX_SLEEP   = 1.0      # seconds, max tick interval
+RESPONSE_MAX_GRACE_TIME = 10.0  # seconds, request timeout grace
+
+# Data sizing
+MAPHASH_LEN          = 4        # bytes per part hash
+SDU                  = 464      # = Packet.MDU (NOT ENCRYPTED_MDU)
+RANDOM_HASH_SIZE     = 4        # collision detection random
+MAX_EFFICIENT_SIZE   = 1048575  # 1 MB - 1
+METADATA_MAX_SIZE    = 16777215 # 16 MB - 1
+AUTO_COMPRESS_MAX_SIZE = 67108864 # 64 MB
+
+# Hashmap / collision
+ADVERTISEMENT_OVERHEAD = 134    # Fixed msgpack overhead for advertisement
+HASHMAP_MAX_LEN      = 74      # = floor((Link.MDU(431) - 134) / 4)
+COLLISION_GUARD_SIZE = 224      # = 2 * WINDOW_MAX(75) + HASHMAP_MAX_LEN(74)
+
+HASHMAP_IS_NOT_EXHAUSTED = 0x00
+HASHMAP_IS_EXHAUSTED     = 0xFF
+```
+
+**Important SDU note**: Python `Resource.SDU = RNS.Packet.MDU = 464`, NOT `ENCRYPTED_MDU` (383). Resource data is already encrypted by the link layer, so parts are not individually encrypted — the full resource is encrypted once as a blob, then split into SDU-sized parts.
+
+### Wire Formats
+
+**Advertisement (msgpack dict):**
+```
+{
+  "t": transfer_size (int),     # encrypted data size (after compress+encrypt)
+  "d": data_size (int),         # total uncompressed size (data + metadata overhead)
+  "n": num_parts (int),         # hashmap entry count
+  "h": resource_hash (bin32),   # SHA-256(unencrypted_data + random_hash), full 32 bytes
+  "r": random_hash (bin4),      # collision detection
+  "o": original_hash (bin32),   # first segment hash (multi-segment)
+  "m": hashmap (bin),           # concatenated 4-byte part hashes (segment)
+  "f": flags (int),             # bit flags (see below)
+  "i": segment_index (int),     # 1-based segment number
+  "l": total_segments (int),    # total segments
+  "q": request_id (bin/nil),    # optional request/response ID
+}
+```
+
+**Flags byte:**
+```
+Bit 0: encrypted
+Bit 1: compressed
+Bit 2: split (multi-segment)
+Bit 3: is_request
+Bit 4: is_response
+Bit 5: has_metadata
+```
+
+**Part request (RESOURCE_REQ context):**
+```
+[exhausted_flag: u8] [last_map_hash: 4 bytes if exhausted] [resource_hash: 32 bytes] [requested_hashes: N*4 bytes]
+```
+
+**Hashmap update (RESOURCE_HMU context):**
+```
+[resource_hash: 32 bytes] [msgpack([segment: int, hashmap: bytes])]
+```
+
+**Resource proof (RESOURCE_PRF context):**
+```
+[resource_hash: 32 bytes] [proof: SHA-256(unencrypted_data + resource_hash)]
+```
+Note: `proof = SHA-256(data + resource_hash)` where `data` is the uncompressed, metadata-prefixed data (same `data` used to compute `resource_hash`). NOT encrypted data.
+
+**Cancel (RESOURCE_ICL/RESOURCE_RCL context):**
+```
+[resource_hash: 32 bytes]
+```
+
+**Note**: `resource_hash` is always the full SHA-256 (32 bytes) everywhere in the wire protocol — part requests, HMU, proofs, and cancels. The `truncated_hash` (16 bytes) exists on the Resource but is not used in any wire format.
 
 ### TDD Sequence
 
-#### 4b.1 Resource — Advertisement
-1. Test: pack advertisement msgpack matches Python format
-2. Test: unpack Python-generated advertisement → correct fields
-3. Test: hashmap contains correct 4-byte part hashes
+#### 4b.0 Minimal Msgpack (`msgpack.rs`)
 
-#### 4b.2 Resource — Transfer State Machine
-1. Test: NONE → QUEUED → ADVERTISED on advertise()
-2. Test: receiver accepts → TRANSFERRING
-3. Test: all parts received → ASSEMBLING → COMPLETE
-4. Test: hash mismatch → CORRUPT
-5. Test: timeout → FAILED
+Wire-compatible msgpack subset for Resource advertisements and HMU packets.
 
-#### 4b.3 Resource — Selective Retransmission
-1. Test: receiver requests missing parts by hash
-2. Test: sender retransmits only requested parts
-3. Test: hashmap exhaustion triggers new hashmap from sender
+1. Test: encode nil → `0xc0`
+2. Test: encode bool true/false → `0xc3`/`0xc2`
+3. Test: encode positive fixint (0..127) → single byte
+4. Test: encode uint8/uint16/uint32/uint64 → `0xcc`/`0xcd`/`0xce`/`0xcf` + value
+5. Test: encode negative fixint (-32..-1) → single byte
+6. Test: encode fixstr (0..31 chars) → `0xa0|len` + bytes
+7. Test: encode str8 (32..255 chars) → `0xd9` + len + bytes
+8. Test: encode bin8/bin16/bin32 → `0xc4`/`0xc5`/`0xc6` + len + bytes
+9. Test: encode fixarray (0..15 items) → `0x90|len` + items
+10. Test: encode fixmap (0..15 entries) → `0x80|len` + key-value pairs
+11. Test: decode all the above formats (roundtrip)
+12. Test: decode uint64 for file sizes > 4GB
+13. Test: decode Python-generated advertisement msgpack bytes → correct fields
+14. Test: Rust-encoded advertisement msgpack → Python can decode (via fixture)
+15. Test: encode/decode [int, bytes] array for HMU
 
-#### 4b.4 Resource — Window Adaptation
-1. Test: window starts at 4
-2. Test: fast rate → window grows to WINDOW_MAX_FAST (75)
-3. Test: slow rate → window shrinks to WINDOW_MAX_SLOW (10)
+#### 4b.1 Resource Types (`resource/types.rs`)
+
+1. Test: ResourceState enum covers all states: None, Queued, Advertised, Transferring, AwaitingProof, Assembling, Complete, Failed, Corrupt, Rejected
+2. Test: ResourceAction variants: SendAdvertisement, SendPart, SendRequest, SendHmu, SendProof, SendCancel, DataReceived, ProgressUpdate, Completed, Failed
+3. Test: ResourceError variants: InvalidAdvertisement, InvalidPart, InvalidProof, HashMismatch, Timeout, Rejected, TooLarge
+4. Test: advertisement flags byte pack/unpack roundtrip (encrypted, compressed, split, is_request, is_response, has_metadata)
+5. Test: HASHMAP_MAX_LEN = floor((LINK_MDU(431) - 134) / MAPHASH_LEN) = 74
+6. Test: COLLISION_GUARD_SIZE = 2 * WINDOW_MAX(75) + HASHMAP_MAX_LEN(74) = 224
+
+#### 4b.2 Part Hashing (`resource/parts.rs`)
+
+1. Test: `map_hash(part_data, random_hash)` = SHA-256(part_data + random_hash)[:4]
+2. Test: map_hash matches Python-generated fixture for same inputs
+3. Test: build_hashmap from data + random_hash → concatenated 4-byte hashes, matches Python
+4. Test: split data into parts of SDU bytes → correct number of parts
+5. Test: collision_guard detects duplicate map_hash within COLLISION_GUARD_SIZE window
+6. Test: last part may be shorter than SDU
+7. Test: empty data → 0 parts (edge case)
+
+#### 4b.3 Advertisement (`resource/advertisement.rs`)
+
+1. Test: pack advertisement with no ratchet, no metadata → msgpack matches Python fixture
+2. Test: pack advertisement with metadata flag set → correct flags byte
+3. Test: pack advertisement with compressed flag → correct flags byte
+4. Test: pack multi-segment advertisement (split=true, segment_index=2, total_segments=5)
+5. Test: pack advertisement with request_id → "q" field present
+6. Test: unpack Python-generated advertisement → all fields extracted correctly
+7. Test: unpack advertisement with nil request_id → request_id is None
+8. Test: hashmap segmentation: advertisement carries ≤ HASHMAP_MAX_LEN hashes
+9. Test: is_request / is_response flag detection
+10. Test: reject advertisement with invalid fields (negative size, etc.)
+
+#### 4b.4 Metadata Handling
+
+1. Test: prepend_metadata(data, metadata_bytes) → [3-byte BE length] + metadata + data
+2. Test: extract_metadata(assembled_data) → (metadata_bytes, remaining_data)
+3. Test: metadata max size (16 MB - 1) enforced
+4. Test: no metadata → data passed through unchanged
+5. Test: roundtrip: prepend then extract recovers original metadata and data
+
+#### 4b.5 Resource Sender State Machine (`resource/sender.rs`)
+
+1. Test: new() from data bytes → state is Queued, parts built, hashmap computed
+2. Test: advertise() → state Advertised, returns SendAdvertisement action with packed advertisement
+3. Test: advertise with auto_compress → data compressed if smaller, flags reflect compression
+4. Test: receive_acceptance() → state Transferring
+5. Test: handle_request(request_data) → returns SendPart actions for requested map_hashes
+6. Test: handle_request with unknown map_hash → no parts sent (graceful skip)
+7. Test: handle_request with HASHMAP_IS_EXHAUSTED → returns SendHmu action
+8. Test: HMU contains correct next segment of hashmap
+9. Test: all parts sent → state AwaitingProof, retries_left = 3 (hardcoded, not MAX_RETRIES)
+10. Test: validate_proof(proof_data) → proof = SHA-256(unencrypted_data + resource_hash), state Complete
+11. Test: invalid proof → state Failed
+12. Test: timeout with no requests → retry advertise (up to MAX_ADV_RETRIES), uses PROCESSING_GRACE
+13. Test: exceed MAX_ADV_RETRIES → state Failed
+14. Test: receive cancel (RESOURCE_RCL) → state Rejected
+15. Test: send cancel (RESOURCE_ICL) → returns SendCancel action
+16. Test: multi-segment sender: segment_index, total_segments, original_hash set correctly
+17. Test: resource_hash = SHA-256(unencrypted_data + random_hash) [full 32 bytes]
+18. Test: expected_proof = SHA-256(unencrypted_data + resource_hash) [full 32 bytes]
+19. Test: AwaitingProof timeout queries network cache for expected proof packet
+20. Test: req_hashlist deduplication — same request packet hash is not processed twice
+
+#### 4b.6 Resource Receiver State Machine (`resource/receiver.rs`)
+
+1. Test: from_advertisement(adv_data) → hashmap stored, parts array initialized
+2. Test: accept() → state Transferring, returns SendRequest for first window of parts
+2a. Test: accept() inherits previous window/EIFR from link if available
+3. Test: reject() → returns SendCancel (RESOURCE_RCL)
+4. Test: receive_part(part_data) → matches map_hash, stores in correct slot
+5. Test: receive_part with unknown map_hash → ignored
+6. Test: receive_part completes window → requests next window
+7. Test: consecutive_completed_height tracks contiguous received parts
+8. Test: window increases by 1 when all outstanding parts received
+9. Test: window_min ratchets up with flexibility
+10. Test: timeout waiting for parts → window decreases, retry with remaining hashes
+11. Test: exceed MAX_RETRIES → state Failed
+12. Test: hashmap exhaustion → request with HASHMAP_IS_EXHAUSTED flag + last_map_hash
+13. Test: receive hashmap_update → new hashes available, resume requesting
+14. Test: all parts received → state Assembling → assemble data → verify hash → state Complete
+15. Test: assembled data hash mismatch → state Corrupt
+16. Test: assembled data with compression → decompress via Compressor trait
+17. Test: assembled data with metadata → extract metadata, return separately
+18. Test: send proof after successful assembly → SHA-256(unencrypted_data + resource_hash)
+19. Test: receive cancel (RESOURCE_ICL) → state Failed
+20. Test: multi-segment: accept each segment, chain via original_hash
+
+#### 4b.7 Window Adaptation (`resource/window.rs`)
+
+1. Test: initial window = WINDOW (4), window_max = WINDOW_MAX_SLOW (10)
+2. Test: window increases when all outstanding parts received (window < window_max)
+3. Test: window_min ratchets up: (window - window_min) > (flexibility - 1) → window_min += 1
+4. Test: window decreases on timeout: window -= 1, window_max -= 1, and if gap > flexibility-1 then window_max -= 1 again (can decrease by 2)
+5. Test: fast rate detection: req_resp_rtt_rate > RATE_FAST for FAST_RATE_THRESHOLD(4) rounds → window_max = WINDOW_MAX_FAST (75)
+6. Test: very slow rate detection: only when fast_rate_rounds == 0, req_data_rtt_rate < RATE_VERY_SLOW for VERY_SLOW_RATE_THRESHOLD rounds → window_max = WINDOW_MAX_VERY_SLOW (4)
+7. Test: EIFR calculation: expected_inflight_rate = req_data_rtt_rate * 8; fallback to previous_eifr; then to establishment_cost * 8 / rtt
+8. Test: fast_rate_rounds only increments (never resets) — once fast mode is entered, it stays
+9. Test: window never goes below WINDOW_MIN (2)
+10. Test: window never exceeds window_max
+11. Test: previous window/EIFR from prior transfer on same link carries over to next transfer
+
+#### 4b.8 Tick / Timeout Logic
+
+1. Test: sender tick() with no response after PART_TIMEOUT_FACTOR(4) * RTT → timeout
+2. Test: sender tick() uses PART_TIMEOUT_FACTOR_AFTER_RTT(2) once RTT is measured
+3. Test: sender AwaitingProof uses PROOF_TIMEOUT_FACTOR(3)
+4. Test: sender AwaitingProof timeout → queries cache for expected proof, retries_left -= 1
+5. Test: receiver tick() with no parts after timeout → decrease window, retry
+6. Test: tick() with SENDER_GRACE_TIME → grace period before declaring failure
+7. Test: tick() with PROCESSING_GRACE → added to timeout when in Advertised state
+8. Test: tick() returns ProgressUpdate actions with completion percentage
+9. Test: tick() must be called at least every WATCHDOG_MAX_SLEEP(1s) for correct behavior
+
+#### 4b.9 Integration Tests
+
+1. Test: full sender↔receiver cycle — create sender, generate advertisement, receiver unpacks, requests parts, sender sends parts, receiver assembles, sends proof, sender validates — both reach Complete
+2. Test: full cycle with simulated packet loss — some parts not delivered, receiver re-requests, sender retransmits
+3. Test: full cycle with hashmap exhaustion — enough parts that receiver exhausts initial hashmap, triggers HMU
+4. Test: full cycle with compression — sender compresses, receiver decompresses, data matches
+5. Test: full cycle with metadata — metadata round-trips through advertisement → assembly
+6. Test: cancel from sender mid-transfer → receiver gets Failed
+7. Test: cancel from receiver mid-transfer → sender gets Failed
+
+#### 4b.10 Interop Tests (vs Python fixtures)
+
+1. Test: Python-packed advertisement → Rust unpack → all fields match
+2. Test: Rust-packed advertisement → Python unpack → all fields match (via fixture)
+3. Test: Python-generated part map_hashes → Rust computes same hashes
+4. Test: Python-generated resource proof → Rust validates
+5. Test: Rust-generated resource proof → matches Python expected value
+
+### Test Fixture Generation
+
+New fixtures in `tests/fixtures/resource/`:
+```
+- msgpack_vectors.json           # Msgpack encode/decode test pairs
+- advertisement_vectors.json     # 4+ advertisement pack/unpack cases
+- part_hash_vectors.json         # map_hash computation for known data+random
+- resource_proof_vectors.json    # Proof generation/validation
+- metadata_vectors.json          # Metadata prepend/extract
+- hmu_vectors.json               # Hashmap update msgpack pack/unpack
+```
 
 ### Python Reference Files
-- `RNS/Resource.py` — Transfer protocol
+- `RNS/Resource.py` — Transfer protocol (1361 lines)
+- `RNS/Packet.py:71-92` — RESOURCE_* context constants
+- `RNS/Link.py:1069-1187` — Link-side resource packet dispatch
+- `RNS/Identity.py` — full_hash for proof/map_hash computation
 
 ---
 
@@ -499,7 +791,7 @@ Each item below is a Red→Green→Refactor cycle (or a small cluster of cycles)
 | **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 46 tests, `Python announce → Rust validate()` ✓ |
 | **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — 143 tests, `Python announce → Rust route + retransmit` ✓ |
 | **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — 248 tests, full 4-way handshake + encrypted channel + buffer streaming ✓ |
-| **4b** | `rns-core` | Resource segmented transfer with windowed flow control | Planned |
+| **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — 375 tests (rns-core), full sender↔receiver cycle + HMU + interop ✓ |
 | **5** | `rns-net` | Daemon joins Python network, routes real traffic | Planned |
 | **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
 
@@ -548,8 +840,13 @@ A Python script that imports RNS (with PROVIDER_INTERNAL forced) and generates J
 - channel_envelope_vectors.json   # 8 Envelope pack/unpack
 - stream_data_vectors.json        # 9 StreamDataMessage pack/unpack
 
-# Future phases (not yet generated)
-- resource_advertisement, resource_transfer
+# Phase 4b vectors (tests/fixtures/resource/)
+- msgpack_vectors.json           # Msgpack encode/decode test pairs
+- advertisement_vectors.json     # Advertisement pack/unpack cases
+- part_hash_vectors.json         # map_hash computation
+- resource_proof_vectors.json    # Proof generation/validation
+- metadata_vectors.json          # Metadata prepend/extract
+- hmu_vectors.json               # Hashmap update msgpack
 ```
 
 ### Fixture format

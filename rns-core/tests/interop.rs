@@ -7,8 +7,12 @@ use rns_core::announce::AnnounceData;
 use rns_core::constants;
 use rns_core::destination;
 use rns_core::hash;
+use rns_core::msgpack;
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::receipt::{self, ProofResult};
+use rns_core::resource::parts::map_hash;
+use rns_core::resource::proof::{compute_resource_hash, compute_expected_proof};
+use rns_core::resource::advertisement::ResourceAdvertisement;
 use rns_crypto::identity::Identity;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -511,4 +515,219 @@ fn test_milestone_announce_pipeline() {
     let reparsed = AnnounceData::unpack(&unpacked.data, has_ratchet).unwrap();
     let revalidated = reparsed.validate(&dest_hash).unwrap();
     assert_eq!(revalidated.identity_hash, validated.identity_hash);
+}
+
+// =============================================================================
+// Resource interop tests
+// =============================================================================
+
+fn resource_fixture_path(name: &str) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("..");
+    path.push("tests");
+    path.push("fixtures");
+    path.push("resource");
+    path.push(name);
+    path
+}
+
+fn load_resource_fixture(name: &str) -> Vec<Value> {
+    let path = resource_fixture_path(name);
+    let data = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("Failed to read fixture {}: {}", path.display(), e)
+    });
+    serde_json::from_str(&data).unwrap()
+}
+
+#[test]
+fn test_msgpack_interop() {
+    let vectors = load_resource_fixture("msgpack_vectors.json");
+
+    for v in &vectors {
+        let desc = v["description"].as_str().unwrap();
+        let expected_packed = hex_to_bytes(v["packed"].as_str().unwrap());
+        let vtype = v["type"].as_str().unwrap();
+
+        // Test unpack: Python-packed bytes → Rust value
+        let (parsed, consumed) = msgpack::unpack(&expected_packed)
+            .unwrap_or_else(|e| panic!("unpack failed for {}: {:?}", desc, e));
+        assert_eq!(consumed, expected_packed.len(), "consumed mismatch for {}", desc);
+
+        // Verify the parsed value matches expected
+        match vtype {
+            "nil" => assert!(matches!(parsed, msgpack::Value::Nil), "expected nil for {}", desc),
+            "bool" => {
+                let expected = v["bool_value"].as_bool().unwrap();
+                assert_eq!(parsed.as_bool(), Some(expected), "bool mismatch for {}", desc);
+            }
+            "int" => {
+                let expected = v["int_value"].as_i64().unwrap();
+                assert_eq!(parsed.as_integer(), Some(expected), "int mismatch for {}", desc);
+            }
+            "str" => {
+                let expected = v["str_value"].as_str().unwrap();
+                assert_eq!(parsed.as_str(), Some(expected), "str mismatch for {}", desc);
+            }
+            "bin" => {
+                let expected = hex_to_bytes(v["bin_value"].as_str().unwrap());
+                assert_eq!(parsed.as_bin(), Some(expected.as_slice()), "bin mismatch for {}", desc);
+            }
+            "array" => {
+                assert!(parsed.as_array().is_some(), "expected array for {}", desc);
+            }
+            "map" => {
+                assert!(parsed.as_map().is_some(), "expected map for {}", desc);
+            }
+            _ => panic!("unknown type {} for {}", vtype, desc),
+        }
+
+        // Test roundtrip: Rust pack → same bytes
+        let repacked = msgpack::pack(&parsed);
+        assert_eq!(repacked, expected_packed, "roundtrip mismatch for {}", desc);
+    }
+}
+
+#[test]
+fn test_resource_part_hash_interop() {
+    let vectors = load_resource_fixture("part_hash_vectors.json");
+
+    for v in &vectors {
+        let desc = v["description"].as_str().unwrap();
+        let part_data = hex_to_bytes(v["part_data"].as_str().unwrap());
+        let random_hash = hex_to_bytes(v["random_hash"].as_str().unwrap());
+        let expected_map_hash = hex_to_bytes(v["map_hash"].as_str().unwrap());
+
+        let result = map_hash(&part_data, &random_hash);
+        assert_eq!(
+            result.as_slice(),
+            expected_map_hash.as_slice(),
+            "map_hash mismatch for {}",
+            desc
+        );
+    }
+}
+
+#[test]
+fn test_resource_proof_interop() {
+    let vectors = load_resource_fixture("resource_proof_vectors.json");
+
+    for v in &vectors {
+        let desc = v["description"].as_str().unwrap();
+        let data = hex_to_bytes(v["data"].as_str().unwrap());
+        let random_hash = hex_to_bytes(v["random_hash"].as_str().unwrap());
+        let expected_resource_hash = hex_to_bytes(v["resource_hash"].as_str().unwrap());
+        let expected_proof = hex_to_bytes(v["expected_proof"].as_str().unwrap());
+
+        let resource_hash = compute_resource_hash(&data, &random_hash);
+        assert_eq!(
+            resource_hash.as_slice(),
+            expected_resource_hash.as_slice(),
+            "resource_hash mismatch for {}",
+            desc
+        );
+
+        let proof = compute_expected_proof(&data, &resource_hash);
+        assert_eq!(
+            proof.as_slice(),
+            expected_proof.as_slice(),
+            "expected_proof mismatch for {}",
+            desc
+        );
+    }
+}
+
+#[test]
+fn test_resource_advertisement_interop() {
+    let vectors = load_resource_fixture("advertisement_vectors.json");
+
+    for v in &vectors {
+        let desc = v["description"].as_str().unwrap();
+        let expected_packed = hex_to_bytes(v["packed"].as_str().unwrap());
+
+        // Test unpack
+        let adv = ResourceAdvertisement::unpack(&expected_packed)
+            .unwrap_or_else(|e| panic!("unpack failed for {}: {:?}", desc, e));
+
+        assert_eq!(adv.transfer_size, v["transfer_size"].as_u64().unwrap(),
+            "transfer_size mismatch for {}", desc);
+        assert_eq!(adv.data_size, v["data_size"].as_u64().unwrap(),
+            "data_size mismatch for {}", desc);
+        assert_eq!(adv.num_parts, v["num_parts"].as_u64().unwrap(),
+            "num_parts mismatch for {}", desc);
+
+        let expected_resource_hash = hex_to_bytes(v["resource_hash"].as_str().unwrap());
+        assert_eq!(adv.resource_hash, expected_resource_hash,
+            "resource_hash mismatch for {}", desc);
+
+        let expected_random_hash = hex_to_bytes(v["random_hash"].as_str().unwrap());
+        assert_eq!(adv.random_hash, expected_random_hash,
+            "random_hash mismatch for {}", desc);
+
+        assert_eq!(adv.segment_index, v["segment_index"].as_u64().unwrap(),
+            "segment_index mismatch for {}", desc);
+        assert_eq!(adv.total_segments, v["total_segments"].as_u64().unwrap(),
+            "total_segments mismatch for {}", desc);
+
+        let expected_hashmap = hex_to_bytes(v["hashmap"].as_str().unwrap());
+        assert_eq!(adv.hashmap, expected_hashmap,
+            "hashmap mismatch for {}", desc);
+
+        let expected_flags = v["flags"].as_u64().unwrap() as u8;
+        assert_eq!(adv.flags.to_byte(), expected_flags,
+            "flags mismatch for {}", desc);
+
+        let expected_original_hash = hex_to_bytes(v["original_hash"].as_str().unwrap());
+        assert_eq!(adv.original_hash, expected_original_hash,
+            "original_hash mismatch for {}", desc);
+
+        if v["request_id"].is_null() {
+            assert!(adv.request_id.is_none(),
+                "expected no request_id for {}", desc);
+        } else {
+            let expected_request_id = hex_to_bytes(v["request_id"].as_str().unwrap());
+            assert_eq!(adv.request_id, Some(expected_request_id),
+                "request_id mismatch for {}", desc);
+        }
+
+        // Semantic roundtrip: Rust pack → unpack → same values
+        // (key ordering may differ from Python, so we don't check byte equality)
+        let repacked = adv.pack(0);
+        let re_adv = ResourceAdvertisement::unpack(&repacked)
+            .unwrap_or_else(|e| panic!("re-unpack failed for {}: {:?}", desc, e));
+        assert_eq!(re_adv.transfer_size, adv.transfer_size,
+            "roundtrip transfer_size mismatch for {}", desc);
+        assert_eq!(re_adv.data_size, adv.data_size,
+            "roundtrip data_size mismatch for {}", desc);
+        assert_eq!(re_adv.num_parts, adv.num_parts,
+            "roundtrip num_parts mismatch for {}", desc);
+        assert_eq!(re_adv.resource_hash, adv.resource_hash,
+            "roundtrip resource_hash mismatch for {}", desc);
+        assert_eq!(re_adv.flags.to_byte(), adv.flags.to_byte(),
+            "roundtrip flags mismatch for {}", desc);
+    }
+}
+
+#[test]
+fn test_resource_hmu_interop() {
+    let vectors = load_resource_fixture("hmu_vectors.json");
+
+    for v in &vectors {
+        let desc = v["description"].as_str().unwrap();
+        let payload = hex_to_bytes(v["payload"].as_str().unwrap());
+        let expected_segment = v["segment"].as_u64().unwrap();
+        let expected_hashmap = hex_to_bytes(v["hashmap_bytes"].as_str().unwrap());
+
+        // Unpack the msgpack array [segment, hashmap]
+        let (value, _) = msgpack::unpack(&payload)
+            .unwrap_or_else(|e| panic!("unpack HMU payload failed for {}: {:?}", desc, e));
+
+        let arr = value.as_array().unwrap();
+        assert_eq!(arr.len(), 2, "HMU array length mismatch for {}", desc);
+
+        let segment = arr[0].as_uint().unwrap();
+        assert_eq!(segment, expected_segment, "segment mismatch for {}", desc);
+
+        let hashmap = arr[1].as_bin().unwrap();
+        assert_eq!(hashmap, expected_hashmap.as_slice(), "hashmap mismatch for {}", desc);
+    }
 }
