@@ -84,20 +84,23 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, I/O [Phase 5d DONE]
+├── rns-net/                         # std — networking, I/O [Phase 5d+6a DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Public API, re-exports
 │   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
 │   │   ├── kiss.rs                  # KISS framing (FEND/FESC) + streaming Decoder
 │   │   ├── rnode_kiss.rs            # RNode KISS commands + streaming RNodeDecoder
-│   │   ├── event.rs                 # Event enum (Frame, InterfaceUp/Down, Tick, Shutdown)
+│   │   ├── event.rs                 # Event enum + QueryRequest/QueryResponse
 │   │   ├── time.rs                  # now() → f64 Unix epoch
 │   │   ├── config.rs                # ConfigObj parser for Python RNS config files
 │   │   ├── storage.rs               # Identity + known destinations persistence
 │   │   ├── ifac.rs                  # IFAC derive/mask/unmask (Interface Access Codes)
 │   │   ├── serial.rs                # Raw serial I/O via libc termios
-│   │   ├── driver.rs                # Callbacks trait, Driver event loop + dispatch
-│   │   ├── node.rs                  # RnsNode start/shutdown/from_config lifecycle
+│   │   ├── pickle.rs               # Minimal pickle codec (proto 2 encode, 2–5 decode)
+│   │   ├── md5.rs                   # MD5 + HMAC-MD5 for Python multiprocessing auth
+│   │   ├── rpc.rs                   # Python multiprocessing.connection wire protocol
+│   │   ├── driver.rs                # Callbacks, Driver loop, InterfaceStats, query dispatch
+│   │   ├── node.rs                  # RnsNode lifecycle + share_instance/RPC config
 │   │   └── interface/
 │   │       ├── mod.rs               # Writer trait, InterfaceEntry
 │   │       ├── tcp.rs               # TCP client: connect, reconnect, reader thread
@@ -115,7 +118,16 @@ rns-rs/
 │   └── tests/
 │       ├── python_interop.rs        # Rust↔Python announce reception
 │       └── ifac_interop.rs          # IFAC mask/unmask vs Python vectors
-├── rns-cli/                         # std — CLI binaries [PLANNED]
+├── rns-cli/                         # std — CLI binaries [Phase 6a DONE]
+│   ├── src/
+│   │   ├── lib.rs                   # Re-exports
+│   │   ├── args.rs                  # Simple argument parser (no external deps)
+│   │   ├── format.rs                # size_str, speed_str, prettytime, prettyhexrep
+│   │   └── bin/
+│   │       ├── rnsd.rs              # Daemon: start node, signal handling
+│   │       ├── rnstatus.rs          # Interface stats via RPC
+│   │       ├── rnpath.rs            # Path/rate table management via RPC
+│   │       └── rnid.rs              # Identity management (standalone)
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
     └── fixtures/
@@ -790,30 +802,81 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
-## Phase 6: CLI Tools (`rns-cli`)
+## Phase 6a: CLI Tools & RPC Infrastructure (`rns-cli` + `rns-net`) — COMPLETE ✓
 
-**Milestone**: `rnsd-rs`, `rnstatus-rs`, `rnpath-rs`, `rnprobe-rs` are drop-in replacements that produce equivalent output and behavior.
+**Milestone**: Core CLI binaries work, RPC layer connects Rust tools to running `rnsd` instances.
+
+**Result**: `rns-cli` crate with 4 binaries + RPC/pickle/MD5 infrastructure in `rns-net`. 677 tests passing across workspace.
+
+### What was built
+
+#### RPC Infrastructure (`rns-net`)
+- `pickle.rs`: Minimal pickle codec (protocol 2 encoder, protocol 2–5 decoder) for Python `multiprocessing` compatibility
+- `md5.rs`: MD5 + HMAC-MD5 for legacy Python multiprocessing auth handshake
+- `rpc.rs`: Full Python `multiprocessing.connection` wire protocol (4-byte BE length prefix + pickle, HMAC-SHA256 auth)
+- `event.rs`: QueryRequest/QueryResponse enums for driver state queries via `Event::Query` with mpsc response channel
+- `driver.rs`: InterfaceStats tracking (rxb/txb/rx_packets/tx_packets), handle_query/handle_query_mut dispatch
+- `node.rs`: `share_instance` + `rpc_port` config, RPC server thread
+
+#### CLI Binaries (`rns-cli`)
+- `args.rs`: Simple argument parser (no external deps)
+- `format.rs`: Shared formatting (size_str, speed_str, prettytime, prettyhexrep)
+- **rnsd**: Daemon — starts node from config, SIGINT/SIGTERM shutdown, verbosity flags
+- **rnstatus**: Interface stats — connects via RPC, displays mode/traffic/uptime, sorting, JSON output, name filtering
+- **rnpath**: Path management — path table, rate table, lookup, drop paths/queues via RPC, JSON output
+- **rnid**: Identity tool — generate, inspect, encrypt/decrypt files, sign/verify, import/export (hex/base64), destination hash computation (standalone, no RPC needed)
+
+---
+
+## Phase 6b: CLI Feature Parity & rnprobe (`rns-cli`)
+
+**Milestone**: All CLI tools reach feature parity with their Python counterparts. `rnprobe` is implemented.
 
 ### TDD Sequence
 
-#### 6.1 rnsd
-1. Test: `--version` prints version
-2. Test: `--exampleconfig` prints valid config
-3. Test: starts daemon, binds shared instance socket
-4. Test: `-s` (service mode) logs to file
-5. Test: SIGTERM → clean shutdown
+#### 6b.1 rnprobe (new tool)
+1. Test: `rnprobe <dest_hash>` sends probe, receives reply, prints RTT
+2. Test: `--timeout` flag — probe to unreachable destination → timeout message
+3. Test: `-n COUNT` sends multiple probes, prints per-probe RTT + summary (packet loss %)
+4. Test: `-w SECONDS` waits between probes
+5. Test: `-s BYTES` sets probe packet size
+6. Test: displays RSSI/SNR/link quality when available from interface
 
-#### 6.2 rnstatus
-1. Test: connects to shared instance, retrieves interface stats
-2. Test: output format matches Python rnstatus for same network state
+#### 6b.2 rnsd enhancements
+1. Test: `--exampleconfig` prints valid example config and exits
+2. Test: `-s` (service mode) logs to file instead of stdout
+3. Test: `-i` (interactive mode) drops into interactive shell after init
 
-#### 6.3 rnpath
-1. Test: `rnpath <dest_hash>` shows path info
-2. Test: `rnpath -d <dest_hash>` drops path
+#### 6b.3 rnstatus enhancements
+1. Test: `-A` shows announce stats (queue depth, held announces)
+2. Test: `-l` shows link table stats
+3. Test: `-t` shows traffic totals across all interfaces
+4. Test: `-m` monitor mode — refreshes display at interval
+5. Test: `-I SECONDS` sets monitor refresh interval
+6. Test: `-d` lists discovered interfaces
+7. Test: `-D` shows details and config entries for discovered interfaces
+8. Test: `-R HASH` + `-i PATH` queries remote transport instance
+9. Test: sorting by announce frequency (rxs/txs/announces/arx/atx/held)
+10. Test: per-interface metadata display (RSSI, SNR, airtime, channel load, CPU, battery)
 
-#### 6.4 rnprobe
-1. Test: sends probe to reachable destination → success
-2. Test: probe to unreachable destination → timeout
+#### 6b.4 rnpath enhancements
+1. Test: `-m HOPS` filters path table by max hops
+2. Test: `-b` lists blackholed identities
+3. Test: `-B HASH` blackholes an identity
+4. Test: `-U HASH` removes blackhole
+5. Test: `--duration HOURS` sets blackhole duration
+6. Test: `--reason TEXT` sets blackhole reason
+7. Test: `-p` views published blackhole list
+8. Test: `-R HASH` + `-i PATH` queries remote transport instance
+9. Test: rate table shows hourly announce frequency calculation
+
+#### 6b.5 rnid enhancements
+1. Test: `-R` requests unknown identity from network
+2. Test: `-a ASPECTS` announces destination
+3. Test: `-B` base32 encoding support
+4. Test: `-f` force overwrite existing files
+5. Test: chunked file encryption for large files (>16MB)
+6. Test: `-I`/`-O` stdin/stdout support
 
 ---
 
@@ -830,7 +893,8 @@ New fixtures in `tests/fixtures/resource/`:
 | **5b** | `rns-net` | Config, TCP server, UDP, Local, persistence | **DONE** — 80 tests, full `rnsd` daemon reads config, opens all interfaces ✓ |
 | **5c** | `rns-net` | IFAC, Serial, KISS interfaces | **DONE** — 119 tests, IFAC mask/unmask + Serial + KISS with flow control ✓ |
 | **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 154 tests, RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
-| **6** | `rns-cli` | CLI tools produce equivalent output | Planned |
+| **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — 677 tests, rnsd/rnstatus/rnpath/rnid + pickle/MD5/RPC ✓ |
+| **6b** | `rns-cli` | Full CLI feature parity + rnprobe | Planned |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
@@ -924,9 +988,10 @@ All crypto is implemented in pure Rust with no third-party crates:
 - Dev-only: `env_logger`, `serde_json`, `ctrlc`, `tempfile`
 - No tokio — std threads are sufficient for the interface count we handle
 
-### rns-cli (std) — PLANNED
-- `rns-net`
-- External deps TBD (clap, etc.)
+### rns-cli (std) — DONE (Phase 6a)
+- `rns-net`, `rns-core`, `rns-crypto`
+- External deps: `log`, `env_logger`, `libc`
+- No clap — uses custom `args.rs` parser (zero external dep for arg parsing)
 
 ---
 
