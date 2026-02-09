@@ -84,7 +84,7 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, I/O [Phase 5d+6a DONE]
+├── rns-net/                         # std — networking, I/O [Phase 8 DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Public API, re-exports
 │   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
@@ -99,6 +99,10 @@ rns-rs/
 │   │   ├── pickle.rs               # Minimal pickle codec (proto 2 encode, 2–5 decode)
 │   │   ├── md5.rs                   # MD5 + HMAC-MD5 for Python multiprocessing auth
 │   │   ├── rpc.rs                   # Python multiprocessing.connection wire protocol
+│   │   ├── announce_cache.rs        # Announce packet caching to disk (Phase 7c)
+│   │   ├── link_manager.rs          # Link lifecycle, request/response, resources, ACL (Phase 7e+8a)
+│   │   ├── management.rs            # Remote management destinations /status /path /list (Phase 7f+8c)
+│   │   ├── shared_client.rs         # Shared instance client mode (Phase 8e)
 │   │   ├── driver.rs                # Callbacks, Driver loop, InterfaceStats, query dispatch
 │   │   ├── node.rs                  # RnsNode lifecycle + share_instance/RPC config
 │   │   └── interface/
@@ -111,23 +115,26 @@ rns-rs/
 │   │       ├── kiss_iface.rs        # KISS + flow control, TNC config
 │   │       ├── pipe.rs              # Subprocess stdin/stdout + HDLC, auto-respawn
 │   │       ├── rnode.rs             # RNode LoRa radio, multi-sub, flow control
-│   │       └── backbone.rs          # TCP mesh backbone, Linux epoll
+│   │       ├── backbone.rs          # TCP mesh backbone, Linux epoll
+│   │       └── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
 │   ├── examples/
 │   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
 │   │   └── rnsd.rs                  # Rust rnsd daemon (config-driven)
 │   └── tests/
 │       ├── python_interop.rs        # Rust↔Python announce reception
 │       └── ifac_interop.rs          # IFAC mask/unmask vs Python vectors
-├── rns-cli/                         # std — CLI binaries [Phase 6b DONE]
+├── rns-cli/                         # std — CLI binaries [Phase 8 DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Re-exports
 │   │   ├── args.rs                  # Simple argument parser (no external deps)
 │   │   ├── format.rs                # size_str, speed_str, prettytime, prettyhexrep, prettyfrequency, base32
+│   │   ├── remote.rs                # Remote management query helper (Phase 8g)
 │   │   └── bin/
 │   │       ├── rnsd.rs              # Daemon: start node, signal handling, service mode, exampleconfig
-│   │       ├── rnstatus.rs          # Interface stats via RPC, sorting, totals, announces, monitor mode
-│   │       ├── rnpath.rs            # Path/rate table, blackhole management via RPC
-│   │       └── rnid.rs              # Identity management (standalone), base32, stdin/stdout
+│   │       ├── rnstatus.rs          # Interface stats via RPC, sorting, totals, announces, monitor, -R
+│   │       ├── rnpath.rs            # Path/rate table, blackhole management via RPC, -R
+│   │       ├── rnid.rs              # Identity management (standalone), base32, stdin/stdout
+│   │       └── rnprobe.rs           # Path probe diagnostic tool (Phase 8f)
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
     └── fixtures/
@@ -914,6 +921,60 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
+## Phase 8: Application API Completion + AutoInterface + CLI (`rns-core` + `rns-net` + `rns-cli`) — COMPLETE ✓
+
+**Milestone**: Application-level APIs wired through network layer (resource transfers, channel messages, management announces), AutoInterface for zero-config LAN discovery, shared instance client mode, rnprobe CLI tool, and remote management `-R` flags. 842 tests passing.
+
+### What was built
+
+#### Phase 8a: Resource Wiring in LinkManager + Driver (`rns-net`)
+- `link_manager.rs`: Resource context dispatch for all 7 context types (ADV/REQ/HMU/RESOURCE/PRF/ICL/RCL)
+- ResourceSender/ResourceReceiver lifecycle wired through ManagedLink with encryption closures
+- ResourceStrategy (AcceptNone/AcceptAll/AcceptApp) for incoming resource filtering
+- `resource_tick()` drives active transfers; driver dispatches resource callbacks
+- New Callbacks: `on_resource_received`, `on_resource_completed`, `on_resource_failed`, `on_resource_progress`
+- New Node API: `send_resource()`, `set_resource_strategy()`
+
+#### Phase 8b: Channel Message Delivery + Data Callbacks (`rns-net`)
+- Channel `MessageReceived` → `LinkManagerAction::ChannelMessageReceived` → `on_channel_message` callback
+- Generic link data (CONTEXT_NONE) → `on_link_data` callback
+- Response delivery with msgpack unpacking → `on_response` callback
+- New Node API: `send_channel_message()`, `send_on_link()`
+
+#### Phase 8c: Management Destination Announcing (`rns-net`)
+- `management.rs`: `build_management_announce()`, `build_blackhole_announce()` build full ANNOUNCE packets
+- Driver emits management/blackhole announces on startup + periodic re-announce (300s interval)
+- Only when `enable_remote_management`/`publish_blackhole` config is true
+
+#### Phase 8d: AutoInterface (`rns-net`)
+- `interface/auto.rs`: Zero-config LAN auto-discovery via IPv6 multicast
+- Multicast address derivation from SHA-256(group_id), discovery tokens, peer management
+- Thread model: discovery sender, multicast receiver, unicast receiver, data receiver, peer jobs (per interface)
+- `socket2` crate for multicast socket setup (`join_multicast_v6`, `set_reuse_port`)
+- Peer tracking with PEERING_TIMEOUT=22s, dedup deque (48 entries, 0.75s TTL)
+- Network interface enumeration via `libc::getifaddrs()` (fe80::/10 link-local addresses)
+- 19 unit tests including Python interop vectors
+
+#### Phase 8e: Shared Instance Client Mode (`rns-net`)
+- `shared_client.rs`: `SharedClientConfig` + `RnsNode::connect_shared()` constructor
+- Connects via LocalClientInterface with `transport_enabled: false`, proxies through daemon
+- `from_parts()` internal constructor for building RnsNode from pre-assembled components
+- 5 unit tests
+
+#### Phase 8f: rnprobe CLI Tool (`rns-cli`)
+- `bin/rnprobe.rs`: Path probe utility using RPC to query running rnsd
+- Combines next_hop, next_hop_if_name, and path_table RPC queries
+- Polls path table with 250ms interval until timeout (default 15s)
+- 10 unit tests
+
+#### Phase 8g: CLI `-R` Remote Management Flags (`rns-cli`)
+- `remote.rs`: `remote_query()` helper using shared client → link → identify → request → response
+- `RemoteCallbacks` captures link_established and response via mpsc channels
+- `-R HASH` flag added to rnstatus and rnpath (stub implementations)
+- 3 unit tests
+
+---
+
 ## Milestone Summary
 
 | Phase | Crate | Milestone Gate | Status |
@@ -930,6 +991,7 @@ New fixtures in `tests/fixtures/resource/`:
 | **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — 677 tests, rnsd/rnstatus/rnpath/rnid + pickle/MD5/RPC ✓ |
 | **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — 689 tests, sorting/monitor/totals/announces/blackhole/base32/service mode ✓ |
 | **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — 773 tests, announce queue + local client + cache + tunnels + links + management ✓ |
+| **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — 842 tests, resource wiring + channel delivery + mgmt announcing + AutoInterface + shared client + rnprobe + -R flags ✓ |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
@@ -1019,7 +1081,7 @@ All crypto is implemented in pure Rust with no third-party crates:
 
 ### rns-net (std)
 - `rns-core`, `rns-crypto` (path dependencies)
-- `log` (logging facade), `libc` (socket options via setsockopt)
+- `log` (logging facade), `libc` (socket options via setsockopt), `socket2` (multicast for AutoInterface)
 - Dev-only: `env_logger`, `serde_json`, `ctrlc`, `tempfile`
 - No tokio — std threads are sufficient for the interface count we handle
 
