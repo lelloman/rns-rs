@@ -324,6 +324,7 @@ fn tcp_reader_loop(mut stream: TcpStream, id: InterfaceId, tx: EventSender) {
 fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
     InterfaceInfo {
         id,
+        name: String::from("LocalInterface"),
         mode: constants::MODE_FULL,
         out_capable: true,
         in_capable: true,

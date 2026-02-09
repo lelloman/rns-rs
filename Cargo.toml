@@ -1,3 +1,3 @@
 [workspace]
-members = ["rns-crypto", "rns-core", "rns-net"]
+members = ["rns-crypto", "rns-core", "rns-net", "rns-cli"]
 resolver = "2"

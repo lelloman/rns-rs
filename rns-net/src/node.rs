@@ -26,7 +26,8 @@ use crate::interface::kiss_iface::KissIfaceConfig;
 use crate::interface::pipe::PipeConfig;
 use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
 use crate::interface::backbone::BackboneConfig;
-use crate::interface::InterfaceEntry;
+use crate::interface::{InterfaceEntry, InterfaceStats};
+use crate::time;
 use crate::serial::Parity;
 use crate::storage;
 
@@ -81,6 +82,10 @@ pub struct NodeConfig {
     pub transport_enabled: bool,
     pub identity: Option<Identity>,
     pub interfaces: Vec<InterfaceConfig>,
+    /// Enable RPC server for external tools (rnstatus, rnpath, etc.)
+    pub share_instance: bool,
+    /// RPC control port (default 37429). Only used when share_instance is true.
+    pub rpc_port: u16,
 }
 
 /// Interface configuration variant with its mode.
@@ -113,10 +118,25 @@ pub enum InterfaceVariant {
     Backbone(BackboneConfig),
 }
 
+use crate::event::{QueryRequest, QueryResponse};
+
+/// Error returned when the driver thread has shut down.
+#[derive(Debug)]
+pub struct SendError;
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "driver shut down")
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// A running RNS node.
 pub struct RnsNode {
     tx: EventSender,
     driver_handle: Option<JoinHandle<()>>,
+    rpc_server: Option<crate::rpc::RpcServer>,
 }
 
 impl RnsNode {
@@ -477,6 +497,8 @@ impl RnsNode {
             transport_enabled: rns_config.reticulum.enable_transport,
             identity: Some(identity),
             interfaces: interface_configs,
+            share_instance: rns_config.reticulum.share_instance,
+            rpc_port: rns_config.reticulum.instance_control_port,
         };
 
         Self::start(node_config, callbacks)
@@ -520,8 +542,10 @@ impl RnsNode {
             match iface_config.variant {
                 InterfaceVariant::TcpClient(tcp_config) => {
                     let id = tcp_config.interface_id;
+                    let name = tcp_config.name.clone();
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
@@ -544,6 +568,10 @@ impl RnsNode {
                             online: false,
                             dynamic: false,
                             ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
                         },
                     );
                 }
@@ -558,6 +586,7 @@ impl RnsNode {
                 }
                 InterfaceVariant::Udp(udp_config) => {
                     let id = udp_config.interface_id;
+                    let name = udp_config.name.clone();
                     let out_capable = udp_config.forward_ip.is_some();
                     let in_capable = udp_config.listen_ip.is_some();
 
@@ -565,6 +594,7 @@ impl RnsNode {
 
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable,
                         in_capable,
@@ -586,6 +616,10 @@ impl RnsNode {
                                 online: in_capable || out_capable,
                                 dynamic: false,
                                 ifac: ifac_state,
+                                stats: InterfaceStats {
+                                    started: time::now(),
+                                    ..Default::default()
+                                },
                             },
                         );
                     }
@@ -599,8 +633,10 @@ impl RnsNode {
                 }
                 InterfaceVariant::LocalClient(local_config) => {
                     let id = local_config.interface_id;
+                    let name = local_config.name.clone();
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
@@ -623,14 +659,20 @@ impl RnsNode {
                             online: false,
                             dynamic: false,
                             ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
                         },
                     );
                 }
                 InterfaceVariant::Serial(serial_config) => {
                     let id = serial_config.interface_id;
+                    let name = serial_config.name.clone();
                     let bitrate = serial_config.speed;
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
@@ -653,13 +695,19 @@ impl RnsNode {
                             online: false,
                             dynamic: false,
                             ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
                         },
                     );
                 }
                 InterfaceVariant::Kiss(kiss_config) => {
                     let id = kiss_config.interface_id;
+                    let name = kiss_config.name.clone();
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
@@ -682,13 +730,19 @@ impl RnsNode {
                             online: false,
                             dynamic: false,
                             ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
                         },
                     );
                 }
                 InterfaceVariant::Pipe(pipe_config) => {
                     let id = pipe_config.interface_id;
+                    let name = pipe_config.name.clone();
                     let info = InterfaceInfo {
                         id,
+                        name,
                         mode: iface_mode,
                         out_capable: true,
                         in_capable: true,
@@ -711,19 +765,33 @@ impl RnsNode {
                             online: false,
                             dynamic: false,
                             ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
                         },
                     );
                 }
                 InterfaceVariant::RNode(rnode_config) => {
+                    let name = rnode_config.name.clone();
                     let sub_writers =
                         crate::interface::rnode::start(rnode_config, tx.clone())?;
 
                     // For multi-subinterface RNodes, we need an IfacState per sub.
                     // Re-derive from the original config for each beyond the first.
                     let mut first = true;
+                    let mut sub_index = 0u32;
                     for (sub_id, writer) in sub_writers {
+                        let sub_name = if sub_index == 0 {
+                            name.clone()
+                        } else {
+                            format!("{}/{}", name, sub_index)
+                        };
+                        sub_index += 1;
+
                         let info = InterfaceInfo {
                             id: sub_id,
+                            name: sub_name,
                             mode: iface_mode,
                             out_capable: true,
                             in_capable: true,
@@ -756,6 +824,10 @@ impl RnsNode {
                                 online: false,
                                 dynamic: false,
                                 ifac: sub_ifac,
+                                stats: InterfaceStats {
+                                    started: time::now(),
+                                    ..Default::default()
+                                },
                             },
                         );
                     }
@@ -786,6 +858,26 @@ impl RnsNode {
                 }
             })?;
 
+        // Start RPC server if share_instance is enabled
+        let rpc_server = if config.share_instance {
+            let auth_key = crate::rpc::derive_auth_key(
+                &identity.get_private_key().unwrap_or([0u8; 64]),
+            );
+            let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
+            match crate::rpc::RpcServer::start(&rpc_addr, auth_key, tx.clone()) {
+                Ok(server) => {
+                    log::info!("RPC server started on 127.0.0.1:{}", config.rpc_port);
+                    Some(server)
+                }
+                Err(e) => {
+                    log::error!("Failed to start RPC server: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Spawn driver thread
         let driver_handle = thread::Builder::new()
             .name("rns-driver".into())
@@ -796,11 +888,64 @@ impl RnsNode {
         Ok(RnsNode {
             tx,
             driver_handle: Some(driver_handle),
+            rpc_server,
         })
+    }
+
+    /// Query the driver for state information.
+    pub fn query(&self, request: QueryRequest) -> Result<QueryResponse, SendError> {
+        let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::Query(request, resp_tx))
+            .map_err(|_| SendError)?;
+        resp_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Send a raw outbound packet.
+    pub fn send_raw(
+        &self,
+        raw: Vec<u8>,
+        dest_type: u8,
+        attached_interface: Option<rns_core::transport::types::InterfaceId>,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendOutbound {
+                raw,
+                dest_type,
+                attached_interface,
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Register a local destination with the transport engine.
+    pub fn register_destination(
+        &self,
+        dest_hash: [u8; 16],
+        dest_type: u8,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::RegisterDestination { dest_hash, dest_type })
+            .map_err(|_| SendError)
+    }
+
+    /// Deregister a local destination.
+    pub fn deregister_destination(&self, dest_hash: [u8; 16]) -> Result<(), SendError> {
+        self.tx
+            .send(Event::DeregisterDestination { dest_hash })
+            .map_err(|_| SendError)
+    }
+
+    /// Get the event sender for direct event injection.
+    pub fn event_sender(&self) -> &EventSender {
+        &self.tx
     }
 
     /// Shut down the node. Blocks until the driver thread exits.
     pub fn shutdown(mut self) {
+        // Stop RPC server first
+        if let Some(mut rpc) = self.rpc_server.take() {
+            rpc.stop();
+        }
         let _ = self.tx.send(Event::Shutdown);
         if let Some(handle) = self.driver_handle.take() {
             let _ = handle.join();
@@ -828,6 +973,8 @@ mod tests {
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
             },
             Box::new(NoopCallbacks),
         )
@@ -844,6 +991,8 @@ mod tests {
                 transport_enabled: true,
                 identity: Some(identity),
                 interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
             },
             Box::new(NoopCallbacks),
         )
@@ -860,6 +1009,8 @@ mod tests {
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
             },
             Box::new(NoopCallbacks),
         )

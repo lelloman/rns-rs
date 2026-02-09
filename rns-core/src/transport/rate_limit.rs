@@ -15,6 +15,11 @@ impl AnnounceRateLimiter {
         }
     }
 
+    /// Iterate over all rate table entries.
+    pub fn entries(&self) -> impl Iterator<Item = (&[u8; 16], &RateEntry)> {
+        self.table.iter()
+    }
+
     /// Check if an announce should be blocked due to rate limiting.
     ///
     /// Returns `true` if the announce should be BLOCKED.

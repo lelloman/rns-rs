@@ -113,6 +113,7 @@ impl TestHarness {
     fn add_interface(&mut self, id: u64, mode: u8) {
         self.engine.register_interface(InterfaceInfo {
             id: InterfaceId(id),
+            name: format!("test-{}", id),
             mode,
             out_capable: true,
             in_capable: true,
@@ -314,6 +315,7 @@ fn test_transport_routing_interop() {
                 // Manually insert a path entry
                 harness.engine.register_interface(InterfaceInfo {
                     id: InterfaceId(1),
+                    name: String::from("test-1"),
                     mode: constants::MODE_FULL,
                     out_capable: true,
                     in_capable: true,

@@ -22,6 +22,16 @@ pub trait Writer: Send {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
 }
 
+/// Traffic statistics for an interface.
+#[derive(Debug, Clone, Default)]
+pub struct InterfaceStats {
+    pub rxb: u64,
+    pub txb: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub started: f64,
+}
+
 /// Everything the driver tracks per interface.
 pub struct InterfaceEntry {
     pub id: InterfaceId,
@@ -33,6 +43,8 @@ pub struct InterfaceEntry {
     pub dynamic: bool,
     /// IFAC state for this interface, if access codes are enabled.
     pub ifac: Option<IfacState>,
+    /// Traffic statistics.
+    pub stats: InterfaceStats,
 }
 
 #[cfg(test)]
@@ -63,6 +75,7 @@ mod tests {
             id: InterfaceId(1),
             info: InterfaceInfo {
                 id: InterfaceId(1),
+                name: String::new(),
                 mode: constants::MODE_FULL,
                 out_capable: true,
                 in_capable: true,
@@ -75,6 +88,7 @@ mod tests {
             online: false,
             dynamic: false,
             ifac: None,
+            stats: InterfaceStats::default(),
         };
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);

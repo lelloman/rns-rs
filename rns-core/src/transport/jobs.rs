@@ -204,6 +204,7 @@ mod tests {
     fn make_interface_info(id: u64) -> InterfaceInfo {
         InterfaceInfo {
             id: InterfaceId(id),
+            name: String::from("test"),
             mode: constants::MODE_FULL,
             out_capable: true,
             in_capable: true,

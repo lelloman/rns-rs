@@ -182,6 +182,7 @@ mod tests {
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {
             id: InterfaceId(id),
+            name: String::from("test"),
             mode,
             out_capable: true,
             in_capable: true,

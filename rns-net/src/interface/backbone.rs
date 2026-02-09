@@ -243,6 +243,7 @@ fn epoll_loop(
 
                             let info = InterfaceInfo {
                                 id: client_id,
+                                name: format!("BackboneInterface/{}", client_fd),
                                 mode: constants::MODE_FULL,
                                 out_capable: true,
                                 in_capable: true,

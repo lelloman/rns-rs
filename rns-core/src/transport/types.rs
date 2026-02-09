@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Opaque identifier for a network interface.
@@ -8,6 +9,7 @@ pub struct InterfaceId(pub u64);
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub id: InterfaceId,
+    pub name: String,
     pub mode: u8,
     pub out_capable: bool,
     pub in_capable: bool,

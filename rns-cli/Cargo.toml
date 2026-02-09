@@ -1,0 +1,29 @@
+[package]
+name = "rns-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tools for Reticulum Network Stack"
+
+[dependencies]
+rns-net = { path = "../rns-net" }
+rns-core = { path = "../rns-core" }
+rns-crypto = { path = "../rns-crypto" }
+log = "0.4"
+env_logger = "0.10"
+libc = "0.2"
+
+[[bin]]
+name = "rnsd"
+path = "src/bin/rnsd.rs"
+
+[[bin]]
+name = "rnstatus"
+path = "src/bin/rnstatus.rs"
+
+[[bin]]
+name = "rnpath"
+path = "src/bin/rnpath.rs"
+
+[[bin]]
+name = "rnid"
+path = "src/bin/rnid.rs"

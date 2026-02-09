@@ -2,13 +2,17 @@
 
 use std::collections::HashMap;
 
+use rns_core::packet::RawPacket;
 use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::OsRng;
 
-use crate::event::{Event, EventReceiver};
+use crate::event::{
+    Event, EventReceiver, InterfaceStatsResponse, NextHopResponse, PathTableEntry,
+    QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
+};
 use crate::ifac;
-use crate::interface::InterfaceEntry;
+use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::time;
 
 /// Callbacks for events the driver produces.
@@ -40,6 +44,7 @@ pub struct Driver {
     pub(crate) rng: OsRng,
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
+    pub(crate) started: f64,
 }
 
 impl Driver {
@@ -55,6 +60,7 @@ impl Driver {
             rng: OsRng,
             rx,
             callbacks,
+            started: time::now(),
         }
     }
 
@@ -68,6 +74,12 @@ impl Driver {
 
             match event {
                 Event::Frame { interface_id, data } => {
+                    // Update rx stats
+                    if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                        entry.stats.rxb += data.len() as u64;
+                        entry.stats.rx_packets += 1;
+                    }
+
                     // IFAC inbound processing
                     let packet = if let Some(entry) = self.interfaces.get(&interface_id) {
                         if let Some(ref ifac_state) = entry.ifac {
@@ -118,6 +130,10 @@ impl Driver {
                                     online: true,
                                     dynamic: true,
                                     ifac: None,
+                                    stats: InterfaceStats {
+                                        started: time::now(),
+                                        ..Default::default()
+                                    },
                                 },
                             );
                         }
@@ -148,8 +164,157 @@ impl Driver {
                         self.callbacks.on_interface_down(id);
                     }
                 }
+                Event::SendOutbound { raw, dest_type, attached_interface } => {
+                    match RawPacket::unpack(&raw) {
+                        Ok(packet) => {
+                            let actions = self.engine.handle_outbound(
+                                &packet,
+                                dest_type,
+                                attached_interface,
+                                time::now(),
+                            );
+                            self.dispatch_all(actions);
+                        }
+                        Err(e) => {
+                            log::warn!("SendOutbound: failed to unpack packet: {:?}", e);
+                        }
+                    }
+                }
+                Event::RegisterDestination { dest_hash, dest_type } => {
+                    self.engine.register_destination(dest_hash, dest_type);
+                }
+                Event::DeregisterDestination { dest_hash } => {
+                    self.engine.deregister_destination(&dest_hash);
+                }
+                Event::Query(request, response_tx) => {
+                    let response = self.handle_query_mut(request);
+                    let _ = response_tx.send(response);
+                }
                 Event::Shutdown => break,
             }
+        }
+    }
+
+    /// Handle a query request and produce a response.
+    fn handle_query(&self, request: QueryRequest) -> QueryResponse {
+        match request {
+            QueryRequest::InterfaceStats => {
+                let mut interfaces = Vec::new();
+                for entry in self.interfaces.values() {
+                    interfaces.push(SingleInterfaceStat {
+                        name: entry.info.name.clone(),
+                        status: entry.online,
+                        mode: entry.info.mode,
+                        rxb: entry.stats.rxb,
+                        txb: entry.stats.txb,
+                        rx_packets: entry.stats.rx_packets,
+                        tx_packets: entry.stats.tx_packets,
+                        bitrate: entry.info.bitrate,
+                        ifac_size: entry.ifac.as_ref().map(|s| s.size),
+                        started: entry.stats.started,
+                    });
+                }
+                // Sort by name for consistent output
+                interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+                QueryResponse::InterfaceStats(InterfaceStatsResponse {
+                    interfaces,
+                    transport_id: self.engine.identity_hash().copied(),
+                    transport_enabled: self.engine.transport_enabled(),
+                    transport_uptime: time::now() - self.started,
+                })
+            }
+            QueryRequest::PathTable { max_hops } => {
+                let entries: Vec<PathTableEntry> = self
+                    .engine
+                    .path_table_entries()
+                    .filter(|(_, entry)| {
+                        max_hops.map_or(true, |max| entry.hops <= max)
+                    })
+                    .map(|(hash, entry)| {
+                        let iface_name = self.interfaces.get(&entry.receiving_interface)
+                            .map(|e| e.info.name.clone())
+                            .or_else(|| self.engine.interface_info(&entry.receiving_interface)
+                                .map(|i| i.name.clone()))
+                            .unwrap_or_default();
+                        PathTableEntry {
+                            hash: *hash,
+                            timestamp: entry.timestamp,
+                            via: entry.next_hop,
+                            hops: entry.hops,
+                            expires: entry.expires,
+                            interface: entry.receiving_interface,
+                            interface_name: iface_name,
+                        }
+                    })
+                    .collect();
+                QueryResponse::PathTable(entries)
+            }
+            QueryRequest::RateTable => {
+                let entries: Vec<RateTableEntry> = self
+                    .engine
+                    .rate_limiter()
+                    .entries()
+                    .map(|(hash, entry)| RateTableEntry {
+                        hash: *hash,
+                        last: entry.last,
+                        rate_violations: entry.rate_violations,
+                        blocked_until: entry.blocked_until,
+                        timestamps: entry.timestamps.clone(),
+                    })
+                    .collect();
+                QueryResponse::RateTable(entries)
+            }
+            QueryRequest::NextHop { dest_hash } => {
+                let resp = self.engine.next_hop(&dest_hash).map(|next_hop| {
+                    NextHopResponse {
+                        next_hop,
+                        hops: self.engine.hops_to(&dest_hash).unwrap_or(0),
+                        interface: self.engine.next_hop_interface(&dest_hash).unwrap_or(InterfaceId(0)),
+                    }
+                });
+                QueryResponse::NextHop(resp)
+            }
+            QueryRequest::NextHopIfName { dest_hash } => {
+                let name = self
+                    .engine
+                    .next_hop_interface(&dest_hash)
+                    .and_then(|id| self.interfaces.get(&id))
+                    .map(|entry| entry.info.name.clone());
+                QueryResponse::NextHopIfName(name)
+            }
+            QueryRequest::LinkCount => {
+                QueryResponse::LinkCount(self.engine.link_table_count())
+            }
+            QueryRequest::DropPath { .. } => {
+                // Mutating queries are handled by handle_query_mut
+                QueryResponse::DropPath(false)
+            }
+            QueryRequest::DropAllVia { .. } => {
+                QueryResponse::DropAllVia(0)
+            }
+            QueryRequest::DropAnnounceQueues => {
+                QueryResponse::DropAnnounceQueues
+            }
+            QueryRequest::TransportIdentity => {
+                QueryResponse::TransportIdentity(self.engine.identity_hash().copied())
+            }
+        }
+    }
+
+    /// Handle a mutating query request.
+    fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
+        match request {
+            QueryRequest::DropPath { dest_hash } => {
+                QueryResponse::DropPath(self.engine.drop_path(&dest_hash))
+            }
+            QueryRequest::DropAllVia { transport_hash } => {
+                QueryResponse::DropAllVia(self.engine.drop_all_via(&transport_hash))
+            }
+            QueryRequest::DropAnnounceQueues => {
+                self.engine.drop_announce_queues();
+                QueryResponse::DropAnnounceQueues
+            }
+            other => self.handle_query(other),
         }
     }
 
@@ -165,6 +330,9 @@ impl Driver {
                             } else {
                                 raw
                             };
+                            // Update tx stats
+                            entry.stats.txb += data.len() as u64;
+                            entry.stats.tx_packets += 1;
                             if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] send failed: {}", entry.info.id.0, e);
                             }
@@ -179,6 +347,9 @@ impl Driver {
                             } else {
                                 raw.clone()
                             };
+                            // Update tx stats
+                            entry.stats.txb += data.len() as u64;
+                            entry.stats.tx_packets += 1;
                             if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] broadcast failed: {}", entry.info.id.0, e);
                             }
@@ -220,13 +391,14 @@ impl Driver {
 mod tests {
     use super::*;
     use crate::event;
-    use crate::interface::{InterfaceEntry, Writer};
+    use crate::interface::Writer;
     use rns_core::announce::AnnounceData;
     use rns_core::constants;
-    use rns_core::packet::{PacketFlags, RawPacket};
+    use rns_core::packet::PacketFlags;
     use rns_core::transport::types::InterfaceInfo;
     use rns_crypto::identity::Identity;
     use std::io;
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
 
     struct MockWriter {
@@ -318,6 +490,7 @@ mod tests {
     fn make_interface_info(id: u64) -> InterfaceInfo {
         InterfaceInfo {
             id: InterfaceId(id),
+            name: format!("test-{}", id),
             mode: constants::MODE_FULL,
             out_capable: true,
             in_capable: true,
@@ -325,6 +498,18 @@ mod tests {
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
+        }
+    }
+
+    fn make_entry(id: u64, writer: Box<dyn Writer>, online: bool) -> InterfaceEntry {
+        InterfaceEntry {
+            id: InterfaceId(id),
+            info: make_interface_info(id),
+            writer,
+            online,
+            dynamic: false,
+            ifac: None,
+            stats: InterfaceStats::default(),
         }
     }
 
@@ -372,14 +557,7 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1),
-            info,
-            writer: Box::new(writer),
-            online: true,
-            dynamic: false,
-            ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
@@ -402,15 +580,7 @@ mod tests {
             Box::new(cbs),
         );
         let (writer, sent) = MockWriter::new();
-        let info = make_interface_info(1);
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1),
-            info,
-            writer: Box::new(writer),
-            online: true,
-            dynamic: false,
-            ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
             interface: InterfaceId(1),
@@ -435,14 +605,8 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        let info1 = make_interface_info(1);
-        let info2 = make_interface_info(2);
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false, ifac: None,
-        });
-        driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
             raw: vec![0xAA],
@@ -467,14 +631,8 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        let info1 = make_interface_info(1);
-        let info2 = make_interface_info(2);
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: true, dynamic: false, ifac: None,
-        });
-        driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
             raw: vec![0xBB],
@@ -499,9 +657,7 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Send Tick then Shutdown
         tx.send(Event::Tick).unwrap();
@@ -536,9 +692,7 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: true, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
@@ -568,14 +722,8 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        let info1 = make_interface_info(1);
-        let info2 = make_interface_info(2);
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info: info1, writer: Box::new(w1), online: false, dynamic: false, ifac: None, // offline
-        });
-        driver.interfaces.insert(InterfaceId(2), InterfaceEntry {
-            id: InterfaceId(2), info: info2, writer: Box::new(w2), online: true, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), false)); // offline
+        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         // Direct send to offline interface: should be skipped
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
@@ -606,10 +754,7 @@ mod tests {
         );
 
         let (w_old, sent_old) = MockWriter::new();
-        let info = make_interface_info(1);
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(w_old), online: false, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w_old), false));
 
         // Simulate reconnect: InterfaceUp with new writer
         let (w_new, sent_new) = MockWriter::new();
@@ -698,6 +843,7 @@ mod tests {
             online: true,
             dynamic: true,
             ifac: None,
+            stats: InterfaceStats::default(),
         });
 
         // InterfaceDown for dynamic → should be removed entirely
@@ -721,11 +867,8 @@ mod tests {
         );
 
         // Static interface
-        let info = make_interface_info(1);
         let (writer, _) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), InterfaceEntry {
-            id: InterfaceId(1), info, writer: Box::new(writer), online: false, dynamic: false, ifac: None,
-        });
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), false));
 
         tx.send(Event::InterfaceUp(InterfaceId(1), None, None)).unwrap();
         tx.send(Event::InterfaceDown(InterfaceId(1))).unwrap();
@@ -737,5 +880,419 @@ mod tests {
         // Static interface should still exist but be offline
         assert!(driver.interfaces.contains_key(&InterfaceId(1)));
         assert!(!driver.interfaces[&InterfaceId(1)].online);
+    }
+
+    // =========================================================================
+    // New tests for Phase 6a
+    // =========================================================================
+
+    #[test]
+    fn frame_updates_rx_stats() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info.clone());
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        let announce_len = announce_raw.len() as u64;
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.rxb, announce_len);
+        assert_eq!(stats.rx_packets, 1);
+    }
+
+    #[test]
+    fn send_updates_tx_stats() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(1),
+            raw: vec![0x01, 0x02, 0x03],
+        }]);
+
+        let stats = &driver.interfaces[&InterfaceId(1)].stats;
+        assert_eq!(stats.txb, 3);
+        assert_eq!(stats.tx_packets, 1);
+
+        drop(tx);
+    }
+
+    #[test]
+    fn broadcast_updates_tx_stats() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let (w1, _s1) = MockWriter::new();
+        let (w2, _s2) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
+
+        driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
+            raw: vec![0xAA, 0xBB],
+            exclude: None,
+        }]);
+
+        // Both interfaces should have tx stats updated
+        assert_eq!(driver.interfaces[&InterfaceId(1)].stats.txb, 2);
+        assert_eq!(driver.interfaces[&InterfaceId(1)].stats.tx_packets, 1);
+        assert_eq!(driver.interfaces[&InterfaceId(2)].stats.txb, 2);
+        assert_eq!(driver.interfaces[&InterfaceId(2)].stats.tx_packets, 1);
+
+        drop(tx);
+    }
+
+    #[test]
+    fn query_interface_stats() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]) },
+            rx,
+            Box::new(cbs),
+        );
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let resp = resp_rx.recv().unwrap();
+        match resp {
+            QueryResponse::InterfaceStats(stats) => {
+                assert_eq!(stats.interfaces.len(), 1);
+                assert_eq!(stats.interfaces[0].name, "test-1");
+                assert!(stats.interfaces[0].status);
+                assert_eq!(stats.transport_id, Some([0x42; 16]));
+                assert!(stats.transport_enabled);
+            }
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_path_table() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Feed an announce to create a path entry
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::PathTable { max_hops: None }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let resp = resp_rx.recv().unwrap();
+        match resp {
+            QueryResponse::PathTable(entries) => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].hops, 1);
+            }
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_drop_path() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Feed an announce to create a path entry
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::DropPath { dest_hash }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let resp = resp_rx.recv().unwrap();
+        match resp {
+            QueryResponse::DropPath(dropped) => {
+                assert!(dropped);
+            }
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn send_outbound_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let (writer, sent) = MockWriter::new();
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Build a DATA packet to a destination
+        let dest = [0xAA; 16];
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+
+        tx.send(Event::SendOutbound {
+            raw: packet.raw,
+            dest_type: constants::DESTINATION_PLAIN,
+            attached_interface: None,
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // PLAIN packet should be broadcast on all interfaces
+        assert_eq!(sent.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn register_destination_and_deliver() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest = [0xBB; 16];
+
+        // Register destination then send a data packet to it
+        tx.send(Event::RegisterDestination {
+            dest_hash: dest,
+            dest_type: constants::DESTINATION_SINGLE,
+        }).unwrap();
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"data").unwrap();
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert_eq!(deliveries.lock().unwrap().len(), 1);
+        assert_eq!(deliveries.lock().unwrap()[0], dest);
+    }
+
+    #[test]
+    fn query_transport_identity() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some([0xAA; 16]) },
+            rx,
+            Box::new(cbs),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::TransportIdentity, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::TransportIdentity(Some(hash)) => {
+                assert_eq!(hash, [0xAA; 16]);
+            }
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_link_count() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::LinkCount(count) => assert_eq!(count, 0),
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_rate_table() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::RateTable, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::RateTable(entries) => assert!(entries.is_empty()),
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_next_hop() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let dest = [0xBB; 16];
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::NextHop { dest_hash: dest }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::NextHop(None) => {}
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_next_hop_if_name() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let dest = [0xCC; 16];
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::NextHopIfName { dest_hash: dest }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::NextHopIfName(None) => {}
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_drop_all_via() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let transport = [0xDD; 16];
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(
+            QueryRequest::DropAllVia { transport_hash: transport },
+            resp_tx,
+        )).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::DropAllVia(count) => assert_eq!(count, 0),
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn query_drop_announce_queues() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::DropAnnounceQueues, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::DropAnnounceQueues => {}
+            _ => panic!("unexpected response"),
+        }
     }
 }

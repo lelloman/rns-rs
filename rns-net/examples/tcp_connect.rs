@@ -69,6 +69,8 @@ fn main() {
                 mode: MODE_FULL,
                 ifac: None,
             }],
+            share_instance: false,
+            rpc_port: 0,
         },
         Box::new(LoggingCallbacks),
     )

@@ -21,6 +21,117 @@ pub enum Event {
     Tick,
     /// Shut down the driver loop.
     Shutdown,
+    /// Send an outbound packet.
+    SendOutbound {
+        raw: Vec<u8>,
+        dest_type: u8,
+        attached_interface: Option<InterfaceId>,
+    },
+    /// Register a local destination.
+    RegisterDestination {
+        dest_hash: [u8; 16],
+        dest_type: u8,
+    },
+    /// Deregister a local destination.
+    DeregisterDestination {
+        dest_hash: [u8; 16],
+    },
+    /// Query driver state. Response is sent via the provided channel.
+    Query(QueryRequest, mpsc::Sender<QueryResponse>),
+}
+
+/// Queries that can be sent to the driver.
+#[derive(Debug)]
+pub enum QueryRequest {
+    /// Get interface statistics and transport info.
+    InterfaceStats,
+    /// Get path table entries, optionally filtered by max hops.
+    PathTable { max_hops: Option<u8> },
+    /// Get rate table entries.
+    RateTable,
+    /// Look up the next hop for a destination.
+    NextHop { dest_hash: [u8; 16] },
+    /// Look up the next hop interface name for a destination.
+    NextHopIfName { dest_hash: [u8; 16] },
+    /// Get link table entry count.
+    LinkCount,
+    /// Drop a specific path.
+    DropPath { dest_hash: [u8; 16] },
+    /// Drop all paths that route via a given transport hash.
+    DropAllVia { transport_hash: [u8; 16] },
+    /// Drop all announce queues.
+    DropAnnounceQueues,
+    /// Get the transport identity hash.
+    TransportIdentity,
+}
+
+/// Responses to queries.
+#[derive(Debug)]
+pub enum QueryResponse {
+    InterfaceStats(InterfaceStatsResponse),
+    PathTable(Vec<PathTableEntry>),
+    RateTable(Vec<RateTableEntry>),
+    NextHop(Option<NextHopResponse>),
+    NextHopIfName(Option<String>),
+    LinkCount(usize),
+    DropPath(bool),
+    DropAllVia(usize),
+    DropAnnounceQueues,
+    TransportIdentity(Option<[u8; 16]>),
+}
+
+/// Interface statistics response.
+#[derive(Debug, Clone)]
+pub struct InterfaceStatsResponse {
+    pub interfaces: Vec<SingleInterfaceStat>,
+    pub transport_id: Option<[u8; 16]>,
+    pub transport_enabled: bool,
+    pub transport_uptime: f64,
+}
+
+/// Statistics for a single interface.
+#[derive(Debug, Clone)]
+pub struct SingleInterfaceStat {
+    pub name: String,
+    pub status: bool,
+    pub mode: u8,
+    pub rxb: u64,
+    pub txb: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub bitrate: Option<u64>,
+    pub ifac_size: Option<usize>,
+    pub started: f64,
+}
+
+/// A single path table entry for query responses.
+#[derive(Debug, Clone)]
+pub struct PathTableEntry {
+    pub hash: [u8; 16],
+    pub timestamp: f64,
+    pub via: [u8; 16],
+    pub hops: u8,
+    pub expires: f64,
+    pub interface: InterfaceId,
+    pub interface_name: String,
+}
+
+/// A single rate table entry for query responses.
+#[derive(Debug, Clone)]
+pub struct RateTableEntry {
+    pub hash: [u8; 16],
+    pub last: f64,
+    pub rate_violations: u32,
+    pub blocked_until: f64,
+    pub timestamps: Vec<f64>,
+}
+
+/// Next hop lookup result.
+#[derive(Debug, Clone)]
+pub struct NextHopResponse {
+    pub next_hop: [u8; 16],
+    pub hops: u8,
+    pub interface: InterfaceId,
 }
 
 impl fmt::Debug for Event {
@@ -42,6 +153,28 @@ impl fmt::Debug for Event {
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),
             Event::Tick => write!(f, "Tick"),
             Event::Shutdown => write!(f, "Shutdown"),
+            Event::SendOutbound { raw, dest_type, .. } => {
+                f.debug_struct("SendOutbound")
+                    .field("raw_len", &raw.len())
+                    .field("dest_type", dest_type)
+                    .finish()
+            }
+            Event::RegisterDestination { dest_hash, dest_type } => {
+                f.debug_struct("RegisterDestination")
+                    .field("dest_hash", dest_hash)
+                    .field("dest_type", dest_type)
+                    .finish()
+            }
+            Event::DeregisterDestination { dest_hash } => {
+                f.debug_struct("DeregisterDestination")
+                    .field("dest_hash", dest_hash)
+                    .finish()
+            }
+            Event::Query(req, _) => {
+                f.debug_tuple("Query")
+                    .field(req)
+                    .finish()
+            }
         }
     }
 }

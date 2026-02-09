@@ -852,6 +852,63 @@ impl TransportEngine {
     }
 
     // =========================================================================
+    // Public read accessors
+    // =========================================================================
+
+    /// Iterate over all path table entries.
+    pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
+        self.path_table.iter()
+    }
+
+    /// Number of registered interfaces.
+    pub fn interface_count(&self) -> usize {
+        self.interfaces.len()
+    }
+
+    /// Number of link table entries.
+    pub fn link_table_count(&self) -> usize {
+        self.link_table.len()
+    }
+
+    /// Access the rate limiter for reading rate table entries.
+    pub fn rate_limiter(&self) -> &AnnounceRateLimiter {
+        &self.rate_limiter
+    }
+
+    /// Get interface info by id.
+    pub fn interface_info(&self, id: &InterfaceId) -> Option<&InterfaceInfo> {
+        self.interfaces.get(id)
+    }
+
+    /// Drop a path from the path table.
+    pub fn drop_path(&mut self, dest_hash: &[u8; 16]) -> bool {
+        self.path_table.remove(dest_hash).is_some()
+    }
+
+    /// Drop all paths that route via a given transport hash.
+    pub fn drop_all_via(&mut self, transport_hash: &[u8; 16]) -> usize {
+        let before = self.path_table.len();
+        self.path_table.retain(|_, entry| &entry.next_hop != transport_hash);
+        before - self.path_table.len()
+    }
+
+    /// Drop all pending announce retransmissions.
+    pub fn drop_announce_queues(&mut self) {
+        self.announce_table.clear();
+        self.held_announces.clear();
+    }
+
+    /// Get the transport identity hash.
+    pub fn identity_hash(&self) -> Option<&[u8; 16]> {
+        self.config.identity_hash.as_ref()
+    }
+
+    /// Whether transport is enabled.
+    pub fn transport_enabled(&self) -> bool {
+        self.config.transport_enabled
+    }
+
+    // =========================================================================
     // Testing helpers
     // =========================================================================
 
@@ -895,6 +952,7 @@ mod tests {
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {
             id: InterfaceId(id),
+            name: String::from("test"),
             mode,
             out_capable: true,
             in_capable: true,

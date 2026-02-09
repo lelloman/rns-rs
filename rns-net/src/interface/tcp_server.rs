@@ -117,6 +117,7 @@ fn listener_loop(
 
         let info = InterfaceInfo {
             id: client_id,
+            name: format!("TCPServerInterface/Client-{}", client_id.0),
             mode: constants::MODE_FULL,
             out_capable: true,
             in_capable: true,
