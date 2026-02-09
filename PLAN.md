@@ -856,9 +856,61 @@ New fixtures in `tests/fixtures/resource/`:
 
 ### Deferred to future phases
 - `rnprobe` (requires application-layer packet send/receive)
-- Remote management (`-R HASH` queries)
+- Remote management CLI (`-R HASH` client-side queries on rnstatus/rnpath)
 - Discovery interfaces (`-d`/`-D`)
 - `rnid -a` (announce destination — requires application-layer)
+
+---
+
+## Phase 7: Close Transport Gaps + Link Wiring + Management (`rns-core` + `rns-net`) — COMPLETE ✓
+
+**Milestone**: Transport engine gains per-interface announce bandwidth queuing, local-client handling, disk-based announce cache, tunnel support, link wiring in the driver, and remote management destinations. 773 tests passing.
+
+### What was built
+
+#### Phase 7a: Per-Interface Announce Bandwidth Queuing (`rns-core`)
+- `transport/announce_queue.rs`: Per-interface bandwidth queuing with dedup, priority (min hops, FIFO), stale removal
+- `constants.rs`: `ANNOUNCE_CAP`, `MAX_QUEUED_ANNOUNCES`, `QUEUED_ANNOUNCE_LIFE`
+- `InterfaceInfo.announce_cap`, `gate_announce()`, `process_announce_queues()` in tick
+- 15 unit tests
+
+#### Phase 7b: Shared-Instance/Local-Client Transport (`rns-core`)
+- `InterfaceInfo.is_local_client`: hop adjustment, announce forwarding, broadcast bridging
+- `TransportAction::ForwardToLocalClients`, `ForwardPlainBroadcast` variants
+- Driver dispatches new action variants to local/external interfaces
+- 8 unit tests
+
+#### Phase 7c: Announce Cache to Disk (`rns-core` + `rns-net`)
+- `TransportAction::CacheAnnounce`, `PathEntry.announce_raw` for pre-hop-increment bytes
+- `announce_cache.rs`: File-based cache (msgpack format, hex filenames), periodic cleanup
+- Driver handles CacheAnnounce action, stores on disk
+- 8 unit tests
+
+#### Phase 7d: Tunnels (`rns-core` + `rns-net`)
+- `transport/tunnel.rs`: TunnelTable, TunnelEntry, TunnelPath, compute/build/validate tunnel synthesis
+- `TransportAction::TunnelSynthesize`, `TunnelEstablished`
+- `InterfaceInfo.wants_tunnel`, `tunnel_id` fields
+- Driver registers tunnel.synthesize destination, handles synthesis/reattach/void
+- 22 unit tests
+
+#### Phase 7e: Link Wiring (`rns-net`)
+- `link_manager.rs`: LinkManager with ManagedLink, LinkDestination, RequestHandlerEntry
+- Full link lifecycle: LINKREQUEST→LRPROOF→ACTIVE, encrypted data, keepalive/stale/close
+- Request/response with Python-compatible msgpack format and ACL
+- Channel data routing, IDENTIFY handling
+- Driver integration: DeliverLocal → LinkManager dispatch, Event::CreateLink, Event::SendOnLink
+- Callbacks: `on_link_established`, `on_link_closed`, `on_remote_identified`
+- 7 unit/integration tests
+
+#### Phase 7f: Management Destinations (`rns-net`)
+- `management.rs`: ManagementConfig, destination hash computation, request handlers
+- `/status` handler: interface stats, traffic totals, uptime, link count (msgpack response)
+- `/path` handler: path table and rate table queries with dest filter and max hops
+- `/list` handler: blackholed identities
+- ACL enforcement: ALLOW_LIST for /status+/path, ALLOW_ALL for /list
+- Config parsing: `enable_remote_management`, `remote_management_allowed`, `publish_blackhole`
+- Driver registers management destinations as SINGLE + link destinations on startup
+- 13 unit tests (11 management + 2 config)
 
 ---
 
@@ -877,6 +929,7 @@ New fixtures in `tests/fixtures/resource/`:
 | **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 154 tests, RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
 | **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — 677 tests, rnsd/rnstatus/rnpath/rnid + pickle/MD5/RPC ✓ |
 | **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — 689 tests, sorting/monitor/totals/announces/blackhole/base32/service mode ✓ |
+| **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — 773 tests, announce queue + local client + cache + tunnels + links + management ✓ |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
