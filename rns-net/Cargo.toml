@@ -8,6 +8,7 @@ rns-core = { path = "../rns-core" }
 rns-crypto = { path = "../rns-crypto" }
 log = "0.4"
 libc = "0.2"
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 env_logger = "0.11"

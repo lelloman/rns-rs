@@ -27,3 +27,7 @@ path = "src/bin/rnpath.rs"
 [[bin]]
 name = "rnid"
 path = "src/bin/rnid.rs"
+
+[[bin]]
+name = "rnprobe"
+path = "src/bin/rnprobe.rs"

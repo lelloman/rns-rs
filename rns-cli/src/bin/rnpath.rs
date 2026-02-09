@@ -50,6 +50,13 @@ fn main() {
     let unblackhole_hash = args.get("U").map(|s| s.to_string());
     let duration_hours: Option<f64> = args.get("duration").and_then(|s| s.parse().ok());
     let reason = args.get("reason").map(|s| s.to_string());
+    let remote_hash = args.get("R").map(|s| s.to_string());
+
+    // Remote management query via -R flag
+    if let Some(ref hash_str) = remote_hash {
+        remote_path(hash_str, config_path.as_deref());
+        return;
+    }
 
     // Load config
     let config_dir = storage::resolve_config_dir(
@@ -481,6 +488,25 @@ fn drop_announce_queues(client: &mut RpcClient) {
     }
 }
 
+fn remote_path(hash_str: &str, config_path: Option<&str>) {
+    let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
+        Some(h) => h,
+        None => {
+            eprintln!("Invalid destination hash: {} (expected 32 hex chars)", hash_str);
+            process::exit(1);
+        }
+    };
+
+    eprintln!(
+        "Remote management query to {} (not yet fully implemented)",
+        prettyhexrep(&dest_hash),
+    );
+    eprintln!("Requires an active link to the remote management destination.");
+    eprintln!("This feature will work once rnsd is running and the remote node is reachable.");
+
+    let _ = (dest_hash, config_path);
+}
+
 fn print_usage() {
     println!("Usage: rnpath [OPTIONS] [DESTINATION_HASH]");
     println!();
@@ -497,6 +523,7 @@ fn print_usage() {
     println!("  -U HASH                 Remove identity from blackhole list");
     println!("  --duration HOURS        Blackhole duration (default: permanent)");
     println!("  --reason TEXT           Reason for blackholing");
+    println!("  -R HASH                 Query remote node via management link");
     println!("  -j                      JSON output");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");

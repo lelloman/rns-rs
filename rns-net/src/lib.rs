@@ -22,6 +22,7 @@ pub mod rpc;
 pub mod announce_cache;
 pub mod link_manager;
 pub mod management;
+pub mod shared_client;
 
 pub use driver::Callbacks;
 pub use event::{
@@ -39,6 +40,8 @@ pub use interface::kiss_iface::KissIfaceConfig;
 pub use interface::pipe::PipeConfig;
 pub use interface::rnode::{RNodeConfig, RNodeSubConfig};
 pub use interface::backbone::BackboneConfig;
+pub use interface::auto::AutoConfig;
+pub use shared_client::SharedClientConfig;
 pub use config::RnsConfig;
 pub use ifac::IfacState;
 pub use serial::Parity;

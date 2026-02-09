@@ -50,7 +50,14 @@ fn main() {
     let monitor_interval: f64 = args.get("I")
         .and_then(|s| s.parse().ok())
         .unwrap_or(1.0);
+    let remote_hash = args.get("R").map(|s| s.to_string());
     let filter = args.positional.first().cloned();
+
+    // Remote management query via -R flag
+    if let Some(ref hash_str) = remote_hash {
+        remote_status(hash_str, config_path.as_deref());
+        return;
+    }
 
     // Load config to get RPC address and auth key
     let config_dir = storage::resolve_config_dir(
@@ -336,6 +343,33 @@ fn pickle_to_json(value: &PickleValue) -> String {
     }
 }
 
+fn remote_status(hash_str: &str, config_path: Option<&str>) {
+    let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
+        Some(h) => h,
+        None => {
+            eprintln!("Invalid destination hash: {} (expected 32 hex chars)", hash_str);
+            process::exit(1);
+        }
+    };
+
+    eprintln!(
+        "Remote management query to {} (not yet fully implemented)",
+        prettyhexrep(&dest_hash),
+    );
+    eprintln!("Requires an active link to the remote management destination.");
+    eprintln!("This feature will work once rnsd is running and the remote node is reachable.");
+
+    // In a full implementation, this would:
+    // 1. Connect as shared client
+    // 2. Wait for path to management destination
+    // 3. Create link
+    // 4. Identify
+    // 5. Send /status request
+    // 6. Parse msgpack response
+    // 7. Display like local status
+    let _ = (dest_hash, config_path);
+}
+
 fn print_usage() {
     println!("Usage: rnstatus [OPTIONS] [FILTER]");
     println!();
@@ -350,6 +384,7 @@ fn print_usage() {
     println!("  -A                      Show announce statistics");
     println!("  -m                      Monitor mode (loop)");
     println!("  -I SECONDS              Monitor interval (default: 1.0)");
+    println!("  -R HASH                 Query remote node via management link");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");

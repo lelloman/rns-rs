@@ -26,6 +26,7 @@ use crate::interface::kiss_iface::KissIfaceConfig;
 use crate::interface::pipe::PipeConfig;
 use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
 use crate::interface::backbone::BackboneConfig;
+use crate::interface::auto::AutoConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::time;
 use crate::serial::Parity;
@@ -120,6 +121,7 @@ pub enum InterfaceVariant {
     Pipe(PipeConfig),
     RNode(RNodeConfig),
     Backbone(BackboneConfig),
+    Auto(AutoConfig),
 }
 
 use crate::event::{QueryRequest, QueryResponse};
@@ -481,6 +483,87 @@ impl RnsNode {
                             name: iface.name.clone(),
                             listen_ip,
                             listen_port,
+                            interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "AutoInterface" => {
+                    let group_id = iface
+                        .params
+                        .get("group_id")
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_else(|| crate::interface::auto::DEFAULT_GROUP_ID.to_vec());
+
+                    let discovery_scope = iface
+                        .params
+                        .get("discovery_scope")
+                        .map(|s| match s.to_lowercase().as_str() {
+                            "link" => crate::interface::auto::SCOPE_LINK.to_string(),
+                            "admin" => crate::interface::auto::SCOPE_ADMIN.to_string(),
+                            "site" => crate::interface::auto::SCOPE_SITE.to_string(),
+                            "organisation" | "organization" => crate::interface::auto::SCOPE_ORGANISATION.to_string(),
+                            "global" => crate::interface::auto::SCOPE_GLOBAL.to_string(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_else(|| crate::interface::auto::SCOPE_LINK.to_string());
+
+                    let discovery_port = iface
+                        .params
+                        .get("discovery_port")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(crate::interface::auto::DEFAULT_DISCOVERY_PORT);
+
+                    let data_port = iface
+                        .params
+                        .get("data_port")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(crate::interface::auto::DEFAULT_DATA_PORT);
+
+                    let multicast_address_type = iface
+                        .params
+                        .get("multicast_address_type")
+                        .map(|s| match s.to_lowercase().as_str() {
+                            "permanent" => crate::interface::auto::MULTICAST_PERMANENT_ADDRESS_TYPE.to_string(),
+                            "temporary" => crate::interface::auto::MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_else(|| crate::interface::auto::MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string());
+
+                    let configured_bitrate = iface
+                        .params
+                        .get("configured_bitrate")
+                        .or_else(|| iface.params.get("bitrate"))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(crate::interface::auto::BITRATE_GUESS);
+
+                    // Parse device lists (comma-separated)
+                    let allowed_interfaces = iface
+                        .params
+                        .get("devices")
+                        .or_else(|| iface.params.get("allowed_interfaces"))
+                        .map(|s| s.split(',').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect())
+                        .unwrap_or_default();
+
+                    let ignored_interfaces = iface
+                        .params
+                        .get("ignored_devices")
+                        .or_else(|| iface.params.get("ignored_interfaces"))
+                        .map(|s| s.split(',').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect())
+                        .unwrap_or_default();
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::Auto(AutoConfig {
+                            name: iface.name.clone(),
+                            group_id,
+                            discovery_scope,
+                            discovery_port,
+                            data_port,
+                            multicast_address_type,
+                            allowed_interfaces,
+                            ignored_interfaces,
+                            configured_bitrate,
                             interface_id: iface_id,
                         }),
                         mode: iface_mode,
@@ -920,6 +1003,15 @@ impl RnsNode {
                     // Like TcpServer/LocalServer, backbone itself doesn't register
                     // as an interface; per-client interfaces are registered via InterfaceUp
                 }
+                InterfaceVariant::Auto(auto_config) => {
+                    crate::interface::auto::start(
+                        auto_config,
+                        tx.clone(),
+                        next_dynamic_id.clone(),
+                    )?;
+                    // Like TcpServer, AutoInterface doesn't register itself;
+                    // per-peer interfaces are registered dynamically via InterfaceUp
+                }
             }
         }
 
@@ -1192,6 +1284,81 @@ impl RnsNode {
         self.tx
             .send(Event::TeardownLink { link_id })
             .map_err(|_| SendError)
+    }
+
+    /// Send a resource on an established link.
+    pub fn send_resource(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendResource { link_id, data, metadata })
+            .map_err(|_| SendError)
+    }
+
+    /// Set the resource acceptance strategy for a link.
+    ///
+    /// 0 = AcceptNone, 1 = AcceptAll, 2 = AcceptApp
+    pub fn set_resource_strategy(
+        &self,
+        link_id: [u8; 16],
+        strategy: u8,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SetResourceStrategy { link_id, strategy })
+            .map_err(|_| SendError)
+    }
+
+    /// Accept or reject a pending resource (for AcceptApp strategy).
+    pub fn accept_resource(
+        &self,
+        link_id: [u8; 16],
+        resource_hash: Vec<u8>,
+        accept: bool,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::AcceptResource { link_id, resource_hash, accept })
+            .map_err(|_| SendError)
+    }
+
+    /// Send a channel message on a link.
+    pub fn send_channel_message(
+        &self,
+        link_id: [u8; 16],
+        msgtype: u16,
+        payload: Vec<u8>,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendChannelMessage { link_id, msgtype, payload })
+            .map_err(|_| SendError)
+    }
+
+    /// Send data on a link with a given context.
+    pub fn send_on_link(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        context: u8,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendOnLink { link_id, data, context })
+            .map_err(|_| SendError)
+    }
+
+    /// Construct an RnsNode from its constituent parts.
+    /// Used by `shared_client` to build a client-mode node.
+    pub(crate) fn from_parts(
+        tx: EventSender,
+        driver_handle: thread::JoinHandle<()>,
+        rpc_server: Option<crate::rpc::RpcServer>,
+    ) -> Self {
+        RnsNode {
+            tx,
+            driver_handle: Some(driver_handle),
+            rpc_server,
+        }
     }
 
     /// Get the event sender for direct event injection.

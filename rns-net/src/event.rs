@@ -71,6 +71,35 @@ pub enum Event {
     TeardownLink {
         link_id: [u8; 16],
     },
+    /// Send a resource on a link.
+    SendResource {
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+    },
+    /// Set the resource acceptance strategy for a link.
+    SetResourceStrategy {
+        link_id: [u8; 16],
+        strategy: u8,
+    },
+    /// Accept or reject a pending resource (for AcceptApp strategy).
+    AcceptResource {
+        link_id: [u8; 16],
+        resource_hash: Vec<u8>,
+        accept: bool,
+    },
+    /// Send a channel message on a link.
+    SendChannelMessage {
+        link_id: [u8; 16],
+        msgtype: u16,
+        payload: Vec<u8>,
+    },
+    /// Send generic data on a link with a given context.
+    SendOnLink {
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        context: u8,
+    },
 }
 
 /// Queries that can be sent to the driver.
@@ -269,6 +298,38 @@ impl fmt::Debug for Event {
             Event::TeardownLink { link_id } => {
                 f.debug_struct("TeardownLink")
                     .field("link_id", link_id)
+                    .finish()
+            }
+            Event::SendResource { link_id, data, .. } => {
+                f.debug_struct("SendResource")
+                    .field("link_id", link_id)
+                    .field("data_len", &data.len())
+                    .finish()
+            }
+            Event::SetResourceStrategy { link_id, strategy } => {
+                f.debug_struct("SetResourceStrategy")
+                    .field("link_id", link_id)
+                    .field("strategy", strategy)
+                    .finish()
+            }
+            Event::AcceptResource { link_id, accept, .. } => {
+                f.debug_struct("AcceptResource")
+                    .field("link_id", link_id)
+                    .field("accept", accept)
+                    .finish()
+            }
+            Event::SendChannelMessage { link_id, msgtype, payload } => {
+                f.debug_struct("SendChannelMessage")
+                    .field("link_id", link_id)
+                    .field("msgtype", msgtype)
+                    .field("payload_len", &payload.len())
+                    .finish()
+            }
+            Event::SendOnLink { link_id, data, context } => {
+                f.debug_struct("SendOnLink")
+                    .field("link_id", link_id)
+                    .field("data_len", &data.len())
+                    .field("context", context)
                     .finish()
             }
         }

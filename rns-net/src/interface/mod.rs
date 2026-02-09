@@ -9,6 +9,7 @@ pub mod kiss_iface;
 pub mod pipe;
 pub mod rnode;
 pub mod backbone;
+pub mod auto;
 
 use std::io;
 

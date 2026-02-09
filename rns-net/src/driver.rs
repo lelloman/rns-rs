@@ -45,6 +45,33 @@ pub trait Callbacks: Send {
 
     /// Called when a remote peer identifies on a link.
     fn on_remote_identified(&mut self, _link_id: [u8; 16], _identity_hash: [u8; 16], _public_key: [u8; 64]) {}
+
+    /// Called when a resource transfer delivers data.
+    fn on_resource_received(&mut self, _link_id: [u8; 16], _data: Vec<u8>, _metadata: Option<Vec<u8>>) {}
+
+    /// Called when a resource transfer completes (sender-side proof validated).
+    fn on_resource_completed(&mut self, _link_id: [u8; 16]) {}
+
+    /// Called when a resource transfer fails.
+    fn on_resource_failed(&mut self, _link_id: [u8; 16], _error: String) {}
+
+    /// Called with resource transfer progress updates.
+    fn on_resource_progress(&mut self, _link_id: [u8; 16], _received: usize, _total: usize) {}
+
+    /// Called to ask whether to accept an incoming resource (for AcceptApp strategy).
+    /// Return true to accept, false to reject.
+    fn on_resource_accept_query(&mut self, _link_id: [u8; 16], _resource_hash: Vec<u8>, _transfer_size: u64, _has_metadata: bool) -> bool {
+        false
+    }
+
+    /// Called when a channel message is received on a link.
+    fn on_channel_message(&mut self, _link_id: [u8; 16], _msgtype: u16, _payload: Vec<u8>) {}
+
+    /// Called when generic link data is received.
+    fn on_link_data(&mut self, _link_id: [u8; 16], _context: u8, _data: Vec<u8>) {}
+
+    /// Called when a response is received on a link.
+    fn on_response(&mut self, _link_id: [u8; 16], _request_id: [u8; 16], _data: Vec<u8>) {}
 }
 
 /// The driver loop. Owns the engine and all interface entries.
@@ -64,6 +91,10 @@ pub struct Driver {
     pub(crate) link_manager: LinkManager,
     /// Management configuration for ACL checks.
     pub(crate) management_config: crate::management::ManagementConfig,
+    /// Last time management announces were emitted.
+    pub(crate) last_management_announce: f64,
+    /// Whether initial management announce has been sent (delayed 5s after start).
+    pub(crate) initial_announce_sent: bool,
 }
 
 impl Driver {
@@ -92,6 +123,8 @@ impl Driver {
             transport_identity: None,
             link_manager: LinkManager::new(),
             management_config: Default::default(),
+            last_management_announce: 0.0,
+            initial_announce_sent: false,
         }
     }
 
@@ -143,11 +176,14 @@ impl Driver {
                     self.dispatch_all(actions);
                 }
                 Event::Tick => {
-                    let actions = self.engine.tick(time::now(), &mut self.rng);
+                    let now = time::now();
+                    let actions = self.engine.tick(now, &mut self.rng);
                     self.dispatch_all(actions);
                     // Tick link manager (keepalive, stale, timeout)
                     let link_actions = self.link_manager.tick(&mut self.rng);
                     self.dispatch_link_actions(link_actions);
+                    // Emit management announces
+                    self.tick_management_announces(now);
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
@@ -273,6 +309,40 @@ impl Driver {
                 }
                 Event::TeardownLink { link_id } => {
                     let link_actions = self.link_manager.teardown_link(&link_id);
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::SendResource { link_id, data, metadata } => {
+                    let link_actions = self.link_manager.send_resource(
+                        &link_id, &data, metadata.as_deref(), &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::SetResourceStrategy { link_id, strategy } => {
+                    use crate::link_manager::ResourceStrategy;
+                    let strat = match strategy {
+                        0 => ResourceStrategy::AcceptNone,
+                        1 => ResourceStrategy::AcceptAll,
+                        2 => ResourceStrategy::AcceptApp,
+                        _ => ResourceStrategy::AcceptNone,
+                    };
+                    self.link_manager.set_resource_strategy(&link_id, strat);
+                }
+                Event::AcceptResource { link_id, resource_hash, accept } => {
+                    let link_actions = self.link_manager.accept_resource(
+                        &link_id, &resource_hash, accept, &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::SendChannelMessage { link_id, msgtype, payload } => {
+                    let link_actions = self.link_manager.send_channel_message(
+                        &link_id, msgtype, &payload, &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::SendOnLink { link_id, data, context } => {
+                    let link_actions = self.link_manager.send_on_link(
+                        &link_id, &data, context, &mut self.rng,
+                    );
                     self.dispatch_link_actions(link_actions);
                 }
                 Event::Shutdown => break,
@@ -700,6 +770,119 @@ impl Driver {
                         link_id, path_hash, data, request_id, remote_identity,
                     );
                 }
+                LinkManagerAction::ResourceReceived { link_id, data, metadata } => {
+                    self.callbacks.on_resource_received(link_id, data, metadata);
+                }
+                LinkManagerAction::ResourceCompleted { link_id } => {
+                    self.callbacks.on_resource_completed(link_id);
+                }
+                LinkManagerAction::ResourceFailed { link_id, error } => {
+                    log::debug!("Resource failed on link {:02x?}: {}", &link_id[..4], error);
+                    self.callbacks.on_resource_failed(link_id, error);
+                }
+                LinkManagerAction::ResourceProgress { link_id, received, total } => {
+                    self.callbacks.on_resource_progress(link_id, received, total);
+                }
+                LinkManagerAction::ResourceAcceptQuery { link_id, resource_hash, transfer_size, has_metadata } => {
+                    let accept = self.callbacks.on_resource_accept_query(
+                        link_id, resource_hash.clone(), transfer_size, has_metadata,
+                    );
+                    let accept_actions = self.link_manager.accept_resource(
+                        &link_id, &resource_hash, accept, &mut self.rng,
+                    );
+                    // Re-dispatch (recursive but bounded: accept_resource won't produce more AcceptQuery)
+                    self.dispatch_link_actions(accept_actions);
+                }
+                LinkManagerAction::ChannelMessageReceived { link_id, msgtype, payload } => {
+                    self.callbacks.on_channel_message(link_id, msgtype, payload);
+                }
+                LinkManagerAction::LinkDataReceived { link_id, context, data } => {
+                    self.callbacks.on_link_data(link_id, context, data);
+                }
+                LinkManagerAction::ResponseReceived { link_id, request_id, data } => {
+                    self.callbacks.on_response(link_id, request_id, data);
+                }
+            }
+        }
+    }
+
+    /// Management announce interval in seconds.
+    const MANAGEMENT_ANNOUNCE_INTERVAL: f64 = 300.0;
+
+    /// Delay before first management announce after startup.
+    const MANAGEMENT_ANNOUNCE_DELAY: f64 = 5.0;
+
+    /// Emit management and/or blackhole announces if enabled and due.
+    fn tick_management_announces(&mut self, now: f64) {
+        if self.transport_identity.is_none() {
+            return;
+        }
+
+        let uptime = now - self.started;
+
+        // Wait for initial delay
+        if !self.initial_announce_sent {
+            if uptime < Self::MANAGEMENT_ANNOUNCE_DELAY {
+                return;
+            }
+            self.initial_announce_sent = true;
+            self.emit_management_announces(now);
+            return;
+        }
+
+        // Periodic re-announce
+        if now - self.last_management_announce >= Self::MANAGEMENT_ANNOUNCE_INTERVAL {
+            self.emit_management_announces(now);
+        }
+    }
+
+    /// Emit management/blackhole announce packets through the engine outbound path.
+    fn emit_management_announces(&mut self, now: f64) {
+        use crate::management;
+
+        self.last_management_announce = now;
+
+        let identity = match self.transport_identity {
+            Some(ref id) => id,
+            None => return,
+        };
+
+        // Build announce packets first (immutable borrow of identity), then dispatch
+        let mgmt_raw = if self.management_config.enable_remote_management {
+            management::build_management_announce(identity, &mut self.rng)
+        } else {
+            None
+        };
+
+        let bh_raw = if self.management_config.publish_blackhole {
+            management::build_blackhole_announce(identity, &mut self.rng)
+        } else {
+            None
+        };
+
+        if let Some(raw) = mgmt_raw {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    rns_core::constants::DESTINATION_SINGLE,
+                    None,
+                    now,
+                );
+                self.dispatch_all(actions);
+                log::debug!("Emitted management destination announce");
+            }
+        }
+
+        if let Some(raw) = bh_raw {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    rns_core::constants::DESTINATION_SINGLE,
+                    None,
+                    now,
+                );
+                self.dispatch_all(actions);
+                log::debug!("Emitted blackhole info announce");
             }
         }
     }
@@ -795,6 +978,12 @@ mod tests {
         link_established: Arc<Mutex<Vec<([u8; 16], f64, bool)>>>,
         link_closed: Arc<Mutex<Vec<[u8; 16]>>>,
         remote_identified: Arc<Mutex<Vec<([u8; 16], [u8; 16])>>>,
+        resources_received: Arc<Mutex<Vec<([u8; 16], Vec<u8>)>>>,
+        resource_completed: Arc<Mutex<Vec<[u8; 16]>>>,
+        resource_failed: Arc<Mutex<Vec<([u8; 16], String)>>>,
+        channel_messages: Arc<Mutex<Vec<([u8; 16], u16, Vec<u8>)>>>,
+        link_data: Arc<Mutex<Vec<([u8; 16], u8, Vec<u8>)>>>,
+        responses: Arc<Mutex<Vec<([u8; 16], [u8; 16], Vec<u8>)>>>,
     }
 
     impl MockCallbacks {
@@ -821,6 +1010,12 @@ mod tests {
                     link_established: Arc::new(Mutex::new(Vec::new())),
                     link_closed: Arc::new(Mutex::new(Vec::new())),
                     remote_identified: Arc::new(Mutex::new(Vec::new())),
+                    resources_received: Arc::new(Mutex::new(Vec::new())),
+                    resource_completed: Arc::new(Mutex::new(Vec::new())),
+                    resource_failed: Arc::new(Mutex::new(Vec::new())),
+                    channel_messages: Arc::new(Mutex::new(Vec::new())),
+                    link_data: Arc::new(Mutex::new(Vec::new())),
+                    responses: Arc::new(Mutex::new(Vec::new())),
                 },
                 announces,
                 paths,
@@ -849,6 +1044,12 @@ mod tests {
                     link_established: link_established.clone(),
                     link_closed: link_closed.clone(),
                     remote_identified: remote_identified.clone(),
+                    resources_received: Arc::new(Mutex::new(Vec::new())),
+                    resource_completed: Arc::new(Mutex::new(Vec::new())),
+                    resource_failed: Arc::new(Mutex::new(Vec::new())),
+                    channel_messages: Arc::new(Mutex::new(Vec::new())),
+                    link_data: Arc::new(Mutex::new(Vec::new())),
+                    responses: Arc::new(Mutex::new(Vec::new())),
                 },
                 link_established,
                 link_closed,
@@ -895,6 +1096,30 @@ mod tests {
 
         fn on_remote_identified(&mut self, link_id: [u8; 16], identity_hash: [u8; 16], _public_key: [u8; 64]) {
             self.remote_identified.lock().unwrap().push((link_id, identity_hash));
+        }
+
+        fn on_resource_received(&mut self, link_id: [u8; 16], data: Vec<u8>, _metadata: Option<Vec<u8>>) {
+            self.resources_received.lock().unwrap().push((link_id, data));
+        }
+
+        fn on_resource_completed(&mut self, link_id: [u8; 16]) {
+            self.resource_completed.lock().unwrap().push(link_id);
+        }
+
+        fn on_resource_failed(&mut self, link_id: [u8; 16], error: String) {
+            self.resource_failed.lock().unwrap().push((link_id, error));
+        }
+
+        fn on_channel_message(&mut self, link_id: [u8; 16], msgtype: u16, payload: Vec<u8>) {
+            self.channel_messages.lock().unwrap().push((link_id, msgtype, payload));
+        }
+
+        fn on_link_data(&mut self, link_id: [u8; 16], context: u8, data: Vec<u8>) {
+            self.link_data.lock().unwrap().push((link_id, context, data));
+        }
+
+        fn on_response(&mut self, link_id: [u8; 16], request_id: [u8; 16], data: Vec<u8>) {
+            self.responses.lock().unwrap().push((link_id, request_id, data));
         }
     }
 
@@ -1912,5 +2137,105 @@ mod tests {
 
         // Handler should be registered (we can't directly query the count,
         // but at least verify no crash)
+    }
+
+    // Phase 8c: Management announce timing tests
+
+    #[test]
+    fn management_announces_emitted_after_delay() {
+        let (tx, rx) = event::channel();
+        let (cbs, announces, _, _, _, _) = MockCallbacks::new();
+        let identity = Identity::new(&mut OsRng);
+        let identity_hash = *identity.hash();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
+            rx,
+            Box::new(cbs),
+        );
+
+        // Register interface so announces can be sent
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info.clone());
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Enable management announces
+        driver.management_config.enable_remote_management = true;
+        driver.transport_identity = Some(identity);
+
+        // Set started time to 10 seconds ago so the 5s delay has passed
+        driver.started = time::now() - 10.0;
+
+        // Send Tick then Shutdown
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should have sent at least one packet (the management announce)
+        let sent_packets = sent.lock().unwrap();
+        assert!(!sent_packets.is_empty(),
+            "Management announce should be sent after startup delay");
+    }
+
+    #[test]
+    fn management_announces_not_emitted_when_disabled() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let identity = Identity::new(&mut OsRng);
+        let identity_hash = *identity.hash();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
+            rx,
+            Box::new(cbs),
+        );
+
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info.clone());
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Management announces disabled (default)
+        driver.transport_identity = Some(identity);
+        driver.started = time::now() - 10.0;
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should NOT have sent any packets
+        let sent_packets = sent.lock().unwrap();
+        assert!(sent_packets.is_empty(),
+            "No announces should be sent when management is disabled");
+    }
+
+    #[test]
+    fn management_announces_not_emitted_before_delay() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let identity = Identity::new(&mut OsRng);
+        let identity_hash = *identity.hash();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
+            rx,
+            Box::new(cbs),
+        );
+
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info.clone());
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        driver.management_config.enable_remote_management = true;
+        driver.transport_identity = Some(identity);
+        // Started just now - delay hasn't passed
+        driver.started = time::now();
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let sent_packets = sent.lock().unwrap();
+        assert!(sent_packets.is_empty(),
+            "No announces before startup delay");
     }
 }

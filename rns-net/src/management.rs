@@ -277,6 +277,84 @@ pub fn handle_blackhole_list_request(
     Some(msgpack::pack(&Value::Map(map_entries)))
 }
 
+/// Build an announce packet for the management destination.
+///
+/// Returns raw packet bytes ready for `engine.handle_outbound()`.
+pub fn build_management_announce(
+    identity: &rns_crypto::identity::Identity,
+    rng: &mut dyn rns_crypto::Rng,
+) -> Option<Vec<u8>> {
+    let identity_hash = *identity.hash();
+    let dest_hash = management_dest_hash(&identity_hash);
+    let name_hash = rns_core::destination::name_hash("rnstransport", &["remote", "management"]);
+    let mut random_hash = [0u8; 10];
+    rng.fill_bytes(&mut random_hash);
+
+    let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+        identity,
+        &dest_hash,
+        &name_hash,
+        &random_hash,
+        None, // no ratchet
+        None, // no app_data
+    )
+    .ok()?;
+
+    let flags = rns_core::packet::PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+
+    let packet = rns_core::packet::RawPacket::pack(
+        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+    )
+    .ok()?;
+
+    Some(packet.raw)
+}
+
+/// Build an announce packet for the blackhole info destination.
+///
+/// Returns raw packet bytes ready for `engine.handle_outbound()`.
+pub fn build_blackhole_announce(
+    identity: &rns_crypto::identity::Identity,
+    rng: &mut dyn rns_crypto::Rng,
+) -> Option<Vec<u8>> {
+    let identity_hash = *identity.hash();
+    let dest_hash = blackhole_dest_hash(&identity_hash);
+    let name_hash = rns_core::destination::name_hash("rnstransport", &["info", "blackhole"]);
+    let mut random_hash = [0u8; 10];
+    rng.fill_bytes(&mut random_hash);
+
+    let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+        identity,
+        &dest_hash,
+        &name_hash,
+        &random_hash,
+        None,
+        None,
+    )
+    .ok()?;
+
+    let flags = rns_core::packet::PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+
+    let packet = rns_core::packet::RawPacket::pack(
+        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+    )
+    .ok()?;
+
+    Some(packet.raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +606,88 @@ mod tests {
             Value::Map(entries) => assert_eq!(entries.len(), 0),
             _ => panic!("Expected map"),
         }
+    }
+
+    // Phase 8c: Announce building tests
+
+    #[test]
+    fn test_build_management_announce() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_management_announce(&identity, &mut OsRng);
+        assert!(raw.is_some(), "Should build management announce");
+
+        let raw = raw.unwrap();
+        // Parse it as a valid packet
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        assert_eq!(pkt.flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
+        assert_eq!(pkt.flags.destination_type, constants::DESTINATION_SINGLE);
+        assert_eq!(pkt.destination_hash, management_dest_hash(identity.hash()));
+    }
+
+    #[test]
+    fn test_build_blackhole_announce() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_blackhole_announce(&identity, &mut OsRng);
+        assert!(raw.is_some(), "Should build blackhole announce");
+
+        let raw = raw.unwrap();
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        assert_eq!(pkt.flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
+        assert_eq!(pkt.destination_hash, blackhole_dest_hash(identity.hash()));
+    }
+
+    #[test]
+    fn test_management_announce_validates() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_management_announce(&identity, &mut OsRng).unwrap();
+
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+
+        // Validate the announce data
+        let validated = rns_core::announce::AnnounceData::unpack(&pkt.data, false);
+        assert!(validated.is_ok(), "Announce data should unpack");
+
+        let ann = validated.unwrap();
+        let result = ann.validate(&pkt.destination_hash);
+        assert!(result.is_ok(), "Announce should validate: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_blackhole_announce_validates() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_blackhole_announce(&identity, &mut OsRng).unwrap();
+
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
+        let result = ann.validate(&pkt.destination_hash);
+        assert!(result.is_ok(), "Blackhole announce should validate: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_management_announce_different_from_blackhole() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let mgmt_raw = build_management_announce(&identity, &mut OsRng).unwrap();
+        let bh_raw = build_blackhole_announce(&identity, &mut OsRng).unwrap();
+
+        let mgmt_pkt = rns_core::packet::RawPacket::unpack(&mgmt_raw).unwrap();
+        let bh_pkt = rns_core::packet::RawPacket::unpack(&bh_raw).unwrap();
+
+        assert_ne!(mgmt_pkt.destination_hash, bh_pkt.destination_hash,
+            "Management and blackhole should have different dest hashes");
     }
 }
