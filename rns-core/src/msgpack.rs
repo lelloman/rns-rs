@@ -12,16 +12,34 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// A msgpack value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Bool(bool),
     UInt(u64),
     Int(i64),
+    Float(f64),
     Bin(Vec<u8>),
     Str(String),
     Array(Vec<Value>),
     Map(Vec<(Value, Value)>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Nil, Value::Nil) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::UInt(a), Value::UInt(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
+            (Value::Bin(a), Value::Bin(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl Value {
@@ -60,6 +78,24 @@ impl Value {
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get as f64 if Float.
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Value::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get as f64, accepting Float, UInt, or Int.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Value::Float(v) => Some(*v),
+            Value::UInt(v) => Some(*v as f64),
+            Value::Int(v) => Some(*v as f64),
             _ => None,
         }
     }
@@ -159,6 +195,10 @@ fn pack_into(value: &Value, buf: &mut Vec<u8>) {
         Value::Bool(false) => buf.push(0xc2),
         Value::UInt(v) => pack_uint(*v, buf),
         Value::Int(v) => pack_int(*v, buf),
+        Value::Float(v) => {
+            buf.push(0xcb);
+            buf.extend_from_slice(&v.to_bits().to_be_bytes());
+        }
         Value::Bin(data) => pack_bin(data, buf),
         Value::Str(s) => pack_str(s, buf),
         Value::Array(items) => pack_array(items, buf),
@@ -328,6 +368,23 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         // bool
         0xc2 => Ok((Value::Bool(false), 1)),
         0xc3 => Ok((Value::Bool(true), 1)),
+
+        // float32
+        0xca => {
+            ensure_len(data, 5)?;
+            let bits = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            Ok((Value::Float(f32::from_bits(bits) as f64), 5))
+        }
+
+        // float64
+        0xcb => {
+            ensure_len(data, 9)?;
+            let bits = u64::from_be_bytes([
+                data[1], data[2], data[3], data[4],
+                data[5], data[6], data[7], data[8],
+            ]);
+            Ok((Value::Float(f64::from_bits(bits)), 9))
+        }
 
         // bin8
         0xc4 => {

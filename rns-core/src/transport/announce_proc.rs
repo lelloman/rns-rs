@@ -74,6 +74,7 @@ pub fn process_validated_announce(
     transport_enabled: bool,
     is_path_response: bool,
     rate_blocked: bool,
+    original_raw: Option<Vec<u8>>,
 ) -> (PathEntry, Option<AnnounceEntry>) {
     // Add the new blob if it's not already there
     if !random_blobs.contains(&random_blob) {
@@ -93,6 +94,7 @@ pub fn process_validated_announce(
         random_blobs,
         receiving_interface,
         packet_hash,
+        announce_raw: original_raw,
     };
 
     let announce_entry = if transport_enabled && !is_path_response && !rate_blocked {
@@ -245,6 +247,7 @@ mod tests {
             true,  // transport enabled
             false, // not path response
             false, // not rate blocked
+            None,
         );
 
         assert_eq!(path.hops, 3);
@@ -278,6 +281,7 @@ mod tests {
             false, // transport disabled
             false,
             false,
+            None,
         );
 
         assert_eq!(path.hops, 2);
@@ -303,6 +307,7 @@ mod tests {
             true,
             true, // path response → no announce entry
             false,
+            None,
         );
 
         assert!(announce.is_none());
@@ -327,6 +332,7 @@ mod tests {
             true,
             false,
             true, // rate blocked → no announce entry
+            None,
         );
 
         assert!(announce.is_none());
@@ -359,6 +365,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
 
         assert_eq!(path.random_blobs.len(), constants::MAX_RANDOM_BLOBS);

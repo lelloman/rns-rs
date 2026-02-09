@@ -146,6 +146,8 @@ except (KeyboardInterrupt, SystemExit):
             }],
             share_instance: false,
             rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
         },
         Box::new(TestCallbacks { announce_tx }),
     )

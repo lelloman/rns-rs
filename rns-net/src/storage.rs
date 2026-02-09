@@ -36,10 +36,12 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let storage = config_dir.join("storage");
     let cache = config_dir.join("cache");
     let identities = storage.join("identities");
+    let announces = cache.join("announces");
 
     fs::create_dir_all(&storage)?;
     fs::create_dir_all(&cache)?;
     fs::create_dir_all(&identities)?;
+    fs::create_dir_all(&announces)?;
 
     Ok(StoragePaths {
         config_dir: config_dir.to_path_buf(),

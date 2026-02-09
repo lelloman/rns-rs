@@ -122,7 +122,7 @@ pub fn route_outbound(
 /// Determine whether an announce should be transmitted on a given interface.
 ///
 /// Applies mode-based filtering from Transport.py:1040-1165.
-fn should_transmit_announce(
+pub(crate) fn should_transmit_announce(
     iface: &InterfaceInfo,
     dest_hash: &[u8; 16],
     hops: u8,
@@ -190,6 +190,10 @@ mod tests {
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
+            announce_cap: constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
         }
     }
 
@@ -202,6 +206,7 @@ mod tests {
             random_blobs: Vec::new(),
             receiving_interface: InterfaceId(iface),
             packet_hash: [0; 32],
+            announce_raw: None,
         }
     }
 

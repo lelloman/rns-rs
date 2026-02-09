@@ -38,6 +38,39 @@ pub enum Event {
     },
     /// Query driver state. Response is sent via the provided channel.
     Query(QueryRequest, mpsc::Sender<QueryResponse>),
+    /// Register a link destination (accepts incoming LINKREQUEST).
+    RegisterLinkDestination {
+        dest_hash: [u8; 16],
+        sig_prv_bytes: [u8; 32],
+        sig_pub_bytes: [u8; 32],
+    },
+    /// Register a request handler for a path on established links.
+    RegisterRequestHandler {
+        path: String,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: Box<dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send>,
+    },
+    /// Create an outbound link. Response sends (link_id) back.
+    CreateLink {
+        dest_hash: [u8; 16],
+        dest_sig_pub_bytes: [u8; 32],
+        response_tx: mpsc::Sender<[u8; 16]>,
+    },
+    /// Send a request on an established link.
+    SendRequest {
+        link_id: [u8; 16],
+        path: String,
+        data: Vec<u8>,
+    },
+    /// Identify on a link (send identity to remote peer).
+    IdentifyOnLink {
+        link_id: [u8; 16],
+        identity_prv_key: [u8; 64],
+    },
+    /// Tear down a link.
+    TeardownLink {
+        link_id: [u8; 16],
+    },
 }
 
 /// Queries that can be sent to the driver.
@@ -205,6 +238,37 @@ impl fmt::Debug for Event {
             Event::Query(req, _) => {
                 f.debug_tuple("Query")
                     .field(req)
+                    .finish()
+            }
+            Event::RegisterLinkDestination { dest_hash, .. } => {
+                f.debug_struct("RegisterLinkDestination")
+                    .field("dest_hash", dest_hash)
+                    .finish()
+            }
+            Event::RegisterRequestHandler { path, .. } => {
+                f.debug_struct("RegisterRequestHandler")
+                    .field("path", path)
+                    .finish()
+            }
+            Event::CreateLink { dest_hash, .. } => {
+                f.debug_struct("CreateLink")
+                    .field("dest_hash", dest_hash)
+                    .finish()
+            }
+            Event::SendRequest { link_id, path, .. } => {
+                f.debug_struct("SendRequest")
+                    .field("link_id", link_id)
+                    .field("path", path)
+                    .finish()
+            }
+            Event::IdentifyOnLink { link_id, .. } => {
+                f.debug_struct("IdentifyOnLink")
+                    .field("link_id", link_id)
+                    .finish()
+            }
+            Event::TeardownLink { link_id } => {
+                f.debug_struct("TeardownLink")
+                    .field("link_id", link_id)
                     .finish()
             }
         }

@@ -212,6 +212,10 @@ mod tests {
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
+            announce_cap: constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
         }
     }
 
@@ -386,6 +390,7 @@ mod tests {
                 random_blobs: Vec::new(),
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
+                announce_raw: None,
             },
         );
 
@@ -422,6 +427,7 @@ mod tests {
                 random_blobs: Vec::new(),
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
+                announce_raw: None,
             },
         );
 

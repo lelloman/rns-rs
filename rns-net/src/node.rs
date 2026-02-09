@@ -86,6 +86,10 @@ pub struct NodeConfig {
     pub share_instance: bool,
     /// RPC control port (default 37429). Only used when share_instance is true.
     pub rpc_port: u16,
+    /// Cache directory for announce cache. If None, announce caching is disabled.
+    pub cache_dir: Option<std::path::PathBuf>,
+    /// Remote management configuration.
+    pub management: crate::management::ManagementConfig,
 }
 
 /// Interface configuration variant with its mode.
@@ -493,12 +497,43 @@ impl RnsNode {
             }
         }
 
+        // Parse management config
+        let mut mgmt_allowed = Vec::new();
+        for hex_hash in &rns_config.reticulum.remote_management_allowed {
+            if hex_hash.len() == 32 {
+                if let Ok(bytes) = (0..hex_hash.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex_hash[i..i+2], 16))
+                    .collect::<Result<Vec<u8>, _>>()
+                {
+                    if bytes.len() == 16 {
+                        let mut h = [0u8; 16];
+                        h.copy_from_slice(&bytes);
+                        mgmt_allowed.push(h);
+                    }
+                } else {
+                    log::warn!("Invalid hex in remote_management_allowed: {}", hex_hash);
+                }
+            } else {
+                log::warn!(
+                    "Invalid entry in remote_management_allowed (expected 32 hex chars, got {}): {}",
+                    hex_hash.len(), hex_hash,
+                );
+            }
+        }
+
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             identity: Some(identity),
             interfaces: interface_configs,
             share_instance: rns_config.reticulum.share_instance,
             rpc_port: rns_config.reticulum.instance_control_port,
+            cache_dir: Some(paths.cache),
+            management: crate::management::ManagementConfig {
+                enable_remote_management: rns_config.reticulum.enable_remote_management,
+                remote_management_allowed: mgmt_allowed,
+                publish_blackhole: rns_config.reticulum.publish_blackhole,
+            },
         };
 
         Self::start(node_config, callbacks)
@@ -517,6 +552,21 @@ impl RnsNode {
 
         let (tx, rx) = event::channel();
         let mut driver = Driver::new(transport_config, rx, callbacks);
+
+        // Set up announce cache if cache directory is configured
+        if let Some(ref cache_dir) = config.cache_dir {
+            let announces_dir = cache_dir.join("announces");
+            let _ = std::fs::create_dir_all(&announces_dir);
+            driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
+        }
+
+        // Store management config on driver for ACL enforcement
+        driver.management_config = config.management.clone();
+
+        // Store transport identity for tunnel synthesis
+        if let Some(prv_key) = identity.get_private_key() {
+            driver.transport_identity = Some(Identity::from_private_key(&prv_key));
+        }
 
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
@@ -553,6 +603,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     let writer =
@@ -602,6 +656,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     driver.engine.register_interface(info.clone());
@@ -644,6 +702,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     let writer =
@@ -680,6 +742,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     let writer =
@@ -715,6 +781,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     let writer =
@@ -750,6 +820,10 @@ impl RnsNode {
                         announce_rate_target: None,
                         announce_rate_grace: 0,
                         announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                     };
 
                     let writer =
@@ -799,6 +873,10 @@ impl RnsNode {
                             announce_rate_target: None,
                             announce_rate_grace: 0,
                             announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
                         };
 
                         let sub_ifac = if first {
@@ -842,6 +920,92 @@ impl RnsNode {
                     // Like TcpServer/LocalServer, backbone itself doesn't register
                     // as an interface; per-client interfaces are registered via InterfaceUp
                 }
+            }
+        }
+
+        // Set up management destinations if enabled
+        if config.management.enable_remote_management {
+            if let Some(prv_key) = identity.get_private_key() {
+                let identity_hash = *identity.hash();
+                let mgmt_dest = crate::management::management_dest_hash(&identity_hash);
+
+                // Extract Ed25519 signing keys from the identity
+                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
+                    &prv_key[32..64].try_into().unwrap(),
+                );
+                let sig_pub_bytes: [u8; 32] = identity
+                    .get_public_key()
+                    .unwrap()[32..64]
+                    .try_into()
+                    .unwrap();
+
+                // Register as SINGLE destination in transport engine
+                driver.engine.register_destination(
+                    mgmt_dest,
+                    rns_core::constants::DESTINATION_SINGLE,
+                );
+
+                // Register as link destination in link manager
+                driver.link_manager.register_link_destination(
+                    mgmt_dest,
+                    sig_prv,
+                    sig_pub_bytes,
+                );
+
+                // Register management path hashes
+                driver.link_manager.register_management_path(
+                    crate::management::status_path_hash(),
+                );
+                driver.link_manager.register_management_path(
+                    crate::management::path_path_hash(),
+                );
+
+                log::info!(
+                    "Remote management enabled on {:02x?}",
+                    &mgmt_dest[..4],
+                );
+
+                // Set up allowed list
+                if !config.management.remote_management_allowed.is_empty() {
+                    log::info!(
+                        "Remote management allowed for {} identities",
+                        config.management.remote_management_allowed.len(),
+                    );
+                }
+            }
+        }
+
+        if config.management.publish_blackhole {
+            if let Some(prv_key) = identity.get_private_key() {
+                let identity_hash = *identity.hash();
+                let bh_dest = crate::management::blackhole_dest_hash(&identity_hash);
+
+                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
+                    &prv_key[32..64].try_into().unwrap(),
+                );
+                let sig_pub_bytes: [u8; 32] = identity
+                    .get_public_key()
+                    .unwrap()[32..64]
+                    .try_into()
+                    .unwrap();
+
+                driver.engine.register_destination(
+                    bh_dest,
+                    rns_core::constants::DESTINATION_SINGLE,
+                );
+                driver.link_manager.register_link_destination(
+                    bh_dest,
+                    sig_prv,
+                    sig_pub_bytes,
+                );
+                driver.link_manager.register_management_path(
+                    crate::management::list_path_hash(),
+                );
+
+                log::info!(
+                    "Blackhole list publishing enabled on {:02x?}",
+                    &bh_dest[..4],
+                );
             }
         }
 
@@ -935,6 +1099,101 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Register a link destination that can accept incoming links.
+    ///
+    /// `dest_hash`: the destination hash
+    /// `sig_prv_bytes`: Ed25519 private signing key (32 bytes)
+    /// `sig_pub_bytes`: Ed25519 public signing key (32 bytes)
+    pub fn register_link_destination(
+        &self,
+        dest_hash: [u8; 16],
+        sig_prv_bytes: [u8; 32],
+        sig_pub_bytes: [u8; 32],
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::RegisterLinkDestination {
+                dest_hash,
+                sig_prv_bytes,
+                sig_pub_bytes,
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Register a request handler for a given path on established links.
+    pub fn register_request_handler<F>(
+        &self,
+        path: &str,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: F,
+    ) -> Result<(), SendError>
+    where
+        F: Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send + 'static,
+    {
+        self.tx
+            .send(Event::RegisterRequestHandler {
+                path: path.to_string(),
+                allowed_list,
+                handler: Box::new(handler),
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Create an outbound link to a destination.
+    ///
+    /// Returns the link_id on success.
+    pub fn create_link(
+        &self,
+        dest_hash: [u8; 16],
+        dest_sig_pub_bytes: [u8; 32],
+    ) -> Result<[u8; 16], SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::CreateLink {
+                dest_hash,
+                dest_sig_pub_bytes,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Send a request on an established link.
+    pub fn send_request(
+        &self,
+        link_id: [u8; 16],
+        path: &str,
+        data: &[u8],
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendRequest {
+                link_id,
+                path: path.to_string(),
+                data: data.to_vec(),
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Identify on a link (reveal identity to remote peer).
+    pub fn identify_on_link(
+        &self,
+        link_id: [u8; 16],
+        identity_prv_key: [u8; 64],
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::IdentifyOnLink {
+                link_id,
+                identity_prv_key,
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Tear down a link.
+    pub fn teardown_link(&self, link_id: [u8; 16]) -> Result<(), SendError> {
+        self.tx
+            .send(Event::TeardownLink { link_id })
+            .map_err(|_| SendError)
+    }
+
     /// Get the event sender for direct event injection.
     pub fn event_sender(&self) -> &EventSender {
         &self.tx
@@ -975,6 +1234,8 @@ mod tests {
                 interfaces: vec![],
                 share_instance: false,
                 rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
             },
             Box::new(NoopCallbacks),
         )
@@ -993,6 +1254,8 @@ mod tests {
                 interfaces: vec![],
                 share_instance: false,
                 rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
             },
             Box::new(NoopCallbacks),
         )
@@ -1011,6 +1274,8 @@ mod tests {
                 interfaces: vec![],
                 share_instance: false,
                 rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
             },
             Box::new(NoopCallbacks),
         )

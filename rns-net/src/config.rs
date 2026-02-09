@@ -29,6 +29,9 @@ pub struct ReticulumSection {
     pub use_implicit_proof: bool,
     pub network_identity: Option<String>,
     pub respond_to_probes: bool,
+    pub enable_remote_management: bool,
+    pub remote_management_allowed: Vec<String>,
+    pub publish_blackhole: bool,
 }
 
 impl Default for ReticulumSection {
@@ -43,6 +46,9 @@ impl Default for ReticulumSection {
             use_implicit_proof: true,
             network_identity: None,
             respond_to_probes: false,
+            enable_remote_management: false,
+            remote_management_allowed: Vec::new(),
+            publish_blackhole: false,
         }
     }
 }
@@ -298,6 +304,27 @@ fn build_reticulum_section(
     if let Some(v) = kvs.get("respond_to_probes") {
         section.respond_to_probes = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
             key: "respond_to_probes".into(),
+            value: v.clone(),
+        })?;
+    }
+    if let Some(v) = kvs.get("enable_remote_management") {
+        section.enable_remote_management = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "enable_remote_management".into(),
+            value: v.clone(),
+        })?;
+    }
+    if let Some(v) = kvs.get("remote_management_allowed") {
+        // Value is a comma-separated list of hex identity hashes
+        for item in v.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                section.remote_management_allowed.push(trimmed.to_string());
+            }
+        }
+    }
+    if let Some(v) = kvs.get("publish_blackhole") {
+        section.publish_blackhole = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "publish_blackhole".into(),
             value: v.clone(),
         })?;
     }
@@ -663,5 +690,37 @@ instance_name = test
         let config = parse(input).unwrap();
         assert_eq!(config.interfaces[0].params.get("passphrase").unwrap(), "secret123");
         assert_eq!(config.interfaces[0].params.get("ifac_size").unwrap(), "64");
+    }
+
+    #[test]
+    fn parse_remote_management_config() {
+        let input = r#"
+[reticulum]
+enable_transport = True
+enable_remote_management = Yes
+remote_management_allowed = aabbccdd00112233aabbccdd00112233, 11223344556677881122334455667788
+publish_blackhole = Yes
+"#;
+        let config = parse(input).unwrap();
+        assert!(config.reticulum.enable_remote_management);
+        assert!(config.reticulum.publish_blackhole);
+        assert_eq!(config.reticulum.remote_management_allowed.len(), 2);
+        assert_eq!(
+            config.reticulum.remote_management_allowed[0],
+            "aabbccdd00112233aabbccdd00112233"
+        );
+        assert_eq!(
+            config.reticulum.remote_management_allowed[1],
+            "11223344556677881122334455667788"
+        );
+    }
+
+    #[test]
+    fn parse_remote_management_defaults() {
+        let input = "[reticulum]\n";
+        let config = parse(input).unwrap();
+        assert!(!config.reticulum.enable_remote_management);
+        assert!(!config.reticulum.publish_blackhole);
+        assert!(config.reticulum.remote_management_allowed.is_empty());
     }
 }

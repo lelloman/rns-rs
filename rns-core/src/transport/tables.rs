@@ -12,6 +12,8 @@ pub struct PathEntry {
     pub random_blobs: Vec<[u8; 10]>,
     pub receiving_interface: InterfaceId,
     pub packet_hash: [u8; 32],
+    /// Original announce raw bytes (pre-hop-increment) for cache/retransmission.
+    pub announce_raw: Option<Vec<u8>>,
 }
 
 /// Entry in the announce table, keyed by destination_hash.
@@ -76,6 +78,7 @@ mod tests {
             random_blobs: Vec::new(),
             receiving_interface: InterfaceId(1),
             packet_hash: [0xBB; 32],
+            announce_raw: None,
         };
         assert_eq!(entry.hops, 3);
         assert_eq!(entry.receiving_interface, InterfaceId(1));

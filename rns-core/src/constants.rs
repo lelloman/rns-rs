@@ -154,6 +154,17 @@ pub const AP_PATH_TIME: f64 = 86400.0;
 /// Roaming path expiry = 6 hours
 pub const ROAMING_PATH_TIME: f64 = 21600.0;
 
+// --- Announce bandwidth cap ---
+
+/// Default announce bandwidth cap (2% of interface bandwidth)
+pub const ANNOUNCE_CAP: f64 = 0.02;
+
+/// Maximum queued announces per interface
+pub const MAX_QUEUED_ANNOUNCES: usize = 16384;
+
+/// Queued announce lifetime (24 hours)
+pub const QUEUED_ANNOUNCE_LIFE: f64 = 86400.0;
+
 // --- Table limits ---
 
 /// How many local rebroadcasts of an announce is allowed

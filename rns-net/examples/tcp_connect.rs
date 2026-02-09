@@ -71,6 +71,8 @@ fn main() {
             }],
             share_instance: false,
             rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
         },
         Box::new(LoggingCallbacks),
     )

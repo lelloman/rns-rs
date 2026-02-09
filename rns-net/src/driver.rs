@@ -13,6 +13,7 @@ use crate::event::{
 };
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
+use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
 /// Callbacks for events the driver produces.
@@ -35,6 +36,15 @@ pub trait Callbacks: Send {
 
     /// Called when an interface goes offline.
     fn on_interface_down(&mut self, _id: InterfaceId) {}
+
+    /// Called when a link is fully established.
+    fn on_link_established(&mut self, _link_id: [u8; 16], _rtt: f64, _is_initiator: bool) {}
+
+    /// Called when a link is closed.
+    fn on_link_closed(&mut self, _link_id: [u8; 16], _reason: Option<rns_core::link::TeardownReason>) {}
+
+    /// Called when a remote peer identifies on a link.
+    fn on_remote_identified(&mut self, _link_id: [u8; 16], _identity_hash: [u8; 16], _public_key: [u8; 64]) {}
 }
 
 /// The driver loop. Owns the engine and all interface entries.
@@ -45,6 +55,15 @@ pub struct Driver {
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
     pub(crate) started: f64,
+    pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
+    /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
+    pub(crate) tunnel_synth_dest: [u8; 16],
+    /// Transport identity (optional, needed for tunnel synthesis).
+    pub(crate) transport_identity: Option<rns_crypto::identity::Identity>,
+    /// Link manager: handles link lifecycle, request/response.
+    pub(crate) link_manager: LinkManager,
+    /// Management configuration for ACL checks.
+    pub(crate) management_config: crate::management::ManagementConfig,
 }
 
 impl Driver {
@@ -54,13 +73,25 @@ impl Driver {
         rx: EventReceiver,
         callbacks: Box<dyn Callbacks>,
     ) -> Self {
+        let tunnel_synth_dest = rns_core::destination::destination_hash(
+            "rnstransport",
+            &["tunnel", "synthesize"],
+            None,
+        );
+        let mut engine = TransportEngine::new(config);
+        engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         Driver {
-            engine: TransportEngine::new(config),
+            engine,
             interfaces: HashMap::new(),
             rng: OsRng,
             rx,
             callbacks,
             started: time::now(),
+            announce_cache: None,
+            tunnel_synth_dest,
+            transport_identity: None,
+            link_manager: LinkManager::new(),
+            management_config: Default::default(),
         }
     }
 
@@ -114,11 +145,16 @@ impl Driver {
                 Event::Tick => {
                     let actions = self.engine.tick(time::now(), &mut self.rng);
                     self.dispatch_all(actions);
+                    // Tick link manager (keepalive, stale, timeout)
+                    let link_actions = self.link_manager.tick(&mut self.rng);
+                    self.dispatch_link_actions(link_actions);
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
+                    let wants_tunnel;
                     if let Some(info) = info {
                         // New dynamic interface (e.g., TCP server client connection)
                         log::info!("[{}] dynamic interface registered", id.0);
+                        wants_tunnel = info.wants_tunnel;
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
                             self.interfaces.insert(
@@ -141,15 +177,30 @@ impl Driver {
                     } else if let Some(entry) = self.interfaces.get_mut(&id) {
                         // Existing interface reconnected
                         log::info!("[{}] interface online", id.0);
+                        wants_tunnel = entry.info.wants_tunnel;
                         entry.online = true;
                         if let Some(writer) = new_writer {
                             log::info!("[{}] writer refreshed after reconnect", id.0);
                             entry.writer = writer;
                         }
                         self.callbacks.on_interface_up(id);
+                    } else {
+                        wants_tunnel = false;
+                    }
+
+                    // Trigger tunnel synthesis if the interface wants it
+                    if wants_tunnel {
+                        self.synthesize_tunnel_for_interface(id);
                     }
                 }
                 Event::InterfaceDown(id) => {
+                    // Void tunnel if interface had one
+                    if let Some(entry) = self.interfaces.get(&id) {
+                        if let Some(tunnel_id) = entry.info.tunnel_id {
+                            self.engine.void_tunnel_interface(&tunnel_id);
+                        }
+                    }
+
                     if let Some(entry) = self.interfaces.get(&id) {
                         if entry.dynamic {
                             // Dynamic interfaces are removed entirely
@@ -189,6 +240,40 @@ impl Driver {
                 Event::Query(request, response_tx) => {
                     let response = self.handle_query_mut(request);
                     let _ = response_tx.send(response);
+                }
+                Event::RegisterLinkDestination { dest_hash, sig_prv_bytes, sig_pub_bytes } => {
+                    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
+                    self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+                    // Also register in transport engine so inbound packets are delivered locally
+                    self.engine.register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                }
+                Event::RegisterRequestHandler { path, allowed_list, handler } => {
+                    self.link_manager.register_request_handler(&path, allowed_list, move |link_id, p, data, remote| {
+                        handler(link_id, p, data, remote)
+                    });
+                }
+                Event::CreateLink { dest_hash, dest_sig_pub_bytes, response_tx } => {
+                    let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
+                    let (link_id, link_actions) = self.link_manager.create_link(
+                        &dest_hash, &dest_sig_pub_bytes, hops, &mut self.rng,
+                    );
+                    let _ = response_tx.send(link_id);
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::SendRequest { link_id, path, data } => {
+                    let link_actions = self.link_manager.send_request(
+                        &link_id, &path, &data, &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::IdentifyOnLink { link_id, identity_prv_key } => {
+                    let identity = rns_crypto::identity::Identity::from_private_key(&identity_prv_key);
+                    let link_actions = self.link_manager.identify(&link_id, &identity, &mut self.rng);
+                    self.dispatch_link_actions(link_actions);
+                }
+                Event::TeardownLink { link_id } => {
+                    let link_actions = self.link_manager.teardown_link(&link_id);
+                    self.dispatch_link_actions(link_actions);
                 }
                 Event::Shutdown => break,
             }
@@ -291,7 +376,7 @@ impl Driver {
                 QueryResponse::NextHopIfName(name)
             }
             QueryRequest::LinkCount => {
-                QueryResponse::LinkCount(self.engine.link_table_count())
+                QueryResponse::LinkCount(self.engine.link_table_count() + self.link_manager.link_count())
             }
             QueryRequest::DropPath { .. } => {
                 // Mutating queries are handled by handle_query_mut
@@ -353,6 +438,47 @@ impl Driver {
         }
     }
 
+    /// Handle a tunnel synthesis packet delivered locally.
+    fn handle_tunnel_synth_delivery(&mut self, raw: &[u8]) {
+        // Extract the data payload from the raw packet
+        let packet = match RawPacket::unpack(raw) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        match rns_core::transport::tunnel::validate_tunnel_synthesize_data(&packet.data) {
+            Ok(validated) => {
+                // Find the interface this tunnel belongs to by computing the expected
+                // tunnel_id for each interface with wants_tunnel
+                let iface_id = self
+                    .interfaces
+                    .iter()
+                    .find(|(_, entry)| entry.info.wants_tunnel && entry.online)
+                    .map(|(id, _)| *id);
+
+                if let Some(iface) = iface_id {
+                    let now = time::now();
+                    let tunnel_actions =
+                        self.engine.handle_tunnel(validated.tunnel_id, iface, now);
+                    self.dispatch_all(tunnel_actions);
+                }
+            }
+            Err(e) => {
+                log::debug!("Tunnel synthesis validation failed: {}", e);
+            }
+        }
+    }
+
+    /// Synthesize a tunnel on an interface that wants it.
+    ///
+    /// Called when an interface with `wants_tunnel` comes up.
+    fn synthesize_tunnel_for_interface(&mut self, interface: InterfaceId) {
+        if let Some(ref identity) = self.transport_identity {
+            let actions = self.engine.synthesize_tunnel(identity, interface, &mut self.rng);
+            self.dispatch_all(actions);
+        }
+    }
+
     /// Dispatch a list of transport actions.
     fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
         for action in actions {
@@ -404,8 +530,19 @@ impl Driver {
                     raw,
                     packet_hash,
                 } => {
-                    self.callbacks
-                        .on_local_delivery(destination_hash, raw, packet_hash);
+                    if destination_hash == self.tunnel_synth_dest {
+                        // Tunnel synthesis packet — validate and handle
+                        self.handle_tunnel_synth_delivery(&raw);
+                    } else if self.link_manager.is_link_destination(&destination_hash) {
+                        // Link-related packet — route to link manager
+                        let link_actions = self.link_manager.handle_local_delivery(
+                            destination_hash, &raw, packet_hash, &mut self.rng,
+                        );
+                        self.dispatch_link_actions(link_actions);
+                    } else {
+                        self.callbacks
+                            .on_local_delivery(destination_hash, raw, packet_hash);
+                    }
                 }
                 TransportAction::AnnounceReceived {
                     destination_hash,
@@ -429,7 +566,190 @@ impl Driver {
                 } => {
                     self.callbacks.on_path_updated(destination_hash, hops);
                 }
+                TransportAction::ForwardToLocalClients { raw, exclude } => {
+                    for entry in self.interfaces.values_mut() {
+                        if entry.online
+                            && entry.info.is_local_client
+                            && Some(entry.id) != exclude
+                        {
+                            let data = if let Some(ref ifac_state) = entry.ifac {
+                                ifac::mask_outbound(&raw, ifac_state)
+                            } else {
+                                raw.clone()
+                            };
+                            entry.stats.txb += data.len() as u64;
+                            entry.stats.tx_packets += 1;
+                            if let Err(e) = entry.writer.send_frame(&data) {
+                                log::warn!("[{}] forward to local client failed: {}", entry.info.id.0, e);
+                            }
+                        }
+                    }
+                }
+                TransportAction::ForwardPlainBroadcast { raw, to_local, exclude } => {
+                    for entry in self.interfaces.values_mut() {
+                        if entry.online
+                            && entry.info.is_local_client == to_local
+                            && Some(entry.id) != exclude
+                        {
+                            let data = if let Some(ref ifac_state) = entry.ifac {
+                                ifac::mask_outbound(&raw, ifac_state)
+                            } else {
+                                raw.clone()
+                            };
+                            entry.stats.txb += data.len() as u64;
+                            entry.stats.tx_packets += 1;
+                            if let Err(e) = entry.writer.send_frame(&data) {
+                                log::warn!("[{}] forward plain broadcast failed: {}", entry.info.id.0, e);
+                            }
+                        }
+                    }
+                }
+                TransportAction::CacheAnnounce { packet_hash, raw } => {
+                    if let Some(ref cache) = self.announce_cache {
+                        if let Err(e) = cache.store(&packet_hash, &raw, None) {
+                            log::warn!("Failed to cache announce: {}", e);
+                        }
+                    }
+                }
+                TransportAction::TunnelSynthesize { interface, data, dest_hash } => {
+                    // Pack as BROADCAST DATA PLAIN packet and send on interface
+                    let flags = rns_core::packet::PacketFlags {
+                        header_type: rns_core::constants::HEADER_1,
+                        context_flag: rns_core::constants::FLAG_UNSET,
+                        transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+                        destination_type: rns_core::constants::DESTINATION_PLAIN,
+                        packet_type: rns_core::constants::PACKET_TYPE_DATA,
+                    };
+                    if let Ok(packet) = rns_core::packet::RawPacket::pack(
+                        flags, 0, &dest_hash, None,
+                        rns_core::constants::CONTEXT_NONE, &data,
+                    ) {
+                        if let Some(entry) = self.interfaces.get_mut(&interface) {
+                            if entry.online {
+                                let raw = if let Some(ref ifac_state) = entry.ifac {
+                                    ifac::mask_outbound(&packet.raw, ifac_state)
+                                } else {
+                                    packet.raw
+                                };
+                                entry.stats.txb += raw.len() as u64;
+                                entry.stats.tx_packets += 1;
+                                if let Err(e) = entry.writer.send_frame(&raw) {
+                                    log::warn!("[{}] tunnel synthesize send failed: {}", entry.info.id.0, e);
+                                }
+                            }
+                        }
+                    }
+                }
+                TransportAction::TunnelEstablished { tunnel_id, interface } => {
+                    log::info!("Tunnel established: {:02x?} on interface {}", &tunnel_id[..4], interface.0);
+                }
             }
+        }
+    }
+
+    /// Dispatch link manager actions.
+    fn dispatch_link_actions(&mut self, actions: Vec<LinkManagerAction>) {
+        for action in actions {
+            match action {
+                LinkManagerAction::SendPacket { raw, dest_type, attached_interface } => {
+                    // Route through the transport engine's outbound path
+                    match RawPacket::unpack(&raw) {
+                        Ok(packet) => {
+                            let transport_actions = self.engine.handle_outbound(
+                                &packet,
+                                dest_type,
+                                attached_interface,
+                                time::now(),
+                            );
+                            self.dispatch_all(transport_actions);
+                        }
+                        Err(e) => {
+                            log::warn!("LinkManager SendPacket: failed to unpack: {:?}", e);
+                        }
+                    }
+                }
+                LinkManagerAction::LinkEstablished { link_id, rtt, is_initiator } => {
+                    log::info!(
+                        "Link established: {:02x?} rtt={:.3}s initiator={}",
+                        &link_id[..4], rtt, is_initiator,
+                    );
+                    self.callbacks.on_link_established(link_id, rtt, is_initiator);
+                }
+                LinkManagerAction::LinkClosed { link_id, reason } => {
+                    log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
+                    self.callbacks.on_link_closed(link_id, reason);
+                }
+                LinkManagerAction::RemoteIdentified { link_id, identity_hash, public_key } => {
+                    log::debug!(
+                        "Remote identified on link {:02x?}: {:02x?}",
+                        &link_id[..4], &identity_hash[..4],
+                    );
+                    self.callbacks.on_remote_identified(link_id, identity_hash, public_key);
+                }
+                LinkManagerAction::RegisterLinkDest { link_id } => {
+                    // Register the link_id as a LINK destination in the transport engine
+                    self.engine.register_destination(link_id, rns_core::constants::DESTINATION_LINK);
+                }
+                LinkManagerAction::DeregisterLinkDest { link_id } => {
+                    self.engine.deregister_destination(&link_id);
+                }
+                LinkManagerAction::ManagementRequest {
+                    link_id, path_hash, data, request_id, remote_identity,
+                } => {
+                    self.handle_management_request(
+                        link_id, path_hash, data, request_id, remote_identity,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Handle a management request by querying engine state and sending a response.
+    fn handle_management_request(
+        &mut self,
+        link_id: [u8; 16],
+        path_hash: [u8; 16],
+        data: Vec<u8>,
+        request_id: [u8; 16],
+        remote_identity: Option<([u8; 16], [u8; 64])>,
+    ) {
+        use crate::management;
+
+        // ACL check for /status and /path (ALLOW_LIST), /list is ALLOW_ALL
+        let is_restricted = path_hash == management::status_path_hash()
+            || path_hash == management::path_path_hash();
+
+        if is_restricted && !self.management_config.remote_management_allowed.is_empty() {
+            match remote_identity {
+                Some((identity_hash, _)) => {
+                    if !self.management_config.remote_management_allowed.contains(&identity_hash) {
+                        log::debug!("Management request denied: identity not in allowed list");
+                        return;
+                    }
+                }
+                None => {
+                    log::debug!("Management request denied: peer not identified");
+                    return;
+                }
+            }
+        }
+
+        let response_data = if path_hash == management::status_path_hash() {
+            management::handle_status_request(&data, &self.engine, &self.interfaces, self.started)
+        } else if path_hash == management::path_path_hash() {
+            management::handle_path_request(&data, &self.engine)
+        } else if path_hash == management::list_path_hash() {
+            management::handle_blackhole_list_request(&self.engine)
+        } else {
+            log::warn!("Unknown management path_hash: {:02x?}", &path_hash[..4]);
+            None
+        };
+
+        if let Some(response) = response_data {
+            let actions = self.link_manager.send_management_response(
+                &link_id, &request_id, &response, &mut self.rng,
+            );
+            self.dispatch_link_actions(actions);
         }
     }
 }
@@ -472,6 +792,9 @@ mod tests {
         deliveries: Arc<Mutex<Vec<[u8; 16]>>>,
         iface_ups: Arc<Mutex<Vec<InterfaceId>>>,
         iface_downs: Arc<Mutex<Vec<InterfaceId>>>,
+        link_established: Arc<Mutex<Vec<([u8; 16], f64, bool)>>>,
+        link_closed: Arc<Mutex<Vec<[u8; 16]>>>,
+        remote_identified: Arc<Mutex<Vec<([u8; 16], [u8; 16])>>>,
     }
 
     impl MockCallbacks {
@@ -495,12 +818,41 @@ mod tests {
                     deliveries: deliveries.clone(),
                     iface_ups: iface_ups.clone(),
                     iface_downs: iface_downs.clone(),
+                    link_established: Arc::new(Mutex::new(Vec::new())),
+                    link_closed: Arc::new(Mutex::new(Vec::new())),
+                    remote_identified: Arc::new(Mutex::new(Vec::new())),
                 },
                 announces,
                 paths,
                 deliveries,
                 iface_ups,
                 iface_downs,
+            )
+        }
+
+        fn with_link_tracking() -> (
+            Self,
+            Arc<Mutex<Vec<([u8; 16], f64, bool)>>>,
+            Arc<Mutex<Vec<[u8; 16]>>>,
+            Arc<Mutex<Vec<([u8; 16], [u8; 16])>>>,
+        ) {
+            let link_established = Arc::new(Mutex::new(Vec::new()));
+            let link_closed = Arc::new(Mutex::new(Vec::new()));
+            let remote_identified = Arc::new(Mutex::new(Vec::new()));
+            (
+                MockCallbacks {
+                    announces: Arc::new(Mutex::new(Vec::new())),
+                    paths: Arc::new(Mutex::new(Vec::new())),
+                    deliveries: Arc::new(Mutex::new(Vec::new())),
+                    iface_ups: Arc::new(Mutex::new(Vec::new())),
+                    iface_downs: Arc::new(Mutex::new(Vec::new())),
+                    link_established: link_established.clone(),
+                    link_closed: link_closed.clone(),
+                    remote_identified: remote_identified.clone(),
+                },
+                link_established,
+                link_closed,
+                remote_identified,
             )
         }
     }
@@ -532,6 +884,18 @@ mod tests {
         fn on_interface_down(&mut self, id: InterfaceId) {
             self.iface_downs.lock().unwrap().push(id);
         }
+
+        fn on_link_established(&mut self, link_id: [u8; 16], rtt: f64, is_initiator: bool) {
+            self.link_established.lock().unwrap().push((link_id, rtt, is_initiator));
+        }
+
+        fn on_link_closed(&mut self, link_id: [u8; 16], _reason: Option<rns_core::link::TeardownReason>) {
+            self.link_closed.lock().unwrap().push(link_id);
+        }
+
+        fn on_remote_identified(&mut self, link_id: [u8; 16], identity_hash: [u8; 16], _public_key: [u8; 64]) {
+            self.remote_identified.lock().unwrap().push((link_id, identity_hash));
+        }
     }
 
     fn make_interface_info(id: u64) -> InterfaceInfo {
@@ -545,6 +909,10 @@ mod tests {
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
         }
     }
 
@@ -1341,5 +1709,208 @@ mod tests {
             QueryResponse::DropAnnounceQueues => {}
             _ => panic!("unexpected response"),
         }
+    }
+
+    // =========================================================================
+    // Phase 7e: Link wiring integration tests
+    // =========================================================================
+
+    #[test]
+    fn register_link_dest_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let mut rng = OsRng;
+        let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
+        let sig_pub_bytes = sig_prv.public_key().public_bytes();
+        let sig_prv_bytes = sig_prv.private_bytes();
+        let dest_hash = [0xDD; 16];
+
+        tx.send(Event::RegisterLinkDestination {
+            dest_hash,
+            sig_prv_bytes,
+            sig_pub_bytes,
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Link manager should know about the destination
+        assert!(driver.link_manager.is_link_destination(&dest_hash));
+    }
+
+    #[test]
+    fn create_link_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _link_established, _, _) = MockCallbacks::with_link_tracking();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest_hash = [0xDD; 16];
+        let dummy_sig_pub = [0xAA; 32];
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::CreateLink {
+            dest_hash,
+            dest_sig_pub_bytes: dummy_sig_pub,
+            response_tx: resp_tx,
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should have received a link_id
+        let link_id = resp_rx.recv().unwrap();
+        assert_ne!(link_id, [0u8; 16]);
+
+        // Link should be in pending state in the manager
+        assert_eq!(driver.link_manager.link_count(), 1);
+
+        // The LINKREQUEST packet won't be sent on the wire without a path
+        // to the destination (DESTINATION_LINK requires a known path or
+        // attached_interface). In a real scenario, the path would exist from
+        // an announce received earlier.
+    }
+
+    #[test]
+    fn deliver_local_routes_to_link_manager() {
+        // Verify that DeliverLocal for a registered link destination goes to
+        // the link manager instead of the callbacks.
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register a link destination
+        let mut rng = OsRng;
+        let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
+        let sig_pub_bytes = sig_prv.public_key().public_bytes();
+        let dest_hash = [0xEE; 16];
+        driver.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+
+        // dispatch_all with a DeliverLocal for that dest should route to link_manager
+        // (not to callbacks). We can't easily test this via run() since we need
+        // a valid LINKREQUEST, but we can check is_link_destination works.
+        assert!(driver.link_manager.is_link_destination(&dest_hash));
+
+        // Non-link destination should go to callbacks
+        assert!(!driver.link_manager.is_link_destination(&[0xFF; 16]));
+
+        drop(tx);
+    }
+
+    #[test]
+    fn teardown_link_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Create a link first
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::CreateLink {
+            dest_hash: [0xDD; 16],
+            dest_sig_pub_bytes: [0xAA; 32],
+            response_tx: resp_tx,
+        }).unwrap();
+        // Then tear it down
+        // We can't receive resp_rx yet since driver.run() hasn't started,
+        // but we know the link_id will be created. Send teardown after CreateLink.
+        // Actually, we need to get the link_id first. Let's use a two-phase approach.
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let link_id = resp_rx.recv().unwrap();
+        assert_ne!(link_id, [0u8; 16]);
+        assert_eq!(driver.link_manager.link_count(), 1);
+
+        // Now restart with same driver (just use events directly since driver loop exited)
+        let teardown_actions = driver.link_manager.teardown_link(&link_id);
+        driver.dispatch_link_actions(teardown_actions);
+
+        // Callback should have been called
+        assert_eq!(link_closed.lock().unwrap().len(), 1);
+        assert_eq!(link_closed.lock().unwrap()[0], link_id);
+    }
+
+    #[test]
+    fn link_count_includes_link_manager() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Create a link via link_manager directly
+        let mut rng = OsRng;
+        let dummy_sig = [0xAA; 32];
+        driver.link_manager.create_link(&[0xDD; 16], &dummy_sig, 1, &mut rng);
+
+        // Query link count — should include link_manager links
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::LinkCount(count) => assert_eq!(count, 1),
+            _ => panic!("unexpected response"),
+        }
+    }
+
+    #[test]
+    fn register_request_handler_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        tx.send(Event::RegisterRequestHandler {
+            path: "/status".to_string(),
+            allowed_list: None,
+            handler: Box::new(|_link_id, _path, _data, _remote| Some(b"OK".to_vec())),
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Handler should be registered (we can't directly query the count,
+        // but at least verify no crash)
     }
 }

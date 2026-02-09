@@ -19,6 +19,9 @@ pub mod serial;
 pub mod md5;
 pub mod pickle;
 pub mod rpc;
+pub mod announce_cache;
+pub mod link_manager;
+pub mod management;
 
 pub use driver::Callbacks;
 pub use event::{
@@ -41,6 +44,8 @@ pub use ifac::IfacState;
 pub use serial::Parity;
 pub use storage::{StoragePaths, KnownDestination};
 pub use rpc::{RpcAddr, RpcServer, RpcClient};
+pub use link_manager::{LinkManager, LinkManagerAction};
+pub use management::ManagementConfig;
 
 // Re-export commonly used types from rns-core
 pub use rns_core::transport::types::InterfaceId;

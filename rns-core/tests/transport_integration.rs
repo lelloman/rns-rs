@@ -121,6 +121,10 @@ impl TestHarness {
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
         });
     }
 }
@@ -323,6 +327,10 @@ fn test_transport_routing_interop() {
                     announce_rate_target: None,
                     announce_rate_grace: 0,
                     announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
                 });
 
                 // Use route_outbound directly with a known path
@@ -337,6 +345,7 @@ fn test_transport_routing_interop() {
                         random_blobs: Vec::new(),
                         receiving_interface: InterfaceId(1),
                         packet_hash: [0; 32],
+                        announce_raw: None,
                     },
                 );
 

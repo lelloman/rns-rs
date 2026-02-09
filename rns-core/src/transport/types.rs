@@ -17,6 +17,14 @@ pub struct InterfaceInfo {
     pub announce_rate_target: Option<f64>,
     pub announce_rate_grace: u32,
     pub announce_rate_penalty: f64,
+    /// Announce bandwidth cap (fraction of bitrate). Default 0.02 (2%).
+    pub announce_cap: f64,
+    /// Whether this interface is a local shared-instance client.
+    pub is_local_client: bool,
+    /// Whether this interface wants tunnel synthesis on connect.
+    pub wants_tunnel: bool,
+    /// Tunnel ID associated with this interface, if any.
+    pub tunnel_id: Option<[u8; 32]>,
 }
 
 /// Actions produced by TransportEngine for the caller to execute.
@@ -54,6 +62,33 @@ pub enum TransportAction {
         destination_hash: [u8; 16],
         hops: u8,
         next_hop: [u8; 16],
+        interface: InterfaceId,
+    },
+    /// Forward raw bytes to all local client interfaces (excluding one).
+    ForwardToLocalClients {
+        raw: Vec<u8>,
+        exclude: Option<InterfaceId>,
+    },
+    /// Forward a PLAIN/GROUP broadcast between local and external interfaces.
+    ForwardPlainBroadcast {
+        raw: Vec<u8>,
+        to_local: bool,
+        exclude: Option<InterfaceId>,
+    },
+    /// Cache an announce packet to disk.
+    CacheAnnounce {
+        packet_hash: [u8; 32],
+        raw: Vec<u8>,
+    },
+    /// Tunnel synthesis: send synthesis data on an interface.
+    TunnelSynthesize {
+        interface: InterfaceId,
+        data: Vec<u8>,
+        dest_hash: [u8; 16],
+    },
+    /// A tunnel was established or reattached.
+    TunnelEstablished {
+        tunnel_id: [u8; 32],
         interface: InterfaceId,
     },
 }
