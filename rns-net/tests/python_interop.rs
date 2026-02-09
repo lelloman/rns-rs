@@ -12,25 +12,19 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use rns_net::{Callbacks, InterfaceConfig, InterfaceId, InterfaceVariant, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
+use rns_net::{DestHash, PacketHash, AnnouncedIdentity};
 
 struct TestCallbacks {
-    announce_tx: Sender<([u8; 16], u8)>,
+    announce_tx: Sender<(DestHash, u8)>,
 }
 
 impl Callbacks for TestCallbacks {
-    fn on_announce(
-        &mut self,
-        dest_hash: [u8; 16],
-        _identity_hash: [u8; 16],
-        _public_key: [u8; 64],
-        _app_data: Option<Vec<u8>>,
-        hops: u8,
-    ) {
-        let _ = self.announce_tx.send((dest_hash, hops));
+    fn on_announce(&mut self, announced: AnnouncedIdentity) {
+        let _ = self.announce_tx.send((announced.dest_hash, announced.hops));
     }
 
-    fn on_path_updated(&mut self, _: [u8; 16], _: u8) {}
-    fn on_local_delivery(&mut self, _: [u8; 16], _: Vec<u8>, _: [u8; 32]) {}
+    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
+    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
 }
 
 /// Check if Python with RNS is available.
@@ -124,7 +118,7 @@ except (KeyboardInterrupt, SystemExit):
     std::thread::sleep(Duration::from_secs(2));
 
     // Start Rust node
-    let (announce_tx, announce_rx): (Sender<([u8; 16], u8)>, Receiver<([u8; 16], u8)>) =
+    let (announce_tx, announce_rx): (Sender<(DestHash, u8)>, Receiver<(DestHash, u8)>) =
         mpsc::channel();
 
     let node = RnsNode::start(
@@ -163,7 +157,7 @@ except (KeyboardInterrupt, SystemExit):
 
     match result {
         Ok((dest_hash, hops)) => {
-            let received_hex: String = dest_hash.iter().map(|b| format!("{:02x}", b)).collect();
+            let received_hex: String = dest_hash.0.iter().map(|b| format!("{:02x}", b)).collect();
             eprintln!("Received announce: dest={} hops={}", received_hex, hops);
             assert_eq!(received_hex, expected_dest_hash_hex);
         }

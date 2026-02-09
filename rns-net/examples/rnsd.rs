@@ -7,41 +7,32 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use rns_net::Callbacks;
-use rns_net::InterfaceId;
-use rns_net::RnsNode;
+use rns_net::{AnnouncedIdentity, Callbacks, DestHash, InterfaceId, PacketHash, RnsNode};
 
 struct LoggingCallbacks;
 
 impl Callbacks for LoggingCallbacks {
-    fn on_announce(
-        &mut self,
-        dest_hash: [u8; 16],
-        identity_hash: [u8; 16],
-        _public_key: [u8; 64],
-        app_data: Option<Vec<u8>>,
-        hops: u8,
-    ) {
+    fn on_announce(&mut self, announced: AnnouncedIdentity) {
         log::info!(
             "Announce: dest={} identity={} hops={} app_data={}",
-            hex(&dest_hash),
-            hex(&identity_hash),
-            hops,
-            app_data
+            announced.dest_hash,
+            announced.identity_hash,
+            announced.hops,
+            announced.app_data
                 .as_ref()
                 .map(|d| format!("{} bytes", d.len()))
                 .unwrap_or_else(|| "none".into())
         );
     }
 
-    fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8) {
-        log::info!("Path updated: dest={} hops={}", hex(&dest_hash), hops);
+    fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8) {
+        log::info!("Path updated: dest={} hops={}", dest_hash, hops);
     }
 
-    fn on_local_delivery(&mut self, dest_hash: [u8; 16], raw: Vec<u8>, _packet_hash: [u8; 32]) {
+    fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, _packet_hash: PacketHash) {
         log::info!(
             "Local delivery: dest={} size={}",
-            hex(&dest_hash),
+            dest_hash,
             raw.len()
         );
     }
@@ -53,10 +44,6 @@ impl Callbacks for LoggingCallbacks {
     fn on_interface_down(&mut self, id: InterfaceId) {
         log::info!("Interface down: {}", id.0);
     }
-}
-
-fn hex(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn main() {

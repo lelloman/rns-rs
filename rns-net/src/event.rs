@@ -100,6 +100,17 @@ pub enum Event {
         data: Vec<u8>,
         context: u8,
     },
+    /// Request a path to a destination from the network.
+    RequestPath {
+        dest_hash: [u8; 16],
+    },
+    /// Register a proof strategy for a destination.
+    RegisterProofStrategy {
+        dest_hash: [u8; 16],
+        strategy: rns_core::types::ProofStrategy,
+        /// Full identity private key (64 bytes) for signing proofs.
+        signing_key: Option<[u8; 64]>,
+    },
 }
 
 /// Queries that can be sent to the driver.
@@ -137,6 +148,12 @@ pub enum QueryRequest {
     UnblackholeIdentity {
         identity_hash: [u8; 16],
     },
+    /// Check if a path exists to a destination.
+    HasPath { dest_hash: [u8; 16] },
+    /// Get hop count to a destination.
+    HopsTo { dest_hash: [u8; 16] },
+    /// Recall identity info for a destination.
+    RecallIdentity { dest_hash: [u8; 16] },
 }
 
 /// Responses to queries.
@@ -155,6 +172,9 @@ pub enum QueryResponse {
     Blackholed(Vec<BlackholeInfo>),
     BlackholeResult(bool),
     UnblackholeResult(bool),
+    HasPath(bool),
+    HopsTo(Option<u8>),
+    RecallIdentity(Option<crate::destination::AnnouncedIdentity>),
 }
 
 /// Interface statistics response.
@@ -330,6 +350,17 @@ impl fmt::Debug for Event {
                     .field("link_id", link_id)
                     .field("data_len", &data.len())
                     .field("context", context)
+                    .finish()
+            }
+            Event::RequestPath { dest_hash } => {
+                f.debug_struct("RequestPath")
+                    .field("dest_hash", dest_hash)
+                    .finish()
+            }
+            Event::RegisterProofStrategy { dest_hash, strategy, .. } => {
+                f.debug_struct("RegisterProofStrategy")
+                    .field("dest_hash", dest_hash)
+                    .field("strategy", strategy)
                     .finish()
             }
         }

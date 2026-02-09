@@ -11,34 +11,23 @@ use rns_net::{Callbacks, InterfaceConfig, InterfaceId, InterfaceVariant, NodeCon
 struct LoggingCallbacks;
 
 impl Callbacks for LoggingCallbacks {
-    fn on_announce(
-        &mut self,
-        dest_hash: [u8; 16],
-        identity_hash: [u8; 16],
-        _public_key: [u8; 64],
-        app_data: Option<Vec<u8>>,
-        hops: u8,
-    ) {
-        let dest_hex: String = dest_hash.iter().map(|b| format!("{:02x}", b)).collect();
-        let id_hex: String = identity_hash.iter().map(|b| format!("{:02x}", b)).collect();
-        let app_str = app_data
+    fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
+        let app_str = announced.app_data
             .as_ref()
             .and_then(|d| std::str::from_utf8(d).ok())
             .unwrap_or("<none>");
         log::info!(
             "Announce: dest={} identity={} hops={} app_data={}",
-            dest_hex, id_hex, hops, app_str
+            announced.dest_hash, announced.identity_hash, announced.hops, app_str
         );
     }
 
-    fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8) {
-        let hex: String = dest_hash.iter().map(|b| format!("{:02x}", b)).collect();
-        log::info!("Path updated: dest={} hops={}", hex, hops);
+    fn on_path_updated(&mut self, dest_hash: rns_net::DestHash, hops: u8) {
+        log::info!("Path updated: dest={} hops={}", dest_hash, hops);
     }
 
-    fn on_local_delivery(&mut self, dest_hash: [u8; 16], _raw: Vec<u8>, _packet_hash: [u8; 32]) {
-        let hex: String = dest_hash.iter().map(|b| format!("{:02x}", b)).collect();
-        log::info!("Local delivery: dest={}", hex);
+    fn on_local_delivery(&mut self, dest_hash: rns_net::DestHash, _raw: Vec<u8>, _packet_hash: rns_net::PacketHash) {
+        log::info!("Local delivery: dest={}", dest_hash);
     }
 }
 

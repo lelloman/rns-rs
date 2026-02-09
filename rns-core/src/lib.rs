@@ -3,6 +3,7 @@ extern crate alloc;
 
 pub mod constants;
 pub mod hash;
+pub mod types;
 pub mod packet;
 pub mod destination;
 pub mod announce;

@@ -15,27 +15,20 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct DaemonCallbacks;
 
 impl Callbacks for DaemonCallbacks {
-    fn on_announce(
-        &mut self,
-        dest_hash: [u8; 16],
-        _identity_hash: [u8; 16],
-        _public_key: [u8; 64],
-        _app_data: Option<Vec<u8>>,
-        hops: u8,
-    ) {
+    fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
         log::info!(
             "Announce received for {} (hops: {})",
-            hex(&dest_hash),
-            hops,
+            hex(&announced.dest_hash.0),
+            announced.hops,
         );
     }
 
-    fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8) {
-        log::debug!("Path updated for {} (hops: {})", hex(&dest_hash), hops);
+    fn on_path_updated(&mut self, dest_hash: rns_net::DestHash, hops: u8) {
+        log::debug!("Path updated for {} (hops: {})", hex(&dest_hash.0), hops);
     }
 
-    fn on_local_delivery(&mut self, dest_hash: [u8; 16], _raw: Vec<u8>, _hash: [u8; 32]) {
-        log::debug!("Local delivery for {}", hex(&dest_hash));
+    fn on_local_delivery(&mut self, dest_hash: rns_net::DestHash, _raw: Vec<u8>, _hash: rns_net::PacketHash) {
+        log::debug!("Local delivery for {}", hex(&dest_hash.0));
     }
 
     fn on_interface_up(&mut self, id: InterfaceId) {

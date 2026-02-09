@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use rns_core::packet::RawPacket;
 use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
-use rns_crypto::OsRng;
+use rns_crypto::{OsRng, Rng};
 
 use crate::event::{
     BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, NextHopResponse,
@@ -17,19 +17,18 @@ use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
 /// Callbacks for events the driver produces.
+///
+/// All identifiers use typed wrappers (`DestHash`, `IdentityHash`, `LinkId`, `PacketHash`)
+/// for compile-time safety.
 pub trait Callbacks: Send {
     fn on_announce(
         &mut self,
-        dest_hash: [u8; 16],
-        identity_hash: [u8; 16],
-        public_key: [u8; 64],
-        app_data: Option<Vec<u8>>,
-        hops: u8,
+        announced: crate::destination::AnnouncedIdentity,
     );
 
-    fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8);
+    fn on_path_updated(&mut self, dest_hash: rns_core::types::DestHash, hops: u8);
 
-    fn on_local_delivery(&mut self, dest_hash: [u8; 16], raw: Vec<u8>, packet_hash: [u8; 32]);
+    fn on_local_delivery(&mut self, dest_hash: rns_core::types::DestHash, raw: Vec<u8>, packet_hash: rns_core::types::PacketHash);
 
     /// Called when an interface comes online.
     fn on_interface_up(&mut self, _id: InterfaceId) {}
@@ -38,40 +37,50 @@ pub trait Callbacks: Send {
     fn on_interface_down(&mut self, _id: InterfaceId) {}
 
     /// Called when a link is fully established.
-    fn on_link_established(&mut self, _link_id: [u8; 16], _rtt: f64, _is_initiator: bool) {}
+    fn on_link_established(&mut self, _link_id: rns_core::types::LinkId, _rtt: f64, _is_initiator: bool) {}
 
     /// Called when a link is closed.
-    fn on_link_closed(&mut self, _link_id: [u8; 16], _reason: Option<rns_core::link::TeardownReason>) {}
+    fn on_link_closed(&mut self, _link_id: rns_core::types::LinkId, _reason: Option<rns_core::link::TeardownReason>) {}
 
     /// Called when a remote peer identifies on a link.
-    fn on_remote_identified(&mut self, _link_id: [u8; 16], _identity_hash: [u8; 16], _public_key: [u8; 64]) {}
+    fn on_remote_identified(&mut self, _link_id: rns_core::types::LinkId, _identity_hash: rns_core::types::IdentityHash, _public_key: [u8; 64]) {}
 
     /// Called when a resource transfer delivers data.
-    fn on_resource_received(&mut self, _link_id: [u8; 16], _data: Vec<u8>, _metadata: Option<Vec<u8>>) {}
+    fn on_resource_received(&mut self, _link_id: rns_core::types::LinkId, _data: Vec<u8>, _metadata: Option<Vec<u8>>) {}
 
     /// Called when a resource transfer completes (sender-side proof validated).
-    fn on_resource_completed(&mut self, _link_id: [u8; 16]) {}
+    fn on_resource_completed(&mut self, _link_id: rns_core::types::LinkId) {}
 
     /// Called when a resource transfer fails.
-    fn on_resource_failed(&mut self, _link_id: [u8; 16], _error: String) {}
+    fn on_resource_failed(&mut self, _link_id: rns_core::types::LinkId, _error: String) {}
 
     /// Called with resource transfer progress updates.
-    fn on_resource_progress(&mut self, _link_id: [u8; 16], _received: usize, _total: usize) {}
+    fn on_resource_progress(&mut self, _link_id: rns_core::types::LinkId, _received: usize, _total: usize) {}
 
     /// Called to ask whether to accept an incoming resource (for AcceptApp strategy).
     /// Return true to accept, false to reject.
-    fn on_resource_accept_query(&mut self, _link_id: [u8; 16], _resource_hash: Vec<u8>, _transfer_size: u64, _has_metadata: bool) -> bool {
+    fn on_resource_accept_query(&mut self, _link_id: rns_core::types::LinkId, _resource_hash: Vec<u8>, _transfer_size: u64, _has_metadata: bool) -> bool {
         false
     }
 
     /// Called when a channel message is received on a link.
-    fn on_channel_message(&mut self, _link_id: [u8; 16], _msgtype: u16, _payload: Vec<u8>) {}
+    fn on_channel_message(&mut self, _link_id: rns_core::types::LinkId, _msgtype: u16, _payload: Vec<u8>) {}
 
     /// Called when generic link data is received.
-    fn on_link_data(&mut self, _link_id: [u8; 16], _context: u8, _data: Vec<u8>) {}
+    fn on_link_data(&mut self, _link_id: rns_core::types::LinkId, _context: u8, _data: Vec<u8>) {}
 
     /// Called when a response is received on a link.
-    fn on_response(&mut self, _link_id: [u8; 16], _request_id: [u8; 16], _data: Vec<u8>) {}
+    fn on_response(&mut self, _link_id: rns_core::types::LinkId, _request_id: [u8; 16], _data: Vec<u8>) {}
+
+    /// Called when a delivery proof is received for a packet we sent.
+    /// `rtt` is the round-trip time in seconds.
+    fn on_proof(&mut self, _dest_hash: rns_core::types::DestHash, _packet_hash: rns_core::types::PacketHash, _rtt: f64) {}
+
+    /// Called for ProveApp strategy: should we prove this incoming packet?
+    /// Return true to generate and send a proof, false to skip.
+    fn on_proof_requested(&mut self, _dest_hash: rns_core::types::DestHash, _packet_hash: rns_core::types::PacketHash) -> bool {
+        true
+    }
 }
 
 /// The driver loop. Owns the engine and all interface entries.
@@ -95,6 +104,15 @@ pub struct Driver {
     pub(crate) last_management_announce: f64,
     /// Whether initial management announce has been sent (delayed 5s after start).
     pub(crate) initial_announce_sent: bool,
+    /// Cache of known announced identities, keyed by destination hash.
+    pub(crate) known_destinations: HashMap<[u8; 16], crate::destination::AnnouncedIdentity>,
+    /// Destination hash for rnstransport.path.request (PLAIN).
+    pub(crate) path_request_dest: [u8; 16],
+    /// Proof strategies per destination hash.
+    /// Maps dest_hash → (strategy, optional signing identity for generating proofs).
+    pub(crate) proof_strategies: HashMap<[u8; 16], (rns_core::types::ProofStrategy, Option<rns_crypto::identity::Identity>)>,
+    /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
+    pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
 }
 
 impl Driver {
@@ -109,8 +127,15 @@ impl Driver {
             &["tunnel", "synthesize"],
             None,
         );
+        let path_request_dest = rns_core::destination::destination_hash(
+            "rnstransport",
+            &["path", "request"],
+            None,
+        );
         let mut engine = TransportEngine::new(config);
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
+        // Register path request destination so inbound path requests are delivered locally
+        engine.register_destination(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
         Driver {
             engine,
             interfaces: HashMap::new(),
@@ -125,6 +150,10 @@ impl Driver {
             management_config: Default::default(),
             last_management_announce: 0.0,
             initial_announce_sent: false,
+            known_destinations: HashMap::new(),
+            path_request_dest,
+            proof_strategies: HashMap::new(),
+            sent_packets: HashMap::new(),
         }
     }
 
@@ -184,6 +213,8 @@ impl Driver {
                     self.dispatch_link_actions(link_actions);
                     // Emit management announces
                     self.tick_management_announces(now);
+                    // Cull expired sent packet tracking entries (no proof received within 60s)
+                    self.sent_packets.retain(|_, (_, sent_time)| now - *sent_time < 60.0);
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
@@ -254,6 +285,13 @@ impl Driver {
                 Event::SendOutbound { raw, dest_type, attached_interface } => {
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
+                            // Track sent DATA packets for proof matching
+                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                                self.sent_packets.insert(
+                                    packet.packet_hash,
+                                    (packet.destination_hash, time::now()),
+                                );
+                            }
                             let actions = self.engine.handle_outbound(
                                 &packet,
                                 dest_type,
@@ -344,6 +382,15 @@ impl Driver {
                         &link_id, &data, context, &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
+                }
+                Event::RequestPath { dest_hash } => {
+                    self.handle_request_path(dest_hash);
+                }
+                Event::RegisterProofStrategy { dest_hash, strategy, signing_key } => {
+                    let identity = signing_key.map(|key| {
+                        rns_crypto::identity::Identity::from_private_key(&key)
+                    });
+                    self.proof_strategies.insert(dest_hash, (strategy, identity));
                 }
                 Event::Shutdown => break,
             }
@@ -479,6 +526,15 @@ impl Driver {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::BlackholeResult(false)
             }
+            QueryRequest::HasPath { dest_hash } => {
+                QueryResponse::HasPath(self.engine.has_path(&dest_hash))
+            }
+            QueryRequest::HopsTo { dest_hash } => {
+                QueryResponse::HopsTo(self.engine.hops_to(&dest_hash))
+            }
+            QueryRequest::RecallIdentity { dest_hash } => {
+                QueryResponse::RecallIdentity(self.known_destinations.get(&dest_hash).cloned())
+            }
         }
     }
 
@@ -549,6 +605,170 @@ impl Driver {
         }
     }
 
+    /// Build and send a path request packet for a destination.
+    fn handle_request_path(&mut self, dest_hash: [u8; 16]) {
+        // Build path request data: dest_hash(16) || [transport_id(16)] || random_tag(16)
+        let mut data = Vec::with_capacity(48);
+        data.extend_from_slice(&dest_hash);
+
+        if self.engine.transport_enabled() {
+            if let Some(id_hash) = self.engine.identity_hash() {
+                data.extend_from_slice(id_hash);
+            }
+        }
+
+        // Random tag (16 bytes)
+        let mut tag = [0u8; 16];
+        self.rng.fill_bytes(&mut tag);
+        data.extend_from_slice(&tag);
+
+        // Build as BROADCAST DATA PLAIN packet to rnstransport.path.request
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_PLAIN,
+            packet_type: rns_core::constants::PACKET_TYPE_DATA,
+        };
+
+        if let Ok(packet) = RawPacket::pack(
+            flags, 0, &self.path_request_dest, None,
+            rns_core::constants::CONTEXT_NONE, &data,
+        ) {
+            let actions = self.engine.handle_outbound(
+                &packet,
+                rns_core::constants::DESTINATION_PLAIN,
+                None,
+                time::now(),
+            );
+            self.dispatch_all(actions);
+        }
+    }
+
+    /// Check if we should generate a proof for a delivered packet,
+    /// and if so, sign and send it.
+    fn maybe_generate_proof(&mut self, dest_hash: [u8; 16], packet_hash: &[u8; 32]) {
+        use rns_core::types::ProofStrategy;
+
+        let (strategy, identity) = match self.proof_strategies.get(&dest_hash) {
+            Some((s, id)) => (*s, id.as_ref()),
+            None => return,
+        };
+
+        let should_prove = match strategy {
+            ProofStrategy::ProveAll => true,
+            ProofStrategy::ProveApp => {
+                self.callbacks.on_proof_requested(
+                    rns_core::types::DestHash(dest_hash),
+                    rns_core::types::PacketHash(*packet_hash),
+                )
+            }
+            ProofStrategy::ProveNone => false,
+        };
+
+        if !should_prove {
+            return;
+        }
+
+        let identity = match identity {
+            Some(id) => id,
+            None => {
+                log::warn!("Cannot generate proof for {:02x?}: no signing key", &dest_hash[..4]);
+                return;
+            }
+        };
+
+        // Sign the packet hash to create the proof
+        let signature = match identity.sign(packet_hash) {
+            Ok(sig) => sig,
+            Err(e) => {
+                log::warn!("Failed to sign proof for {:02x?}: {:?}", &dest_hash[..4], e);
+                return;
+            }
+        };
+
+        // Build explicit proof: [packet_hash:32][signature:64]
+        let mut proof_data = Vec::with_capacity(96);
+        proof_data.extend_from_slice(packet_hash);
+        proof_data.extend_from_slice(&signature);
+
+        // Pack as PROOF packet addressed to the destination
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_SINGLE,
+            packet_type: rns_core::constants::PACKET_TYPE_PROOF,
+        };
+
+        if let Ok(packet) = RawPacket::pack(
+            flags, 0, &dest_hash, None,
+            rns_core::constants::CONTEXT_NONE, &proof_data,
+        ) {
+            let actions = self.engine.handle_outbound(
+                &packet,
+                rns_core::constants::DESTINATION_SINGLE,
+                None,
+                time::now(),
+            );
+            self.dispatch_all(actions);
+            log::debug!("Generated proof for packet on dest {:02x?}", &dest_hash[..4]);
+        }
+    }
+
+    /// Handle an inbound proof packet: validate and fire on_proof callback.
+    fn handle_inbound_proof(&mut self, dest_hash: [u8; 16], proof_data: &[u8], _raw_packet_hash: &[u8; 32]) {
+        // Explicit proof format: [packet_hash:32][signature:64] = 96 bytes
+        if proof_data.len() < 96 {
+            log::debug!("Proof too short for explicit proof: {} bytes", proof_data.len());
+            return;
+        }
+
+        let mut tracked_hash = [0u8; 32];
+        tracked_hash.copy_from_slice(&proof_data[..32]);
+
+        let signature = &proof_data[32..96];
+
+        // Look up the tracked sent packet
+        if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
+            // Validate the proof signature using the destination's public key
+            // (matches Python's PacketReceipt.validate_proof behavior)
+            if let Some(announced) = self.known_destinations.get(&tracked_dest) {
+                let identity = rns_crypto::identity::Identity::from_public_key(&announced.public_key);
+                let mut sig = [0u8; 64];
+                sig.copy_from_slice(signature);
+                if !identity.verify(&sig, &tracked_hash) {
+                    log::debug!(
+                        "Proof signature invalid for {:02x?}",
+                        &tracked_hash[..4],
+                    );
+                    return;
+                }
+            } else {
+                log::debug!(
+                    "No known identity for dest {:02x?}, accepting proof without signature check",
+                    &tracked_dest[..4],
+                );
+            }
+
+            let rtt = time::now() - sent_time;
+            log::debug!(
+                "Proof received for {:02x?} rtt={:.3}s",
+                &tracked_hash[..4], rtt,
+            );
+            self.callbacks.on_proof(
+                rns_core::types::DestHash(tracked_dest),
+                rns_core::types::PacketHash(tracked_hash),
+                rtt,
+            );
+        } else {
+            log::debug!(
+                "Proof for unknown packet {:02x?} on dest {:02x?}",
+                &tracked_hash[..4], &dest_hash[..4],
+            );
+        }
+    }
+
     /// Dispatch a list of transport actions.
     fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
         for action in actions {
@@ -603,6 +823,16 @@ impl Driver {
                     if destination_hash == self.tunnel_synth_dest {
                         // Tunnel synthesis packet — validate and handle
                         self.handle_tunnel_synth_delivery(&raw);
+                    } else if destination_hash == self.path_request_dest {
+                        // Path request packet — extract data and handle
+                        if let Ok(packet) = RawPacket::unpack(&raw) {
+                            let actions = self.engine.handle_path_request(
+                                &packet.data,
+                                InterfaceId(0), // no specific interface
+                                time::now(),
+                            );
+                            self.dispatch_all(actions);
+                        }
                     } else if self.link_manager.is_link_destination(&destination_hash) {
                         // Link-related packet — route to link manager
                         let link_actions = self.link_manager.handle_local_delivery(
@@ -610,8 +840,23 @@ impl Driver {
                         );
                         self.dispatch_link_actions(link_actions);
                     } else {
+                        // Check if this is a PROOF packet for a packet we sent
+                        if let Ok(packet) = RawPacket::unpack(&raw) {
+                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
+                                self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                                continue;
+                            }
+                        }
+
+                        // Check if destination has a proof strategy — generate proof if needed
+                        self.maybe_generate_proof(destination_hash, &packet_hash);
+
                         self.callbacks
-                            .on_local_delivery(destination_hash, raw, packet_hash);
+                            .on_local_delivery(
+                                rns_core::types::DestHash(destination_hash),
+                                raw,
+                                rns_core::types::PacketHash(packet_hash),
+                            );
                     }
                 }
                 TransportAction::AnnounceReceived {
@@ -626,15 +871,24 @@ impl Driver {
                     if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
                         entry.stats.record_incoming_announce(time::now());
                     }
-                    self.callbacks
-                        .on_announce(destination_hash, identity_hash, public_key, app_data, hops);
+                    // Cache the announced identity
+                    let announced = crate::destination::AnnouncedIdentity {
+                        dest_hash: rns_core::types::DestHash(destination_hash),
+                        identity_hash: rns_core::types::IdentityHash(identity_hash),
+                        public_key,
+                        app_data: app_data.clone(),
+                        hops,
+                        received_at: time::now(),
+                    };
+                    self.known_destinations.insert(destination_hash, announced.clone());
+                    self.callbacks.on_announce(announced);
                 }
                 TransportAction::PathUpdated {
                     destination_hash,
                     hops,
                     ..
                 } => {
-                    self.callbacks.on_path_updated(destination_hash, hops);
+                    self.callbacks.on_path_updated(rns_core::types::DestHash(destination_hash), hops);
                 }
                 TransportAction::ForwardToLocalClients { raw, exclude } => {
                     for entry in self.interfaces.values_mut() {
@@ -743,18 +997,22 @@ impl Driver {
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
                         &link_id[..4], rtt, is_initiator,
                     );
-                    self.callbacks.on_link_established(link_id, rtt, is_initiator);
+                    self.callbacks.on_link_established(rns_core::types::LinkId(link_id), rtt, is_initiator);
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
-                    self.callbacks.on_link_closed(link_id, reason);
+                    self.callbacks.on_link_closed(rns_core::types::LinkId(link_id), reason);
                 }
                 LinkManagerAction::RemoteIdentified { link_id, identity_hash, public_key } => {
                     log::debug!(
                         "Remote identified on link {:02x?}: {:02x?}",
                         &link_id[..4], &identity_hash[..4],
                     );
-                    self.callbacks.on_remote_identified(link_id, identity_hash, public_key);
+                    self.callbacks.on_remote_identified(
+                        rns_core::types::LinkId(link_id),
+                        rns_core::types::IdentityHash(identity_hash),
+                        public_key,
+                    );
                 }
                 LinkManagerAction::RegisterLinkDest { link_id } => {
                     // Register the link_id as a LINK destination in the transport engine
@@ -771,21 +1029,21 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::ResourceReceived { link_id, data, metadata } => {
-                    self.callbacks.on_resource_received(link_id, data, metadata);
+                    self.callbacks.on_resource_received(rns_core::types::LinkId(link_id), data, metadata);
                 }
                 LinkManagerAction::ResourceCompleted { link_id } => {
-                    self.callbacks.on_resource_completed(link_id);
+                    self.callbacks.on_resource_completed(rns_core::types::LinkId(link_id));
                 }
                 LinkManagerAction::ResourceFailed { link_id, error } => {
                     log::debug!("Resource failed on link {:02x?}: {}", &link_id[..4], error);
-                    self.callbacks.on_resource_failed(link_id, error);
+                    self.callbacks.on_resource_failed(rns_core::types::LinkId(link_id), error);
                 }
                 LinkManagerAction::ResourceProgress { link_id, received, total } => {
-                    self.callbacks.on_resource_progress(link_id, received, total);
+                    self.callbacks.on_resource_progress(rns_core::types::LinkId(link_id), received, total);
                 }
                 LinkManagerAction::ResourceAcceptQuery { link_id, resource_hash, transfer_size, has_metadata } => {
                     let accept = self.callbacks.on_resource_accept_query(
-                        link_id, resource_hash.clone(), transfer_size, has_metadata,
+                        rns_core::types::LinkId(link_id), resource_hash.clone(), transfer_size, has_metadata,
                     );
                     let accept_actions = self.link_manager.accept_resource(
                         &link_id, &resource_hash, accept, &mut self.rng,
@@ -794,13 +1052,13 @@ impl Driver {
                     self.dispatch_link_actions(accept_actions);
                 }
                 LinkManagerAction::ChannelMessageReceived { link_id, msgtype, payload } => {
-                    self.callbacks.on_channel_message(link_id, msgtype, payload);
+                    self.callbacks.on_channel_message(rns_core::types::LinkId(link_id), msgtype, payload);
                 }
                 LinkManagerAction::LinkDataReceived { link_id, context, data } => {
-                    self.callbacks.on_link_data(link_id, context, data);
+                    self.callbacks.on_link_data(rns_core::types::LinkId(link_id), context, data);
                 }
                 LinkManagerAction::ResponseReceived { link_id, request_id, data } => {
-                    self.callbacks.on_response(link_id, request_id, data);
+                    self.callbacks.on_response(rns_core::types::LinkId(link_id), request_id, data);
                 }
             }
         }
@@ -969,29 +1227,33 @@ mod tests {
         }
     }
 
+    use rns_core::types::{DestHash, IdentityHash, LinkId as TypedLinkId, PacketHash};
+
     struct MockCallbacks {
-        announces: Arc<Mutex<Vec<([u8; 16], u8)>>>,
-        paths: Arc<Mutex<Vec<([u8; 16], u8)>>>,
-        deliveries: Arc<Mutex<Vec<[u8; 16]>>>,
+        announces: Arc<Mutex<Vec<(DestHash, u8)>>>,
+        paths: Arc<Mutex<Vec<(DestHash, u8)>>>,
+        deliveries: Arc<Mutex<Vec<DestHash>>>,
         iface_ups: Arc<Mutex<Vec<InterfaceId>>>,
         iface_downs: Arc<Mutex<Vec<InterfaceId>>>,
-        link_established: Arc<Mutex<Vec<([u8; 16], f64, bool)>>>,
-        link_closed: Arc<Mutex<Vec<[u8; 16]>>>,
-        remote_identified: Arc<Mutex<Vec<([u8; 16], [u8; 16])>>>,
-        resources_received: Arc<Mutex<Vec<([u8; 16], Vec<u8>)>>>,
-        resource_completed: Arc<Mutex<Vec<[u8; 16]>>>,
-        resource_failed: Arc<Mutex<Vec<([u8; 16], String)>>>,
-        channel_messages: Arc<Mutex<Vec<([u8; 16], u16, Vec<u8>)>>>,
-        link_data: Arc<Mutex<Vec<([u8; 16], u8, Vec<u8>)>>>,
-        responses: Arc<Mutex<Vec<([u8; 16], [u8; 16], Vec<u8>)>>>,
+        link_established: Arc<Mutex<Vec<(TypedLinkId, f64, bool)>>>,
+        link_closed: Arc<Mutex<Vec<TypedLinkId>>>,
+        remote_identified: Arc<Mutex<Vec<(TypedLinkId, IdentityHash)>>>,
+        resources_received: Arc<Mutex<Vec<(TypedLinkId, Vec<u8>)>>>,
+        resource_completed: Arc<Mutex<Vec<TypedLinkId>>>,
+        resource_failed: Arc<Mutex<Vec<(TypedLinkId, String)>>>,
+        channel_messages: Arc<Mutex<Vec<(TypedLinkId, u16, Vec<u8>)>>>,
+        link_data: Arc<Mutex<Vec<(TypedLinkId, u8, Vec<u8>)>>>,
+        responses: Arc<Mutex<Vec<(TypedLinkId, [u8; 16], Vec<u8>)>>>,
+        proofs: Arc<Mutex<Vec<(DestHash, PacketHash, f64)>>>,
+        proof_requested: Arc<Mutex<Vec<(DestHash, PacketHash)>>>,
     }
 
     impl MockCallbacks {
         fn new() -> (
             Self,
-            Arc<Mutex<Vec<([u8; 16], u8)>>>,
-            Arc<Mutex<Vec<([u8; 16], u8)>>>,
-            Arc<Mutex<Vec<[u8; 16]>>>,
+            Arc<Mutex<Vec<(DestHash, u8)>>>,
+            Arc<Mutex<Vec<(DestHash, u8)>>>,
+            Arc<Mutex<Vec<DestHash>>>,
             Arc<Mutex<Vec<InterfaceId>>>,
             Arc<Mutex<Vec<InterfaceId>>>,
         ) {
@@ -1016,6 +1278,8 @@ mod tests {
                     channel_messages: Arc::new(Mutex::new(Vec::new())),
                     link_data: Arc::new(Mutex::new(Vec::new())),
                     responses: Arc::new(Mutex::new(Vec::new())),
+                    proofs: Arc::new(Mutex::new(Vec::new())),
+                    proof_requested: Arc::new(Mutex::new(Vec::new())),
                 },
                 announces,
                 paths,
@@ -1027,9 +1291,9 @@ mod tests {
 
         fn with_link_tracking() -> (
             Self,
-            Arc<Mutex<Vec<([u8; 16], f64, bool)>>>,
-            Arc<Mutex<Vec<[u8; 16]>>>,
-            Arc<Mutex<Vec<([u8; 16], [u8; 16])>>>,
+            Arc<Mutex<Vec<(TypedLinkId, f64, bool)>>>,
+            Arc<Mutex<Vec<TypedLinkId>>>,
+            Arc<Mutex<Vec<(TypedLinkId, IdentityHash)>>>,
         ) {
             let link_established = Arc::new(Mutex::new(Vec::new()));
             let link_closed = Arc::new(Mutex::new(Vec::new()));
@@ -1050,6 +1314,8 @@ mod tests {
                     channel_messages: Arc::new(Mutex::new(Vec::new())),
                     link_data: Arc::new(Mutex::new(Vec::new())),
                     responses: Arc::new(Mutex::new(Vec::new())),
+                    proofs: Arc::new(Mutex::new(Vec::new())),
+                    proof_requested: Arc::new(Mutex::new(Vec::new())),
                 },
                 link_established,
                 link_closed,
@@ -1059,22 +1325,15 @@ mod tests {
     }
 
     impl Callbacks for MockCallbacks {
-        fn on_announce(
-            &mut self,
-            dest_hash: [u8; 16],
-            _identity_hash: [u8; 16],
-            _public_key: [u8; 64],
-            _app_data: Option<Vec<u8>>,
-            hops: u8,
-        ) {
-            self.announces.lock().unwrap().push((dest_hash, hops));
+        fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
+            self.announces.lock().unwrap().push((announced.dest_hash, announced.hops));
         }
 
-        fn on_path_updated(&mut self, dest_hash: [u8; 16], hops: u8) {
+        fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8) {
             self.paths.lock().unwrap().push((dest_hash, hops));
         }
 
-        fn on_local_delivery(&mut self, dest_hash: [u8; 16], _raw: Vec<u8>, _packet_hash: [u8; 32]) {
+        fn on_local_delivery(&mut self, dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
             self.deliveries.lock().unwrap().push(dest_hash);
         }
 
@@ -1086,40 +1345,49 @@ mod tests {
             self.iface_downs.lock().unwrap().push(id);
         }
 
-        fn on_link_established(&mut self, link_id: [u8; 16], rtt: f64, is_initiator: bool) {
+        fn on_link_established(&mut self, link_id: TypedLinkId, rtt: f64, is_initiator: bool) {
             self.link_established.lock().unwrap().push((link_id, rtt, is_initiator));
         }
 
-        fn on_link_closed(&mut self, link_id: [u8; 16], _reason: Option<rns_core::link::TeardownReason>) {
+        fn on_link_closed(&mut self, link_id: TypedLinkId, _reason: Option<rns_core::link::TeardownReason>) {
             self.link_closed.lock().unwrap().push(link_id);
         }
 
-        fn on_remote_identified(&mut self, link_id: [u8; 16], identity_hash: [u8; 16], _public_key: [u8; 64]) {
+        fn on_remote_identified(&mut self, link_id: TypedLinkId, identity_hash: IdentityHash, _public_key: [u8; 64]) {
             self.remote_identified.lock().unwrap().push((link_id, identity_hash));
         }
 
-        fn on_resource_received(&mut self, link_id: [u8; 16], data: Vec<u8>, _metadata: Option<Vec<u8>>) {
+        fn on_resource_received(&mut self, link_id: TypedLinkId, data: Vec<u8>, _metadata: Option<Vec<u8>>) {
             self.resources_received.lock().unwrap().push((link_id, data));
         }
 
-        fn on_resource_completed(&mut self, link_id: [u8; 16]) {
+        fn on_resource_completed(&mut self, link_id: TypedLinkId) {
             self.resource_completed.lock().unwrap().push(link_id);
         }
 
-        fn on_resource_failed(&mut self, link_id: [u8; 16], error: String) {
+        fn on_resource_failed(&mut self, link_id: TypedLinkId, error: String) {
             self.resource_failed.lock().unwrap().push((link_id, error));
         }
 
-        fn on_channel_message(&mut self, link_id: [u8; 16], msgtype: u16, payload: Vec<u8>) {
+        fn on_channel_message(&mut self, link_id: TypedLinkId, msgtype: u16, payload: Vec<u8>) {
             self.channel_messages.lock().unwrap().push((link_id, msgtype, payload));
         }
 
-        fn on_link_data(&mut self, link_id: [u8; 16], context: u8, data: Vec<u8>) {
+        fn on_link_data(&mut self, link_id: TypedLinkId, context: u8, data: Vec<u8>) {
             self.link_data.lock().unwrap().push((link_id, context, data));
         }
 
-        fn on_response(&mut self, link_id: [u8; 16], request_id: [u8; 16], data: Vec<u8>) {
+        fn on_response(&mut self, link_id: TypedLinkId, request_id: [u8; 16], data: Vec<u8>) {
             self.responses.lock().unwrap().push((link_id, request_id, data));
+        }
+
+        fn on_proof(&mut self, dest_hash: DestHash, packet_hash: PacketHash, rtt: f64) {
+            self.proofs.lock().unwrap().push((dest_hash, packet_hash, rtt));
+        }
+
+        fn on_proof_requested(&mut self, dest_hash: DestHash, packet_hash: PacketHash) -> bool {
+            self.proof_requested.lock().unwrap().push((dest_hash, packet_hash));
+            true
         }
     }
 
@@ -1778,7 +2046,7 @@ mod tests {
         driver.run();
 
         assert_eq!(deliveries.lock().unwrap().len(), 1);
-        assert_eq!(deliveries.lock().unwrap()[0], dest);
+        assert_eq!(deliveries.lock().unwrap()[0], DestHash(dest));
     }
 
     #[test]
@@ -2083,7 +2351,7 @@ mod tests {
 
         // Callback should have been called
         assert_eq!(link_closed.lock().unwrap().len(), 1);
-        assert_eq!(link_closed.lock().unwrap()[0], link_id);
+        assert_eq!(link_closed.lock().unwrap()[0], TypedLinkId(link_id));
     }
 
     #[test]
@@ -2237,5 +2505,906 @@ mod tests {
         let sent_packets = sent.lock().unwrap();
         assert!(sent_packets.is_empty(),
             "No announces before startup delay");
+    }
+
+    // =========================================================================
+    // Phase 9c: Announce + Discovery tests
+    // =========================================================================
+
+    #[test]
+    fn announce_received_populates_known_destinations() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // known_destinations should be populated
+        assert!(driver.known_destinations.contains_key(&dest_hash));
+        let recalled = &driver.known_destinations[&dest_hash];
+        assert_eq!(recalled.dest_hash.0, dest_hash);
+        assert_eq!(recalled.identity_hash.0, *identity.hash());
+        assert_eq!(&recalled.public_key, &identity.get_public_key().unwrap());
+        assert_eq!(recalled.hops, 1);
+    }
+
+    #[test]
+    fn query_has_path() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // No path yet
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::HasPath { dest_hash: [0xAA; 16] }, resp_tx)).unwrap();
+
+        // Feed an announce to create a path
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+
+        let (resp_tx2, resp_rx2) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::HasPath { dest_hash }, resp_tx2)).unwrap();
+
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // First query — no path
+        match resp_rx.recv().unwrap() {
+            QueryResponse::HasPath(false) => {}
+            other => panic!("expected HasPath(false), got {:?}", other),
+        }
+
+        // Second query — path exists
+        match resp_rx2.recv().unwrap() {
+            QueryResponse::HasPath(true) => {}
+            other => panic!("expected HasPath(true), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_hops_to() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Feed an announce
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::HopsTo { dest_hash }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::HopsTo(Some(1)) => {}
+            other => panic!("expected HopsTo(Some(1)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_recall_identity() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+
+        // Recall identity
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::RecallIdentity { dest_hash }, resp_tx)).unwrap();
+
+        // Also recall unknown destination
+        let (resp_tx2, resp_rx2) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::RecallIdentity { dest_hash: [0xFF; 16] }, resp_tx2)).unwrap();
+
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::RecallIdentity(Some(recalled)) => {
+                assert_eq!(recalled.dest_hash.0, dest_hash);
+                assert_eq!(recalled.identity_hash.0, *identity.hash());
+                assert_eq!(recalled.public_key, identity.get_public_key().unwrap());
+                assert_eq!(recalled.hops, 1);
+            }
+            other => panic!("expected RecallIdentity(Some(..)), got {:?}", other),
+        }
+
+        match resp_rx2.recv().unwrap() {
+            QueryResponse::RecallIdentity(None) => {}
+            other => panic!("expected RecallIdentity(None), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn request_path_sends_packet() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Send path request
+        tx.send(Event::RequestPath { dest_hash: [0xAA; 16] }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should have sent a packet on the wire (broadcast)
+        let sent_packets = sent.lock().unwrap();
+        assert!(!sent_packets.is_empty(), "Path request should be sent on wire");
+
+        // Verify the sent packet is a DATA PLAIN BROADCAST packet
+        let raw = &sent_packets[0];
+        let flags = rns_core::packet::PacketFlags::unpack(raw[0] & 0x7F);
+        assert_eq!(flags.packet_type, constants::PACKET_TYPE_DATA);
+        assert_eq!(flags.destination_type, constants::DESTINATION_PLAIN);
+        assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+    }
+
+    #[test]
+    fn request_path_includes_transport_id() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some([0xBB; 16]) },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        tx.send(Event::RequestPath { dest_hash: [0xAA; 16] }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let sent_packets = sent.lock().unwrap();
+        assert!(!sent_packets.is_empty());
+
+        // Unpack the packet to check data length includes transport_id
+        let raw = &sent_packets[0];
+        if let Ok(packet) = RawPacket::unpack(raw) {
+            // Data: dest_hash(16) + transport_id(16) + random_tag(16) = 48 bytes
+            assert_eq!(packet.data.len(), 48, "Path request data should be 48 bytes with transport_id");
+            assert_eq!(&packet.data[..16], &[0xAA; 16], "First 16 bytes should be dest_hash");
+            assert_eq!(&packet.data[16..32], &[0xBB; 16], "Next 16 bytes should be transport_id");
+        } else {
+            panic!("Could not unpack sent packet");
+        }
+    }
+
+    #[test]
+    fn path_request_dest_registered() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        // The path request dest should be registered as a local PLAIN destination
+        let expected_dest = rns_core::destination::destination_hash(
+            "rnstransport", &["path", "request"], None,
+        );
+        assert_eq!(driver.path_request_dest, expected_dest);
+
+        drop(tx);
+    }
+
+    // =========================================================================
+    // Phase 9d: send_packet + proofs tests
+    // =========================================================================
+
+    #[test]
+    fn register_proof_strategy_event() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let dest = [0xAA; 16];
+        let identity = Identity::new(&mut OsRng);
+        let prv_key = identity.get_private_key().unwrap();
+
+        tx.send(Event::RegisterProofStrategy {
+            dest_hash: dest,
+            strategy: rns_core::types::ProofStrategy::ProveAll,
+            signing_key: Some(prv_key),
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(driver.proof_strategies.contains_key(&dest));
+        let (strategy, ref id_opt) = driver.proof_strategies[&dest];
+        assert_eq!(strategy, rns_core::types::ProofStrategy::ProveAll);
+        assert!(id_opt.is_some());
+    }
+
+    #[test]
+    fn register_proof_strategy_prove_none_no_identity() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+
+        let dest = [0xBB; 16];
+        tx.send(Event::RegisterProofStrategy {
+            dest_hash: dest,
+            strategy: rns_core::types::ProofStrategy::ProveNone,
+            signing_key: None,
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(driver.proof_strategies.contains_key(&dest));
+        let (strategy, ref id_opt) = driver.proof_strategies[&dest];
+        assert_eq!(strategy, rns_core::types::ProofStrategy::ProveNone);
+        assert!(id_opt.is_none());
+    }
+
+    #[test]
+    fn send_outbound_tracks_sent_packets() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Build a DATA packet
+        let dest = [0xCC; 16];
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test data").unwrap();
+        let expected_hash = packet.packet_hash;
+
+        tx.send(Event::SendOutbound {
+            raw: packet.raw,
+            dest_type: constants::DESTINATION_PLAIN,
+            attached_interface: None,
+        }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should be tracking the sent packet
+        assert!(driver.sent_packets.contains_key(&expected_hash));
+        let (tracked_dest, _sent_time) = &driver.sent_packets[&expected_hash];
+        assert_eq!(tracked_dest, &dest);
+    }
+
+    #[test]
+    fn prove_all_generates_proof_on_delivery() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register a destination with ProveAll
+        let dest = [0xDD; 16];
+        let identity = Identity::new(&mut OsRng);
+        let prv_key = identity.get_private_key().unwrap();
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(dest, (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(Identity::from_private_key(&prv_key)),
+        ));
+
+        // Send a DATA packet to that destination
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should have delivered the packet
+        assert_eq!(deliveries.lock().unwrap().len(), 1);
+
+        // Should have sent at least one proof packet on the wire
+        let sent_packets = sent.lock().unwrap();
+        // The original DATA is not sent out (it was delivered locally), but a PROOF should be
+        let has_proof = sent_packets.iter().any(|raw| {
+            let flags = PacketFlags::unpack(raw[0] & 0x7F);
+            flags.packet_type == constants::PACKET_TYPE_PROOF
+        });
+        assert!(has_proof, "ProveAll should generate a proof packet: sent {} packets", sent_packets.len());
+    }
+
+    #[test]
+    fn prove_none_does_not_generate_proof() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register a destination with ProveNone
+        let dest = [0xDD; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(dest, (
+            rns_core::types::ProofStrategy::ProveNone,
+            None,
+        ));
+
+        // Send a DATA packet to that destination
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Should have delivered the packet
+        assert_eq!(deliveries.lock().unwrap().len(), 1);
+
+        // Should NOT have sent any proof
+        let sent_packets = sent.lock().unwrap();
+        let has_proof = sent_packets.iter().any(|raw| {
+            let flags = PacketFlags::unpack(raw[0] & 0x7F);
+            flags.packet_type == constants::PACKET_TYPE_PROOF
+        });
+        assert!(!has_proof, "ProveNone should not generate a proof packet");
+    }
+
+    #[test]
+    fn no_proof_strategy_does_not_generate_proof() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register destination but NO proof strategy
+        let dest = [0xDD; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert_eq!(deliveries.lock().unwrap().len(), 1);
+
+        let sent_packets = sent.lock().unwrap();
+        let has_proof = sent_packets.iter().any(|raw| {
+            let flags = PacketFlags::unpack(raw[0] & 0x7F);
+            flags.packet_type == constants::PACKET_TYPE_PROOF
+        });
+        assert!(!has_proof, "No proof strategy means no proof generated");
+    }
+
+    #[test]
+    fn prove_app_calls_callback() {
+        let (tx, rx) = event::channel();
+        let proof_requested = Arc::new(Mutex::new(Vec::new()));
+        let deliveries = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: deliveries.clone(),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: Arc::new(Mutex::new(Vec::new())),
+            proof_requested: proof_requested.clone(),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register dest with ProveApp
+        let dest = [0xDD; 16];
+        let identity = Identity::new(&mut OsRng);
+        let prv_key = identity.get_private_key().unwrap();
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(dest, (
+            rns_core::types::ProofStrategy::ProveApp,
+            Some(Identity::from_private_key(&prv_key)),
+        ));
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"app test").unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // on_proof_requested should have been called
+        let prs = proof_requested.lock().unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].0, DestHash(dest));
+
+        // Since our mock returns true, a proof should also have been sent
+        let sent_packets = sent.lock().unwrap();
+        let has_proof = sent_packets.iter().any(|raw| {
+            let flags = PacketFlags::unpack(raw[0] & 0x7F);
+            flags.packet_type == constants::PACKET_TYPE_PROOF
+        });
+        assert!(has_proof, "ProveApp (callback returns true) should generate a proof");
+    }
+
+    #[test]
+    fn inbound_proof_fires_callback() {
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register a destination so proof packets can be delivered locally
+        let dest = [0xEE; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        // Simulate a sent packet that we're tracking
+        let tracked_hash = [0x42u8; 32];
+        let sent_time = time::now() - 0.5; // 500ms ago
+        driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+
+        // Build a PROOF packet with the tracked hash + dummy signature
+        let mut proof_data = Vec::new();
+        proof_data.extend_from_slice(&tracked_hash);
+        proof_data.extend_from_slice(&[0xAA; 64]); // dummy signature
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // on_proof callback should have been fired
+        let proof_list = proofs.lock().unwrap();
+        assert_eq!(proof_list.len(), 1);
+        assert_eq!(proof_list[0].0, DestHash(dest));
+        assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
+        assert!(proof_list[0].2 >= 0.4, "RTT should be approximately 0.5s, got {}", proof_list[0].2);
+
+        // Tracked packet should be removed
+        assert!(!driver.sent_packets.contains_key(&tracked_hash));
+    }
+
+    #[test]
+    fn inbound_proof_for_unknown_packet_is_ignored() {
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest = [0xEE; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        // Build a PROOF packet for an untracked hash
+        let unknown_hash = [0xFF; 32];
+        let mut proof_data = Vec::new();
+        proof_data.extend_from_slice(&unknown_hash);
+        proof_data.extend_from_slice(&[0xAA; 64]);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // on_proof should NOT have been called
+        assert!(proofs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbound_proof_with_valid_signature_fires_callback() {
+        // When the destination IS in known_destinations, the proof signature is verified
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest = [0xEE; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        // Create real identity and add to known_destinations
+        let identity = Identity::new(&mut OsRng);
+        let pub_key = identity.get_public_key();
+        driver.known_destinations.insert(dest, crate::destination::AnnouncedIdentity {
+            dest_hash: DestHash(dest),
+            identity_hash: IdentityHash(*identity.hash()),
+            public_key: pub_key.unwrap(),
+            app_data: None,
+            hops: 0,
+            received_at: time::now(),
+        });
+
+        // Sign a packet hash with the identity
+        let tracked_hash = [0x42u8; 32];
+        let sent_time = time::now() - 0.5;
+        driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+
+        let signature = identity.sign(&tracked_hash).unwrap();
+        let mut proof_data = Vec::new();
+        proof_data.extend_from_slice(&tracked_hash);
+        proof_data.extend_from_slice(&signature);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Valid signature: on_proof should fire
+        let proof_list = proofs.lock().unwrap();
+        assert_eq!(proof_list.len(), 1);
+        assert_eq!(proof_list[0].0, DestHash(dest));
+        assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
+    }
+
+    #[test]
+    fn inbound_proof_with_invalid_signature_rejected() {
+        // When known_destinations has the public key, bad signatures are rejected
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest = [0xEE; 16];
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        // Create identity and add to known_destinations
+        let identity = Identity::new(&mut OsRng);
+        let pub_key = identity.get_public_key();
+        driver.known_destinations.insert(dest, crate::destination::AnnouncedIdentity {
+            dest_hash: DestHash(dest),
+            identity_hash: IdentityHash(*identity.hash()),
+            public_key: pub_key.unwrap(),
+            app_data: None,
+            hops: 0,
+            received_at: time::now(),
+        });
+
+        // Track a sent packet
+        let tracked_hash = [0x42u8; 32];
+        let sent_time = time::now() - 0.5;
+        driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+
+        // Use WRONG signature (all 0xAA — invalid for this identity)
+        let mut proof_data = Vec::new();
+        proof_data.extend_from_slice(&tracked_hash);
+        proof_data.extend_from_slice(&[0xAA; 64]);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Invalid signature: on_proof should NOT fire
+        assert!(proofs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proof_data_is_valid_explicit_proof() {
+        // Verify that the proof generated by ProveAll is a valid explicit proof
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let dest = [0xDD; 16];
+        let identity = Identity::new(&mut OsRng);
+        let prv_key = identity.get_private_key().unwrap();
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(dest, (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(Identity::from_private_key(&prv_key)),
+        ));
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let data_packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"verify me").unwrap();
+        let data_packet_hash = data_packet.packet_hash;
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: data_packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Find the proof packet in sent
+        let sent_packets = sent.lock().unwrap();
+        let proof_raw = sent_packets.iter().find(|raw| {
+            let f = PacketFlags::unpack(raw[0] & 0x7F);
+            f.packet_type == constants::PACKET_TYPE_PROOF
+        });
+        assert!(proof_raw.is_some(), "Should have sent a proof");
+
+        let proof_packet = RawPacket::unpack(proof_raw.unwrap()).unwrap();
+        // Proof data should be 96 bytes: packet_hash(32) + signature(64)
+        assert_eq!(proof_packet.data.len(), 96, "Explicit proof should be 96 bytes");
+
+        // Validate using rns-core's receipt module
+        let result = rns_core::receipt::validate_proof(
+            &proof_packet.data,
+            &data_packet_hash,
+            &Identity::from_private_key(&prv_key), // same identity
+        );
+        assert_eq!(result, rns_core::receipt::ProofResult::Valid);
     }
 }

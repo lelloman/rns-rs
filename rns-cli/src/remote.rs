@@ -37,30 +37,23 @@ pub struct RemoteQueryResult {
 
 /// Callbacks that capture link establishment and response data.
 struct RemoteCallbacks {
-    link_established_tx: mpsc::Sender<[u8; 16]>,
+    link_established_tx: mpsc::Sender<rns_net::LinkId>,
     response_data: Arc<Mutex<Option<Vec<u8>>>>,
     response_tx: mpsc::Sender<()>,
 }
 
 impl Callbacks for RemoteCallbacks {
-    fn on_announce(
-        &mut self,
-        _dest_hash: [u8; 16],
-        _identity_hash: [u8; 16],
-        _public_key: [u8; 64],
-        _app_data: Option<Vec<u8>>,
-        _hops: u8,
-    ) {}
+    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
 
-    fn on_path_updated(&mut self, _dest_hash: [u8; 16], _hops: u8) {}
+    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
 
-    fn on_local_delivery(&mut self, _dest_hash: [u8; 16], _raw: Vec<u8>, _packet_hash: [u8; 32]) {}
+    fn on_local_delivery(&mut self, _dest_hash: rns_net::DestHash, _raw: Vec<u8>, _packet_hash: rns_net::PacketHash) {}
 
-    fn on_link_established(&mut self, link_id: [u8; 16], _rtt: f64, _is_initiator: bool) {
+    fn on_link_established(&mut self, link_id: rns_net::LinkId, _rtt: f64, _is_initiator: bool) {
         let _ = self.link_established_tx.send(link_id);
     }
 
-    fn on_response(&mut self, _link_id: [u8; 16], _request_id: [u8; 16], data: Vec<u8>) {
+    fn on_response(&mut self, _link_id: rns_net::LinkId, _request_id: [u8; 16], data: Vec<u8>) {
         *self.response_data.lock().unwrap() = Some(data);
         let _ = self.response_tx.send(());
     }

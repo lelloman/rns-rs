@@ -23,6 +23,7 @@ pub mod announce_cache;
 pub mod link_manager;
 pub mod management;
 pub mod shared_client;
+pub mod destination;
 
 pub use driver::Callbacks;
 pub use event::{
@@ -49,9 +50,11 @@ pub use storage::{StoragePaths, KnownDestination};
 pub use rpc::{RpcAddr, RpcServer, RpcClient};
 pub use link_manager::{LinkManager, LinkManagerAction};
 pub use management::ManagementConfig;
+pub use destination::{Destination, AnnouncedIdentity};
 
 // Re-export commonly used types from rns-core
 pub use rns_core::transport::types::InterfaceId;
+pub use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash, DestinationType, Direction, ProofStrategy};
 pub use rns_core::constants::{
     MODE_FULL, MODE_POINT_TO_POINT, MODE_ACCESS_POINT,
     MODE_ROAMING, MODE_BOUNDARY, MODE_GATEWAY,

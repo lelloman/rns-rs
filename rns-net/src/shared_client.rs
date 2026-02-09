@@ -173,9 +173,9 @@ mod tests {
 
     struct NoopCallbacks;
     impl Callbacks for NoopCallbacks {
-        fn on_announce(&mut self, _: [u8; 16], _: [u8; 16], _: [u8; 64], _: Option<Vec<u8>>, _: u8) {}
-        fn on_path_updated(&mut self, _: [u8; 16], _: u8) {}
-        fn on_local_delivery(&mut self, _: [u8; 16], _: Vec<u8>, _: [u8; 32]) {}
+        fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
+        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
+        fn on_local_delivery(&mut self, _: rns_core::types::DestHash, _: Vec<u8>, _: rns_core::types::PacketHash) {}
     }
 
     fn find_free_port() -> u16 {

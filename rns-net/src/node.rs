@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rns_core::transport::types::{InterfaceInfo, TransportConfig};
 use rns_crypto::identity::Identity;
-use rns_crypto::OsRng;
+use rns_crypto::{OsRng, Rng};
 
 use crate::config;
 use crate::driver::{Callbacks, Driver};
@@ -1347,6 +1347,165 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Build and broadcast an announce for a destination.
+    ///
+    /// The identity is used to sign the announce. Must be the identity that
+    /// owns the destination (i.e. `identity.hash()` matches `dest.identity_hash`).
+    pub fn announce(
+        &self,
+        dest: &crate::destination::Destination,
+        identity: &Identity,
+        app_data: Option<&[u8]>,
+    ) -> Result<(), SendError> {
+        let name_hash = rns_core::destination::name_hash(
+            &dest.app_name,
+            &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
+
+        let mut random_hash = [0u8; 10];
+        OsRng.fill_bytes(&mut random_hash);
+
+        let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+            identity,
+            &dest.hash.0,
+            &name_hash,
+            &random_hash,
+            None, // no ratchet
+            app_data,
+        ).map_err(|_| SendError)?;
+
+        let context_flag = rns_core::constants::FLAG_UNSET;
+
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_SINGLE,
+            packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+        };
+
+        let packet = rns_core::packet::RawPacket::pack(
+            flags, 0, &dest.hash.0, None,
+            rns_core::constants::CONTEXT_NONE, &announce_data,
+        ).map_err(|_| SendError)?;
+
+        self.send_raw(
+            packet.raw,
+            dest.dest_type.to_wire_constant(),
+            None,
+        )
+    }
+
+    /// Send an encrypted (SINGLE) or plaintext (PLAIN) packet to a destination.
+    ///
+    /// For SINGLE destinations, `dest.public_key` must be set (OUT direction).
+    /// Returns the packet hash for proof tracking.
+    pub fn send_packet(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<rns_core::types::PacketHash, SendError> {
+        use rns_core::types::DestinationType;
+
+        let payload = match dest.dest_type {
+            DestinationType::Single => {
+                let pub_key = dest.public_key.ok_or(SendError)?;
+                let remote_id = rns_crypto::identity::Identity::from_public_key(&pub_key);
+                remote_id.encrypt(data, &mut OsRng).map_err(|_| SendError)?
+            }
+            DestinationType::Plain => data.to_vec(),
+            DestinationType::Group => {
+                // Group encryption not yet supported
+                return Err(SendError);
+            }
+        };
+
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: dest.dest_type.to_wire_constant(),
+            packet_type: rns_core::constants::PACKET_TYPE_DATA,
+        };
+
+        let packet = rns_core::packet::RawPacket::pack(
+            flags, 0, &dest.hash.0, None,
+            rns_core::constants::CONTEXT_NONE, &payload,
+        ).map_err(|_| SendError)?;
+
+        let packet_hash = rns_core::types::PacketHash(packet.packet_hash);
+
+        self.tx
+            .send(Event::SendOutbound {
+                raw: packet.raw,
+                dest_type: dest.dest_type.to_wire_constant(),
+                attached_interface: None,
+            })
+            .map_err(|_| SendError)?;
+
+        Ok(packet_hash)
+    }
+
+    /// Register a destination with the transport engine and set its proof strategy.
+    ///
+    /// `signing_key` is the full 64-byte identity private key (X25519 32 bytes +
+    /// Ed25519 32 bytes), needed for ProveAll/ProveApp to sign proof packets.
+    pub fn register_destination_with_proof(
+        &self,
+        dest: &crate::destination::Destination,
+        signing_key: Option<[u8; 64]>,
+    ) -> Result<(), SendError> {
+        // Register with transport engine
+        self.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())?;
+
+        // Register proof strategy if not ProveNone
+        if dest.proof_strategy != rns_core::types::ProofStrategy::ProveNone {
+            self.tx
+                .send(Event::RegisterProofStrategy {
+                    dest_hash: dest.hash.0,
+                    strategy: dest.proof_strategy,
+                    signing_key,
+                })
+                .map_err(|_| SendError)?;
+        }
+
+        Ok(())
+    }
+
+    /// Request a path to a destination from the network.
+    pub fn request_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<(), SendError> {
+        self.tx
+            .send(Event::RequestPath { dest_hash: dest_hash.0 })
+            .map_err(|_| SendError)
+    }
+
+    /// Check if a path exists to a destination (synchronous query).
+    pub fn has_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<bool, SendError> {
+        match self.query(QueryRequest::HasPath { dest_hash: dest_hash.0 })? {
+            QueryResponse::HasPath(v) => Ok(v),
+            _ => Ok(false),
+        }
+    }
+
+    /// Get hop count to a destination (synchronous query).
+    pub fn hops_to(&self, dest_hash: &rns_core::types::DestHash) -> Result<Option<u8>, SendError> {
+        match self.query(QueryRequest::HopsTo { dest_hash: dest_hash.0 })? {
+            QueryResponse::HopsTo(v) => Ok(v),
+            _ => Ok(None),
+        }
+    }
+
+    /// Recall the identity information for a previously announced destination.
+    pub fn recall_identity(
+        &self,
+        dest_hash: &rns_core::types::DestHash,
+    ) -> Result<Option<crate::destination::AnnouncedIdentity>, SendError> {
+        match self.query(QueryRequest::RecallIdentity { dest_hash: dest_hash.0 })? {
+            QueryResponse::RecallIdentity(v) => Ok(v),
+            _ => Ok(None),
+        }
+    }
+
     /// Construct an RnsNode from its constituent parts.
     /// Used by `shared_client` to build a client-mode node.
     pub(crate) fn from_parts(
@@ -1387,9 +1546,9 @@ mod tests {
     struct NoopCallbacks;
 
     impl Callbacks for NoopCallbacks {
-        fn on_announce(&mut self, _: [u8; 16], _: [u8; 16], _: [u8; 64], _: Option<Vec<u8>>, _: u8) {}
-        fn on_path_updated(&mut self, _: [u8; 16], _: u8) {}
-        fn on_local_delivery(&mut self, _: [u8; 16], _: Vec<u8>, _: [u8; 32]) {}
+        fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
+        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
+        fn on_local_delivery(&mut self, _: rns_core::types::DestHash, _: Vec<u8>, _: rns_core::types::PacketHash) {}
     }
 
     #[test]
@@ -1850,5 +2009,262 @@ enable_transport = False
         assert_eq!(sub.frequency, 868_000_000);
         assert_eq!(sub.bandwidth, 125_000);
         assert!(!sub.flow_control);
+    }
+
+    // =========================================================================
+    // Phase 9c: Announce + Discovery node-level tests
+    // =========================================================================
+
+    #[test]
+    fn announce_builds_valid_packet() {
+        let identity = Identity::new(&mut OsRng);
+        let identity_hash = rns_core::types::IdentityHash(*identity.hash());
+
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let dest = crate::destination::Destination::single_in(
+            "test", &["echo"], identity_hash,
+        );
+
+        // Register destination first
+        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant()).unwrap();
+
+        // Announce should succeed (though no interfaces to send on)
+        let result = node.announce(&dest, &identity, Some(b"hello"));
+        assert!(result.is_ok());
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn has_path_and_hops_to() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let dh = rns_core::types::DestHash([0xAA; 16]);
+
+        // No path should exist
+        assert_eq!(node.has_path(&dh).unwrap(), false);
+        assert_eq!(node.hops_to(&dh).unwrap(), None);
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn recall_identity_none_when_unknown() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let dh = rns_core::types::DestHash([0xBB; 16]);
+        assert!(node.recall_identity(&dh).unwrap().is_none());
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn request_path_does_not_crash() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let dh = rns_core::types::DestHash([0xCC; 16]);
+        assert!(node.request_path(&dh).is_ok());
+
+        // Small wait for the event to be processed
+        thread::sleep(Duration::from_millis(50));
+
+        node.shutdown();
+    }
+
+    // =========================================================================
+    // Phase 9d: send_packet + register_destination_with_proof tests
+    // =========================================================================
+
+    #[test]
+    fn send_packet_plain() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let dest = crate::destination::Destination::plain("test", &["echo"]);
+        let result = node.send_packet(&dest, b"hello world");
+        assert!(result.is_ok());
+
+        let packet_hash = result.unwrap();
+        // Packet hash should be non-zero
+        assert_ne!(packet_hash.0, [0u8; 32]);
+
+        // Small wait for the event to be processed
+        thread::sleep(Duration::from_millis(50));
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn send_packet_single_requires_public_key() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        // single_in has no public_key — sending should fail
+        let dest = crate::destination::Destination::single_in(
+            "test", &["echo"],
+            rns_core::types::IdentityHash([0x42; 16]),
+        );
+        let result = node.send_packet(&dest, b"hello");
+        assert!(result.is_err(), "single_in has no public_key, should fail");
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn send_packet_single_encrypts() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        // Create a proper OUT SINGLE destination with a real identity's public key
+        let remote_identity = Identity::new(&mut OsRng);
+        let recalled = crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash([0xAA; 16]),
+            identity_hash: rns_core::types::IdentityHash(*remote_identity.hash()),
+            public_key: remote_identity.get_public_key().unwrap(),
+            app_data: None,
+            hops: 1,
+            received_at: 0.0,
+        };
+        let dest = crate::destination::Destination::single_out("test", &["echo"], &recalled);
+
+        let result = node.send_packet(&dest, b"secret message");
+        assert!(result.is_ok());
+
+        let packet_hash = result.unwrap();
+        assert_ne!(packet_hash.0, [0u8; 32]);
+
+        thread::sleep(Duration::from_millis(50));
+        node.shutdown();
+    }
+
+    #[test]
+    fn register_destination_with_proof_prove_all() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        let identity = Identity::new(&mut OsRng);
+        let ih = rns_core::types::IdentityHash(*identity.hash());
+        let dest = crate::destination::Destination::single_in("echo", &["request"], ih)
+            .set_proof_strategy(rns_core::types::ProofStrategy::ProveAll);
+        let prv_key = identity.get_private_key().unwrap();
+
+        let result = node.register_destination_with_proof(&dest, Some(prv_key));
+        assert!(result.is_ok());
+
+        // Small wait for the events to be processed
+        thread::sleep(Duration::from_millis(50));
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn register_destination_with_proof_prove_none() {
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: None,
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            Box::new(NoopCallbacks),
+        ).unwrap();
+
+        // ProveNone should not send RegisterProofStrategy event
+        let dest = crate::destination::Destination::plain("test", &["data"])
+            .set_proof_strategy(rns_core::types::ProofStrategy::ProveNone);
+
+        let result = node.register_destination_with_proof(&dest, None);
+        assert!(result.is_ok());
+
+        thread::sleep(Duration::from_millis(50));
+        node.shutdown();
     }
 }
