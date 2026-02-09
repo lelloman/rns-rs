@@ -41,7 +41,9 @@ impl Args {
                 } else {
                     // Boolean flags that don't take values
                     match key.as_str() {
-                        "version" | "exampleconfig" | "help" => {
+                        "version" | "exampleconfig" | "help"
+                        | "stdin" | "stdout" | "force"
+                        | "blackholed" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -61,13 +63,19 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        's' | 'a' | 'r' | 't' | 'j' | 'p' | 'P' | 'b' | 'B' | 'x' | 'D' => {
+                        'a' | 'r' | 't' | 'j' | 'p' | 'P' | 'x' | 'D'
+                        | 'l' | 'f' | 'A' => {
                             flags.insert(c.to_string(), "true".into());
                         }
                         _ => {
-                            // Short flag with value: -c /path
+                            // Short flag that may take a value: -c /path, -s rate
+                            // Only consume next arg if it doesn't look like a flag
                             if chars.len() == 1 {
-                                if let Some(val) = iter.next() {
+                                let next_is_value = iter.as_slice().first()
+                                    .map(|s| !s.starts_with('-') || s == "-")
+                                    .unwrap_or(false);
+                                if next_is_value {
+                                    let val = iter.next().unwrap();
                                     flags.insert(c.to_string(), val);
                                 } else {
                                     flags.insert(c.to_string(), "true".into());
@@ -146,5 +154,58 @@ mod tests {
     fn parse_quiet() {
         let a = args(&["-qq"]);
         assert_eq!(a.quiet, 2);
+    }
+
+    #[test]
+    fn parse_new_boolean_flags() {
+        let a = args(&["-l", "-f", "-m", "-A"]);
+        assert!(a.has("l"));
+        assert!(a.has("f"));
+        assert!(a.has("m"));
+        assert!(a.has("A"));
+    }
+
+    #[test]
+    fn parse_long_boolean_flags() {
+        let a = args(&["--stdin", "--stdout", "--force", "--blackholed"]);
+        assert!(a.has("stdin"));
+        assert!(a.has("stdout"));
+        assert!(a.has("force"));
+        assert!(a.has("blackholed"));
+    }
+
+    #[test]
+    fn parse_exampleconfig() {
+        let a = args(&["--exampleconfig"]);
+        assert!(a.has("exampleconfig"));
+    }
+
+    #[test]
+    fn flag_with_value_vs_boolean() {
+        // -s with a non-flag value should capture it
+        let a = args(&["-s", "rate"]);
+        assert_eq!(a.get("s"), Some("rate"));
+
+        // -s followed by another flag should be boolean
+        let a = args(&["-s", "-v"]);
+        assert!(a.has("s"));
+        assert_eq!(a.get("s"), Some("true"));
+        assert_eq!(a.verbosity, 1);
+
+        // -m with a value
+        let a = args(&["-m", "5"]);
+        assert_eq!(a.get("m"), Some("5"));
+
+        // -m alone (boolean)
+        let a = args(&["-m"]);
+        assert!(a.has("m"));
+
+        // -B with a hash value
+        let a = args(&["-B", "abcdef1234567890"]);
+        assert_eq!(a.get("B"), Some("abcdef1234567890"));
+
+        // -B alone (boolean for base32 mode)
+        let a = args(&["-B"]);
+        assert!(a.has("B"));
     }
 }

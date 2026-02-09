@@ -11,7 +11,7 @@ use rns_net::rpc::derive_auth_key;
 use rns_net::config;
 use rns_net::storage;
 use rns_cli::args::Args;
-use rns_cli::format::{size_str, speed_str, prettytime, prettyhexrep};
+use rns_cli::format::{size_str, speed_str, prettytime, prettyhexrep, prettyfrequency};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -43,6 +43,13 @@ fn main() {
     let show_all = args.has("a");
     let sort_by = args.get("s").map(|s| s.to_string());
     let reverse = args.has("r");
+    let show_totals = args.has("t");
+    let show_links = args.has("l");
+    let show_announces = args.has("A");
+    let monitor_mode = args.has("m");
+    let monitor_interval: f64 = args.get("I")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0);
     let filter = args.positional.first().cloned();
 
     // Load config to get RPC address and auth key
@@ -92,40 +99,89 @@ fn main() {
     let rpc_port = rns_config.reticulum.instance_control_port;
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
 
-    // Connect to RPC server
-    let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Could not connect to rnsd: {}", e);
-            eprintln!("Is rnsd running?");
-            process::exit(1);
-        }
-    };
+    loop {
+        // Connect to RPC server
+        let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
+            Ok(c) => c,
+            Err(e) => {
+                if monitor_mode {
+                    eprintln!("Could not connect to rnsd: {} — retrying...", e);
+                    std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
+                    continue;
+                }
+                eprintln!("Could not connect to rnsd: {}", e);
+                eprintln!("Is rnsd running?");
+                process::exit(1);
+            }
+        };
 
-    // Request interface stats
-    let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("interface_stats".into())),
-    ])) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
-        }
-    };
+        // Request interface stats
+        let response = match client.call(&PickleValue::Dict(vec![
+            (PickleValue::String("get".into()), PickleValue::String("interface_stats".into())),
+        ])) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("RPC error: {}", e);
+                if monitor_mode {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
+                    continue;
+                }
+                process::exit(1);
+            }
+        };
 
-    if json_output {
-        print_json(&response);
-    } else {
-        print_status(&response, show_all, sort_by.as_deref(), reverse, filter.as_deref());
+        // Query link count if requested
+        let link_count = if show_links {
+            match client.call(&PickleValue::Dict(vec![
+                (PickleValue::String("get".into()), PickleValue::String("link_count".into())),
+            ])) {
+                Ok(r) => r.as_int(),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        if monitor_mode {
+            // Clear screen
+            print!("\x1b[2J\x1b[H");
+        }
+
+        if json_output {
+            print_json(&response);
+        } else {
+            print_status(
+                &response,
+                show_all,
+                sort_by.as_deref(),
+                reverse,
+                filter.as_deref(),
+                show_totals,
+                show_announces,
+            );
+        }
+
+        if let Some(count) = link_count {
+            println!(" Active links  : {}", count);
+            println!();
+        }
+
+        if !monitor_mode {
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
     }
 }
 
 fn print_status(
     response: &PickleValue,
     _show_all: bool,
-    _sort_by: Option<&str>,
-    _reverse: bool,
+    sort_by: Option<&str>,
+    reverse: bool,
     filter: Option<&str>,
+    show_totals: bool,
+    show_announces: bool,
 ) {
     // Print transport info
     if let Some(PickleValue::Bool(true)) = response.get("transport_enabled").map(|v| v) {
@@ -142,16 +198,55 @@ fn print_status(
 
     // Print interfaces
     if let Some(interfaces) = response.get("interfaces").and_then(|v| v.as_list()) {
-        for iface in interfaces {
+        // Collect into a sortable vec of references
+        let mut iface_list: Vec<&PickleValue> = interfaces.iter().collect();
+
+        // Apply filter
+        if let Some(f) = filter {
+            iface_list.retain(|iface| {
+                let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                name.to_lowercase().contains(&f.to_lowercase())
+            });
+        }
+
+        // Sort if requested
+        if let Some(sort_key) = sort_by {
+            iface_list.sort_by(|a, b| {
+                let cmp = match sort_key {
+                    "rate" => {
+                        let ra = a.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
+                        let rb = b.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
+                        ra.cmp(&rb)
+                    }
+                    "traffic" => {
+                        let ta = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
+                            + a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                        let tb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
+                            + b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                        ta.cmp(&tb)
+                    }
+                    "rx" => {
+                        let ra = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
+                        let rb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
+                        ra.cmp(&rb)
+                    }
+                    "tx" => {
+                        let ta = a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                        let tb = b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                        ta.cmp(&tb)
+                    }
+                    _ => {
+                        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        na.cmp(nb)
+                    }
+                };
+                if reverse { cmp.reverse() } else { cmp }
+            });
+        }
+
+        for iface in &iface_list {
             let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
-
-            // Apply filter
-            if let Some(f) = filter {
-                if !name.to_lowercase().contains(&f.to_lowercase()) {
-                    continue;
-                }
-            }
-
             let status = iface.get("status").and_then(|v| v.as_bool()).unwrap_or(false);
             let rxb = iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
             let txb = iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
@@ -186,8 +281,29 @@ fn print_status(
                     println!("    Uptime    : {}", prettytime(uptime));
                 }
             }
+            if show_announces {
+                let ia_freq = iface.get("ia_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
+                let oa_freq = iface.get("oa_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
+                println!(
+                    "    Announces : {} in  {} out",
+                    prettyfrequency(ia_freq),
+                    prettyfrequency(oa_freq),
+                );
+            }
             println!();
         }
+    }
+
+    // Show traffic totals
+    if show_totals {
+        let total_rxb = response.get("rxb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
+        let total_txb = response.get("txb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
+        println!(
+            " Traffic totals: {} \u{2191}  {} \u{2193}",
+            size_str(total_txb),
+            size_str(total_rxb),
+        );
+        println!();
     }
 }
 
@@ -229,6 +345,11 @@ fn print_usage() {
     println!("  -j                      JSON output");
     println!("  -s SORT                 Sort by: rate, traffic, rx, tx");
     println!("  -r                      Reverse sort order");
+    println!("  -t                      Show traffic totals");
+    println!("  -l                      Show link count");
+    println!("  -A                      Show announce statistics");
+    println!("  -m                      Monitor mode (loop)");
+    println!("  -I SECONDS              Monitor interval (default: 1.0)");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");

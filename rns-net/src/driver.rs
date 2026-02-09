@@ -8,8 +8,8 @@ use rns_core::transport::TransportEngine;
 use rns_crypto::OsRng;
 
 use crate::event::{
-    Event, EventReceiver, InterfaceStatsResponse, NextHopResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
+    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, NextHopResponse,
+    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
 };
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
@@ -200,7 +200,11 @@ impl Driver {
         match request {
             QueryRequest::InterfaceStats => {
                 let mut interfaces = Vec::new();
+                let mut total_rxb: u64 = 0;
+                let mut total_txb: u64 = 0;
                 for entry in self.interfaces.values() {
+                    total_rxb += entry.stats.rxb;
+                    total_txb += entry.stats.txb;
                     interfaces.push(SingleInterfaceStat {
                         name: entry.info.name.clone(),
                         status: entry.online,
@@ -212,6 +216,8 @@ impl Driver {
                         bitrate: entry.info.bitrate,
                         ifac_size: entry.ifac.as_ref().map(|s| s.size),
                         started: entry.stats.started,
+                        ia_freq: entry.stats.incoming_announce_freq(),
+                        oa_freq: entry.stats.outgoing_announce_freq(),
                     });
                 }
                 // Sort by name for consistent output
@@ -221,6 +227,8 @@ impl Driver {
                     transport_id: self.engine.identity_hash().copied(),
                     transport_enabled: self.engine.transport_enabled(),
                     transport_uptime: time::now() - self.started,
+                    total_rxb,
+                    total_txb,
                 })
             }
             QueryRequest::PathTable { max_hops } => {
@@ -298,12 +306,39 @@ impl Driver {
             QueryRequest::TransportIdentity => {
                 QueryResponse::TransportIdentity(self.engine.identity_hash().copied())
             }
+            QueryRequest::GetBlackholed => {
+                let now = time::now();
+                let entries: Vec<BlackholeInfo> = self.engine.blackholed_entries()
+                    .filter(|(_, e)| e.expires == 0.0 || e.expires > now)
+                    .map(|(hash, entry)| BlackholeInfo {
+                        identity_hash: *hash,
+                        created: entry.created,
+                        expires: entry.expires,
+                        reason: entry.reason.clone(),
+                    })
+                    .collect();
+                QueryResponse::Blackholed(entries)
+            }
+            QueryRequest::BlackholeIdentity { .. }
+            | QueryRequest::UnblackholeIdentity { .. } => {
+                // Mutating queries handled by handle_query_mut
+                QueryResponse::BlackholeResult(false)
+            }
         }
     }
 
     /// Handle a mutating query request.
     fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
+            QueryRequest::BlackholeIdentity { identity_hash, duration_hours, reason } => {
+                let now = time::now();
+                self.engine.blackhole_identity(identity_hash, now, duration_hours, reason);
+                QueryResponse::BlackholeResult(true)
+            }
+            QueryRequest::UnblackholeIdentity { identity_hash } => {
+                let result = self.engine.unblackhole_identity(&identity_hash);
+                QueryResponse::UnblackholeResult(result)
+            }
             QueryRequest::DropPath { dest_hash } => {
                 QueryResponse::DropPath(self.engine.drop_path(&dest_hash))
             }
@@ -323,6 +358,7 @@ impl Driver {
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
+                    let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
                             let data = if let Some(ref ifac_state) = entry.ifac {
@@ -333,6 +369,9 @@ impl Driver {
                             // Update tx stats
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
+                            if is_announce {
+                                entry.stats.record_outgoing_announce(time::now());
+                            }
                             if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] send failed: {}", entry.info.id.0, e);
                             }
@@ -340,6 +379,7 @@ impl Driver {
                     }
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
+                    let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     for entry in self.interfaces.values_mut() {
                         if entry.online && Some(entry.id) != exclude {
                             let data = if let Some(ref ifac_state) = entry.ifac {
@@ -350,6 +390,9 @@ impl Driver {
                             // Update tx stats
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
+                            if is_announce {
+                                entry.stats.record_outgoing_announce(time::now());
+                            }
                             if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] broadcast failed: {}", entry.info.id.0, e);
                             }
@@ -370,8 +413,12 @@ impl Driver {
                     public_key,
                     app_data,
                     hops,
+                    receiving_interface,
                     ..
                 } => {
+                    if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
+                        entry.stats.record_incoming_announce(time::now());
+                    }
                     self.callbacks
                         .on_announce(destination_hash, identity_hash, public_key, app_data, hops);
                 }

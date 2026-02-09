@@ -24,7 +24,7 @@ pub use driver::Callbacks;
 pub use event::{
     Event, QueryRequest, QueryResponse,
     InterfaceStatsResponse, SingleInterfaceStat,
-    PathTableEntry, RateTableEntry, NextHopResponse,
+    PathTableEntry, RateTableEntry, NextHopResponse, BlackholeInfo,
 };
 pub use node::{IfacConfig, InterfaceConfig, InterfaceVariant, NodeConfig, RnsNode, SendError};
 pub use interface::tcp::TcpClientConfig;

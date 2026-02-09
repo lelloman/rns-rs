@@ -3,6 +3,7 @@
 //! Generate, inspect, and manage RNS identities. Standalone tool, no RPC needed.
 
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process;
 
@@ -10,9 +11,10 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_core::destination::destination_hash;
 use rns_cli::args::Args;
-use rns_cli::format::prettyhexrep;
+use rns_cli::format::{prettyhexrep, base32_encode, base32_decode};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024; // 16 MB
 
 fn main() {
     let args = Args::parse();
@@ -29,7 +31,7 @@ fn main() {
 
     // Generate new identity
     if let Some(file) = args.get("g") {
-        generate_identity(file);
+        generate_identity(file, &args);
         return;
     }
 
@@ -54,10 +56,12 @@ fn main() {
     print_usage();
 }
 
-fn generate_identity(file: &str) {
+fn generate_identity(file: &str, args: &Args) {
     let path = Path::new(file);
-    if path.exists() {
-        eprintln!("File already exists: {}", file);
+    let force = args.has("f") || args.has("force");
+
+    if path.exists() && !force {
+        eprintln!("File already exists: {} (use -f to overwrite)", file);
         process::exit(1);
     }
 
@@ -72,6 +76,11 @@ fn generate_identity(file: &str) {
     println!("Generated new identity");
     println!("  Hash : {}", prettyhexrep(identity.hash()));
     println!("  Saved: {}", file);
+
+    // Show base32 if requested
+    if args.has("B") {
+        println!("  Base32: {}", base32_encode(&prv_key));
+    }
 }
 
 fn inspect_identity_file(path: &Path, args: &Args) {
@@ -86,8 +95,6 @@ fn inspect_identity_file(path: &Path, args: &Args) {
         key.copy_from_slice(&data);
         Identity::from_private_key(&key)
     } else if data.len() == 64 + 64 {
-        // Could be full private key (enc_prv + enc_pub + sig_prv + sig_pub) - unlikely
-        // or public key only
         let mut key = [0u8; 64];
         key.copy_from_slice(&data[..64]);
         Identity::from_private_key(&key)
@@ -134,42 +141,63 @@ fn inspect_identity_file(path: &Path, args: &Args) {
         }
     }
 
+    let force = args.has("f") || args.has("force");
+    let use_stdin = args.has("stdin");
+    let use_stdout = args.has("stdout");
+
     // Encrypt file
     if let Some(file) = args.get("e") {
-        let plaintext = fs::read(file).unwrap_or_else(|e| {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
-        });
+        let plaintext = if use_stdin {
+            read_stdin()
+        } else {
+            check_file_size(file);
+            fs::read(file).unwrap_or_else(|e| {
+                eprintln!("Error reading file: {}", e);
+                process::exit(1);
+            })
+        };
         let ciphertext = identity.encrypt(&plaintext, &mut OsRng).unwrap_or_else(|e| {
             eprintln!("Encryption failed: {:?}", e);
             process::exit(1);
         });
-        let out_file = format!("{}.enc", file);
-        fs::write(&out_file, &ciphertext).unwrap_or_else(|e| {
-            eprintln!("Error writing: {}", e);
-            process::exit(1);
-        });
-        println!("  Encrypted {} -> {}", file, out_file);
+        if use_stdout {
+            io::stdout().write_all(&ciphertext).unwrap_or_else(|e| {
+                eprintln!("Error writing to stdout: {}", e);
+                process::exit(1);
+            });
+        } else {
+            let out_file = format!("{}.enc", file);
+            write_file_checked(&out_file, &ciphertext, force);
+            println!("  Encrypted {} -> {}", file, out_file);
+        }
     }
 
     // Decrypt file
     if let Some(file) = args.get("d") {
-        let ciphertext = fs::read(file).unwrap_or_else(|e| {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
-        });
+        let ciphertext = if use_stdin {
+            read_stdin()
+        } else {
+            fs::read(file).unwrap_or_else(|e| {
+                eprintln!("Error reading file: {}", e);
+                process::exit(1);
+            })
+        };
         match identity.decrypt(&ciphertext) {
             Ok(plaintext) => {
-                let out_file = if file.ends_with(".enc") {
-                    file[..file.len() - 4].to_string()
+                if use_stdout {
+                    io::stdout().write_all(&plaintext).unwrap_or_else(|e| {
+                        eprintln!("Error writing to stdout: {}", e);
+                        process::exit(1);
+                    });
                 } else {
-                    format!("{}.dec", file)
-                };
-                fs::write(&out_file, &plaintext).unwrap_or_else(|e| {
-                    eprintln!("Error writing: {}", e);
-                    process::exit(1);
-                });
-                println!("  Decrypted {} -> {}", file, out_file);
+                    let out_file = if file.ends_with(".enc") {
+                        file[..file.len() - 4].to_string()
+                    } else {
+                        format!("{}.dec", file)
+                    };
+                    write_file_checked(&out_file, &plaintext, force);
+                    println!("  Decrypted {} -> {}", file, out_file);
+                }
             }
             Err(e) => {
                 eprintln!("  Decryption failed: {:?}", e);
@@ -180,18 +208,26 @@ fn inspect_identity_file(path: &Path, args: &Args) {
 
     // Sign file
     if let Some(file) = args.get("s") {
-        let data = fs::read(file).unwrap_or_else(|e| {
-            eprintln!("Error reading file: {}", e);
-            process::exit(1);
-        });
+        let data = if use_stdin {
+            read_stdin()
+        } else {
+            fs::read(file).unwrap_or_else(|e| {
+                eprintln!("Error reading file: {}", e);
+                process::exit(1);
+            })
+        };
         match identity.sign(&data) {
             Ok(sig) => {
-                let out_file = format!("{}.sig", file);
-                fs::write(&out_file, &sig).unwrap_or_else(|e| {
-                    eprintln!("Error writing: {}", e);
-                    process::exit(1);
-                });
-                println!("  Signed {} -> {}", file, out_file);
+                if use_stdout {
+                    io::stdout().write_all(&sig).unwrap_or_else(|e| {
+                        eprintln!("Error writing to stdout: {}", e);
+                        process::exit(1);
+                    });
+                } else {
+                    let out_file = format!("{}.sig", file);
+                    write_file_checked(&out_file, &sig, force);
+                    println!("  Signed {} -> {}", file, out_file);
+                }
             }
             Err(e) => {
                 eprintln!("  Signing failed: {:?}", e);
@@ -251,14 +287,34 @@ fn inspect_identity_file(path: &Path, args: &Args) {
             println!("{}", base64_encode(&pub_key));
         }
     }
+
+    // Export as base32
+    if args.has("B") {
+        if let Some(prv_key) = identity.get_private_key() {
+            println!("{}", base32_encode(&prv_key));
+        } else if let Some(pub_key) = identity.get_public_key() {
+            println!("{}", base32_encode(&pub_key));
+        }
+    }
 }
 
 fn import_from_hex(hex_str: &str, args: &Args) {
-    let bytes = match parse_hex(hex_str) {
-        Some(b) => b,
-        None => {
-            eprintln!("Invalid hex string");
-            process::exit(1);
+    // Check if it's actually base32
+    let bytes = if args.has("B") {
+        match base32_decode(hex_str) {
+            Some(b) => b,
+            None => {
+                eprintln!("Invalid base32 string");
+                process::exit(1);
+            }
+        }
+    } else {
+        match parse_hex(hex_str) {
+            Some(b) => b,
+            None => {
+                eprintln!("Invalid hex string");
+                process::exit(1);
+            }
         }
     };
 
@@ -270,14 +326,12 @@ fn import_from_hex(hex_str: &str, args: &Args) {
 
         // Save to file if -w is provided
         if let Some(file) = args.get("w") {
-            fs::write(file, &key).unwrap_or_else(|e| {
-                eprintln!("Error writing: {}", e);
-                process::exit(1);
-            });
+            let force = args.has("f") || args.has("force");
+            write_file_checked(file, &key, force);
             println!("  Saved to {}", file);
         }
     } else {
-        eprintln!("Expected 64 bytes (128 hex chars), got {} bytes", bytes.len());
+        eprintln!("Expected 64 bytes (128 hex chars or base32), got {} bytes", bytes.len());
         process::exit(1);
     }
 }
@@ -326,6 +380,38 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
+fn read_stdin() -> Vec<u8> {
+    let mut buf = Vec::new();
+    io::stdin().read_to_end(&mut buf).unwrap_or_else(|e| {
+        eprintln!("Error reading stdin: {}", e);
+        process::exit(1);
+    });
+    buf
+}
+
+fn check_file_size(file: &str) {
+    if let Ok(meta) = fs::metadata(file) {
+        if meta.len() > LARGE_FILE_WARN {
+            eprintln!(
+                "Warning: file is {} — encryption is done in-memory",
+                rns_cli::format::size_str(meta.len()),
+            );
+        }
+    }
+}
+
+fn write_file_checked(path: &str, data: &[u8], force: bool) {
+    let p = Path::new(path);
+    if p.exists() && !force {
+        eprintln!("File already exists: {} (use -f to overwrite)", path);
+        process::exit(1);
+    }
+    fs::write(p, data).unwrap_or_else(|e| {
+        eprintln!("Error writing: {}", e);
+        process::exit(1);
+    });
+}
+
 fn print_usage() {
     println!("Usage: rnid [OPTIONS]");
     println!();
@@ -343,6 +429,10 @@ fn print_usage() {
     println!("  -w FILE            Write imported identity to file");
     println!("  -x                 Export as hex");
     println!("  -b                 Export as base64");
+    println!("  -B                 Export/import as base32");
+    println!("  -f, --force        Force overwrite existing files");
+    println!("  --stdin            Read input from stdin");
+    println!("  --stdout           Write output to stdout");
     println!("  --version          Print version and exit");
     println!("  --help, -h         Print this help");
 }

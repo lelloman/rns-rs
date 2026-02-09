@@ -58,6 +58,17 @@ pub enum TransportAction {
     },
 }
 
+/// A blackholed identity entry.
+#[derive(Debug, Clone)]
+pub struct BlackholeEntry {
+    /// When this entry was created.
+    pub created: f64,
+    /// When this entry expires (0.0 = never).
+    pub expires: f64,
+    /// Optional reason for blackholing.
+    pub reason: Option<String>,
+}
+
 /// Configuration for TransportEngine.
 #[derive(Debug, Clone)]
 pub struct TransportConfig {

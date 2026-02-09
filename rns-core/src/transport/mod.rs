@@ -29,7 +29,7 @@ use self::pathfinder::{
 };
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, LinkEntry, PathEntry};
-use self::types::{InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
+use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 
 /// The core transport/routing engine.
 ///
@@ -48,6 +48,7 @@ pub struct TransportEngine {
     path_requests: BTreeMap<[u8; 16], f64>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
     local_destinations: BTreeMap<[u8; 16], u8>,
+    blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     discovery_pr_tags: Vec<[u8; 32]>,
     // Job timing
     announces_last_checked: f64,
@@ -70,6 +71,7 @@ impl TransportEngine {
             path_requests: BTreeMap::new(),
             interfaces: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
+            blackholed_identities: BTreeMap::new(),
             discovery_pr_tags: Vec::new(),
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,
@@ -162,6 +164,59 @@ impl TransportEngine {
 
     pub fn remove_link(&mut self, link_id: &[u8; 16]) {
         self.link_table.remove(link_id);
+    }
+
+    // =========================================================================
+    // Blackhole management
+    // =========================================================================
+
+    /// Add an identity hash to the blackhole list.
+    pub fn blackhole_identity(
+        &mut self,
+        identity_hash: [u8; 16],
+        now: f64,
+        duration_hours: Option<f64>,
+        reason: Option<String>,
+    ) {
+        let expires = match duration_hours {
+            Some(h) if h > 0.0 => now + h * 3600.0,
+            _ => 0.0, // never expires
+        };
+        self.blackholed_identities.insert(
+            identity_hash,
+            BlackholeEntry {
+                created: now,
+                expires,
+                reason,
+            },
+        );
+    }
+
+    /// Remove an identity hash from the blackhole list.
+    pub fn unblackhole_identity(&mut self, identity_hash: &[u8; 16]) -> bool {
+        self.blackholed_identities.remove(identity_hash).is_some()
+    }
+
+    /// Check if an identity hash is blackholed (and not expired).
+    pub fn is_blackholed(&self, identity_hash: &[u8; 16], now: f64) -> bool {
+        if let Some(entry) = self.blackholed_identities.get(identity_hash) {
+            if entry.expires == 0.0 || entry.expires > now {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get all blackhole entries (for queries).
+    pub fn blackholed_entries(&self) -> impl Iterator<Item = (&[u8; 16], &BlackholeEntry)> {
+        self.blackholed_identities.iter()
+    }
+
+    /// Cull expired blackhole entries.
+    fn cull_blackholed(&mut self, now: f64) {
+        self.blackholed_identities.retain(|_, entry| {
+            entry.expires == 0.0 || entry.expires > now
+        });
     }
 
     // =========================================================================
@@ -408,6 +463,11 @@ impl TransportEngine {
             Ok(v) => v,
             Err(_) => return,
         };
+
+        // Skip blackholed identities
+        if self.is_blackholed(&validated.identity_hash, now) {
+            return;
+        }
 
         // Skip local destinations
         if self.local_destinations.contains_key(&packet.destination_hash) {
@@ -721,6 +781,7 @@ impl TransportEngine {
             jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, now);
             jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
             jobs::cull_path_states(&mut self.path_states, &self.path_table);
+            self.cull_blackholed(now);
             self.tables_last_culled = now;
         }
 
@@ -1171,6 +1232,89 @@ mod tests {
 
         // Retries should have increased
         assert_eq!(engine.announce_table[&dest].retries, 1);
+    }
+
+    #[test]
+    fn test_blackhole_identity() {
+        let mut engine = TransportEngine::new(make_config(false));
+        let hash = [0xAA; 16];
+        let now = 1000.0;
+
+        assert!(!engine.is_blackholed(&hash, now));
+
+        engine.blackhole_identity(hash, now, None, Some(String::from("test")));
+        assert!(engine.is_blackholed(&hash, now));
+        assert!(engine.is_blackholed(&hash, now + 999999.0)); // never expires
+
+        assert!(engine.unblackhole_identity(&hash));
+        assert!(!engine.is_blackholed(&hash, now));
+        assert!(!engine.unblackhole_identity(&hash)); // already removed
+    }
+
+    #[test]
+    fn test_blackhole_with_duration() {
+        let mut engine = TransportEngine::new(make_config(false));
+        let hash = [0xBB; 16];
+        let now = 1000.0;
+
+        engine.blackhole_identity(hash, now, Some(1.0), None); // 1 hour
+        assert!(engine.is_blackholed(&hash, now));
+        assert!(engine.is_blackholed(&hash, now + 3599.0)); // just before expiry
+        assert!(!engine.is_blackholed(&hash, now + 3601.0)); // after expiry
+    }
+
+    #[test]
+    fn test_cull_blackholed() {
+        let mut engine = TransportEngine::new(make_config(false));
+        let hash1 = [0xCC; 16];
+        let hash2 = [0xDD; 16];
+        let now = 1000.0;
+
+        engine.blackhole_identity(hash1, now, Some(1.0), None); // 1 hour
+        engine.blackhole_identity(hash2, now, None, None); // never expires
+
+        engine.cull_blackholed(now + 4000.0); // past hash1 expiry
+
+        assert!(!engine.blackholed_identities.contains_key(&hash1));
+        assert!(engine.blackholed_identities.contains_key(&hash2));
+    }
+
+    #[test]
+    fn test_blackhole_blocks_announce() {
+        use crate::announce::AnnounceData;
+        use crate::destination::{destination_hash, name_hash};
+
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x55; 32]));
+        let dest_hash = destination_hash("test", &["app"], Some(identity.hash()));
+        let name_h = name_hash("test", &["app"]);
+        let random_hash = [0x42u8; 10];
+
+        let (announce_data, _) = AnnounceData::pack(
+            &identity, &dest_hash, &name_h, &random_hash, None, None,
+        ).unwrap();
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        };
+        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+
+        // Blackhole the identity
+        let now = 1000.0;
+        engine.blackhole_identity(*identity.hash(), now, None, None);
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), now, &mut rng);
+
+        // Should produce no AnnounceReceived or PathUpdated actions
+        assert!(actions.iter().all(|a| !matches!(a, TransportAction::AnnounceReceived { .. })));
+        assert!(actions.iter().all(|a| !matches!(a, TransportAction::PathUpdated { .. })));
     }
 
     #[test]

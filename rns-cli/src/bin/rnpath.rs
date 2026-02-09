@@ -11,7 +11,7 @@ use rns_net::rpc::derive_auth_key;
 use rns_net::config;
 use rns_net::storage;
 use rns_cli::args::Args;
-use rns_cli::format::{prettytime, prettyhexrep};
+use rns_cli::format::{prettytime, prettyhexrep, prettyfrequency};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -44,6 +44,12 @@ fn main() {
     let drop_via = args.get("x").map(|s| s.to_string());
     let drop_queues = args.has("D");
     let json_output = args.has("j");
+    let max_hops: Option<u8> = args.get("m").and_then(|s| s.parse().ok());
+    let show_blackholed = args.has("blackholed") || args.has("b");
+    let blackhole_hash = args.get("B").map(|s| s.to_string());
+    let unblackhole_hash = args.get("U").map(|s| s.to_string());
+    let duration_hours: Option<f64> = args.get("duration").and_then(|s| s.parse().ok());
+    let reason = args.get("reason").map(|s| s.to_string());
 
     // Load config
     let config_dir = storage::resolve_config_dir(
@@ -100,9 +106,15 @@ fn main() {
     };
 
     if show_table {
-        show_path_table(&mut client, json_output);
+        show_path_table(&mut client, json_output, max_hops);
     } else if show_rates {
         show_rate_table(&mut client, json_output);
+    } else if let Some(hash_str) = blackhole_hash {
+        do_blackhole(&mut client, &hash_str, duration_hours, reason);
+    } else if let Some(hash_str) = unblackhole_hash {
+        do_unblackhole(&mut client, &hash_str);
+    } else if show_blackholed {
+        show_blackholed_list(&mut client);
     } else if let Some(hash_str) = drop_hash {
         drop_path(&mut client, &hash_str);
     } else if let Some(hash_str) = drop_via {
@@ -131,10 +143,15 @@ fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn show_path_table(client: &mut RpcClient, _json_output: bool) {
+fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<u8>) {
+    let max_hops_val = match max_hops {
+        Some(h) => PickleValue::Int(h as i64),
+        None => PickleValue::None,
+    };
+
     let response = match client.call(&PickleValue::Dict(vec![
         (PickleValue::String("get".into()), PickleValue::String("path_table".into())),
-        (PickleValue::String("max_hops".into()), PickleValue::None),
+        (PickleValue::String("max_hops".into()), max_hops_val),
     ])) {
         Ok(r) => r,
         Err(e) => {
@@ -203,9 +220,9 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
             println!("Rate table is empty");
             return;
         }
-        println!("{:<34} {:>12} {:>16}",
-            "Destination", "Violations", "Blocked Until");
-        println!("{}", "-".repeat(64));
+        println!("{:<34} {:>12} {:>12} {:>16}",
+            "Destination", "Violations", "Frequency", "Blocked Until");
+        println!("{}", "-".repeat(78));
         for entry in entries {
             let hash = entry.get("hash")
                 .and_then(|v| v.as_bytes())
@@ -222,11 +239,142 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
                 })
                 .unwrap_or_default();
 
-            println!("{:<34} {:>12} {:>16}",
+            // Compute hourly frequency from timestamps
+            let freq_str = if let Some(timestamps) = entry.get("timestamps").and_then(|v| v.as_list()) {
+                let ts: Vec<f64> = timestamps.iter()
+                    .filter_map(|v| v.as_float())
+                    .collect();
+                if ts.len() >= 2 {
+                    let span = ts[ts.len() - 1] - ts[0];
+                    if span > 0.0 {
+                        let freq_per_sec = (ts.len() - 1) as f64 / span;
+                        prettyfrequency(freq_per_sec)
+                    } else {
+                        "none".into()
+                    }
+                } else {
+                    "none".into()
+                }
+            } else {
+                "none".into()
+            };
+
+            println!("{:<34} {:>12} {:>12} {:>16}",
                 &hash[..hash.len().min(32)],
                 violations,
+                freq_str,
                 blocked,
             );
+        }
+    }
+}
+
+fn show_blackholed_list(client: &mut RpcClient) {
+    let response = match client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("get".into()), PickleValue::String("blackholed".into())),
+    ])) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("RPC error: {}", e);
+            process::exit(1);
+        }
+    };
+
+    if let Some(entries) = response.as_list() {
+        if entries.is_empty() {
+            println!("Blackhole list is empty");
+            return;
+        }
+        println!("{:<34} {:<16} {}",
+            "Identity Hash", "Expires", "Reason");
+        println!("{}", "-".repeat(70));
+        for entry in entries {
+            let hash = entry.get("identity_hash")
+                .and_then(|v| v.as_bytes())
+                .map(prettyhexrep)
+                .unwrap_or_default();
+            let expires = entry.get("expires")
+                .and_then(|v| v.as_float())
+                .map(|e| {
+                    if e == 0.0 {
+                        "never".into()
+                    } else {
+                        let remaining = e - rns_net::time::now();
+                        if remaining > 0.0 { prettytime(remaining) } else { "expired".into() }
+                    }
+                })
+                .unwrap_or_default();
+            let reason = entry.get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-");
+
+            println!("{:<34} {:<16} {}",
+                &hash[..hash.len().min(32)],
+                expires,
+                reason,
+            );
+        }
+    } else {
+        eprintln!("Unexpected response format");
+    }
+}
+
+fn do_blackhole(client: &mut RpcClient, hash_str: &str, duration_hours: Option<f64>, reason: Option<String>) {
+    let hash_bytes = match parse_hex_hash(hash_str) {
+        Some(b) if b.len() >= 16 => b,
+        _ => {
+            eprintln!("Invalid identity hash: {}", hash_str);
+            process::exit(1);
+        }
+    };
+
+    let mut dict = vec![
+        (PickleValue::String("blackhole".into()), PickleValue::Bytes(hash_bytes[..16].to_vec())),
+    ];
+    if let Some(d) = duration_hours {
+        dict.push((PickleValue::String("duration".into()), PickleValue::Float(d)));
+    }
+    if let Some(r) = reason {
+        dict.push((PickleValue::String("reason".into()), PickleValue::String(r)));
+    }
+
+    match client.call(&PickleValue::Dict(dict)) {
+        Ok(r) => {
+            if r.as_bool() == Some(true) {
+                println!("Blackholed identity {}", prettyhexrep(&hash_bytes[..16]));
+            } else {
+                eprintln!("Failed to blackhole identity");
+            }
+        }
+        Err(e) => {
+            eprintln!("RPC error: {}", e);
+            process::exit(1);
+        }
+    }
+}
+
+fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
+    let hash_bytes = match parse_hex_hash(hash_str) {
+        Some(b) if b.len() >= 16 => b,
+        _ => {
+            eprintln!("Invalid identity hash: {}", hash_str);
+            process::exit(1);
+        }
+    };
+
+    match client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("unblackhole".into()), PickleValue::Bytes(hash_bytes[..16].to_vec())),
+    ])) {
+        Ok(r) => {
+            if r.as_bool() == Some(true) {
+                println!("Removed {} from blackhole list", prettyhexrep(&hash_bytes[..16]));
+            } else {
+                println!("Identity {} was not blackholed", prettyhexrep(&hash_bytes[..16]));
+            }
+        }
+        Err(e) => {
+            eprintln!("RPC error: {}", e);
+            process::exit(1);
         }
     }
 }
@@ -339,10 +487,16 @@ fn print_usage() {
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -t                      Show path table");
+    println!("  -m HOPS                 Filter path table by max hops");
     println!("  -r                      Show rate table");
     println!("  -d HASH                 Drop path for destination");
     println!("  -x HASH                 Drop all paths via transport");
     println!("  -D                      Drop all announce queues");
+    println!("  -b                      Show blackholed identities");
+    println!("  -B HASH                 Blackhole an identity");
+    println!("  -U HASH                 Remove identity from blackhole list");
+    println!("  --duration HOURS        Blackhole duration (default: permanent)");
+    println!("  --reason TEXT           Reason for blackholing");
     println!("  -j                      JSON output");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");

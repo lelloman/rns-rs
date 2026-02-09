@@ -18,7 +18,7 @@ use rns_crypto::sha256::sha256;
 use rns_crypto::hmac::hmac_sha256;
 
 use crate::event::{
-    Event, EventSender, QueryRequest, QueryResponse,
+    BlackholeInfo, Event, EventSender, QueryRequest, QueryResponse,
     InterfaceStatsResponse, SingleInterfaceStat,
     PathTableEntry, RateTableEntry,
 };
@@ -320,8 +320,48 @@ fn handle_rpc_request(
                         Ok(PickleValue::None)
                     }
                 }
+                "blackholed" => {
+                    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
+                    if let QueryResponse::Blackholed(entries) = resp {
+                        Ok(blackholed_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
             };
+        }
+    }
+
+    // Handle "blackhole" requests
+    if let Some(hash_val) = request.get("blackhole") {
+        if let Some(hash_bytes) = hash_val.as_bytes() {
+            if hash_bytes.len() >= 16 {
+                let mut identity_hash = [0u8; 16];
+                identity_hash.copy_from_slice(&hash_bytes[..16]);
+                let duration_hours = request.get("duration").and_then(|v| v.as_float());
+                let reason = request.get("reason").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let resp = send_query(event_tx, QueryRequest::BlackholeIdentity {
+                    identity_hash,
+                    duration_hours,
+                    reason,
+                })?;
+                return Ok(PickleValue::Bool(matches!(resp, QueryResponse::BlackholeResult(true))));
+            }
+        }
+    }
+
+    // Handle "unblackhole" requests
+    if let Some(hash_val) = request.get("unblackhole") {
+        if let Some(hash_bytes) = hash_val.as_bytes() {
+            if hash_bytes.len() >= 16 {
+                let mut identity_hash = [0u8; 16];
+                identity_hash.copy_from_slice(&hash_bytes[..16]);
+                let resp = send_query(event_tx, QueryRequest::UnblackholeIdentity {
+                    identity_hash,
+                })?;
+                return Ok(PickleValue::Bool(matches!(resp, QueryResponse::UnblackholeResult(true))));
+            }
         }
     }
 
@@ -409,6 +449,14 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::String("transport_uptime".into()),
             PickleValue::Float(stats.transport_uptime),
         ),
+        (
+            PickleValue::String("rxb".into()),
+            PickleValue::Int(stats.total_rxb as i64),
+        ),
+        (
+            PickleValue::String("txb".into()),
+            PickleValue::Int(stats.total_txb as i64),
+        ),
     ];
 
     if let Some(tid) = stats.transport_id {
@@ -436,6 +484,8 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         (PickleValue::String("rx_packets".into()), PickleValue::Int(s.rx_packets as i64)),
         (PickleValue::String("tx_packets".into()), PickleValue::Int(s.tx_packets as i64)),
         (PickleValue::String("started".into()), PickleValue::Float(s.started)),
+        (PickleValue::String("ia_freq".into()), PickleValue::Float(s.ia_freq)),
+        (PickleValue::String("oa_freq".into()), PickleValue::Float(s.oa_freq)),
     ];
 
     match s.bitrate {
@@ -488,6 +538,23 @@ fn rate_table_to_pickle(entries: &[RateTableEntry]) -> PickleValue {
                 e.timestamps.iter().map(|&t| PickleValue::Float(t)).collect()
             )),
         ])
+    }).collect();
+    PickleValue::List(list)
+}
+
+fn blackholed_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {
+    let list: Vec<PickleValue> = entries.iter().map(|e| {
+        let mut dict = vec![
+            (PickleValue::String("identity_hash".into()), PickleValue::Bytes(e.identity_hash.to_vec())),
+            (PickleValue::String("created".into()), PickleValue::Float(e.created)),
+            (PickleValue::String("expires".into()), PickleValue::Float(e.expires)),
+        ];
+        if let Some(ref reason) = e.reason {
+            dict.push((PickleValue::String("reason".into()), PickleValue::String(reason.clone())));
+        } else {
+            dict.push((PickleValue::String("reason".into()), PickleValue::None));
+        }
+        PickleValue::Dict(dict)
     }).collect();
     PickleValue::List(list)
 }
@@ -692,10 +759,14 @@ mod tests {
                                 bitrate: Some(10_000_000),
                                 ifac_size: None,
                                 started: 1000.0,
+                                ia_freq: 0.0,
+                                oa_freq: 0.0,
                             }],
                             transport_id: None,
                             transport_enabled: true,
                             transport_uptime: 3600.0,
+                            total_rxb: 1000,
+                            total_txb: 2000,
                         }));
                     }
                     _ => break,
@@ -785,10 +856,14 @@ mod tests {
                 bitrate: Some(1000000),
                 ifac_size: Some(16),
                 started: 1000.0,
+                ia_freq: 0.0,
+                oa_freq: 0.0,
             }],
             transport_id: Some([0xAB; 16]),
             transport_enabled: true,
             transport_uptime: 3600.0,
+            total_rxb: 100,
+            total_txb: 200,
         };
 
         let pickle = interface_stats_to_pickle(&stats);

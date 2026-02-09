@@ -63,6 +63,18 @@ pub enum QueryRequest {
     DropAnnounceQueues,
     /// Get the transport identity hash.
     TransportIdentity,
+    /// Get all blackholed identities.
+    GetBlackholed,
+    /// Add an identity to the blackhole list.
+    BlackholeIdentity {
+        identity_hash: [u8; 16],
+        duration_hours: Option<f64>,
+        reason: Option<String>,
+    },
+    /// Remove an identity from the blackhole list.
+    UnblackholeIdentity {
+        identity_hash: [u8; 16],
+    },
 }
 
 /// Responses to queries.
@@ -78,6 +90,9 @@ pub enum QueryResponse {
     DropAllVia(usize),
     DropAnnounceQueues,
     TransportIdentity(Option<[u8; 16]>),
+    Blackholed(Vec<BlackholeInfo>),
+    BlackholeResult(bool),
+    UnblackholeResult(bool),
 }
 
 /// Interface statistics response.
@@ -87,6 +102,10 @@ pub struct InterfaceStatsResponse {
     pub transport_id: Option<[u8; 16]>,
     pub transport_enabled: bool,
     pub transport_uptime: f64,
+    /// Total received bytes across all interfaces.
+    pub total_rxb: u64,
+    /// Total transmitted bytes across all interfaces.
+    pub total_txb: u64,
 }
 
 /// Statistics for a single interface.
@@ -102,6 +121,10 @@ pub struct SingleInterfaceStat {
     pub bitrate: Option<u64>,
     pub ifac_size: Option<usize>,
     pub started: f64,
+    /// Incoming announce frequency (per second).
+    pub ia_freq: f64,
+    /// Outgoing announce frequency (per second).
+    pub oa_freq: f64,
 }
 
 /// A single path table entry for query responses.
@@ -124,6 +147,15 @@ pub struct RateTableEntry {
     pub rate_violations: u32,
     pub blocked_until: f64,
     pub timestamps: Vec<f64>,
+}
+
+/// A blackholed identity for query responses.
+#[derive(Debug, Clone)]
+pub struct BlackholeInfo {
+    pub identity_hash: [u8; 16],
+    pub created: f64,
+    pub expires: f64,
+    pub reason: Option<String>,
 }
 
 /// Next hop lookup result.
