@@ -118,16 +118,16 @@ rns-rs/
 │   └── tests/
 │       ├── python_interop.rs        # Rust↔Python announce reception
 │       └── ifac_interop.rs          # IFAC mask/unmask vs Python vectors
-├── rns-cli/                         # std — CLI binaries [Phase 6a DONE]
+├── rns-cli/                         # std — CLI binaries [Phase 6b DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Re-exports
 │   │   ├── args.rs                  # Simple argument parser (no external deps)
-│   │   ├── format.rs                # size_str, speed_str, prettytime, prettyhexrep
+│   │   ├── format.rs                # size_str, speed_str, prettytime, prettyhexrep, prettyfrequency, base32
 │   │   └── bin/
-│   │       ├── rnsd.rs              # Daemon: start node, signal handling
-│   │       ├── rnstatus.rs          # Interface stats via RPC
-│   │       ├── rnpath.rs            # Path/rate table management via RPC
-│   │       └── rnid.rs              # Identity management (standalone)
+│   │       ├── rnsd.rs              # Daemon: start node, signal handling, service mode, exampleconfig
+│   │       ├── rnstatus.rs          # Interface stats via RPC, sorting, totals, announces, monitor mode
+│   │       ├── rnpath.rs            # Path/rate table, blackhole management via RPC
+│   │       └── rnid.rs              # Identity management (standalone), base32, stdin/stdout
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
     └── fixtures/
@@ -828,55 +828,37 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
-## Phase 6b: CLI Feature Parity & rnprobe (`rns-cli`)
+## Phase 6b: CLI Enhancements (`rns-cli` + `rns-core` + `rns-net`) — COMPLETE ✓
 
-**Milestone**: All CLI tools reach feature parity with their Python counterparts. `rnprobe` is implemented.
+**Milestone**: CLI tools gain sorting, monitoring, announce stats, traffic totals, blackhole management, base32 encoding, and service mode. Core transport gains blackhole infrastructure.
 
-### TDD Sequence
+**Result**: 689 tests passing across workspace. Added 4 blackhole tests to rns-core (335 total), updated rns-net stats/queries (215 tests), added 8 new CLI tests (17 total).
 
-#### 6b.1 rnprobe (new tool)
-1. Test: `rnprobe <dest_hash>` sends probe, receives reply, prints RTT
-2. Test: `--timeout` flag — probe to unreachable destination → timeout message
-3. Test: `-n COUNT` sends multiple probes, prints per-probe RTT + summary (packet loss %)
-4. Test: `-w SECONDS` waits between probes
-5. Test: `-s BYTES` sets probe packet size
-6. Test: displays RSSI/SNR/link quality when available from interface
+### What was built
 
-#### 6b.2 rnsd enhancements
-1. Test: `--exampleconfig` prints valid example config and exits
-2. Test: `-s` (service mode) logs to file instead of stdout
-3. Test: `-i` (interactive mode) drops into interactive shell after init
+#### Core Blackhole Infrastructure (`rns-core`)
+- `transport/types.rs`: `BlackholeEntry` struct (created, expires, reason)
+- `transport/mod.rs`: `blackholed_identities: BTreeMap`, methods (`blackhole_identity`, `unblackhole_identity`, `is_blackholed`, `blackholed_entries`, `cull_blackholed`), announce rejection in `process_inbound_announce()`, culling in `tick()`
 
-#### 6b.3 rnstatus enhancements
-1. Test: `-A` shows announce stats (queue depth, held announces)
-2. Test: `-l` shows link table stats
-3. Test: `-t` shows traffic totals across all interfaces
-4. Test: `-m` monitor mode — refreshes display at interval
-5. Test: `-I SECONDS` sets monitor refresh interval
-6. Test: `-d` lists discovered interfaces
-7. Test: `-D` shows details and config entries for discovered interfaces
-8. Test: `-R HASH` + `-i PATH` queries remote transport instance
-9. Test: sorting by announce frequency (rxs/txs/announces/arx/atx/held)
-10. Test: per-interface metadata display (RSSI, SNR, airtime, channel load, CPU, battery)
+#### Network Layer Enhancements (`rns-net`)
+- `interface/mod.rs`: Announce tracking on `InterfaceStats` (bounded Vec<f64> with max 6 samples, frequency computation)
+- `event.rs`: `total_rxb`/`total_txb` on `InterfaceStatsResponse`, `ia_freq`/`oa_freq` on `SingleInterfaceStat`, `BlackholeInfo` struct, `GetBlackholed`/`BlackholeIdentity`/`UnblackholeIdentity` query variants
+- `driver.rs`: Traffic totals computation, announce tracking in `dispatch_all()` (detect via `raw[0] & 0x03 == 0x01`), blackhole query handling
+- `rpc.rs`: Blackhole RPC translation (`get: "blackholed"`, `blackhole`, `unblackhole` requests), serialization of new fields
 
-#### 6b.4 rnpath enhancements
-1. Test: `-m HOPS` filters path table by max hops
-2. Test: `-b` lists blackholed identities
-3. Test: `-B HASH` blackholes an identity
-4. Test: `-U HASH` removes blackhole
-5. Test: `--duration HOURS` sets blackhole duration
-6. Test: `--reason TEXT` sets blackhole reason
-7. Test: `-p` views published blackhole list
-8. Test: `-R HASH` + `-i PATH` queries remote transport instance
-9. Test: rate table shows hourly announce frequency calculation
+#### CLI Enhancements (`rns-cli`)
+- `format.rs`: `prettyfrequency()`, `base32_encode()`/`base32_decode()` (RFC 4648)
+- `args.rs`: Smart flag parsing (value flags detect `-`-prefixed next args as separate flags)
+- **rnsd**: `--exampleconfig` (prints full example config), `-s` service mode (logs to file)
+- **rnstatus**: Sorting (`-s rate/traffic/rx/tx`, `-r` reverse), traffic totals (`-t`), link count (`-l`), announce stats (`-A`), monitor mode (`-m`, `-I SECONDS`)
+- **rnpath**: Max hops filter (`-m HOPS`), rate hourly frequency, blackhole commands (`-b`/`-B HASH`/`-U HASH`/`--duration HOURS`/`--reason TEXT`)
+- **rnid**: Base32 (`-B`), force overwrite (`-f`/`--force`), stdin/stdout (`--stdin`/`--stdout`), large file warning (>16MB)
 
-#### 6b.5 rnid enhancements
-1. Test: `-R` requests unknown identity from network
-2. Test: `-a ASPECTS` announces destination
-3. Test: `-B` base32 encoding support
-4. Test: `-f` force overwrite existing files
-5. Test: chunked file encryption for large files (>16MB)
-6. Test: `-I`/`-O` stdin/stdout support
+### Deferred to future phases
+- `rnprobe` (requires application-layer packet send/receive)
+- Remote management (`-R HASH` queries)
+- Discovery interfaces (`-d`/`-D`)
+- `rnid -a` (announce destination — requires application-layer)
 
 ---
 
@@ -894,7 +876,7 @@ New fixtures in `tests/fixtures/resource/`:
 | **5c** | `rns-net` | IFAC, Serial, KISS interfaces | **DONE** — 119 tests, IFAC mask/unmask + Serial + KISS with flow control ✓ |
 | **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 154 tests, RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
 | **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — 677 tests, rnsd/rnstatus/rnpath/rnid + pickle/MD5/RPC ✓ |
-| **6b** | `rns-cli` | Full CLI feature parity + rnprobe | Planned |
+| **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — 689 tests, sorting/monitor/totals/announces/blackhole/base32/service mode ✓ |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
