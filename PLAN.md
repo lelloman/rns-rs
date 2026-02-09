@@ -49,6 +49,7 @@ rns-rs/
 ├── rns-core/                        # no_std — protocol logic [DONE]
 │   ├── src/
 │   │   ├── lib.rs
+│   │   ├── types.rs                 # Phase 9a: Typed wrappers (DestHash, IdentityHash, LinkId, PacketHash) + enums
 │   │   ├── constants.rs, hash.rs, packet.rs
 │   │   ├── destination.rs, announce.rs, receipt.rs
 │   │   ├── transport/              # Phase 3: Routing engine
@@ -84,9 +85,10 @@ rns-rs/
 │       ├── transport_integration.rs # 15 integration tests for transport engine
 │       ├── link_integration.rs     # 9 integration tests for link/channel/buffer
 │       └── resource_integration.rs # Integration tests for resource transfer
-├── rns-net/                         # std — networking, I/O [Phase 8 DONE]
+├── rns-net/                         # std — networking, I/O [Phase 9 DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Public API, re-exports
+│   │   ├── destination.rs           # Phase 9b: Destination + AnnouncedIdentity structs
 │   │   ├── hdlc.rs                  # HDLC escape/unescape/frame + streaming Decoder
 │   │   ├── kiss.rs                  # KISS framing (FEND/FESC) + streaming Decoder
 │   │   ├── rnode_kiss.rs            # RNode KISS commands + streaming RNodeDecoder
@@ -119,11 +121,12 @@ rns-rs/
 │   │       └── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
 │   ├── examples/
 │   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
-│   │   └── rnsd.rs                  # Rust rnsd daemon (config-driven)
+│   │   ├── rnsd.rs                  # Rust rnsd daemon (config-driven)
+│   │   └── echo.rs                  # Phase 9f: Echo server/client via TCP loopback
 │   └── tests/
 │       ├── python_interop.rs        # Rust↔Python announce reception
 │       └── ifac_interop.rs          # IFAC mask/unmask vs Python vectors
-├── rns-cli/                         # std — CLI binaries [Phase 8 DONE]
+├── rns-cli/                         # std — CLI binaries [Phase 9 DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Re-exports
 │   │   ├── args.rs                  # Simple argument parser (no external deps)
@@ -975,6 +978,58 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
+## Phase 9: Application-Facing API (`rns-core` + `rns-net`) — COMPLETE ✓
+
+**Milestone**: Ergonomic application-facing API with typed wrappers, Destination abstraction, announce/discover/send_packet/proof lifecycle, and an end-to-end echo example. 887 tests passing.
+
+### What was built
+
+#### Phase 9a: Typed Wrappers + Enums (`rns-core`)
+- `types.rs`: `DestHash([u8;16])`, `IdentityHash([u8;16])`, `LinkId([u8;16])`, `PacketHash([u8;32])` newtypes
+- `DestinationType`, `Direction`, `ProofStrategy` enums with `to_wire_constant()` conversions
+- `Display` (hex), `From`, `PartialEq`, `Eq`, `Hash` implementations
+- 10 unit tests
+
+#### Phase 9b: Destination + AnnouncedIdentity Structs (`rns-net`)
+- `destination.rs`: `Destination` struct with constructors (`single_in`, `single_out`, `plain`)
+- `AnnouncedIdentity` struct for announce data
+- Uses `rns_core::destination::destination_hash()` internally for hash computation
+- `set_proof_strategy()` builder method
+- 8 unit tests
+
+#### Phase 9c: Node Methods — Announce + Discovery (`rns-net`)
+- `RnsNode::announce()`: builds announce packet on calling thread, signs with identity, sends via SendOutbound
+- `RnsNode::request_path()`: sends RequestPath event to driver
+- `RnsNode::has_path()`, `hops_to()`: convenience wrappers over Query mechanism
+- `RnsNode::recall_identity()`: retrieves announced identity from driver's known_destinations cache
+- Driver maintains `known_destinations: HashMap<[u8;16], AnnouncedIdentity>` populated from AnnounceReceived actions
+- New Query variants: HasPath, HopsTo, RecallIdentity, RequestPath
+- 15 unit tests
+
+#### Phase 9d: Node Methods — send_packet + Proofs (`rns-net`)
+- `RnsNode::send_packet()`: encrypts (SINGLE) or wraps (PLAIN) data, returns PacketHash for tracking
+- `RnsNode::register_destination_with_proof()`: registers destination + proof strategy
+- Driver proof infrastructure: `proof_strategies` HashMap, `sent_packets` tracking, auto-prove (ProveAll/ProveApp/ProveNone)
+- Inbound proof matching: validates explicit proofs, computes RTT, fires `on_proof` callback
+- New Callbacks: `on_proof(dest_hash, packet_hash, rtt)`, `on_proof_requested(dest_hash, packet_hash) -> bool`
+- 15 unit tests (10 driver + 5 node)
+
+#### Phase 9e: Migrate Callbacks + Link Methods to Typed Wrappers (`rns-net`)
+- Updated all Callbacks trait signatures to use `DestHash`, `IdentityHash`, `LinkId`, `PacketHash`
+- `on_announce` now takes `AnnouncedIdentity` struct instead of 5 flat params
+- Updated all implementations: driver, node, shared_client, CLI binaries, examples
+- Updated all test assertions
+- Compile-time type safety prevents mixing up destination/identity/link hashes
+
+#### Phase 9f: Echo Example (`rns-net`)
+- `examples/echo.rs`: Full end-to-end echo server/client via TCP loopback
+- Server: creates identity, destination, registers with ProveAll, announces
+- Client: receives announce, creates OUT destination, sends encrypted packet
+- Server auto-generates proof, client receives proof with RTT measurement
+- Validates announce→discover→send→receive→proof lifecycle
+
+---
+
 ## Milestone Summary
 
 | Phase | Crate | Milestone Gate | Status |
@@ -992,6 +1047,7 @@ New fixtures in `tests/fixtures/resource/`:
 | **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — 689 tests, sorting/monitor/totals/announces/blackhole/base32/service mode ✓ |
 | **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — 773 tests, announce queue + local client + cache + tunnels + links + management ✓ |
 | **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — 842 tests, resource wiring + channel delivery + mgmt announcing + AutoInterface + shared client + rnprobe + -R flags ✓ |
+| **9** | `rns-core` + `rns-net` | Application-facing API + typed wrappers + echo example | **DONE** — 887 tests, Destination/AnnouncedIdentity + announce/discover/send_packet/proofs + typed callbacks + echo server/client ✓ |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
