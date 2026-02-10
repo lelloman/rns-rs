@@ -1,20 +1,12 @@
-mod api;
-mod auth;
-mod bridge;
-mod config;
-mod encode;
-mod http;
-mod server;
-mod sha1;
-mod state;
-mod ws;
-
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use rns_crypto::Rng;
 use rns_crypto::identity::Identity;
+
+use rns_ctl::{bridge, config, encode, server, state};
+use rns_ctl::api;
 
 fn main() {
     let args = config::Args::parse();
