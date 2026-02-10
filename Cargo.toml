@@ -1,5 +1,5 @@
 [workspace]
-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli"]
+members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl"]
 resolver = "2"
 
 # Compile crypto crate with optimizations even in debug/test builds.
