@@ -1415,8 +1415,7 @@ impl RnsNode {
             }
             DestinationType::Plain => data.to_vec(),
             DestinationType::Group => {
-                // Group encryption not yet supported
-                return Err(SendError);
+                dest.encrypt(data).map_err(|_| SendError)?
             }
         };
 

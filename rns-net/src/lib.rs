@@ -50,7 +50,7 @@ pub use storage::{StoragePaths, KnownDestination};
 pub use rpc::{RpcAddr, RpcServer, RpcClient};
 pub use link_manager::{LinkManager, LinkManagerAction};
 pub use management::ManagementConfig;
-pub use destination::{Destination, AnnouncedIdentity};
+pub use destination::{Destination, AnnouncedIdentity, GroupKeyError};
 
 // Re-export commonly used types from rns-core
 pub use rns_core::transport::types::InterfaceId;

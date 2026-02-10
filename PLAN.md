@@ -991,11 +991,13 @@ New fixtures in `tests/fixtures/resource/`:
 - 10 unit tests
 
 #### Phase 9b: Destination + AnnouncedIdentity Structs (`rns-net`)
-- `destination.rs`: `Destination` struct with constructors (`single_in`, `single_out`, `plain`)
+- `destination.rs`: `Destination` struct with constructors (`single_in`, `single_out`, `plain`, `group`)
 - `AnnouncedIdentity` struct for announce data
 - Uses `rns_core::destination::destination_hash()` internally for hash computation
 - `set_proof_strategy()` builder method
-- 8 unit tests
+- GROUP: `group_key` field, `create_keys()`, `load_private_key()`, `encrypt()`/`decrypt()` via Token
+- `GroupKeyError` error type, re-exported from `lib.rs`
+- 21 unit tests (8 original + 13 GROUP)
 
 #### Phase 9c: Node Methods — Announce + Discovery (`rns-net`)
 - `RnsNode::announce()`: builds announce packet on calling thread, signs with identity, sends via SendOutbound
@@ -1030,6 +1032,33 @@ New fixtures in `tests/fixtures/resource/`:
 
 ---
 
+## GROUP Destination Support (`rns-net`) — COMPLETE ✓
+
+**Milestone**: GROUP destinations with symmetric Token encryption — create, load/generate keys, encrypt/decrypt, send via `send_packet()`. 900 tests passing.
+
+### What was built
+
+#### Destination GROUP Support (`rns-net/src/destination.rs`)
+- `Destination::group(app_name, aspects)` constructor — hash based on name only (no identity)
+- `group_key: Option<Vec<u8>>` field on `Destination` struct
+- `create_keys()` — generates random 64-byte AES-256 key via `OsRng`
+- `load_private_key(key)` — accepts 32-byte (AES-128) or 64-byte (AES-256)
+- `get_private_key()` — retrieve key bytes
+- `encrypt(plaintext)` / `decrypt(ciphertext)` — delegates to `rns_crypto::Token`
+- `GroupKeyError` enum (NoKey, InvalidKeyLength, EncryptionFailed, DecryptionFailed)
+- `GroupKeyError` re-exported from `lib.rs`
+
+#### send_packet() GROUP Wiring (`rns-net/src/node.rs`)
+- `DestinationType::Group` branch calls `dest.encrypt(data)` (was `return Err(SendError)`)
+
+#### Tests (13 new)
+- Hash determinism, GROUP/PLAIN hash equivalence, key generation (64 bytes)
+- Key loading (32 + 64), invalid key rejection
+- Encrypt/decrypt roundtrip (AES-128 + AES-256), wrong-key failure, no-key error
+- Bidirectional Token interop (Token↔Destination encrypt/decrypt)
+
+---
+
 ## Milestone Summary
 
 | Phase | Crate | Milestone Gate | Status |
@@ -1048,6 +1077,7 @@ New fixtures in `tests/fixtures/resource/`:
 | **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — 773 tests, announce queue + local client + cache + tunnels + links + management ✓ |
 | **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — 842 tests, resource wiring + channel delivery + mgmt announcing + AutoInterface + shared client + rnprobe + -R flags ✓ |
 | **9** | `rns-core` + `rns-net` | Application-facing API + typed wrappers + echo example | **DONE** — 887 tests, Destination/AnnouncedIdentity + announce/discover/send_packet/proofs + typed callbacks + echo server/client ✓ |
+| **GROUP** | `rns-net` | GROUP destinations with symmetric Token encryption | **DONE** — 900 tests, group constructor + key management + encrypt/decrypt + send_packet wiring ✓ |
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
