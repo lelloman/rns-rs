@@ -709,6 +709,7 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
+                            interface_type: "TCPClientInterface".to_string(),
                         },
                     );
                 }
@@ -761,6 +762,7 @@ impl RnsNode {
                                     started: time::now(),
                                     ..Default::default()
                                 },
+                                interface_type: "UDPInterface".to_string(),
                             },
                         );
                     }
@@ -808,6 +810,7 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
+                            interface_type: "LocalInterface".to_string(),
                         },
                     );
                 }
@@ -848,6 +851,7 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
+                            interface_type: "SerialInterface".to_string(),
                         },
                     );
                 }
@@ -887,6 +891,7 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
+                            interface_type: "KISSInterface".to_string(),
                         },
                     );
                 }
@@ -926,6 +931,7 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
+                            interface_type: "PipeInterface".to_string(),
                         },
                     );
                 }
@@ -989,6 +995,7 @@ impl RnsNode {
                                     started: time::now(),
                                     ..Default::default()
                                 },
+                                interface_type: "RNodeInterface".to_string(),
                             },
                         );
                     }
@@ -1033,6 +1040,10 @@ impl RnsNode {
 
                 // Register as SINGLE destination in transport engine
                 driver.engine.register_destination(
+                    mgmt_dest,
+                    rns_core::constants::DESTINATION_SINGLE,
+                );
+                driver.local_destinations.insert(
                     mgmt_dest,
                     rns_core::constants::DESTINATION_SINGLE,
                 );

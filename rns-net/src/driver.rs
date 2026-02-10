@@ -8,13 +8,31 @@ use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
 use crate::event::{
-    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, NextHopResponse,
-    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
+    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, SingleInterfaceStat,
 };
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
+
+/// Infer the interface type string from a dynamic interface's name.
+/// Dynamic interfaces (TCP server clients, backbone peers, auto peers, local server clients)
+/// include their type in the name prefix set at construction.
+fn infer_interface_type(name: &str) -> String {
+    if name.starts_with("TCPServerInterface") {
+        "TCPServerClientInterface".to_string()
+    } else if name.starts_with("BackboneInterface") {
+        "BackboneInterface".to_string()
+    } else if name.starts_with("LocalInterface") {
+        "LocalServerClientInterface".to_string()
+    } else {
+        // AutoInterface peers use "{group_name}:{peer_addr}" format where
+        // group_name is the config section name (typically "AutoInterface" or similar).
+        "AutoInterface".to_string()
+    }
+}
 
 /// Callbacks for events the driver produces.
 ///
@@ -113,6 +131,8 @@ pub struct Driver {
     pub(crate) proof_strategies: HashMap<[u8; 16], (rns_core::types::ProofStrategy, Option<rns_crypto::identity::Identity>)>,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
+    /// Locally registered destinations: hash → dest_type.
+    pub(crate) local_destinations: HashMap<[u8; 16], u8>,
 }
 
 impl Driver {
@@ -136,6 +156,9 @@ impl Driver {
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         // Register path request destination so inbound path requests are delivered locally
         engine.register_destination(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
+        let mut local_destinations = HashMap::new();
+        local_destinations.insert(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
+        local_destinations.insert(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
         Driver {
             engine,
             interfaces: HashMap::new(),
@@ -154,6 +177,7 @@ impl Driver {
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
+            local_destinations,
         }
     }
 
@@ -222,6 +246,7 @@ impl Driver {
                         // New dynamic interface (e.g., TCP server client connection)
                         log::info!("[{}] dynamic interface registered", id.0);
                         wants_tunnel = info.wants_tunnel;
+                        let iface_type = infer_interface_type(&info.name);
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
                             self.interfaces.insert(
@@ -237,6 +262,7 @@ impl Driver {
                                         started: time::now(),
                                         ..Default::default()
                                     },
+                                    interface_type: iface_type,
                                 },
                             );
                         }
@@ -307,9 +333,11 @@ impl Driver {
                 }
                 Event::RegisterDestination { dest_hash, dest_type } => {
                     self.engine.register_destination(dest_hash, dest_type);
+                    self.local_destinations.insert(dest_hash, dest_type);
                 }
                 Event::DeregisterDestination { dest_hash } => {
                     self.engine.deregister_destination(&dest_hash);
+                    self.local_destinations.remove(&dest_hash);
                 }
                 Event::Query(request, response_tx) => {
                     let response = self.handle_query_mut(request);
@@ -320,6 +348,7 @@ impl Driver {
                     self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
                     // Also register in transport engine so inbound packets are delivered locally
                     self.engine.register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                    self.local_destinations.insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                 }
                 Event::RegisterRequestHandler { path, allowed_list, handler } => {
                     self.link_manager.register_request_handler(&path, allowed_list, move |link_id, p, data, remote| {
@@ -420,6 +449,7 @@ impl Driver {
                         started: entry.stats.started,
                         ia_freq: entry.stats.incoming_announce_freq(),
                         oa_freq: entry.stats.outgoing_announce_freq(),
+                        interface_type: entry.interface_type.clone(),
                     });
                 }
                 // Sort by name for consistent output
@@ -534,6 +564,23 @@ impl Driver {
             }
             QueryRequest::RecallIdentity { dest_hash } => {
                 QueryResponse::RecallIdentity(self.known_destinations.get(&dest_hash).cloned())
+            }
+            QueryRequest::LocalDestinations => {
+                let entries: Vec<LocalDestinationEntry> = self
+                    .local_destinations
+                    .iter()
+                    .map(|(hash, dest_type)| LocalDestinationEntry {
+                        hash: *hash,
+                        dest_type: *dest_type,
+                    })
+                    .collect();
+                QueryResponse::LocalDestinations(entries)
+            }
+            QueryRequest::Links => {
+                QueryResponse::Links(self.link_manager.link_entries())
+            }
+            QueryRequest::Resources => {
+                QueryResponse::Resources(self.link_manager.resource_entries())
             }
         }
     }
@@ -1418,6 +1465,7 @@ mod tests {
             dynamic: false,
             ifac: None,
             stats: InterfaceStats::default(),
+            interface_type: String::new(),
         }
     }
 
@@ -1752,6 +1800,7 @@ mod tests {
             dynamic: true,
             ifac: None,
             stats: InterfaceStats::default(),
+            interface_type: String::new(),
         });
 
         // InterfaceDown for dynamic → should be removed entirely
@@ -3406,5 +3455,148 @@ mod tests {
             &Identity::from_private_key(&prv_key), // same identity
         );
         assert_eq!(result, rns_core::receipt::ProofResult::Valid);
+    }
+
+    #[test]
+    fn query_local_destinations_empty() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
+        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::LocalDestinations(entries) => {
+                // Should contain the two internal destinations (tunnel_synth + path_request)
+                assert_eq!(entries.len(), 2);
+                for entry in &entries {
+                    assert_eq!(entry.dest_type, rns_core::constants::DESTINATION_PLAIN);
+                }
+            }
+            other => panic!("expected LocalDestinations, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_local_destinations_with_registered() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
+        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+
+        let dest_hash = [0xAA; 16];
+        tx.send(Event::RegisterDestination {
+            dest_hash,
+            dest_type: rns_core::constants::DESTINATION_SINGLE,
+        }).unwrap();
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::LocalDestinations(entries) => {
+                // 2 internal + 1 registered
+                assert_eq!(entries.len(), 3);
+                assert!(entries.iter().any(|e| e.hash == dest_hash
+                    && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
+            }
+            other => panic!("expected LocalDestinations, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_local_destinations_tracks_link_dest() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
+        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+
+        let dest_hash = [0xBB; 16];
+        tx.send(Event::RegisterLinkDestination {
+            dest_hash,
+            sig_prv_bytes: [0x11; 32],
+            sig_pub_bytes: [0x22; 32],
+        }).unwrap();
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::LocalDestinations(entries) => {
+                // 2 internal + 1 link destination
+                assert_eq!(entries.len(), 3);
+                assert!(entries.iter().any(|e| e.hash == dest_hash
+                    && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
+            }
+            other => panic!("expected LocalDestinations, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_links_empty() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
+        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::Links, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::Links(entries) => {
+                assert!(entries.is_empty());
+            }
+            other => panic!("expected Links, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_resources_empty() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
+        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::Resources, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::Resources(entries) => {
+                assert!(entries.is_empty());
+            }
+            other => panic!("expected Resources, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn infer_interface_type_from_name() {
+        assert_eq!(
+            super::infer_interface_type("TCPServerInterface/Client-1234"),
+            "TCPServerClientInterface"
+        );
+        assert_eq!(
+            super::infer_interface_type("BackboneInterface/5"),
+            "BackboneInterface"
+        );
+        assert_eq!(
+            super::infer_interface_type("LocalInterface"),
+            "LocalServerClientInterface"
+        );
+        assert_eq!(
+            super::infer_interface_type("MyAutoGroup:fe80::1"),
+            "AutoInterface"
+        );
     }
 }

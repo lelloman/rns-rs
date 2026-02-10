@@ -1717,6 +1717,59 @@ impl LinkManager {
         self.links.len()
     }
 
+    /// Get information about all active links.
+    pub fn link_entries(&self) -> Vec<crate::event::LinkInfoEntry> {
+        self.links
+            .iter()
+            .map(|(link_id, managed)| {
+                let state = match managed.engine.state() {
+                    LinkState::Pending => "pending",
+                    LinkState::Handshake => "handshake",
+                    LinkState::Active => "active",
+                    LinkState::Stale => "stale",
+                    LinkState::Closed => "closed",
+                };
+                crate::event::LinkInfoEntry {
+                    link_id: *link_id,
+                    state: state.to_string(),
+                    is_initiator: managed.engine.is_initiator(),
+                    dest_hash: managed.dest_hash,
+                    remote_identity: managed.remote_identity.as_ref().map(|(h, _)| *h),
+                    rtt: managed.engine.rtt(),
+                }
+            })
+            .collect()
+    }
+
+    /// Get information about all active resource transfers.
+    pub fn resource_entries(&self) -> Vec<crate::event::ResourceInfoEntry> {
+        let mut entries = Vec::new();
+        for (link_id, managed) in &self.links {
+            for recv in &managed.incoming_resources {
+                let (received, total) = recv.progress();
+                entries.push(crate::event::ResourceInfoEntry {
+                    link_id: *link_id,
+                    direction: "incoming".to_string(),
+                    total_parts: total,
+                    transferred_parts: received,
+                    complete: received >= total && total > 0,
+                });
+            }
+            for send in &managed.outgoing_resources {
+                let total = send.total_parts();
+                let sent = send.sent_parts;
+                entries.push(crate::event::ResourceInfoEntry {
+                    link_id: *link_id,
+                    direction: "outgoing".to_string(),
+                    total_parts: total,
+                    transferred_parts: sent,
+                    complete: sent >= total && total > 0,
+                });
+            }
+        }
+        entries
+    }
+
     /// Convert LinkActions to LinkManagerActions.
     fn process_link_actions(&self, link_id: &LinkId, actions: &[LinkAction]) -> Vec<LinkManagerAction> {
         let mut result = Vec::new();

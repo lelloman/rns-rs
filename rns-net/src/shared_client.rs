@@ -105,6 +105,7 @@ impl RnsNode {
                     started: time::now(),
                     ..Default::default()
                 },
+                interface_type: "LocalClientInterface".to_string(),
             },
         );
 

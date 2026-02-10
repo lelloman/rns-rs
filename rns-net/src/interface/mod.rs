@@ -93,6 +93,8 @@ pub struct InterfaceEntry {
     pub ifac: Option<IfacState>,
     /// Traffic statistics.
     pub stats: InterfaceStats,
+    /// Human-readable interface type string (e.g. "TCPClientInterface").
+    pub interface_type: String,
 }
 
 #[cfg(test)]
@@ -141,6 +143,7 @@ mod tests {
             dynamic: false,
             ifac: None,
             stats: InterfaceStats::default(),
+            interface_type: String::new(),
         };
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);

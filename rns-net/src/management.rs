@@ -411,6 +411,7 @@ mod tests {
                 ia_timestamps: vec![],
                 oa_timestamps: vec![],
             },
+            interface_type: "TestInterface".to_string(),
         });
         map
     }

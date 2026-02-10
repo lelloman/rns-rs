@@ -30,6 +30,7 @@ pub use event::{
     Event, QueryRequest, QueryResponse,
     InterfaceStatsResponse, SingleInterfaceStat,
     PathTableEntry, RateTableEntry, NextHopResponse, BlackholeInfo,
+    LocalDestinationEntry, LinkInfoEntry, ResourceInfoEntry,
 };
 pub use node::{IfacConfig, InterfaceConfig, InterfaceVariant, NodeConfig, RnsNode, SendError};
 pub use interface::tcp::TcpClientConfig;

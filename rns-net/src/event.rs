@@ -154,6 +154,12 @@ pub enum QueryRequest {
     HopsTo { dest_hash: [u8; 16] },
     /// Recall identity info for a destination.
     RecallIdentity { dest_hash: [u8; 16] },
+    /// Get locally registered destinations.
+    LocalDestinations,
+    /// Get active links.
+    Links,
+    /// Get active resource transfers.
+    Resources,
 }
 
 /// Responses to queries.
@@ -175,6 +181,9 @@ pub enum QueryResponse {
     HasPath(bool),
     HopsTo(Option<u8>),
     RecallIdentity(Option<crate::destination::AnnouncedIdentity>),
+    LocalDestinations(Vec<LocalDestinationEntry>),
+    Links(Vec<LinkInfoEntry>),
+    Resources(Vec<ResourceInfoEntry>),
 }
 
 /// Interface statistics response.
@@ -207,6 +216,36 @@ pub struct SingleInterfaceStat {
     pub ia_freq: f64,
     /// Outgoing announce frequency (per second).
     pub oa_freq: f64,
+    /// Human-readable interface type string (e.g. "TCPClientInterface").
+    pub interface_type: String,
+}
+
+/// A locally registered destination.
+#[derive(Debug, Clone)]
+pub struct LocalDestinationEntry {
+    pub hash: [u8; 16],
+    pub dest_type: u8,
+}
+
+/// Information about an active link.
+#[derive(Debug, Clone)]
+pub struct LinkInfoEntry {
+    pub link_id: [u8; 16],
+    pub state: String,
+    pub is_initiator: bool,
+    pub dest_hash: [u8; 16],
+    pub remote_identity: Option<[u8; 16]>,
+    pub rtt: Option<f64>,
+}
+
+/// Information about an active resource transfer.
+#[derive(Debug, Clone)]
+pub struct ResourceInfoEntry {
+    pub link_id: [u8; 16],
+    pub direction: String,
+    pub total_parts: usize,
+    pub transferred_parts: usize,
+    pub complete: bool,
 }
 
 /// A single path table entry for query responses.
