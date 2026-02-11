@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use super::tables::{LinkEntry, ReverseEntry};
 use super::types::{InterfaceId, TransportAction};
 use crate::constants;
+use crate::link::handshake::compute_link_id;
 use crate::packet::RawPacket;
 
 /// Forward a packet that is addressed to us as a transport node.
@@ -55,20 +56,16 @@ pub fn create_link_entry(
     now: f64,
     proof_timeout: f64,
 ) -> ([u8; 16], LinkEntry) {
-    // Link ID is derived from packet data (first 32 bytes of LINKREQUEST data
-    // form the ephemeral public key; link_id = truncated_hash of public_key))
-    // In Python: RNS.Link.link_id_from_lr_packet uses packet.data[:32+10]
-    // For simplicity, we use the destination_hash as the link_id key since
-    // link requests are targeted at a specific destination.
-    // Actually in Python, link_id = SHA256(packet.data[:32+10])[:16]
-    // But the link_table is keyed by this link_id. For us, we'll compute it.
-    let link_id = crate::hash::truncated_hash(
-        if packet.data.len() >= 42 {
-            &packet.data[..42]
-        } else {
-            &packet.data
-        },
-    );
+    // Link ID must be computed the same way as in the link engine:
+    // compute_link_id(hashable_part, extra) where extra = data_len - ECPUBSIZE
+    // This ensures the transport's link table key matches the link_id in LRPROOF packets.
+    let hashable = packet.get_hashable_part();
+    let extra = if packet.data.len() > constants::LINK_ECPUBSIZE {
+        packet.data.len() - constants::LINK_ECPUBSIZE
+    } else {
+        0
+    };
+    let link_id = compute_link_id(&hashable, extra);
 
     let entry = LinkEntry {
         timestamp: now,

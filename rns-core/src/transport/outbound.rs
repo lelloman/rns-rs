@@ -60,15 +60,18 @@ pub fn route_outbound(
     }
 
     // No known path (or announce/plain/group): broadcast on all OUT interfaces
-    // For LINK destinations, only send on attached interface
+    // For LINK destinations, send on attached interface if specified,
+    // otherwise broadcast (needed for LRPROOF and other link responses
+    // where the responder doesn't know the originating interface).
     if dest_type == constants::DESTINATION_LINK {
         if let Some(iface) = attached_interface {
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
                 raw: packet.raw.clone(),
             });
+            return actions;
         }
-        return actions;
+        // No attached interface — fall through to broadcast
     }
 
     // For announces, apply mode filtering
