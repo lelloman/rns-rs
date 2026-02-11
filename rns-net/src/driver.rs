@@ -739,7 +739,14 @@ impl Driver {
         proof_data.extend_from_slice(packet_hash);
         proof_data.extend_from_slice(&signature);
 
-        // Pack as PROOF packet addressed to the destination
+        // Address the proof to the truncated packet hash (first 16 bytes),
+        // matching Python's ProofDestination (Packet.py:390-394).
+        // Transport nodes create reverse_table entries keyed by truncated
+        // packet hash when forwarding data, so this allows proofs to be
+        // routed back to the sender via the reverse path.
+        let mut proof_dest = [0u8; 16];
+        proof_dest.copy_from_slice(&packet_hash[..16]);
+
         let flags = rns_core::packet::PacketFlags {
             header_type: rns_core::constants::HEADER_1,
             context_flag: rns_core::constants::FLAG_UNSET,
@@ -749,7 +756,7 @@ impl Driver {
         };
 
         if let Ok(packet) = RawPacket::pack(
-            flags, 0, &dest_hash, None,
+            flags, 0, &proof_dest, None,
             rns_core::constants::CONTEXT_NONE, &proof_data,
         ) {
             let actions = self.engine.handle_outbound(
