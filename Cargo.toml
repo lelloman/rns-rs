@@ -3,7 +3,7 @@ members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl"]
 resolver = "2"
 
 # Compile crypto crate with optimizations even in debug/test builds.
-# The pure-Rust Ed25519 bigint math is ~100x slower without this.
+# Helps curve25519-dalek performance in debug mode.
 [profile.dev.package.rns-crypto]
 opt-level = 2
 
