@@ -1,11 +1,15 @@
 [package]
 name = "rns-net"
-version = "0.1.0"
-edition = "2021"
+description = "Network interfaces and node driver for the Reticulum Network Stack"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
-rns-core = { path = "../rns-core" }
-rns-crypto = { path = "../rns-crypto" }
+rns-core.workspace = true
+rns-crypto.workspace = true
 log = "0.4"
 libc = "0.2"
 socket2 = { version = "0.5", features = ["all"] }

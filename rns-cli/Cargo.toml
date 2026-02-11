@@ -1,13 +1,16 @@
 [package]
 name = "rns-cli"
-version = "0.1.0"
-edition = "2021"
-description = "CLI tools for Reticulum Network Stack"
+description = "CLI tools for the Reticulum Network Stack"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
-rns-net = { path = "../rns-net" }
-rns-core = { path = "../rns-core" }
-rns-crypto = { path = "../rns-crypto" }
+rns-net.workspace = true
+rns-core.workspace = true
+rns-crypto.workspace = true
 log = "0.4"
 env_logger = "0.10"
 libc = "0.2"

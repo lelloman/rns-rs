@@ -1,7 +1,11 @@
 [package]
 name = "rns-crypto"
-version = "0.1.0"
-edition = "2021"
+description = "Cryptographic primitives for the Reticulum Network Stack"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [features]
 default = ["std"]

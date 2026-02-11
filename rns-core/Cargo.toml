@@ -1,14 +1,18 @@
 [package]
 name = "rns-core"
-version = "0.1.0"
-edition = "2021"
+description = "Wire protocol, transport routing, and link/resource engine for the Reticulum Network Stack"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [features]
 default = ["std"]
 std = []
 
 [dependencies]
-rns-crypto = { path = "../rns-crypto" }
+rns-crypto.workspace = true
 
 [dev-dependencies]
 serde_json = "1"

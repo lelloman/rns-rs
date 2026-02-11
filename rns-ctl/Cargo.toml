@@ -1,16 +1,20 @@
 [package]
 name = "rns-ctl"
-version = "0.1.0"
-edition = "2021"
+description = "HTTP/WebSocket control server for the Reticulum Network Stack"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [features]
 default = []
 tls = ["rustls", "rustls-pemfile"]
 
 [dependencies]
-rns-net = { path = "../rns-net" }
-rns-core = { path = "../rns-core" }
-rns-crypto = { path = "../rns-crypto" }
+rns-net.workspace = true
+rns-core.workspace = true
+rns-crypto.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
