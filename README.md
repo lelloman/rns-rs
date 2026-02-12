@@ -12,6 +12,7 @@ This is a faithful port of the Python reference implementation, validated agains
 | `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers |
 | `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto interfaces, config parsing, driver loop |
 | `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid` |
+| `rns-ctl` | No | HTTP/WebSocket control server: REST API + WebSocket for monitoring and controlling RNS nodes |
 | `rns-ctl` | No | HTTP/WebSocket control server |
 
 ## Building
@@ -36,6 +37,7 @@ cargo test -p rns-crypto
 cargo test -p rns-core
 cargo test -p rns-net
 cargo test -p rns-cli
+cargo test -p rns-ctl
 ```
 
 ## CLI Tools
@@ -58,6 +60,30 @@ cargo run --bin rnprobe
 # Identity management
 cargo run --bin rnid
 ```
+
+## rns-ctl Control Server
+
+Build and run the HTTP/WebSocket control server:
+
+```bash
+# Run with default settings
+cargo run --bin rns-ctl
+
+# Run with custom RNS config
+cargo run --bin rns-ctl --config /path/to/config
+
+# Run with auth token
+RNSCTL_AUTH_TOKEN=my-secret-token cargo run --bin rns-ctl
+
+# Run with disabled auth (for testing)
+RNSCTL_DISABLE_AUTH=true cargo run --bin rns-ctl
+```
+
+The server exposes:
+- HTTP API on `http://localhost:8000` (configurable via `RNSCTL_HTTP_PORT`)
+- WebSocket endpoint at `ws://localhost:8000/ws`
+
+See `RNSCTL-PLAN.md` for full API documentation.
 
 ## Interoperability
 

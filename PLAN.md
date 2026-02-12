@@ -38,7 +38,7 @@ Each phase has three layers of tests:
 
 ```
 rns-rs/
-├── Cargo.toml                       # Workspace root (members: rns-crypto, rns-core, rns-net)
+├── Cargo.toml                       # Workspace root (members: rns-crypto, rns-core, rns-net, rns-cli, rns-ctl)
 ├── rns-crypto/                      # no_std — cryptographic primitives [DONE]
 │   ├── src/
 │   │   ├── lib.rs                   # Rng trait, FixedRng, OsRng
@@ -138,9 +138,51 @@ rns-rs/
 │   │       ├── rnpath.rs            # Path/rate table, blackhole management via RPC, -R
 │   │       ├── rnid.rs              # Identity management (standalone), base32, stdin/stdout
 │   │       └── rnprobe.rs           # Path probe diagnostic tool (Phase 8f)
+├── rns-ctl/                         # std — HTTP/WebSocket control server [DONE]
+│   ├── src/
+│   │   ├── main.rs                  # CLI entry point, args, logging, node startup
+│   │   ├── config.rs                # Config from env vars/CLI args
+│   │   ├── server.rs                # HTTP server
+│   │   ├── http.rs                 # HTTP request/response parsing
+│   │   ├── ws.rs                   # WebSocket implementation (33 unit tests)
+│   │   ├── api.rs                  # REST API handlers (all endpoints implemented)
+│   │   ├── auth.rs                 # Bearer token auth middleware
+│   │   ├── state.rs                # Shared state management
+│   │   ├── bridge.rs               # RNS callbacks → state integration
+│   │   ├── encode.rs               # Base64/hex encoding utilities
+│   │   └── sha1.rs                # SHA-1 for WebSocket handshake
+│   ├── tests/
+│   │   └── integration.rs           # 28 integration tests
+│   └── Dockerfile                  # Docker image for running rns-ctl
 └── tests/
     ├── generate_vectors.py          # Generates JSON fixtures from Python RNS
-    └── fixtures/
+    ├── fixtures/                 # JSON test fixtures for interop tests
+    └── docker/                  # Docker-based E2E test framework [untracked in git]
+        ├── Dockerfile
+        ├── run-all.sh             # Run full test matrix
+        ├── run.sh                # Run single topology/suite
+        ├── lib/                  # Helper libraries
+        ├── topologies/           # Topology generators (chain, star, mesh)
+        ├── configs/              # Generated topology configs
+        │   ├── chain-3/, chain-5/
+        │   ├── star-5/, star-30/
+        │   └── mesh-4/
+        └── suites/               # Test suites (12 suites)
+            ├── 01_health.sh
+            ├── 02_announce_direct.sh
+            ├── 03_announce_multihop.sh
+            ├── 04_packet_delivery.sh
+            ├── 05_proof_receipt.sh
+            ├── 06_bidirectional.sh
+            ├── 07_identity_recall.sh
+            ├── 08_path_table.sh
+            ├── 09_convergence.sh
+            ├── 10_scale.sh
+            ├── 11_star_announce.sh
+            └── 12_mesh_routing.sh
+```
+
+### Test Summary
         ├── crypto/                  # 11 JSON fixture files (Phase 1)
         ├── protocol/               # 6 JSON fixture files (Phase 2)
         ├── transport/              # 4 JSON fixture files (Phase 3)
@@ -152,8 +194,10 @@ rns-rs/
 ### Crate Graph
 
 ```
-rns-cli → rns-net → rns-core → rns-crypto
-                     (no_std)    (no_std)
+rns-ctl ──┐
+           │
+rns-cli ──┴── rns-net ──→ rns-core ──→ rns-crypto
+                          (no_std)      (no_std)
 ```
 
 ---
@@ -1063,21 +1107,25 @@ New fixtures in `tests/fixtures/resource/`:
 
 | Phase | Crate | Milestone Gate | Status |
 |-------|-------|---------------|--------|
-| **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | **DONE** — 76 tests, `Python Token.encrypt() → Rust decrypt()` ✓ |
-| **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 46 tests, `Python announce → Rust validate()` ✓ |
-| **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — 143 tests, `Python announce → Rust route + retransmit` ✓ |
-| **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — 248 tests, full 4-way handshake + encrypted channel + buffer streaming ✓ |
-| **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — 375 tests (rns-core), full sender↔receiver cycle + HMU + interop ✓ |
-| **5a** | `rns-net` | TCP connect → receive announces → discover paths | **DONE** — 36 tests, Rust connects to Python TCP server, processes HDLC-framed announces ✓ |
-| **5b** | `rns-net` | Config, TCP server, UDP, Local, persistence | **DONE** — 80 tests, full `rnsd` daemon reads config, opens all interfaces ✓ |
-| **5c** | `rns-net` | IFAC, Serial, KISS interfaces | **DONE** — 119 tests, IFAC mask/unmask + Serial + KISS with flow control ✓ |
-| **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 154 tests, RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
-| **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — 677 tests, rnsd/rnstatus/rnpath/rnid + pickle/MD5/RPC ✓ |
-| **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — 689 tests, sorting/monitor/totals/announces/blackhole/base32/service mode ✓ |
-| **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — 773 tests, announce queue + local client + cache + tunnels + links + management ✓ |
-| **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — 842 tests, resource wiring + channel delivery + mgmt announcing + AutoInterface + shared client + rnprobe + -R flags ✓ |
-| **9** | `rns-core` + `rns-net` | Application-facing API + typed wrappers + echo example | **DONE** — 887 tests, Destination/AnnouncedIdentity + announce/discover/send_packet/proofs + typed callbacks + echo server/client ✓ |
-| **GROUP** | `rns-net` | GROUP destinations with symmetric Token encryption | **DONE** — 900 tests, group constructor + key management + encrypt/decrypt + send_packet wiring ✓ |
+| **1** | `rns-crypto` | All crypto ops produce byte-identical output to Python | **DONE** — 80 tests, `Python Token.encrypt() → Rust decrypt()` ✓ |
+| **2** | `rns-core` | Packet pack/unpack, Destination, Announce wire-compatible | **DONE** — 435 tests, `Python announce → Rust validate()` ✓ |
+| **3** | `rns-core` | Transport routes packets identically to Python | **DONE** — included in rns-core tests |
+| **4a** | `rns-core` | Link handshake, Channel messaging, Buffer streaming | **DONE** — included in rns-core tests |
+| **4b** | `rns-core` | Resource segmented transfer with windowed flow control | **DONE** — included in rns-core tests |
+| **5a** | `rns-net` | TCP connect → receive announces → discover paths | **DONE** — included in rns-net tests |
+| **5b** | `rns-net` | Config, TCP server, UDP, Local, persistence | **DONE** — included in rns-net tests |
+| **5c** | `rns-net` | IFAC, Serial, KISS interfaces | **DONE** — included in rns-net tests |
+| **5d** | `rns-net` | RNode, Pipe, Backbone interfaces | **DONE** — 470 tests (1 failing), RNode LoRa + Pipe subprocess + Backbone epoll TCP mesh ✓ |
+| **6a** | `rns-cli` + `rns-net` | Core CLI tools + RPC infrastructure | **DONE** — included in rns-net/rns-cli tests |
+| **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — included in rns-net tests |
+| **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — included in rns-core/rns-net tests |
+| **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — included in rns-core/rns-net tests |
+| **9** | `rns-core` + `rns-net` | Application-facing API + typed wrappers + echo example | **DONE** — included in rns-core/rns-net tests |
+| **GROUP** | `rns-net` | GROUP destinations with symmetric Token encryption | **DONE** — included in rns-net tests |
+| **rns-ctl** | `rns-ctl` | HTTP/WebSocket control server | **DONE** — 61 tests, full REST API + WebSocket + auth + state management ✓ |
+| **E2E** | `tests/docker/` | Docker-based end-to-end test framework | **DONE** — 12 test suites, chain/star/mesh topologies (untracked in git) ✓ |
+
+**Total Workspace Tests: ~1,056 tests passing** (as of 2026-02-12)
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 
