@@ -10,6 +10,7 @@ pub mod pipe;
 pub mod rnode;
 pub mod backbone;
 pub mod auto;
+pub mod i2p;
 
 use std::io;
 

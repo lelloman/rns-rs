@@ -27,6 +27,7 @@ use crate::interface::pipe::PipeConfig;
 use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
 use crate::interface::backbone::BackboneConfig;
 use crate::interface::auto::AutoConfig;
+use crate::interface::i2p::I2pConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::time;
 use crate::serial::Parity;
@@ -122,6 +123,7 @@ pub enum InterfaceVariant {
     RNode(RNodeConfig),
     Backbone(BackboneConfig),
     Auto(AutoConfig),
+    I2p(I2pConfig),
 }
 
 use crate::event::{QueryRequest, QueryResponse};
@@ -565,6 +567,47 @@ impl RnsNode {
                             ignored_interfaces,
                             configured_bitrate,
                             interface_id: iface_id,
+                        }),
+                        mode: iface_mode,
+                        ifac: ifac_config,
+                    });
+                }
+                "I2PInterface" => {
+                    let sam_host = iface
+                        .params
+                        .get("sam_host")
+                        .cloned()
+                        .unwrap_or_else(|| "127.0.0.1".into());
+                    let sam_port = iface
+                        .params
+                        .get("sam_port")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(7656);
+                    let connectable = iface
+                        .params
+                        .get("connectable")
+                        .and_then(|v| config::parse_bool_pub(v))
+                        .unwrap_or(false);
+                    let peers: Vec<String> = iface
+                        .params
+                        .get("peers")
+                        .map(|s| {
+                            s.split(',')
+                                .map(|p| p.trim().to_string())
+                                .filter(|p| !p.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    interface_configs.push(InterfaceConfig {
+                        variant: InterfaceVariant::I2p(I2pConfig {
+                            name: iface.name.clone(),
+                            interface_id: iface_id,
+                            sam_host,
+                            sam_port,
+                            peers,
+                            connectable,
+                            storage_dir: paths.storage.clone(),
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
@@ -1017,6 +1060,15 @@ impl RnsNode {
                         next_dynamic_id.clone(),
                     )?;
                     // Like TcpServer, AutoInterface doesn't register itself;
+                    // per-peer interfaces are registered dynamically via InterfaceUp
+                }
+                InterfaceVariant::I2p(i2p_config) => {
+                    crate::interface::i2p::start(
+                        i2p_config,
+                        tx.clone(),
+                        next_dynamic_id.clone(),
+                    )?;
+                    // Like TcpServer, I2P doesn't register itself;
                     // per-peer interfaces are registered dynamically via InterfaceUp
                 }
             }
