@@ -124,6 +124,8 @@ fn start_test_server_with_config(
         state: shared_state,
         ws_broadcast,
         config: cfg,
+        #[cfg(feature = "tls")]
+        tls_config: None,
     });
 
     let ctx2 = ctx.clone();
@@ -763,4 +765,226 @@ fn test_packet_delivery() {
     assert!(delivered, "Node A should have received at least one packet within 10s");
 
     pair.shutdown();
+}
+
+// ─── TLS Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(feature = "tls")]
+mod tls_tests {
+    use super::*;
+
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    /// Start a test server with TLS enabled using self-signed certs.
+    fn start_tls_test_server() -> (TestServer, Arc<rustls::RootCertStore>) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_pem = cert.cert.pem();
+        let key_pem = cert.key_pair.serialize_pem();
+
+        // Write cert and key to temp files (unique per call to avoid parallel test conflicts)
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let tmp_dir = std::env::temp_dir().join(format!("rns-ctl-tls-test-{}-{}", std::process::id(), id));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let cert_path = tmp_dir.join("cert.pem");
+        let key_path = tmp_dir.join("key.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, &key_pem).unwrap();
+
+        let tls_config =
+            rns_ctl::tls::load_tls_config(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
+                .expect("Failed to load TLS config");
+
+        let port = find_free_port();
+
+        let cfg = CtlConfig {
+            host: "127.0.0.1".into(),
+            port,
+            auth_token: None,
+            disable_auth: true,
+            config_path: None,
+            daemon_mode: false,
+            tls_cert: Some(cert_path.to_str().unwrap().into()),
+            tls_key: Some(key_path.to_str().unwrap().into()),
+        };
+
+        let shared_state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        let ws_broadcast: WsBroadcast = Arc::new(Mutex::new(Vec::new()));
+
+        let callbacks = Box::new(CtlCallbacks::new(
+            shared_state.clone(),
+            ws_broadcast.clone(),
+        ));
+
+        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                identity: Some(rns_crypto::identity::Identity::from_private_key(
+                    &identity.get_private_key().unwrap(),
+                )),
+                interfaces: vec![],
+                share_instance: false,
+                rpc_port: 0,
+                cache_dir: None,
+                management: Default::default(),
+            },
+            callbacks,
+        )
+        .expect("Failed to start test node");
+
+        {
+            let mut s = shared_state.write().unwrap();
+            s.identity_hash = Some(*identity.hash());
+            if let Some(prv) = identity.get_private_key() {
+                s.identity = Some(rns_crypto::identity::Identity::from_private_key(&prv));
+            }
+        }
+
+        let node_handle: NodeHandle = Arc::new(Mutex::new(Some(node)));
+
+        let ctx = Arc::new(ServerContext {
+            node: node_handle,
+            state: shared_state,
+            ws_broadcast,
+            config: cfg,
+            tls_config: Some(tls_config),
+        });
+
+        let ctx2 = ctx.clone();
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+
+        let handle = thread::Builder::new()
+            .name("test-tls-server".into())
+            .spawn(move || {
+                let _ = server::run_server(addr, ctx2);
+            })
+            .expect("Failed to spawn TLS server thread");
+
+        // Wait for the port to accept TCP connections
+        wait_for_port(port);
+
+        // Build a root cert store with our self-signed cert
+        let mut root_store = rustls::RootCertStore::empty();
+        let der_cert = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for c in der_cert {
+            root_store.add(c).unwrap();
+        }
+
+        let server = TestServer {
+            ctx,
+            port,
+            _thread: handle,
+        };
+
+        (server, Arc::new(root_store))
+    }
+
+    fn tls_http_get(
+        port: u16,
+        path: &str,
+        root_store: &Arc<rustls::RootCertStore>,
+    ) -> super::HttpResult {
+        let tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store.clone())
+            .with_no_client_auth();
+
+        let server_name: rustls::pki_types::ServerName =
+            "localhost".try_into().unwrap();
+
+        let mut conn = rustls::ClientConnection::new(Arc::new(tls_config), server_name).unwrap();
+        let mut tcp = TcpStream::connect(format!("127.0.0.1:{}", port)).expect("Failed to connect");
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+
+        let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            path
+        );
+        tls.write_all(request.as_bytes()).expect("Failed to write request");
+
+        let mut response = Vec::new();
+        loop {
+            let mut buf = [0u8; 4096];
+            match tls.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => response.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => panic!("TLS read error: {}", e),
+            }
+        }
+
+        let response_str = String::from_utf8_lossy(&response);
+        let status_line = response_str.lines().next().unwrap_or("");
+        let status: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let body = if let Some(pos) = response_str.find("\r\n\r\n") {
+            response_str[pos + 4..].to_string()
+        } else {
+            String::new()
+        };
+
+        super::HttpResult { status, body }
+    }
+
+    #[test]
+    fn test_tls_health_endpoint() {
+        let (server, root_store) = start_tls_test_server();
+        let res = tls_http_get(server.port, "/health", &root_store);
+        assert_eq!(res.status, 200);
+        let json = res.json();
+        assert_eq!(json["status"], "healthy");
+        server.shutdown();
+    }
+
+    #[test]
+    fn test_tls_api_info() {
+        let (server, root_store) = start_tls_test_server();
+        let res = tls_http_get(server.port, "/api/info", &root_store);
+        assert_eq!(res.status, 200);
+        let json = res.json();
+        let identity_hash = json["identity_hash"].as_str().unwrap();
+        assert_eq!(identity_hash.len(), 32);
+        server.shutdown();
+    }
+
+    #[test]
+    fn test_tls_plain_connection_rejected() {
+        let (server, _root_store) = start_tls_test_server();
+        // A plain HTTP request to a TLS server should fail
+        let mut tcp =
+            TcpStream::connect(format!("127.0.0.1:{}", server.port)).expect("Failed to connect");
+        tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let request = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        let _ = tcp.write_all(request.as_bytes());
+        // Read — should get garbage or error, not a valid HTTP response
+        let mut response = Vec::new();
+        loop {
+            let mut buf = [0u8; 4096];
+            match tcp.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => response.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+        let response_str = String::from_utf8_lossy(&response);
+        // Should NOT contain a valid HTTP status line
+        assert!(
+            !response_str.contains("HTTP/1.1 200"),
+            "Plain HTTP should not get a valid response from TLS server"
+        );
+        server.shutdown();
+    }
 }

@@ -111,12 +111,46 @@ fn main() {
         std::process::exit(0);
     });
 
+    // Validate and load TLS config
+    #[cfg(feature = "tls")]
+    let tls_config = {
+        match (&cfg.tls_cert, &cfg.tls_key) {
+            (Some(cert), Some(key)) => {
+                match rns_ctl::tls::load_tls_config(cert, key) {
+                    Ok(config) => {
+                        log::info!("TLS enabled with cert={} key={}", cert, key);
+                        Some(config)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load TLS config: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                log::error!("Both --tls-cert and --tls-key must be provided together");
+                std::process::exit(1);
+            }
+            (None, None) => None,
+        }
+    };
+
+    #[cfg(not(feature = "tls"))]
+    {
+        if cfg.tls_cert.is_some() || cfg.tls_key.is_some() {
+            log::error!("TLS options require the 'tls' feature. Rebuild with: cargo build --features tls");
+            std::process::exit(1);
+        }
+    }
+
     // Build server context
     let ctx = Arc::new(server::ServerContext {
         node: node_handle,
         state: shared_state,
         ws_broadcast,
         config: cfg,
+        #[cfg(feature = "tls")]
+        tls_config,
     });
 
     let addr: SocketAddr = format!("{}:{}", ctx.config.host, ctx.config.port)

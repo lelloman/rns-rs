@@ -148,8 +148,15 @@ pub fn from_args_and_env(args: &Args) -> CtlConfig {
 
     cfg.daemon_mode = args.has("daemon");
 
-    cfg.tls_cert = args.get("tls-cert").map(String::from);
-    cfg.tls_key = args.get("tls-key").map(String::from);
+    cfg.tls_cert = args
+        .get("tls-cert")
+        .map(String::from)
+        .or_else(|| std::env::var("RNSCTL_TLS_CERT").ok());
+
+    cfg.tls_key = args
+        .get("tls-key")
+        .map(String::from)
+        .or_else(|| std::env::var("RNSCTL_TLS_KEY").ok());
 
     cfg
 }
@@ -168,8 +175,8 @@ OPTIONS:
     -t, --token TOKEN       Auth bearer token (env: RNSCTL_AUTH_TOKEN)
     -d, --daemon            Connect as client to running rnsd
         --disable-auth      Disable authentication
-        --tls-cert PATH     TLS certificate file (requires 'tls' feature)
-        --tls-key PATH      TLS private key file (requires 'tls' feature)
+        --tls-cert PATH     TLS certificate file (env: RNSCTL_TLS_CERT, requires 'tls' feature)
+        --tls-key PATH      TLS private key file (env: RNSCTL_TLS_KEY, requires 'tls' feature)
     -v                      Increase verbosity (repeat for more)
     -h, --help              Show this help
         --version           Show version"

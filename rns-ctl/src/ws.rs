@@ -7,10 +7,11 @@ use crate::sha1::sha1;
 const WS_MAGIC: &str = "258EAFA5-E914-47DA-95CA-5AB5DC11D045";
 
 /// WebSocket frame opcodes.
-const OPCODE_TEXT: u8 = 0x1;
-const OPCODE_CLOSE: u8 = 0x8;
-const OPCODE_PING: u8 = 0x9;
-const OPCODE_PONG: u8 = 0xA;
+pub(crate) const OPCODE_TEXT: u8 = 0x1;
+pub(crate) const OPCODE_CLOSE: u8 = 0x8;
+pub(crate) const OPCODE_PING: u8 = 0x9;
+#[allow(dead_code)]
+pub(crate) const OPCODE_PONG: u8 = 0xA;
 
 /// A decoded WebSocket frame.
 pub struct WsFrame {
@@ -168,6 +169,118 @@ pub fn run_ws_loop(
     Ok(())
 }
 
+/// Try to parse a complete WebSocket frame from a byte buffer.
+/// Returns `Some((frame, bytes_consumed))` if a complete frame is available.
+fn parse_frame_from_buf(buf: &[u8]) -> Option<(WsFrame, usize)> {
+    if buf.len() < 2 {
+        return None;
+    }
+
+    let opcode = buf[0] & 0x0F;
+    let masked = buf[1] & 0x80 != 0;
+    let len_byte = buf[1] & 0x7F;
+
+    let mut pos = 2;
+
+    let payload_len: usize = if len_byte <= 125 {
+        len_byte as usize
+    } else if len_byte == 126 {
+        if buf.len() < pos + 2 {
+            return None;
+        }
+        let len = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2;
+        len
+    } else {
+        if buf.len() < pos + 8 {
+            return None;
+        }
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(&buf[pos..pos + 8]);
+        let len = u64::from_be_bytes(arr) as usize;
+        pos += 8;
+        len
+    };
+
+    let mask_key = if masked {
+        if buf.len() < pos + 4 {
+            return None;
+        }
+        let key = [buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]];
+        pos += 4;
+        Some(key)
+    } else {
+        None
+    };
+
+    if buf.len() < pos + payload_len {
+        return None;
+    }
+
+    let mut payload = buf[pos..pos + payload_len].to_vec();
+    pos += payload_len;
+
+    if let Some(key) = mask_key {
+        for i in 0..payload.len() {
+            payload[i] ^= key[i % 4];
+        }
+    }
+
+    Some((WsFrame { opcode, payload }, pos))
+}
+
+/// Buffered non-blocking WebSocket frame reader.
+///
+/// Accumulates bytes from a non-blocking or timeout-based stream and
+/// yields complete frames without requiring `read_exact`.
+pub struct WsBuf {
+    buf: Vec<u8>,
+}
+
+impl WsBuf {
+    pub fn new() -> Self {
+        WsBuf { buf: Vec::with_capacity(4096) }
+    }
+
+    /// Try to read a complete frame. Returns:
+    /// - `Ok(Some(frame))` if a complete frame was parsed
+    /// - `Ok(None)` if not enough data yet (WouldBlock/TimedOut)
+    /// - `Err(e)` on connection error (EOF, etc.)
+    pub fn try_read_frame(&mut self, stream: &mut dyn Read) -> io::Result<Option<WsFrame>> {
+        // First, try to parse from existing buffer data
+        if let Some((frame, consumed)) = parse_frame_from_buf(&self.buf) {
+            self.buf.drain(..consumed);
+            return Ok(Some(frame));
+        }
+
+        // Read more data from the stream
+        let mut tmp = [0u8; 4096];
+        match stream.read(&mut tmp) {
+            Ok(0) => {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed"));
+            }
+            Ok(n) => {
+                self.buf.extend_from_slice(&tmp[..n]);
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Try to parse again with new data
+        if let Some((frame, consumed)) = parse_frame_from_buf(&self.buf) {
+            self.buf.drain(..consumed);
+            return Ok(Some(frame));
+        }
+
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +312,60 @@ mod tests {
         let frame = read_frame(&mut &buf[..]).unwrap();
         assert_eq!(frame.opcode, OPCODE_TEXT);
         assert_eq!(frame.payload.len(), 300);
+    }
+
+    #[test]
+    fn parse_frame_from_buf_complete() {
+        let mut data = Vec::new();
+        write_text_frame(&mut data, "hello").unwrap();
+
+        let result = parse_frame_from_buf(&data);
+        assert!(result.is_some());
+        let (frame, consumed) = result.unwrap();
+        assert_eq!(frame.opcode, OPCODE_TEXT);
+        assert_eq!(frame.payload, b"hello");
+        assert_eq!(consumed, data.len());
+    }
+
+    #[test]
+    fn parse_frame_from_buf_incomplete() {
+        let mut data = Vec::new();
+        write_text_frame(&mut data, "hello").unwrap();
+
+        // Only provide first byte — not enough
+        assert!(parse_frame_from_buf(&data[..1]).is_none());
+        // Provide header but truncate payload
+        assert!(parse_frame_from_buf(&data[..3]).is_none());
+    }
+
+    #[test]
+    fn wsbuf_try_read_frame_wouldblock() {
+        use std::io;
+
+        struct WouldBlockReader;
+        impl Read for WouldBlockReader {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, "would block"))
+            }
+        }
+
+        let mut ws_buf = WsBuf::new();
+        let result = ws_buf.try_read_frame(&mut WouldBlockReader);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn wsbuf_try_read_frame_complete() {
+        let mut data = Vec::new();
+        write_text_frame(&mut data, "test").unwrap();
+
+        let mut ws_buf = WsBuf::new();
+        let mut cursor = io::Cursor::new(data);
+        let result = ws_buf.try_read_frame(&mut cursor).unwrap();
+        assert!(result.is_some());
+        let frame = result.unwrap();
+        assert_eq!(frame.opcode, OPCODE_TEXT);
+        assert_eq!(frame.payload, b"test");
     }
 }

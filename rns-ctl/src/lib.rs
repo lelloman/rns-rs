@@ -7,4 +7,6 @@ pub mod http;
 pub mod server;
 pub mod sha1;
 pub mod state;
+#[cfg(feature = "tls")]
+pub mod tls;
 pub mod ws;
