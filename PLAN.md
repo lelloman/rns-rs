@@ -118,7 +118,10 @@ rns-rs/
 │   │       ├── pipe.rs              # Subprocess stdin/stdout + HDLC, auto-respawn
 │   │       ├── rnode.rs             # RNode LoRa radio, multi-sub, flow control
 │   │       ├── backbone.rs          # TCP mesh backbone, Linux epoll
-│   │       └── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
+│   │       ├── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
+│   │       └── i2p/                 # I2P interface using SAM v3.1 protocol
+│   │           ├── mod.rs           # I2P coordinator, outbound/inbound peer handling
+│   │           └── sam.rs           # SAM v3.1 wire protocol (DEST GENERATE, SESSION CREATE, etc.)
 │   ├── examples/
 │   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
 │   │   ├── rnsd.rs                  # Rust rnsd daemon (config-driven)
@@ -815,7 +818,7 @@ New fixtures in `tests/fixtures/resource/`:
 - `node.rs` — `InterfaceConfig` struct with `variant: InterfaceVariant` + `mode: u8`, `from_config()` reads config + creates/loads identity, `parse_interface_mode()` maps mode strings to constants (4 new tests)
 - `interface/mod.rs` — `InterfaceEntry` gained `dynamic: bool` field
 
-**Not included (deferred to Phase 5c)**: Serial/KISS/RNode interfaces (need hardware), AutoInterface (complex multicast discovery), IFAC (Interface Access Codes), RPC control port, I2P interface.
+**Not included**: Serial/KISS/RNode interfaces (need hardware, Phase 5c), AutoInterface (complex multicast discovery, Phase 8d), IFAC (Interface Access Codes, Phase 5c), RPC control port (Phase 6a), I2P interface (completed separately).
 
 ---
 
@@ -832,7 +835,7 @@ New fixtures in `tests/fixtures/resource/`:
 - `interface/serial_iface.rs` — Serial + HDLC framing, reader thread, reconnect (5 tests)
 - `interface/kiss_iface.rs` — KISS + flow control, TNC config, beacon support (8 tests)
 
-**Deferred**: AutoInterface (IPv6 multicast, cross-platform interface enumeration), I2P (SAM client), RNode/Pipe/Backbone (Phase 5d).
+**Deferred**: RNode/Pipe/Backbone (Phase 5d). Note: AutoInterface and I2P were completed in later phases.
 
 ---
 
@@ -852,7 +855,7 @@ New fixtures in `tests/fixtures/resource/`:
 - `node.rs` — `InterfaceVariant::Pipe/RNode/Backbone`, config parsing, start handling (4 tests)
 - `lib.rs` — Re-exports for `PipeConfig`, `RNodeConfig`, `RNodeSubConfig`, `BackboneConfig`
 
-**Deferred**: AutoInterface, I2P, RNodeMultiInterface config nesting (`[[[triple-bracket]]]`).
+**Deferred**: RNodeMultiInterface config nesting (`[[[triple-bracket]]]`) — Multi-subinterface RNode with nested config syntax. Note: Basic RNode (single subinterface), AutoInterface, and I2P are complete.
 
 ---
 
@@ -909,10 +912,11 @@ New fixtures in `tests/fixtures/resource/`:
 - **rnid**: Base32 (`-B`), force overwrite (`-f`/`--force`), stdin/stdout (`--stdin`/`--stdout`), large file warning (>16MB)
 
 ### Deferred to future phases
-- `rnprobe` (requires application-layer packet send/receive)
-- Remote management CLI (`-R HASH` client-side queries on rnstatus/rnpath)
-- Discovery interfaces (`-d`/`-D`)
+- Discovery interfaces (`-d`/`-D`) — CLI flags for managing discovery announcements
 - `rnid -a` (announce destination — requires application-layer)
+- RNodeMultiInterface config nesting (`[[[triple-bracket]]]`) — Multi-subinterface RNode with nested config syntax
+
+Note: `rnprobe` and Remote management CLI (`-R HASH`) were completed in Phase 8f/8g.
 
 ---
 
@@ -1120,6 +1124,8 @@ New fixtures in `tests/fixtures/resource/`:
 | **6b** | `rns-cli` + `rns-core` + `rns-net` | CLI enhancements + blackhole infrastructure | **DONE** — included in rns-net tests |
 | **7** | `rns-core` + `rns-net` | Transport gaps + link wiring + management | **DONE** — included in rns-core/rns-net tests |
 | **8** | `rns-core` + `rns-net` + `rns-cli` | App API + AutoInterface + shared client + CLI | **DONE** — included in rns-core/rns-net tests |
+| **8d** | `rns-net` | AutoInterface: IPv6 multicast LAN discovery | **DONE** — 19 tests including Python interop vectors ✓ |
+| **I2P** | `rns-net` | I2P interface using SAM v3.1 protocol | **DONE** — SAM client, outbound/inbound peers, key persistence ✓ |
 | **9** | `rns-core` + `rns-net` | Application-facing API + typed wrappers + echo example | **DONE** — included in rns-core/rns-net tests |
 | **GROUP** | `rns-net` | GROUP destinations with symmetric Token encryption | **DONE** — included in rns-net tests |
 | **rns-ctl** | `rns-ctl` | HTTP/WebSocket control server | **DONE** — 61 tests, full REST API + WebSocket + auth + state management ✓ |

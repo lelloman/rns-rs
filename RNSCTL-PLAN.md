@@ -698,10 +698,9 @@ RNSCTL_HTTP_PORT=8000              # HTTP port (default: 8000)
 RNSCTL_HTTPS_PORT=8443             # HTTPS port (default: 8443)
 RNSCTL_HOST=0.0.0.0                # Bind address (default: 0.0.0.0)
 
-# TLS
-RNSCTL_TLS_CERT=/path/to/cert.pem  # TLS certificate path
+# TLS (optional, requires 'tls' feature)
+RNSCTL_TLS_CERT=/path/to/cert.pem  # TLS certificate path (enables TLS when both cert/key set)
 RNSCTL_TLS_KEY=/path/to/key.pem    # TLS private key path
-RNSCTL_DISABLE_TLS=false           # Disable TLS for testing (default: false)
 
 # Auth
 RNSCTL_AUTH_TOKEN=secret-token     # Bearer token for API auth
@@ -903,8 +902,8 @@ rns-ctl --config /path/to/config
 # Disable auth for testing
 rns-ctl --disable-auth
 
-# Disable TLS for testing
-rns-ctl --disable-tls
+# With TLS (requires cert/key files)
+rns-ctl --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 
 # Generate self-signed certificate
 rns-ctl --generate-cert --cert-dir /tmp/certs
@@ -1181,7 +1180,8 @@ async def rust_to_rust_announce(nodes: dict[str, SakClient]):
 - [x] Create `rns-ctl/` crate with Cargo.toml
 - [x] Implement config from env vars + CLI args
 - [x] Implement state management (Arc<RwLock<State>>)
-- [ ] Implement TLS support (with self-signed cert generation) — **OPTIONAL, not implemented**
+- [x] Implement TLS support (via rustls, optional cargo feature) — **DONE**
+  - Note: Self-signed cert generation not implemented; users provide PEM cert/key files
 - [x] Implement token auth middleware
 - [x] Implement REST API read-only endpoints (info, interfaces, paths, links, etc.)
 - [x] Implement REST API action endpoints (announce, send, create destination, etc.)
@@ -1383,16 +1383,15 @@ while True:
 # Build image
 docker build -t rns-ctl:rust -f rns-rs/rns-ctl/Dockerfile rns-rs
 
-# Run with default config
+# Run with default config (HTTP only)
 docker run -d --name rns-ctl \
-  -p 8000:8000 -p 8443:8443 \
+  -p 8000:8000 \
   -e RNSCTL_AUTH_TOKEN=my-secret-token \
-  -e RNSCTL_DISABLE_TLS=false \
   rns-ctl:rust
 
-# Run with custom RNS config
+# Run with custom RNS config (HTTP only)
 docker run -d --name rns-ctl \
-  -p 8000:8000 -p 8443:8443 \
+  -p 8000:8000 \
   -v ./config:/config:ro \
   -v ./data:/data \
   -e RNSCTL_CONFIG_PATH=/config/config \
@@ -1415,7 +1414,6 @@ services:
       - "7001:7000"
     environment:
       - RNSCTL_AUTH_TOKEN=test-token
-      - RNSCTL_DISABLE_TLS=true
       - RNSCTL_CONFIG_PATH=/config/config
     volumes:
       - node-a-data:/data
