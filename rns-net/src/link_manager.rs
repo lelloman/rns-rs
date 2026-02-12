@@ -86,6 +86,7 @@ pub enum LinkManagerAction {
     /// Link established — notify callbacks.
     LinkEstablished {
         link_id: LinkId,
+        dest_hash: [u8; 16],
         rtt: f64,
         is_initiator: bool,
     },
@@ -1787,8 +1788,12 @@ impl LinkManager {
                     }
                 }
                 LinkAction::LinkEstablished { rtt, is_initiator, .. } => {
+                    let dest_hash = self.links.get(link_id)
+                        .map(|l| l.dest_hash)
+                        .unwrap_or([0u8; 16]);
                     result.push(LinkManagerAction::LinkEstablished {
                         link_id: *link_id,
+                        dest_hash,
                         rtt: *rtt,
                         is_initiator: *is_initiator,
                     });

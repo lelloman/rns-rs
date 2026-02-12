@@ -56,7 +56,7 @@ impl Callbacks for CtlCallbacks {
         true
     }
 
-    fn on_link_established(&mut self, link_id: LinkId, rtt: f64, is_initiator: bool) {
+    fn on_link_established(&mut self, link_id: LinkId, _dest_hash: DestHash, rtt: f64, is_initiator: bool) {
         let record = LinkEventRecord {
             link_id: to_hex(&link_id.0),
             event_type: "established".into(),

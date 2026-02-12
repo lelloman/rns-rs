@@ -146,7 +146,7 @@ impl Callbacks for TestCallbacks {
         let _ = self.tx.send(TestEvent::InterfaceDown(id));
     }
 
-    fn on_link_established(&mut self, link_id: rns_core::types::LinkId, rtt: f64, is_initiator: bool) {
+    fn on_link_established(&mut self, link_id: rns_core::types::LinkId, _dest_hash: rns_core::types::DestHash, rtt: f64, is_initiator: bool) {
         let _ = self.tx.send(TestEvent::LinkEstablished {
             link_id: link_id.0,
             rtt,

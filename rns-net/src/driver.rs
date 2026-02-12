@@ -55,7 +55,7 @@ pub trait Callbacks: Send {
     fn on_interface_down(&mut self, _id: InterfaceId) {}
 
     /// Called when a link is fully established.
-    fn on_link_established(&mut self, _link_id: rns_core::types::LinkId, _rtt: f64, _is_initiator: bool) {}
+    fn on_link_established(&mut self, _link_id: rns_core::types::LinkId, _dest_hash: rns_core::types::DestHash, _rtt: f64, _is_initiator: bool) {}
 
     /// Called when a link is closed.
     fn on_link_closed(&mut self, _link_id: rns_core::types::LinkId, _reason: Option<rns_core::link::TeardownReason>) {}
@@ -892,7 +892,25 @@ impl Driver {
                         let link_actions = self.link_manager.handle_local_delivery(
                             destination_hash, &raw, packet_hash, &mut self.rng,
                         );
-                        self.dispatch_link_actions(link_actions);
+                        if link_actions.is_empty() {
+                            // Link manager couldn't handle (e.g. opportunistic DATA
+                            // for a registered link destination). Fall back to
+                            // regular delivery.
+                            if let Ok(packet) = RawPacket::unpack(&raw) {
+                                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
+                                    self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                                    continue;
+                                }
+                            }
+                            self.maybe_generate_proof(destination_hash, &packet_hash);
+                            self.callbacks.on_local_delivery(
+                                rns_core::types::DestHash(destination_hash),
+                                raw,
+                                rns_core::types::PacketHash(packet_hash),
+                            );
+                        } else {
+                            self.dispatch_link_actions(link_actions);
+                        }
                     } else {
                         // Check if this is a PROOF packet for a packet we sent
                         if let Ok(packet) = RawPacket::unpack(&raw) {
@@ -1046,12 +1064,17 @@ impl Driver {
                         }
                     }
                 }
-                LinkManagerAction::LinkEstablished { link_id, rtt, is_initiator } => {
+                LinkManagerAction::LinkEstablished { link_id, dest_hash, rtt, is_initiator } => {
                     log::info!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
                         &link_id[..4], rtt, is_initiator,
                     );
-                    self.callbacks.on_link_established(rns_core::types::LinkId(link_id), rtt, is_initiator);
+                    self.callbacks.on_link_established(
+                        rns_core::types::LinkId(link_id),
+                        rns_core::types::DestHash(dest_hash),
+                        rtt,
+                        is_initiator,
+                    );
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
@@ -1399,7 +1422,7 @@ mod tests {
             self.iface_downs.lock().unwrap().push(id);
         }
 
-        fn on_link_established(&mut self, link_id: TypedLinkId, rtt: f64, is_initiator: bool) {
+        fn on_link_established(&mut self, link_id: TypedLinkId, _dest_hash: DestHash, rtt: f64, is_initiator: bool) {
             self.link_established.lock().unwrap().push((link_id, rtt, is_initiator));
         }
 

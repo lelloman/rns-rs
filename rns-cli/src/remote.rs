@@ -49,7 +49,7 @@ impl Callbacks for RemoteCallbacks {
 
     fn on_local_delivery(&mut self, _dest_hash: rns_net::DestHash, _raw: Vec<u8>, _packet_hash: rns_net::PacketHash) {}
 
-    fn on_link_established(&mut self, link_id: rns_net::LinkId, _rtt: f64, _is_initiator: bool) {
+    fn on_link_established(&mut self, link_id: rns_net::LinkId, _dest_hash: rns_net::DestHash, _rtt: f64, _is_initiator: bool) {
         let _ = self.link_established_tx.send(link_id);
     }
 
