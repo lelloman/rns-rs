@@ -2,18 +2,17 @@
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
-This is a faithful port of the Python reference implementation, validated against it with 900+ interop tests. `rns-crypto` and `rns-core` are `no_std`-compatible with zero external dependencies, making them suitable for embedded/microcontroller targets.
+This is a faithful port of the Python reference implementation, validated against it with 900+ interop tests. `rns-crypto` and `rns-core` are `no_std`-compatible with zero external dependencies, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
 
 ## Workspace Crates
 
 | Crate | `no_std` | Description |
 |-------|----------|-------------|
 | `rns-crypto` | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
-| `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers |
-| `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto interfaces, config parsing, driver loop |
+| `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
+| `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto interfaces, config parsing, driver loop, DirectLink NAT hole punching |
 | `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid` |
 | `rns-ctl` | No | HTTP/WebSocket control server: REST API + WebSocket for monitoring and controlling RNS nodes |
-| `rns-ctl` | No | HTTP/WebSocket control server |
 
 ## Building
 
@@ -84,6 +83,24 @@ The server exposes:
 - WebSocket endpoint at `ws://localhost:8000/ws`
 
 See `RNSCTL-PLAN.md` for full API documentation.
+
+## Direct Link (NAT Hole Punching)
+
+> **rns-rs extension** — this feature is not present in the original Python Reticulum implementation.
+
+rns-rs can upgrade an existing Reticulum link to a direct peer-to-peer UDP connection, bypassing transport nodes entirely. This reduces latency and offloads bandwidth from shared infrastructure.
+
+The protocol uses a STUN-like probe to discover public endpoints, negotiates the upgrade over the existing link's channel, then both peers simultaneously punch through their NATs.
+
+**Configuration:**
+- Facilitator (transport node): `probe_port = 4343` in `[reticulum]`
+- Client (behind NAT): `probe_addr = <facilitator_ip>:4343` in `[reticulum]`
+
+**API (via rns-ctl):**
+- `POST /api/direct_connect {"link_id": "..."}` — initiate upgrade
+- `GET /api/link_events` — monitor for `direct_established` / `direct_failed`
+
+See [docs/direct-link-protocol.md](docs/direct-link-protocol.md) for the full protocol specification.
 
 ## Interoperability
 

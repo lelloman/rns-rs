@@ -71,15 +71,18 @@ rns-rs/
 │   │   │   ├── mod.rs              # StreamDataMessage, BufferWriter, BufferReader
 │   │   │   └── types.rs            # StreamId, Compressor trait, BufferError
 │   │   ├── msgpack.rs              # Phase 4b: Minimal msgpack encode/decode
-│   │   └── resource/               # Phase 4b: Resource transfer
-│   │       ├── mod.rs              # Re-exports, top-level docs
-│   │       ├── types.rs            # ResourceState, ResourceAction, ResourceError
-│   │       ├── advertisement.rs    # ResourceAdvertisement pack/unpack (msgpack)
-│   │       ├── parts.rs            # Part hashing, hashmap, collision guard
-│   │       ├── window.rs           # Window adaptation, rate tracking
-│   │       ├── sender.rs           # ResourceSender state machine
-│   │       ├── receiver.rs         # ResourceReceiver state machine
-│   │       └── proof.rs            # Resource proof generation/validation
+│   │   ├── resource/               # Phase 4b: Resource transfer
+│   │   │   ├── mod.rs              # Re-exports, top-level docs
+│   │   │   ├── types.rs            # ResourceState, ResourceAction, ResourceError
+│   │   │   ├── advertisement.rs    # ResourceAdvertisement pack/unpack (msgpack)
+│   │   │   ├── parts.rs            # Part hashing, hashmap, collision guard
+│   │   │   ├── window.rs           # Window adaptation, rate tracking
+│   │   │   ├── sender.rs           # ResourceSender state machine
+│   │   │   ├── receiver.rs         # ResourceReceiver state machine
+│   │   │   └── proof.rs            # Resource proof generation/validation
+│   │   └── holepunch/              # DirectLink: NAT hole punching state machine
+│   │       ├── mod.rs, types.rs    # Protocol constants, state, actions, errors
+│   │       └── engine.rs           # Pure state machine (no I/O)
 │   └── tests/
 │       ├── interop.rs              # 12 interop tests (incl. milestone + resource)
 │       ├── transport_integration.rs # 15 integration tests for transport engine
@@ -107,21 +110,26 @@ rns-rs/
 │   │   ├── shared_client.rs         # Shared instance client mode (Phase 8e)
 │   │   ├── driver.rs                # Callbacks, Driver loop, InterfaceStats, query dispatch
 │   │   ├── node.rs                  # RnsNode lifecycle + share_instance/RPC config
-│   │   └── interface/
-│   │       ├── mod.rs               # Writer trait, InterfaceEntry
-│   │       ├── tcp.rs               # TCP client: connect, reconnect, reader thread
-│   │       ├── tcp_server.rs        # TCP server: accept, per-client reader threads
-│   │       ├── udp.rs               # UDP broadcast: no HDLC framing
-│   │       ├── local.rs             # Unix abstract socket + TCP fallback
-│   │       ├── serial_iface.rs      # Serial + HDLC framing, reconnect
-│   │       ├── kiss_iface.rs        # KISS + flow control, TNC config
-│   │       ├── pipe.rs              # Subprocess stdin/stdout + HDLC, auto-respawn
-│   │       ├── rnode.rs             # RNode LoRa radio, multi-sub, flow control
-│   │       ├── backbone.rs          # TCP mesh backbone, Linux epoll
-│   │       ├── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
-│   │       └── i2p/                 # I2P interface using SAM v3.1 protocol
-│   │           ├── mod.rs           # I2P coordinator, outbound/inbound peer handling
-│   │           └── sam.rs           # SAM v3.1 wire protocol (DEST GENERATE, SESSION CREATE, etc.)
+│   │   ├── interface/
+│   │   │   ├── mod.rs               # Writer trait, InterfaceEntry
+│   │   │   ├── tcp.rs               # TCP client: connect, reconnect, reader thread
+│   │   │   ├── tcp_server.rs        # TCP server: accept, per-client reader threads
+│   │   │   ├── udp.rs               # UDP broadcast: no HDLC framing
+│   │   │   ├── local.rs             # Unix abstract socket + TCP fallback
+│   │   │   ├── serial_iface.rs      # Serial + HDLC framing, reconnect
+│   │   │   ├── kiss_iface.rs        # KISS + flow control, TNC config
+│   │   │   ├── pipe.rs              # Subprocess stdin/stdout + HDLC, auto-respawn
+│   │   │   ├── rnode.rs             # RNode LoRa radio, multi-sub, flow control
+│   │   │   ├── backbone.rs          # TCP mesh backbone, Linux epoll
+│   │   │   ├── auto.rs              # AutoInterface: IPv6 multicast LAN discovery (Phase 8d)
+│   │   │   └── i2p/                 # I2P interface using SAM v3.1 protocol
+│   │   │       ├── mod.rs           # I2P coordinator, outbound/inbound peer handling
+│   │   │       └── sam.rs           # SAM v3.1 wire protocol (DEST GENERATE, SESSION CREATE, etc.)
+│   │   └── holepunch/               # DirectLink: NAT hole punching orchestration
+│   │       ├── orchestrator.rs      # Session manager, bridges engine with networking
+│   │       ├── probe.rs             # STUN-like probe server + client
+│   │       ├── puncher.rs           # UDP hole punch execution
+│   │       └── udp_direct.rs        # Direct peer-to-peer UDP interface
 │   ├── examples/
 │   │   ├── tcp_connect.rs           # Connect to Python RNS, log announces
 │   │   ├── rnsd.rs                  # Rust rnsd daemon (config-driven)
@@ -170,6 +178,7 @@ rns-rs/
         │   ├── chain-3/, chain-5/
         │   ├── star-5/, star-30/
         │   └── mesh-4/
+        ├── nat-punch/            # DirectLink NAT hole punching E2E test
         └── suites/               # Test suites (12 suites)
             ├── 01_health.sh
             ├── 02_announce_direct.sh
@@ -1107,6 +1116,47 @@ Note: `rnprobe` and Remote management CLI (`-R HASH`) were completed in Phase 8f
 
 ---
 
+## Phase 10: DirectLink — NAT Hole Punching (`rns-core` + `rns-net` + `rns-ctl`) — COMPLETE ✓
+
+> **rns-rs extension** — this feature is not present in the original Python Reticulum implementation.
+
+**Milestone**: Two Rust peers with an existing Reticulum link can upgrade to a direct peer-to-peer UDP connection, bypassing transport nodes. The protocol discovers public endpoints via a STUN-like probe, negotiates the upgrade over the existing link's channel, and performs simultaneous NAT hole punching. ~1,081 tests passing.
+
+### What was built
+
+#### rns-core: Holepunch Engine (`rns-core/src/holepunch/`)
+- `types.rs`: Protocol constants, `HolepunchState`, `HolepunchAction`, `HolepunchError`
+- `engine.rs`: Pure state machine (no I/O, `no_std`-compatible), asymmetric protocol (initiator/responder roles)
+- Drives the full lifecycle: STUN discovery → negotiation → punch → confirmation
+- Action queue model matching transport/link/channel/resource patterns
+
+#### rns-net: Holepunch Orchestration (`rns-net/src/holepunch/`)
+- `orchestrator.rs`: Session manager, bridges the core engine with networking I/O
+- `probe.rs`: STUN-like probe server (facilitator) + client; discovers public IP:port
+- `puncher.rs`: UDP hole punch execution with configurable interval and timeout
+- `udp_direct.rs`: `DirectUdpInterface` — direct peer-to-peer UDP transport with NAT keepalive
+
+#### Configuration
+- Facilitator (transport node): `probe_port = 4343` in `[reticulum]`
+- Client (behind NAT): `probe_addr = <facilitator_ip>:4343` in `[reticulum]`
+
+#### Driver Integration
+- Signaling message interception on the existing link's channel
+- Path redirect to `DirectUdpInterface` on successful punch
+- Channel TX flush before switchover
+
+#### rns-ctl Integration
+- `POST /api/direct_connect` — initiate a direct link upgrade on an active link
+- Bridge callbacks for `direct_established` / `direct_failed` events
+- Events exposed via `GET /api/link_events`
+
+#### Docker E2E Test
+- `tests/docker/nat-punch/` — end-to-end NAT hole punching test with simulated NAT topology
+
+See [docs/direct-link-protocol.md](docs/direct-link-protocol.md) for the full protocol specification.
+
+---
+
 ## Milestone Summary
 
 | Phase | Crate | Milestone Gate | Status |
@@ -1130,8 +1180,9 @@ Note: `rnprobe` and Remote management CLI (`-R HASH`) were completed in Phase 8f
 | **GROUP** | `rns-net` | GROUP destinations with symmetric Token encryption | **DONE** — included in rns-net tests |
 | **rns-ctl** | `rns-ctl` | HTTP/WebSocket control server | **DONE** — 61 tests, full REST API + WebSocket + auth + state management ✓ |
 | **E2E** | `tests/docker/` | Docker-based end-to-end test framework | **DONE** — 12 test suites, chain/star/mesh topologies (untracked in git) ✓ |
+| **10** | `rns-core` + `rns-net` + `rns-ctl` | DirectLink: NAT hole punching (rns-rs extension) | **DONE** — holepunch engine + orchestrator + probe + punch + DirectUdpInterface ✓ |
 
-**Total Workspace Tests: ~1,056 tests passing** (as of 2026-02-12)
+**Total Workspace Tests: ~1,081 tests passing** (as of 2026-02-13)
 
 Each phase is self-contained: it has its own detailed plan (to be written before starting), its own test fixtures, and a clear gate before moving to the next phase. No phase starts until the previous milestone gate passes.
 

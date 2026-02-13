@@ -19,7 +19,7 @@
 │  ┌─────────────────────────────────────────────────────────────────┐    │
 │  │                    REST API (HTTPS)                             │    │
 │  │  GET  /api/info, /api/interfaces, /api/paths, /api/links, ...   │    │
-│  │  POST /api/announce, /api/send, /api/link, /api/resource, ...    │    │
+│  │  POST /api/announce, /api/send, /api/link, /api/direct_connect   │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
 │                                    │                                     │
 │  ┌─────────────────────────────────┴───────────────────────────────┐    │
@@ -467,6 +467,54 @@ Request:
   "destination_hash": "0123456789abcdef0123456789abcdef"
 }
 ```
+
+#### POST /api/direct_connect
+
+Propose a direct P2P connection via NAT hole punching on an active link.
+
+> **rns-rs extension** — this endpoint controls a feature not present in the original Python Reticulum implementation.
+
+Request:
+```json
+{
+  "link_id": "0123456789abcdef0123456789abcdef"
+}
+```
+
+Response:
+```json
+{
+  "status": "proposed"
+}
+```
+
+The link must be active. Monitor `GET /api/link_events` for `direct_established` or `direct_failed` events.
+
+#### GET /api/link_events
+
+Get link lifecycle events (established, closed, identified, direct connect).
+
+Response:
+```json
+{
+  "status": "success",
+  "data": {
+    "events": [
+      {
+        "link_id": "0123456789abcdef0123456789abcdef",
+        "event_type": "established",
+        "reason": null,
+        "timestamp": 1234567890.123
+      }
+    ]
+  }
+}
+```
+
+Event types:
+- `"established"`, `"closed"`, `"identified"` — standard link lifecycle events
+- `"direct_established"` — direct P2P connection succeeded (reason: `"interface_id=N"`)
+- `"direct_failed"` — direct connection attempt failed (reason: `"reason_code=N"`)
 
 #### GET /api/identity/{dest_hash}
 
