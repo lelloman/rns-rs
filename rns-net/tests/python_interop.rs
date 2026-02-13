@@ -6,7 +6,7 @@
 //! Requires Python 3 with RNS installed (run from repo root).
 //! Skipped if Python or RNS is not available.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
@@ -64,25 +64,28 @@ config_dir = tempfile.mkdtemp()
 config_path = os.path.join(config_dir, "config")
 with open(config_path, "w") as f:
     f.write(f"""[reticulum]
-enable_transport = false
-share_instance = false
+  enable_transport = false
+  share_instance = yes
 
 [interfaces]
-  [[TCP Server]]
+  [[TCP Server Interface]]
     type = TCPServerInterface
+    interface_enabled = true
     listen_ip = 127.0.0.1
     listen_port = {port}
 """)
 
 import RNS
-reticulum = RNS.Reticulum(configpath=config_dir)
+reticulum = RNS.Reticulum(configdir=config_dir)
 identity = RNS.Identity()
 destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "test")
 
 dest_hash = destination.hash.hex()
 print(json.dumps({"port": port, "dest_hash": dest_hash}), flush=True)
 
-time.sleep(1)  # let server start
+# Wait for Rust node to connect before announcing
+sys.stdin.readline()
+time.sleep(0.5)
 destination.announce()
 
 # Wait for signal
@@ -97,6 +100,7 @@ except (KeyboardInterrupt, SystemExit):
     // Start Python process
     let mut child = Command::new("python3")
         .args(["-c", python_script])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -114,10 +118,7 @@ except (KeyboardInterrupt, SystemExit):
 
     eprintln!("Python server on port {}, dest_hash={}", port, expected_dest_hash_hex);
 
-    // Give Python a moment to announce
-    std::thread::sleep(Duration::from_secs(2));
-
-    // Start Rust node
+    // Start Rust node (before triggering announce)
     let (announce_tx, announce_rx): (Sender<(DestHash, u8)>, Receiver<(DestHash, u8)>) =
         mpsc::channel();
 
@@ -146,6 +147,12 @@ except (KeyboardInterrupt, SystemExit):
         Box::new(TestCallbacks { announce_tx }),
     )
     .expect("Failed to start Rust node");
+
+    // Give Rust node time to connect, then signal Python to announce
+    std::thread::sleep(Duration::from_secs(2));
+    if let Some(ref mut stdin) = child.stdin {
+        let _ = writeln!(stdin, "go");
+    }
 
     // Wait for announce
     let result = announce_rx.recv_timeout(Duration::from_secs(10));
