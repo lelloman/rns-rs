@@ -11,6 +11,7 @@ pub mod tunnel;
 pub mod jobs;
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use rns_crypto::Rng;
