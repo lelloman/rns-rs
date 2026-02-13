@@ -1,0 +1,95 @@
+# NAT hole punching test topology.
+#
+# Uses a single privileged "testbed" container that creates NAT using
+# Linux network namespaces + veth pairs + iptables. This avoids Docker's
+# bridge isolation (DOCKER-ISOLATION iptables chains) that blocks cross-bridge
+# forwarding.
+#
+# Inside the testbed:
+#   ns-a (node-a) <--veth--> router-a namespace <--bridge--> public bridge <--bridge--> router-b namespace <--veth--> ns-b (node-b)
+#
+# For simplicity, we skip the full namespace approach and instead put everything
+# on a single Docker network but use iptables SNAT/DNAT to simulate NAT.
+# The facilitator sees traffic from node-a as coming from 172.22.0.10 (router-a)
+# and from node-b as coming from 172.22.0.20 (router-b).
+
+networks:
+  net-public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+
+services:
+  # --- Facilitator (backbone transport + probe server) ---
+  facilitator:
+    image: rns-test
+    container_name: nat-facilitator
+    volumes:
+      - ./configs/facilitator:/etc/rns:ro
+    ports:
+      - "8083:8080"
+    networks:
+      net-public:
+        ipv4_address: 172.22.0.30
+
+  # --- Node A (behind simulated NAT) ---
+  # Uses iptables SNAT to masquerade all outbound traffic, simulating
+  # being behind a NAT gateway. The probe server will see the container's
+  # real IP (172.22.0.10) as the "public" endpoint.
+  node-a:
+    image: rns-test
+    container_name: nat-node-a
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./configs/node-a:/etc/rns:ro
+    ports:
+      - "8081:8080"
+    networks:
+      net-public:
+        ipv4_address: 172.22.0.10
+    depends_on:
+      facilitator:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        iptables -t nat -A POSTROUTING -p udp -j MASQUERADE
+        cp /etc/rns/config /data/config
+        exec rns-ctl --config /data --disable-auth --host 0.0.0.0 --port 8080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # --- Node B (behind simulated NAT) ---
+  node-b:
+    image: rns-test
+    container_name: nat-node-b
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./configs/node-b:/etc/rns:ro
+    ports:
+      - "8082:8080"
+    networks:
+      net-public:
+        ipv4_address: 172.22.0.20
+    depends_on:
+      facilitator:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        iptables -t nat -A POSTROUTING -p udp -j MASQUERADE
+        cp /etc/rns/config /data/config
+        exec rns-ctl --config /data --disable-auth --host 0.0.0.0 --port 8080
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

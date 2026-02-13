@@ -111,6 +111,26 @@ pub enum Event {
         /// Full identity private key (64 bytes) for signing proofs.
         signing_key: Option<[u8; 64]>,
     },
+    /// Propose a direct connection to a peer via hole punching.
+    ProposeDirectConnect {
+        link_id: [u8; 16],
+    },
+    /// Set the direct-connect policy.
+    SetDirectConnectPolicy {
+        policy: crate::holepunch::orchestrator::HolePunchPolicy,
+    },
+    /// (Internal) Probe result arrived from a worker thread.
+    HolePunchProbeResult {
+        link_id: [u8; 16],
+        session_id: [u8; 16],
+        observed_addr: std::net::SocketAddr,
+        socket: std::net::UdpSocket,
+    },
+    /// (Internal) Probe failed.
+    HolePunchProbeFailed {
+        link_id: [u8; 16],
+        session_id: [u8; 16],
+    },
 }
 
 /// Queries that can be sent to the driver.
@@ -400,6 +420,27 @@ impl fmt::Debug for Event {
                 f.debug_struct("RegisterProofStrategy")
                     .field("dest_hash", dest_hash)
                     .field("strategy", strategy)
+                    .finish()
+            }
+            Event::ProposeDirectConnect { link_id } => {
+                f.debug_struct("ProposeDirectConnect")
+                    .field("link_id", link_id)
+                    .finish()
+            }
+            Event::SetDirectConnectPolicy { .. } => {
+                write!(f, "SetDirectConnectPolicy")
+            }
+            Event::HolePunchProbeResult { link_id, session_id, observed_addr, .. } => {
+                f.debug_struct("HolePunchProbeResult")
+                    .field("link_id", link_id)
+                    .field("session_id", session_id)
+                    .field("observed_addr", observed_addr)
+                    .finish()
+            }
+            Event::HolePunchProbeFailed { link_id, session_id } => {
+                f.debug_struct("HolePunchProbeFailed")
+                    .field("link_id", link_id)
+                    .field("session_id", session_id)
                     .finish()
             }
         }

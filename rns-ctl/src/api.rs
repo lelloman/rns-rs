@@ -74,6 +74,7 @@ pub fn handle_request(
         ("POST", "/api/channel") => handle_post_channel(req, node),
         ("POST", "/api/resource") => handle_post_resource(req, node),
         ("POST", "/api/path/request") => handle_post_path_request(req, node),
+        ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
 
         _ => HttpResponse::not_found(),
     }
@@ -714,6 +715,29 @@ fn handle_post_path_request(req: &HttpRequest, node: &NodeHandle) -> HttpRespons
         match n.request_path(&DestHash(dh)) {
             Ok(()) => HttpResponse::ok(json!({"status": "requested"})),
             Err(_) => HttpResponse::internal_error("Path request failed"),
+        }
+    })
+}
+
+fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let lid_str = match body["link_id"].as_str() {
+        Some(s) => s,
+        None => return HttpResponse::bad_request("Missing link_id"),
+    };
+    let link_id: [u8; 16] = match hex_to_array(lid_str) {
+        Some(h) => h,
+        None => return HttpResponse::bad_request("Invalid link_id"),
+    };
+
+    with_node(node, |n| {
+        match n.propose_direct_connect(link_id) {
+            Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
+            Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
         }
     })
 }

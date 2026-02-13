@@ -532,6 +532,11 @@ impl LinkEngine {
         &self.destination_hash
     }
 
+    /// Get the derived session key (needed for hole-punch token derivation).
+    pub fn derived_key(&self) -> Option<&[u8]> {
+        self.derived_key.as_deref()
+    }
+
     pub fn keepalive_interval(&self) -> f64 {
         self.keepalive_interval
     }

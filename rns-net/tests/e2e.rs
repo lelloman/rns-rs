@@ -488,6 +488,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -521,6 +523,8 @@ fn start_client_node(
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         callbacks,
     )
@@ -732,6 +736,8 @@ fn test_direct_link_no_transport() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1137,6 +1143,8 @@ fn test_plain_message_delivery() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1199,6 +1207,8 @@ fn test_group_message_delivery() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1258,6 +1268,8 @@ fn test_group_wrong_key_fails() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2068,6 +2080,8 @@ fn test_udp_announce_and_message() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2095,6 +2109,8 @@ fn test_udp_announce_and_message() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )

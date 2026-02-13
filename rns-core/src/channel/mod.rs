@@ -163,6 +163,12 @@ impl Channel {
         self.collect_contiguous()
     }
 
+    /// Clear all outstanding TX entries, restoring the window to full capacity.
+    /// Used after holepunch completion where signaling messages are fire-and-forget.
+    pub fn flush_tx(&mut self) {
+        self.tx_ring.clear();
+    }
+
     /// Notify that a packet with given sequence was delivered (acknowledged).
     pub fn packet_delivered(&mut self, sequence: Sequence) -> Vec<ChannelAction> {
         if let Some(pos) = self.tx_ring.iter().position(|e| e.sequence == sequence) {

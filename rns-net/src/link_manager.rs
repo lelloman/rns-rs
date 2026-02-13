@@ -198,6 +198,12 @@ impl LinkManager {
         }
     }
 
+    /// Get the derived session key for a link (needed for hole-punch token derivation).
+    pub fn get_derived_key(&self, link_id: &LinkId) -> Option<Vec<u8>> {
+        self.links.get(link_id)
+            .and_then(|link| link.engine.derived_key().map(|dk| dk.to_vec()))
+    }
+
     /// Register a destination that can accept incoming links.
     pub fn register_link_destination(
         &mut self,
@@ -1570,6 +1576,16 @@ impl LinkManager {
     pub fn set_resource_strategy(&mut self, link_id: &LinkId, strategy: ResourceStrategy) {
         if let Some(link) = self.links.get_mut(link_id) {
             link.resource_strategy = strategy;
+        }
+    }
+
+    /// Flush the channel TX ring for a link, clearing outstanding messages.
+    /// Called after holepunch completion where signaling messages are fire-and-forget.
+    pub fn flush_channel_tx(&mut self, link_id: &LinkId) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            if let Some(ref mut channel) = link.channel {
+                channel.flush_tx();
+            }
         }
     }
 

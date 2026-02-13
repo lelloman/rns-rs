@@ -132,6 +132,8 @@ fn main() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(ServerCallbacks { delivery_tx }),
     )
@@ -167,6 +169,8 @@ fn main() {
             rpc_port: 0,
             cache_dir: None,
             management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
         },
         Box::new(ClientCallbacks {
             announce_tx,

@@ -63,7 +63,7 @@ impl RnsNode {
         };
 
         let (tx, rx) = event::channel();
-        let mut driver = Driver::new(transport_config, rx, callbacks);
+        let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
 
         // Connect to the daemon via LocalClientInterface
         let local_config = LocalClientConfig {

@@ -15,6 +15,7 @@ use crate::event::{
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
+use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::time;
 
 /// Infer the interface type string from a dynamic interface's name.
@@ -99,6 +100,18 @@ pub trait Callbacks: Send {
     fn on_proof_requested(&mut self, _dest_hash: rns_core::types::DestHash, _packet_hash: rns_core::types::PacketHash) -> bool {
         true
     }
+
+    /// Called when a direct connection is proposed by a peer (for AskApp policy).
+    /// Return true to accept, false to reject.
+    fn on_direct_connect_proposed(&mut self, _link_id: rns_core::types::LinkId, _peer_identity: Option<rns_core::types::IdentityHash>) -> bool {
+        false
+    }
+
+    /// Called when a direct P2P connection is established via hole punching.
+    fn on_direct_connect_established(&mut self, _link_id: rns_core::types::LinkId, _interface_id: InterfaceId) {}
+
+    /// Called when a direct connection attempt fails.
+    fn on_direct_connect_failed(&mut self, _link_id: rns_core::types::LinkId, _reason: u8) {}
 }
 
 /// The driver loop. Owns the engine and all interface entries.
@@ -133,6 +146,10 @@ pub struct Driver {
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
+    /// Hole-punch manager for direct P2P connections.
+    pub(crate) holepunch_manager: HolePunchManager,
+    /// Event sender for worker threads to send results back to the driver loop.
+    pub(crate) event_tx: crate::event::EventSender,
 }
 
 impl Driver {
@@ -140,6 +157,7 @@ impl Driver {
     pub fn new(
         config: TransportConfig,
         rx: EventReceiver,
+        tx: crate::event::EventSender,
         callbacks: Box<dyn Callbacks>,
     ) -> Self {
         let tunnel_synth_dest = rns_core::destination::destination_hash(
@@ -178,7 +196,14 @@ impl Driver {
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
             local_destinations,
+            holepunch_manager: HolePunchManager::new(None),
+            event_tx: tx,
         }
+    }
+
+    /// Set the probe address for hole punching.
+    pub fn set_probe_addr(&mut self, addr: Option<std::net::SocketAddr>) {
+        self.holepunch_manager = HolePunchManager::new(addr);
     }
 
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
@@ -235,6 +260,12 @@ impl Driver {
                     // Tick link manager (keepalive, stale, timeout)
                     let link_actions = self.link_manager.tick(&mut self.rng);
                     self.dispatch_link_actions(link_actions);
+                    // Tick hole-punch manager
+                    {
+                        let tx = self.get_event_sender();
+                        let hp_actions = self.holepunch_manager.tick(&tx);
+                        self.dispatch_holepunch_actions(hp_actions);
+                    }
                     // Emit management announces
                     self.tick_management_announces(now);
                     // Cull expired sent packet tracking entries (no proof received within 60s)
@@ -420,6 +451,33 @@ impl Driver {
                         rns_crypto::identity::Identity::from_private_key(&key)
                     });
                     self.proof_strategies.insert(dest_hash, (strategy, identity));
+                }
+                Event::ProposeDirectConnect { link_id } => {
+                    let derived_key = self.link_manager.get_derived_key(&link_id);
+                    if let Some(dk) = derived_key {
+                        let tx = self.get_event_sender();
+                        let hp_actions = self.holepunch_manager.propose(
+                            link_id, &dk, &mut self.rng, &tx,
+                        );
+                        self.dispatch_holepunch_actions(hp_actions);
+                    } else {
+                        log::warn!("Cannot propose direct connect: no derived key for link {:02x?}", &link_id[..4]);
+                    }
+                }
+                Event::SetDirectConnectPolicy { policy } => {
+                    self.holepunch_manager.set_policy(policy);
+                }
+                Event::HolePunchProbeResult { link_id, session_id, observed_addr, socket } => {
+                    let hp_actions = self.holepunch_manager.handle_probe_result(
+                        link_id, session_id, observed_addr, socket,
+                    );
+                    self.dispatch_holepunch_actions(hp_actions);
+                }
+                Event::HolePunchProbeFailed { link_id, session_id } => {
+                    let hp_actions = self.holepunch_manager.handle_probe_failed(
+                        link_id, session_id,
+                    );
+                    self.dispatch_holepunch_actions(hp_actions);
                 }
                 Event::Shutdown => break,
             }
@@ -1078,6 +1136,7 @@ impl Driver {
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
+                    self.holepunch_manager.link_closed(&link_id);
                     self.callbacks.on_link_closed(rns_core::types::LinkId(link_id), reason);
                 }
                 LinkManagerAction::RemoteIdentified { link_id, identity_hash, public_key } => {
@@ -1129,7 +1188,19 @@ impl Driver {
                     self.dispatch_link_actions(accept_actions);
                 }
                 LinkManagerAction::ChannelMessageReceived { link_id, msgtype, payload } => {
-                    self.callbacks.on_channel_message(rns_core::types::LinkId(link_id), msgtype, payload);
+                    // Intercept hole-punch signaling messages (0xFE00..=0xFE04)
+                    if HolePunchManager::is_holepunch_message(msgtype) {
+                        let derived_key = self.link_manager.get_derived_key(&link_id);
+                        let tx = self.get_event_sender();
+                        let (handled, hp_actions) = self.holepunch_manager.handle_signal(
+                            link_id, msgtype, payload, derived_key.as_deref(), &tx,
+                        );
+                        if handled {
+                            self.dispatch_holepunch_actions(hp_actions);
+                        }
+                    } else {
+                        self.callbacks.on_channel_message(rns_core::types::LinkId(link_id), msgtype, payload);
+                    }
                 }
                 LinkManagerAction::LinkDataReceived { link_id, context, data } => {
                     self.callbacks.on_link_data(rns_core::types::LinkId(link_id), context, data);
@@ -1139,6 +1210,55 @@ impl Driver {
                 }
             }
         }
+    }
+
+    /// Dispatch hole-punch manager actions.
+    fn dispatch_holepunch_actions(&mut self, actions: Vec<HolePunchManagerAction>) {
+        for action in actions {
+            match action {
+                HolePunchManagerAction::SendChannelMessage { link_id, msgtype, payload } => {
+                    let link_actions = self.link_manager.send_channel_message(
+                        &link_id, msgtype, &payload, &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
+                HolePunchManagerAction::DirectConnectEstablished { link_id, session_id, interface_id } => {
+                    log::info!(
+                        "Direct connection established for link {:02x?} session {:02x?} iface {}",
+                        &link_id[..4], &session_id[..4], interface_id.0
+                    );
+                    // Redirect the link's path to use the direct interface
+                    self.engine.redirect_path(&link_id, interface_id, time::now());
+                    // Flush holepunch signaling messages from the channel window
+                    self.link_manager.flush_channel_tx(&link_id);
+                    self.callbacks.on_direct_connect_established(
+                        rns_core::types::LinkId(link_id),
+                        interface_id,
+                    );
+                }
+                HolePunchManagerAction::DirectConnectFailed { link_id, session_id, reason } => {
+                    log::debug!(
+                        "Direct connection failed for link {:02x?} session {:02x?} reason={}",
+                        &link_id[..4], &session_id[..4], reason
+                    );
+                    self.callbacks.on_direct_connect_failed(
+                        rns_core::types::LinkId(link_id),
+                        reason,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Get an event sender for worker threads to send results back to the driver.
+    ///
+    /// This is a bit of a workaround since the driver owns the receiver.
+    /// We store a clone of the sender when the driver is created.
+    fn get_event_sender(&self) -> crate::event::EventSender {
+        // The driver doesn't directly have a sender, but node.rs creates the channel
+        // and passes rx to the driver. We need to store a sender clone.
+        // For now we use an internal sender that was set during construction.
+        self.event_tx.clone()
     }
 
     /// Management announce interval in seconds.
@@ -1538,6 +1658,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -1563,6 +1684,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let (writer, sent) = MockWriter::new();
@@ -1586,6 +1708,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1612,6 +1735,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1638,6 +1762,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -1659,6 +1784,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1673,6 +1799,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -1703,6 +1830,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1736,6 +1864,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1773,6 +1902,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1815,6 +1945,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1850,6 +1981,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -1880,6 +2012,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -1907,6 +2040,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
@@ -1931,6 +2065,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let (w1, _s1) = MockWriter::new();
@@ -1959,6 +2094,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
@@ -1989,6 +2125,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2023,6 +2160,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2060,6 +2198,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let (writer, sent) = MockWriter::new();
@@ -2097,6 +2236,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2135,6 +2275,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some([0xAA; 16]) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2158,6 +2299,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2179,6 +2321,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2200,6 +2343,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2222,6 +2366,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2244,6 +2389,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2269,6 +2415,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2294,6 +2441,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2326,6 +2474,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2367,6 +2516,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2399,6 +2549,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2440,6 +2591,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2471,6 +2623,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2497,6 +2650,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2533,6 +2687,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2564,6 +2719,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2597,6 +2753,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2631,6 +2788,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2676,6 +2834,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2710,6 +2869,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2759,6 +2919,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2790,6 +2951,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: true, identity_hash: Some([0xBB; 16]) },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2823,6 +2985,7 @@ mod tests {
         let driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2846,6 +3009,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2874,6 +3038,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
 
@@ -2899,6 +3064,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2939,6 +3105,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -2990,6 +3157,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3038,6 +3206,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3099,6 +3268,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3169,6 +3339,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3240,6 +3411,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3300,6 +3472,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3379,6 +3552,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3436,6 +3610,7 @@ mod tests {
         let mut driver = Driver::new(
             TransportConfig { transport_enabled: false, identity_hash: None },
             rx,
+            tx.clone(),
             Box::new(cbs),
         );
         let info = make_interface_info(1);
@@ -3492,7 +3667,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
-        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+        let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
         tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
@@ -3516,7 +3691,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
-        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+        let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xAA; 16];
         tx.send(Event::RegisterDestination {
@@ -3545,7 +3720,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
-        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+        let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xBB; 16];
         tx.send(Event::RegisterLinkDestination {
@@ -3575,7 +3750,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
-        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+        let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
         tx.send(Event::Query(QueryRequest::Links, resp_tx)).unwrap();
@@ -3595,7 +3770,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver_config = TransportConfig { transport_enabled: false, identity_hash: None };
-        let mut driver = Driver::new(driver_config, rx, Box::new(cbs));
+        let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
         tx.send(Event::Query(QueryRequest::Resources, resp_tx)).unwrap();

@@ -9,7 +9,7 @@ COPY rns-ctl rns-ctl
 RUN cargo build --release --bin rns-ctl
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl iproute2 iptables && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/rns-ctl /usr/local/bin/rns-ctl
 RUN mkdir -p /etc/rns /data
 EXPOSE 8080

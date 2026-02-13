@@ -1,0 +1,10 @@
+[reticulum]
+enable_transport = True
+share_instance = No
+probe_addr = 172.22.0.30:4343
+
+[interfaces]
+  [[Interface 0]]
+    type = TCPClientInterface
+    target_host = 172.22.0.30
+    target_port = 4965

@@ -92,6 +92,10 @@ pub struct NodeConfig {
     pub cache_dir: Option<std::path::PathBuf>,
     /// Remote management configuration.
     pub management: crate::management::ManagementConfig,
+    /// Port to run the STUN probe server on (for facilitator nodes).
+    pub probe_port: Option<u16>,
+    /// Address of the STUN probe server (for client nodes behind NAT).
+    pub probe_addr: Option<std::net::SocketAddr>,
 }
 
 /// Interface configuration variant with its mode.
@@ -146,6 +150,8 @@ pub struct RnsNode {
     driver_handle: Option<JoinHandle<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
+    #[allow(dead_code)]
+    probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
 }
 
 impl RnsNode {
@@ -649,6 +655,14 @@ impl RnsNode {
             }
         }
 
+        // Parse probe_addr string to SocketAddr
+        let probe_addr = rns_config.reticulum.probe_addr.as_ref().and_then(|s| {
+            s.parse::<std::net::SocketAddr>().map_err(|e| {
+                log::warn!("Invalid probe_addr '{}': {}", s, e);
+                e
+            }).ok()
+        });
+
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             identity: Some(identity),
@@ -661,6 +675,8 @@ impl RnsNode {
                 remote_management_allowed: mgmt_allowed,
                 publish_blackhole: rns_config.reticulum.publish_blackhole,
             },
+            probe_port: rns_config.reticulum.probe_port,
+            probe_addr,
         };
 
         Self::start(node_config, callbacks)
@@ -678,7 +694,7 @@ impl RnsNode {
         };
 
         let (tx, rx) = event::channel();
-        let mut driver = Driver::new(transport_config, rx, callbacks);
+        let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
 
         // Set up announce cache if cache directory is configured
         if let Some(ref cache_dir) = config.cache_dir {
@@ -686,6 +702,28 @@ impl RnsNode {
             let _ = std::fs::create_dir_all(&announces_dir);
             driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
         }
+
+        // Configure probe address for hole punching
+        if let Some(addr) = config.probe_addr {
+            driver.set_probe_addr(Some(addr));
+        }
+
+        // Start probe server if configured
+        let probe_server = if let Some(port) = config.probe_port {
+            let listen_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
+            match crate::holepunch::probe::start_probe_server(listen_addr) {
+                Ok(handle) => {
+                    log::info!("Probe server started on 0.0.0.0:{}", port);
+                    Some(handle)
+                }
+                Err(e) => {
+                    log::error!("Failed to start probe server on port {}: {}", port, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Store management config on driver for ACL enforcement
         driver.management_config = config.management.clone();
@@ -1213,6 +1251,7 @@ impl RnsNode {
             driver_handle: Some(driver_handle),
             rpc_server,
             tick_interval_ms,
+            probe_server,
         })
     }
 
@@ -1403,6 +1442,26 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Propose a direct P2P connection to a peer via NAT hole punching.
+    ///
+    /// The link must be active and connected through a backbone node.
+    /// If successful, a direct UDP connection will be established, bypassing the backbone.
+    pub fn propose_direct_connect(&self, link_id: [u8; 16]) -> Result<(), SendError> {
+        self.tx
+            .send(Event::ProposeDirectConnect { link_id })
+            .map_err(|_| SendError)
+    }
+
+    /// Set the policy for handling incoming direct-connect proposals.
+    pub fn set_direct_connect_policy(
+        &self,
+        policy: crate::holepunch::orchestrator::HolePunchPolicy,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SetDirectConnectPolicy { policy })
+            .map_err(|_| SendError)
+    }
+
     /// Send data on a link with a given context.
     pub fn send_on_link(
         &self,
@@ -1586,6 +1645,7 @@ impl RnsNode {
             driver_handle: Some(driver_handle),
             rpc_server,
             tick_interval_ms,
+            probe_server: None,
         }
     }
 
@@ -1653,6 +1713,8 @@ mod tests {
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1673,6 +1735,8 @@ mod tests {
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1693,6 +1757,8 @@ mod tests {
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2120,6 +2186,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2149,6 +2217,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2173,6 +2243,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2194,6 +2266,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2222,6 +2296,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2251,6 +2327,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2277,6 +2355,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2314,6 +2394,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2344,6 +2426,8 @@ enable_transport = False
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
+                probe_port: None,
+                probe_addr: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

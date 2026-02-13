@@ -1295,6 +1295,26 @@ impl TransportEngine {
         self.interfaces.get(id)
     }
 
+    /// Redirect a path entry to a different interface (e.g. after direct connect).
+    /// If no entry exists, creates a minimal direct path (hops=1).
+    pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
+        if let Some(entry) = self.path_table.get_mut(dest_hash) {
+            entry.receiving_interface = interface;
+            entry.hops = 1;
+        } else {
+            self.path_table.insert(*dest_hash, PathEntry {
+                timestamp: now,
+                next_hop: [0u8; 16],
+                hops: 1,
+                expires: now + 3600.0,
+                random_blobs: Vec::new(),
+                receiving_interface: interface,
+                packet_hash: [0u8; 32],
+                announce_raw: None,
+            });
+        }
+    }
+
     /// Drop a path from the path table.
     pub fn drop_path(&mut self, dest_hash: &[u8; 16]) -> bool {
         self.path_table.remove(dest_hash).is_some()

@@ -32,6 +32,8 @@ pub struct ReticulumSection {
     pub enable_remote_management: bool,
     pub remote_management_allowed: Vec<String>,
     pub publish_blackhole: bool,
+    pub probe_port: Option<u16>,
+    pub probe_addr: Option<String>,
 }
 
 impl Default for ReticulumSection {
@@ -49,6 +51,8 @@ impl Default for ReticulumSection {
             enable_remote_management: false,
             remote_management_allowed: Vec::new(),
             publish_blackhole: false,
+            probe_port: None,
+            probe_addr: None,
         }
     }
 }
@@ -327,6 +331,15 @@ fn build_reticulum_section(
             key: "publish_blackhole".into(),
             value: v.clone(),
         })?;
+    }
+    if let Some(v) = kvs.get("probe_port") {
+        section.probe_port = Some(v.parse::<u16>().map_err(|_| ConfigError::InvalidValue {
+            key: "probe_port".into(),
+            value: v.clone(),
+        })?);
+    }
+    if let Some(v) = kvs.get("probe_addr") {
+        section.probe_addr = Some(v.clone());
     }
 
     Ok(section)

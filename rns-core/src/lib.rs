@@ -14,3 +14,4 @@ pub mod channel;
 pub mod buffer;
 pub mod msgpack;
 pub mod resource;
+pub mod holepunch;

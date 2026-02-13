@@ -1,0 +1,10 @@
+[reticulum]
+enable_transport = True
+share_instance = No
+probe_port = 4343
+
+[interfaces]
+  [[Interface 0]]
+    type = TCPServerInterface
+    listen_ip = 0.0.0.0
+    listen_port = 4965

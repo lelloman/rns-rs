@@ -1,4 +1,5 @@
 use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
+use rns_core::transport::types::InterfaceId;
 use rns_net::destination::AnnouncedIdentity;
 use rns_net::Callbacks;
 
@@ -200,6 +201,34 @@ impl Callbacks for CtlCallbacks {
         };
         let event = WsEvent::packet(&record);
         push_packet(&self.state, record);
+        broadcast(&self.ws_broadcast, event);
+    }
+
+    fn on_direct_connect_established(&mut self, link_id: LinkId, interface_id: InterfaceId) {
+        let record = LinkEventRecord {
+            link_id: to_hex(&link_id.0),
+            event_type: "direct_established".into(),
+            is_initiator: None,
+            rtt: None,
+            identity_hash: None,
+            reason: Some(format!("interface_id={}", interface_id.0)),
+        };
+        let event = WsEvent::link(&record);
+        push_link_event(&self.state, record);
+        broadcast(&self.ws_broadcast, event);
+    }
+
+    fn on_direct_connect_failed(&mut self, link_id: LinkId, reason: u8) {
+        let record = LinkEventRecord {
+            link_id: to_hex(&link_id.0),
+            event_type: "direct_failed".into(),
+            is_initiator: None,
+            rtt: None,
+            identity_hash: None,
+            reason: Some(format!("reason_code={}", reason)),
+        };
+        let event = WsEvent::link(&record);
+        push_link_event(&self.state, record);
         broadcast(&self.ws_broadcast, event);
     }
 }
