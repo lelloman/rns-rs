@@ -4,7 +4,7 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -145,6 +145,7 @@ pub struct RnsNode {
     tx: EventSender,
     driver_handle: Option<JoinHandle<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
+    tick_interval_ms: Arc<AtomicU64>,
 }
 
 impl RnsNode {
@@ -1164,13 +1165,16 @@ impl RnsNode {
             }
         }
 
-        // Spawn timer thread
+        // Spawn timer thread with configurable tick interval
+        let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let timer_tx = tx.clone();
+        let timer_interval = Arc::clone(&tick_interval_ms);
         thread::Builder::new()
             .name("rns-timer".into())
             .spawn(move || {
                 loop {
-                    thread::sleep(Duration::from_secs(1));
+                    let ms = timer_interval.load(Ordering::Relaxed);
+                    thread::sleep(Duration::from_millis(ms));
                     if timer_tx.send(Event::Tick).is_err() {
                         break; // receiver dropped
                     }
@@ -1208,6 +1212,7 @@ impl RnsNode {
             tx,
             driver_handle: Some(driver_handle),
             rpc_server,
+            tick_interval_ms,
         })
     }
 
@@ -1574,17 +1579,41 @@ impl RnsNode {
         tx: EventSender,
         driver_handle: thread::JoinHandle<()>,
         rpc_server: Option<crate::rpc::RpcServer>,
+        tick_interval_ms: Arc<AtomicU64>,
     ) -> Self {
         RnsNode {
             tx,
             driver_handle: Some(driver_handle),
             rpc_server,
+            tick_interval_ms,
         }
     }
 
     /// Get the event sender for direct event injection.
     pub fn event_sender(&self) -> &EventSender {
         &self.tx
+    }
+
+    /// Set the tick interval in milliseconds.
+    /// Default is 1000 (1 second). Changes take effect on the next tick cycle.
+    /// Values are clamped to the range 100..=10000.
+    /// Returns the actual stored value (which may differ from `ms` if clamped).
+    pub fn set_tick_interval(&self, ms: u64) -> u64 {
+        let clamped = ms.clamp(100, 10_000);
+        if clamped != ms {
+            log::warn!(
+                "tick interval {}ms out of range, clamped to {}ms",
+                ms,
+                clamped
+            );
+        }
+        self.tick_interval_ms.store(clamped, Ordering::Relaxed);
+        clamped
+    }
+
+    /// Get the current tick interval in milliseconds.
+    pub fn tick_interval(&self) -> u64 {
+        self.tick_interval_ms.load(Ordering::Relaxed)
     }
 
     /// Shut down the node. Blocks until the driver thread exits.

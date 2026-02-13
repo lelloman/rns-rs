@@ -12,6 +12,8 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -109,13 +111,16 @@ impl RnsNode {
             },
         );
 
-        // Spawn timer thread
+        // Spawn timer thread with configurable tick interval
+        let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let timer_tx = tx.clone();
+        let timer_interval = Arc::clone(&tick_interval_ms);
         thread::Builder::new()
             .name("rns-timer-client".into())
             .spawn(move || {
                 loop {
-                    thread::sleep(Duration::from_secs(1));
+                    let ms = timer_interval.load(Ordering::Relaxed);
+                    thread::sleep(Duration::from_millis(ms));
                     if timer_tx.send(event::Event::Tick).is_err() {
                         break;
                     }
@@ -129,7 +134,7 @@ impl RnsNode {
                 driver.run();
             })?;
 
-        Ok(RnsNode::from_parts(tx, driver_handle, None))
+        Ok(RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms))
     }
 
     /// Connect to a shared instance, with config loaded from a config directory.
