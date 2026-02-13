@@ -28,7 +28,7 @@
 │  └─────────────────────────────────────────────────────────────────┘    │
 │                                    │                                     │
 │  ┌─────────────────────────────────┴───────────────────────────────┐    │
-│  │                  rns-ctl Core (Rust/Python)                      │    │
+│  │                  rns-ctl Core (Rust)                              │    │
 │  │  - Manages RNS instance                                          │    │
 │  │  - Tracks state (announces, packets, links, resources)           │    │
 │  │  - Handles WebSocket subscriptions                               │    │
@@ -911,139 +911,6 @@ rns-ctl --generate-cert --cert-dir /tmp/certs
 
 ---
 
-## Python Implementation
-
-### Location
-
-`RNS/Utilities/rns_sak/`
-
-### Structure
-
-```
-rns_sak/
-├── __init__.py
-├── __main__.py              # CLI entry point
-├── config.py                # Config from env vars
-├── server.py                # HTTP server setup
-├── api.py                   # Route handlers
-├── websocket.py             # WebSocket server
-├── state.py                 # Shared state
-├── tls.py                   # TLS handling
-└── requirements.txt
-```
-
-### Dependencies (requirements.txt)
-
-```
-RNS>=0.5.0
-aiohttp>=3.9.0
-aiohttp-cors>=0.7.0
-python-dotenv>=1.0.0
-```
-
-### Environment Variables
-
-Same as Rust version.
-
-### Core Components
-
-#### State Management (state.py)
-
-```python
-import asyncio
-from collections import deque
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-from datetime import datetime
-
-@dataclass
-class AnnounceEvent:
-    dest_hash: bytes
-    identity_hash: bytes
-    app_name: str
-    aspect: str
-    hops: int
-    received_at: float
-
-@dataclass
-class SakState:
-    node_id: str
-    started_at: float
-    identity_hash: Optional[bytes] = None
-
-    announces: deque = field(default_factory=deque)
-    packets: deque = field(default_factory=deque)
-    proofs: deque = field(default_factory=deque)
-
-    interfaces: Dict[str, dict] = field(default_factory=dict)
-    destinations: Dict[bytes, dict] = field(default_factory=dict)
-    links: Dict[bytes, dict] = field(default_factory=dict)
-    paths: Dict[bytes, dict] = field(default_factory=dict)
-    resources: Dict[bytes, dict] = field(default_factory=dict)
-
-    ws_subscribers: List[asyncio.Queue] = field(default_factory=list)
-```
-
-#### REST API (api.py)
-
-```python
-from aiohttp import web
-import json
-import base64
-
-async def get_info(request: web.Request) -> web.Response:
-    state = request.app['state']
-    return web.json_response({
-        'status': 'success',
-        'data': {
-            'node_id': state.node_id,
-            'implementation': 'python',
-            'version': '0.1.0',
-            'uptime_seconds': time.time() - state.started_at,
-            'identity_hash': state.identity_hash.hex() if state.identity_hash else None,
-        }
-    })
-
-async def get_interfaces(request: web.Request) -> web.Response:
-    state = request.app['state']
-    return web.json_response({
-        'status': 'success',
-        'data': {'interfaces': list(state.interfaces.values())}
-    })
-
-# ... more handlers
-```
-
-#### WebSocket (websocket.py)
-
-```python
-import asyncio
-import json
-from aiohttp import web, WSMsgType
-
-async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-
-    state = request.app['state']
-    queue = asyncio.Queue()
-    state.ws_subscribers.append(queue)
-
-    try:
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                data = json.loads(msg.data)
-                await handle_ws_message(state, ws, data)
-            elif msg.type == WSMsgType.ERROR:
-                print(f'WS error: {ws.exception()}')
-    finally:
-        state.ws_subscribers.remove(queue)
-
-    return ws
-```
-
----
-
 ## E2E Test Framework
 
 ### Location
@@ -1199,22 +1066,7 @@ async def rust_to_rust_announce(nodes: dict[str, SakClient]):
 - `POST /api/link`, `/api/link/send`, `/api/link/close`
 - `POST /api/channel`, `/api/resource`, `/api/path/request`
 
-### Phase 2: Python rns-ctl (Week 2-3)
-
-**Goal**: Python version with same API.
-
-- [ ] Create `RNS/Utilities/rns_sak/` package
-- [ ] Implement config from env vars
-- [ ] Implement state management
-- [ ] Implement TLS support
-- [ ] Implement token auth middleware
-- [ ] Implement REST API endpoints
-- [ ] Implement WebSocket server
-- [ ] Implement RNS callbacks integration
-- [ ] Create Dockerfile
-- [ ] Manual interop test (Rust ↔ Python)
-
-### Phase 3: E2E Test Infrastructure — **PARTIALLY DONE** ⚠️
+### Phase 2: E2E Test Infrastructure — **PARTIALLY DONE** ⚠️
 
 **Goal**: Working test controller with basic scenarios.
 
@@ -1242,7 +1094,7 @@ async def rust_to_rust_announce(nodes: dict[str, SakClient]):
 - [ ] Advanced scenarios (links, resources, multi-hop with links)
 - [ ] Failure injection & stress tests
 
-### Phase 4: Advanced Scenarios (Week 4-5)
+### Phase 3: Advanced Scenarios (Week 4-5)
 
 **Goal**: Links, resources, multi-hop routing.
 
@@ -1253,7 +1105,7 @@ async def rust_to_rust_announce(nodes: dict[str, SakClient]):
 - [ ] Implement path timeout scenario
 - [ ] Implement announce retransmit scenario
 
-### Phase 5: Failure Injection & Stress (Week 5-6)
+### Phase 4: Failure Injection & Stress (Week 5-6)
 
 **Goal**: Failure scenarios and stress tests.
 
@@ -1265,7 +1117,7 @@ async def rust_to_rust_announce(nodes: dict[str, SakClient]):
 - [ ] Implement burst packets stress test
 - [ ] Implement long-running stability test
 
-### Phase 6: CI/CD Integration (Week 6-7)
+### Phase 5: CI/CD Integration (Week 6-7)
 
 **Goal**: Automated E2E tests in CI.
 
@@ -1449,8 +1301,6 @@ networks:
 
 - [x] Rust rns-ctl implements full API — **DONE** (61 tests)
 - [x] All API endpoints tested manually — **DONE** (28 integration tests)
-- [ ] Python rns-ctl implements full API — **NOT DONE**
-- [ ] Rust ↔ Python interop verified — **NOT DONE**
 - [x] E2E test controller runs scenarios — **PARTIAL** (shell-based in tests/docker/)
 - [x] At least 15 test scenarios passing — **DONE** (12 suites running on multiple topologies)
 - [ ] CI/CD runs E2E tests on PRs — **NOT DONE**
@@ -1469,5 +1319,4 @@ networks:
 
 **External references**:
 - Axum documentation: https://docs.rs/axum/
-- aiohttp documentation: https://docs.aiohttp.org/
 - WebSocket protocol: RFC 6455
