@@ -55,6 +55,8 @@ pub fn handle_request(
         ("GET", "/api/announces") => handle_event_list(req, state, "announces"),
         ("GET", "/api/packets") => handle_event_list(req, state, "packets"),
         ("GET", "/api/proofs") => handle_event_list(req, state, "proofs"),
+        ("GET", "/api/link_events") => handle_event_list(req, state, "link_events"),
+        ("GET", "/api/resource_events") => handle_event_list(req, state, "resource_events"),
 
         // Identity recall: /api/identity/<dest_hash>
         ("GET", path) if path.starts_with("/api/identity/") => {
@@ -274,6 +276,28 @@ fn handle_event_list(req: &HttpRequest, state: &SharedState, kind: &str) -> Http
             }
             v
         }
+        "link_events" => {
+            let v: Vec<Value> = s
+                .link_events
+                .iter()
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .collect();
+            if clear {
+                s.link_events.clear();
+            }
+            v
+        }
+        "resource_events" => {
+            let v: Vec<Value> = s
+                .resource_events
+                .iter()
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .collect();
+            if clear {
+                s.resource_events.clear();
+            }
+            v
+        }
         _ => Vec::new(),
     };
 
@@ -330,11 +354,12 @@ fn handle_post_destination(
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
-    let (identity_hash, identity_prv_key) = {
+    let (identity_hash, identity_prv_key, identity_pub_key) = {
         let s = state.read().unwrap();
         let ih = s.identity_hash;
         let prv = s.identity.as_ref().and_then(|i| i.get_private_key());
-        (ih, prv)
+        let pubk = s.identity.as_ref().and_then(|i| i.get_public_key());
+        (ih, prv, pubk)
     };
 
     let (dest, signing_key) = match dest_type_str {
@@ -413,6 +438,20 @@ fn handle_post_destination(
     with_node(node, |n| {
         match n.register_destination_with_proof(&dest, signing_key) {
             Ok(()) => {
+                // For inbound single dests, also register with link manager
+                // so incoming LINKREQUEST packets are accepted.
+                if dest_type_str == "single"
+                    && body["direction"].as_str().unwrap_or("in") == "in"
+                {
+                    if let (Some(prv), Some(pubk)) = (identity_prv_key, identity_pub_key) {
+                        let mut sig_prv = [0u8; 32];
+                        sig_prv.copy_from_slice(&prv[32..64]);
+                        let mut sig_pub = [0u8; 32];
+                        sig_pub.copy_from_slice(&pubk[32..64]);
+                        let _ = n.register_link_destination(dest.hash.0, sig_prv, sig_pub);
+                    }
+                }
+
                 let full_name = format_dest_name(app_name, &aspects);
                 let hash_hex = to_hex(&dest.hash.0);
                 let group_key_b64 = dest.get_private_key().map(to_base64);

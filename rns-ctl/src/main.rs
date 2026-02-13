@@ -95,6 +95,12 @@ fn main() {
     let node_handle: api::NodeHandle = Arc::new(Mutex::new(Some(node)));
     let node_for_shutdown = node_handle.clone();
 
+    // Store node handle in shared state so callbacks can access it
+    {
+        let mut s = shared_state.write().unwrap();
+        s.node_handle = Some(node_handle.clone());
+    }
+
     // Set up ctrl-c handler
     let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_flag_handler = shutdown_flag.clone();

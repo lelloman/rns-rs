@@ -228,6 +228,124 @@ get_identity() {
   ctl_get "$port" "/api/identity/${dest_hash}"
 }
 
+# ── Link helpers ─────────────────────────────────────────────────────────────
+
+# create_link PORT DEST_HASH — creates a link to dest_hash, echoes link_id
+create_link() {
+  local port="$1" dest_hash="$2"
+  local body
+  body=$(jq -n --arg dh "$dest_hash" '{dest_hash: $dh}')
+  ctl_post "$port" "/api/link" "$body" | jq -r '.link_id'
+}
+
+# send_on_link PORT LINK_ID DATA_B64 [CONTEXT]
+send_on_link() {
+  local port="$1" link_id="$2" data_b64="$3" context="${4:-0}"
+  local body
+  body=$(jq -n --arg lid "$link_id" --arg d "$data_b64" --argjson ctx "$context" \
+    '{link_id: $lid, data: $d, context: $ctx}')
+  ctl_post "$port" "/api/link/send" "$body"
+}
+
+# close_link PORT LINK_ID
+close_link() {
+  local port="$1" link_id="$2"
+  local body
+  body=$(jq -n --arg lid "$link_id" '{link_id: $lid}')
+  ctl_post "$port" "/api/link/close" "$body"
+}
+
+# get_links PORT
+get_links() {
+  local port="$1"
+  ctl_get "$port" "/api/links"
+}
+
+# get_link_events PORT
+get_link_events() {
+  local port="$1"
+  ctl_get "$port" "/api/link_events"
+}
+
+# ── Channel helpers ──────────────────────────────────────────────────────────
+
+# send_channel PORT LINK_ID MSGTYPE PAYLOAD_B64
+send_channel() {
+  local port="$1" link_id="$2" msgtype="$3" payload_b64="$4"
+  local body
+  body=$(jq -n --arg lid "$link_id" --argjson mt "$msgtype" --arg p "$payload_b64" \
+    '{link_id: $lid, msgtype: $mt, payload: $p}')
+  ctl_post "$port" "/api/channel" "$body"
+}
+
+# ── Resource helpers ─────────────────────────────────────────────────────────
+
+# send_resource PORT LINK_ID DATA_B64 [METADATA_B64]
+send_resource() {
+  local port="$1" link_id="$2" data_b64="$3" metadata_b64="${4:-}"
+  local body
+  if [[ -n "$metadata_b64" ]]; then
+    body=$(jq -n --arg lid "$link_id" --arg d "$data_b64" --arg m "$metadata_b64" \
+      '{link_id: $lid, data: $d, metadata: $m}')
+  else
+    body=$(jq -n --arg lid "$link_id" --arg d "$data_b64" \
+      '{link_id: $lid, data: $d}')
+  fi
+  ctl_post "$port" "/api/resource" "$body"
+}
+
+# get_resources PORT
+get_resources() {
+  local port="$1"
+  ctl_get "$port" "/api/resources"
+}
+
+# get_resource_events PORT
+get_resource_events() {
+  local port="$1"
+  ctl_get "$port" "/api/resource_events"
+}
+
+# ── Link establishment convenience ───────────────────────────────────────────
+
+# establish_link PORT_INITIATOR PORT_LISTENER APP ASPECTS [TIMEOUT]
+#   Creates inbound dest on listener, announces, waits for identity recall
+#   on initiator, creates link from initiator to listener, waits for link
+#   to become active on both sides.
+#   Echoes: "link_id dest_hash"
+establish_link() {
+  local port_init="$1" port_listen="$2" app="$3" aspects="$4" timeout="${5:-30}"
+
+  # Listener creates inbound destination and announces
+  local dest_hash
+  dest_hash=$(create_destination "$port_listen" "single" "$app" "$aspects")
+  announce "$port_listen" "$dest_hash"
+
+  # Wait for initiator to learn listener's identity
+  if ! poll_until "$port_init" "/api/identity/${dest_hash}" ".dest_hash" "$dest_hash" "$timeout"; then
+    echo "establish_link: identity recall failed" >&2
+    return 1
+  fi
+
+  # Initiator creates link
+  local link_id
+  link_id=$(create_link "$port_init" "$dest_hash")
+  if [[ -z "$link_id" || "$link_id" == "null" ]]; then
+    echo "establish_link: create_link failed" >&2
+    return 1
+  fi
+
+  # Wait for link to become active on initiator
+  if ! poll_until "$port_init" "/api/links" \
+    ".links[] | select(.link_id == \"${link_id}\") | .state" \
+    "active" "$timeout"; then
+    echo "establish_link: link not active on initiator" >&2
+    return 1
+  fi
+
+  echo "${link_id} ${dest_hash}"
+}
+
 # ── Test reporting ────────────────────────────────────────────────────────────
 
 suite_result() {

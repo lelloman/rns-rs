@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use rns_net::Destination;
+use rns_net::{Destination, RnsNode};
 use rns_crypto::identity::Identity;
 
 use crate::encode::to_hex;
@@ -27,6 +27,7 @@ pub struct CtlState {
     pub link_events: VecDeque<LinkEventRecord>,
     pub resource_events: VecDeque<ResourceEventRecord>,
     pub destinations: HashMap<[u8; 16], DestinationEntry>,
+    pub node_handle: Option<Arc<Mutex<Option<RnsNode>>>>,
 }
 
 /// A registered destination plus metadata for the API.
@@ -48,6 +49,7 @@ impl CtlState {
             link_events: VecDeque::new(),
             resource_events: VecDeque::new(),
             destinations: HashMap::new(),
+            node_handle: None,
         }
     }
 

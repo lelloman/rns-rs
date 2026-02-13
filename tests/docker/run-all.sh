@@ -61,6 +61,7 @@ MATRIX=(
   "chain-5  08    Path table on 5-node chain"
   "star-5   all   Star topology tests"
   "mesh-4   all   Mesh topology tests"
+  "chain-5  16    Multi-hop link on 5-node chain"
 )
 
 if ! $SKIP_SCALE; then

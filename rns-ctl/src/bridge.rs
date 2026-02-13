@@ -57,6 +57,17 @@ impl Callbacks for CtlCallbacks {
     }
 
     fn on_link_established(&mut self, link_id: LinkId, _dest_hash: DestHash, rtt: f64, is_initiator: bool) {
+        // Set resource strategy to AcceptAll so this node can receive resources on this link
+        let node_handle = {
+            let s = self.state.read().unwrap();
+            s.node_handle.clone()
+        };
+        if let Some(nh) = node_handle {
+            if let Some(node) = nh.lock().unwrap().as_ref() {
+                let _ = node.set_resource_strategy(link_id.0, 1); // 1 = AcceptAll
+            }
+        }
+
         let record = LinkEventRecord {
             link_id: to_hex(&link_id.0),
             event_type: "established".into(),
