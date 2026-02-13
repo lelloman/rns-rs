@@ -12,7 +12,7 @@ authors = ["rns-rs contributors"]
 [workspace.dependencies]
 rns-crypto = { version = "0.1.0", path = "rns-crypto" }
 rns-core = { version = "0.1.0", path = "rns-core" }
-rns-net = { version = "0.1.0", path = "rns-net" }
+rns-net = { version = "0.2.0", path = "rns-net" }
 
 # Compile crypto crate with optimizations even in debug/test builds.
 # Helps curve25519-dalek performance in debug mode.

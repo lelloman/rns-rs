@@ -1,7 +1,7 @@
 [package]
 name = "rns-net"
 description = "Network interfaces and node driver for the Reticulum Network Stack"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
