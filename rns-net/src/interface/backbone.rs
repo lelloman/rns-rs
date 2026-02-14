@@ -1,18 +1,22 @@
 //! Backbone TCP mesh interface using Linux epoll.
 //!
-//! Server-only: listens on a TCP port, accepts peer connections, spawns
+//! Server mode: listens on a TCP port, accepts peer connections, spawns
 //! dynamic per-peer interfaces. Uses a single epoll thread to multiplex
 //! all client sockets. HDLC framing for packet boundaries.
+//!
+//! Client mode: connects to a remote backbone server, single TCP connection
+//! with HDLC framing. Reconnects on disconnect.
 //!
 //! Matches Python `BackboneInterface.py`.
 
 use std::collections::HashMap;
-use std::io;
-use std::net::TcpListener;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use rns_core::constants;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
@@ -386,11 +390,194 @@ fn cleanup(epfd: RawFd, clients: &HashMap<RawFd, ClientState>, listener_fd: RawF
     }
 }
 
+// ---------------------------------------------------------------------------
+// Client mode
+// ---------------------------------------------------------------------------
+
+/// Configuration for a backbone client interface.
+#[derive(Debug, Clone)]
+pub struct BackboneClientConfig {
+    pub name: String,
+    pub target_host: String,
+    pub target_port: u16,
+    pub interface_id: InterfaceId,
+    pub reconnect_wait: Duration,
+    pub max_reconnect_tries: Option<u32>,
+    pub connect_timeout: Duration,
+    pub transport_identity: Option<String>,
+}
+
+impl Default for BackboneClientConfig {
+    fn default() -> Self {
+        BackboneClientConfig {
+            name: String::new(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4242,
+            interface_id: InterfaceId(0),
+            reconnect_wait: Duration::from_secs(5),
+            max_reconnect_tries: None,
+            connect_timeout: Duration::from_secs(5),
+            transport_identity: None,
+        }
+    }
+}
+
+/// Writer that sends HDLC-framed data over a TCP stream (client mode).
+struct BackboneClientWriter {
+    stream: TcpStream,
+}
+
+impl Writer for BackboneClientWriter {
+    fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        self.stream.write_all(&hdlc::frame(data))
+    }
+}
+
+/// Try to connect to the target host:port with timeout.
+fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
+    let addr_str = format!("{}:{}", config.target_host, config.target_port);
+    let addr = addr_str
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses resolved"))?;
+
+    let stream = TcpStream::connect_timeout(&addr, config.connect_timeout)?;
+    stream.set_nodelay(true)?;
+    set_tcp_keepalive(stream.as_raw_fd());
+    Ok(stream)
+}
+
+/// Connect and start the reader thread. Returns the writer for the driver.
+pub fn start_client(
+    config: BackboneClientConfig,
+    tx: EventSender,
+) -> io::Result<Box<dyn Writer>> {
+    let stream = try_connect_client(&config)?;
+    let reader_stream = stream.try_clone()?;
+    let writer_stream = stream.try_clone()?;
+
+    let id = config.interface_id;
+    log::info!(
+        "[{}] backbone client connected to {}:{}",
+        config.name,
+        config.target_host,
+        config.target_port
+    );
+
+    // Initial connect: writer is None because it's returned directly to the caller
+    let _ = tx.send(Event::InterfaceUp(id, None, None));
+
+    thread::Builder::new()
+        .name(format!("backbone-client-{}", id.0))
+        .spawn(move || {
+            client_reader_loop(reader_stream, config, tx);
+        })?;
+
+    Ok(Box::new(BackboneClientWriter { stream: writer_stream }))
+}
+
+/// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
+/// On disconnect, attempts reconnection.
+fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: EventSender) {
+    let id = config.interface_id;
+    let mut decoder = hdlc::Decoder::new();
+    let mut buf = [0u8; 4096];
+
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                log::warn!("[{}] connection closed", config.name);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match client_reconnect(&config, &tx) {
+                    Some(new_stream) => {
+                        stream = new_stream;
+                        decoder = hdlc::Decoder::new();
+                        continue;
+                    }
+                    None => {
+                        log::error!("[{}] reconnection failed, giving up", config.name);
+                        return;
+                    }
+                }
+            }
+            Ok(n) => {
+                for frame in decoder.feed(&buf[..n]) {
+                    if tx
+                        .send(Event::Frame {
+                            interface_id: id,
+                            data: frame,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[{}] read error: {}", config.name, e);
+                let _ = tx.send(Event::InterfaceDown(id));
+                match client_reconnect(&config, &tx) {
+                    Some(new_stream) => {
+                        stream = new_stream;
+                        decoder = hdlc::Decoder::new();
+                        continue;
+                    }
+                    None => {
+                        log::error!("[{}] reconnection failed, giving up", config.name);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Attempt to reconnect with retry logic. Returns the new reader stream on success.
+/// Sends the new writer to the driver via InterfaceUp event.
+fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<TcpStream> {
+    let mut attempts = 0u32;
+    loop {
+        thread::sleep(config.reconnect_wait);
+        attempts += 1;
+
+        if let Some(max) = config.max_reconnect_tries {
+            if attempts > max {
+                let _ = tx.send(Event::InterfaceDown(config.interface_id));
+                return None;
+            }
+        }
+
+        log::info!(
+            "[{}] reconnect attempt {} ...",
+            config.name,
+            attempts
+        );
+
+        match try_connect_client(config) {
+            Ok(new_stream) => {
+                let writer_stream = match new_stream.try_clone() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("[{}] failed to clone stream: {}", config.name, e);
+                        continue;
+                    }
+                };
+                log::info!("[{}] reconnected", config.name);
+                let new_writer: Box<dyn Writer> =
+                    Box::new(BackboneClientWriter { stream: writer_stream });
+                let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
+                return Some(new_stream);
+            }
+            Err(e) => {
+                log::warn!("[{}] reconnect failed: {}", config.name, e);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -669,5 +856,118 @@ mod tests {
             }
             other => panic!("expected Frame, got {:?}", other),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Client mode tests
+    // -----------------------------------------------------------------------
+
+    fn make_client_config(port: u16, id: u64) -> BackboneClientConfig {
+        BackboneClientConfig {
+            name: format!("test-bb-client-{}", port),
+            target_host: "127.0.0.1".into(),
+            target_port: port,
+            interface_id: InterfaceId(id),
+            reconnect_wait: Duration::from_millis(100),
+            max_reconnect_tries: Some(2),
+            connect_timeout: Duration::from_secs(2),
+            transport_identity: None,
+        }
+    }
+
+    #[test]
+    fn backbone_client_connect() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        let config = make_client_config(port, 9000);
+        let _writer = start_client(config, tx).unwrap();
+
+        let _server_stream = listener.accept().unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(InterfaceId(9000), _, _)));
+    }
+
+    #[test]
+    fn backbone_client_receive_frame() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        let config = make_client_config(port, 9100);
+        let _writer = start_client(config, tx).unwrap();
+
+        let (mut server_stream, _) = listener.accept().unwrap();
+
+        // Drain InterfaceUp
+        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        // Send HDLC frame from server side (>= 19 bytes payload)
+        let payload: Vec<u8> = (0..32).collect();
+        server_stream.write_all(&hdlc::frame(&payload)).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::Frame { interface_id, data } => {
+                assert_eq!(interface_id, InterfaceId(9100));
+                assert_eq!(data, payload);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn backbone_client_send_frame() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, _rx) = mpsc::channel();
+
+        let config = make_client_config(port, 9200);
+        let mut writer = start_client(config, tx).unwrap();
+
+        let (mut server_stream, _) = listener.accept().unwrap();
+        server_stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+
+        let payload: Vec<u8> = (0..24).collect();
+        writer.send_frame(&payload).unwrap();
+
+        let mut buf = [0u8; 256];
+        let n = server_stream.read(&mut buf).unwrap();
+        let expected = hdlc::frame(&payload);
+        assert_eq!(&buf[..n], &expected[..]);
+    }
+
+    #[test]
+    fn backbone_client_reconnect() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        listener.set_nonblocking(false).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        let config = make_client_config(port, 9300);
+        let _writer = start_client(config, tx).unwrap();
+
+        // Accept first connection and immediately close it
+        let (server_stream, _) = listener.accept().unwrap();
+
+        // Drain InterfaceUp
+        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        drop(server_stream);
+
+        // Should get InterfaceDown
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(InterfaceId(9300))));
+
+        // Accept the reconnection
+        let _server_stream2 = listener.accept().unwrap();
+
+        // Should get InterfaceUp again
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(InterfaceId(9300), _, _)));
     }
 }

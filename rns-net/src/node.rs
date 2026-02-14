@@ -25,7 +25,7 @@ use crate::interface::serial_iface::SerialIfaceConfig;
 use crate::interface::kiss_iface::KissIfaceConfig;
 use crate::interface::pipe::PipeConfig;
 use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
-use crate::interface::backbone::BackboneConfig;
+use crate::interface::backbone::{BackboneConfig, BackboneClientConfig};
 use crate::interface::auto::AutoConfig;
 use crate::interface::i2p::I2pConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
@@ -126,6 +126,7 @@ pub enum InterfaceVariant {
     Pipe(PipeConfig),
     RNode(RNodeConfig),
     Backbone(BackboneConfig),
+    BackboneClient(BackboneClientConfig),
     Auto(AutoConfig),
     I2p(I2pConfig),
 }
@@ -478,25 +479,51 @@ impl RnsNode {
                     });
                 }
                 "BackboneInterface" => {
-                    let listen_ip = iface.params.get("listen_ip")
-                        .or_else(|| iface.params.get("device"))
-                        .cloned()
-                        .unwrap_or_else(|| "0.0.0.0".into());
-                    let listen_port = iface.params.get("listen_port")
-                        .or_else(|| iface.params.get("port"))
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(4242);
+                    if let Some(target_host) = iface.params.get("remote")
+                        .or_else(|| iface.params.get("target_host"))
+                    {
+                        // Client mode
+                        let target_host = target_host.clone();
+                        let target_port = iface.params.get("target_port")
+                            .or_else(|| iface.params.get("port"))
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(4242);
+                        let transport_identity = iface.params.get("transport_identity").cloned();
 
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Backbone(BackboneConfig {
-                            name: iface.name.clone(),
-                            listen_ip,
-                            listen_port,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                    });
+                        interface_configs.push(InterfaceConfig {
+                            variant: InterfaceVariant::BackboneClient(BackboneClientConfig {
+                                name: iface.name.clone(),
+                                target_host,
+                                target_port,
+                                interface_id: iface_id,
+                                transport_identity,
+                                ..BackboneClientConfig::default()
+                            }),
+                            mode: iface_mode,
+                            ifac: ifac_config,
+                        });
+                    } else {
+                        // Server mode
+                        let listen_ip = iface.params.get("listen_ip")
+                            .or_else(|| iface.params.get("device"))
+                            .cloned()
+                            .unwrap_or_else(|| "0.0.0.0".into());
+                        let listen_port = iface.params.get("listen_port")
+                            .or_else(|| iface.params.get("port"))
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(4242);
+
+                        interface_configs.push(InterfaceConfig {
+                            variant: InterfaceVariant::Backbone(BackboneConfig {
+                                name: iface.name.clone(),
+                                listen_ip,
+                                listen_port,
+                                interface_id: iface_id,
+                            }),
+                            mode: iface_mode,
+                            ifac: ifac_config,
+                        });
+                    }
                 }
                 "AutoInterface" => {
                     let group_id = iface
@@ -1091,6 +1118,46 @@ impl RnsNode {
                     )?;
                     // Like TcpServer/LocalServer, backbone itself doesn't register
                     // as an interface; per-client interfaces are registered via InterfaceUp
+                }
+                InterfaceVariant::BackboneClient(config) => {
+                    let id = config.interface_id;
+                    let name = config.name.clone();
+                    let info = InterfaceInfo {
+                        id,
+                        name,
+                        mode: iface_mode,
+                        out_capable: true,
+                        in_capable: true,
+                        bitrate: Some(1_000_000_000),
+                        announce_rate_target: None,
+                        announce_rate_grace: 0,
+                        announce_rate_penalty: 0.0,
+                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                        is_local_client: false,
+                        wants_tunnel: false,
+                        tunnel_id: None,
+                    };
+
+                    let writer =
+                        crate::interface::backbone::start_client(config, tx.clone())?;
+
+                    driver.engine.register_interface(info.clone());
+                    driver.interfaces.insert(
+                        id,
+                        InterfaceEntry {
+                            id,
+                            info,
+                            writer,
+                            online: false,
+                            dynamic: false,
+                            ifac: ifac_state,
+                            stats: InterfaceStats {
+                                started: time::now(),
+                                ..Default::default()
+                            },
+                            interface_type: "BackboneInterface".to_string(),
+                        },
+                    );
                 }
                 InterfaceVariant::Auto(auto_config) => {
                     crate::interface::auto::start(
