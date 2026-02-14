@@ -24,6 +24,8 @@ pub struct TcpClientConfig {
     pub reconnect_wait: Duration,
     pub max_reconnect_tries: Option<u32>,
     pub connect_timeout: Duration,
+    /// Linux network interface to bind the socket to (e.g. "usb0").
+    pub device: Option<String>,
 }
 
 impl Default for TcpClientConfig {
@@ -36,6 +38,7 @@ impl Default for TcpClientConfig {
             reconnect_wait: Duration::from_secs(5),
             max_reconnect_tries: None,
             connect_timeout: Duration::from_secs(5),
+            device: None,
         }
     }
 }
@@ -147,9 +150,128 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses resolved"))?;
 
+    #[cfg(target_os = "linux")]
+    let stream = if let Some(ref device) = config.device {
+        connect_with_device(&addr, device, config.connect_timeout)?
+    } else {
+        TcpStream::connect_timeout(&addr, config.connect_timeout)?
+    };
+    #[cfg(not(target_os = "linux"))]
     let stream = TcpStream::connect_timeout(&addr, config.connect_timeout)?;
     set_socket_options(&stream)?;
     Ok(stream)
+}
+
+/// Create a TCP socket, bind it to a network device, then connect with timeout.
+#[cfg(target_os = "linux")]
+fn connect_with_device(
+    addr: &std::net::SocketAddr,
+    device: &str,
+    timeout: Duration,
+) -> io::Result<TcpStream> {
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    let domain = if addr.is_ipv4() { libc::AF_INET } else { libc::AF_INET6 };
+    let fd: RawFd = unsafe { libc::socket(domain, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Ensure the fd is closed on error paths
+    let stream = unsafe { TcpStream::from_raw_fd(fd) };
+
+    super::bind_to_device(stream.as_raw_fd(), device)?;
+
+    // Set non-blocking for connect-with-timeout
+    stream.set_nonblocking(true)?;
+
+    let (sockaddr, socklen) = socket_addr_to_raw(addr);
+    let ret = unsafe {
+        libc::connect(
+            stream.as_raw_fd(),
+            &sockaddr as *const libc::sockaddr_storage as *const libc::sockaddr,
+            socklen,
+        )
+    };
+
+    if ret != 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EINPROGRESS) {
+            return Err(err);
+        }
+    }
+
+    // Poll for connect completion
+    let mut pollfd = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    let timeout_ms = timeout.as_millis() as libc::c_int;
+    let poll_ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+
+    if poll_ret == 0 {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "connect timed out"));
+    }
+    if poll_ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Check SO_ERROR
+    let mut err_val: libc::c_int = 0;
+    let mut err_len: libc::socklen_t = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut err_val as *mut _ as *mut libc::c_void,
+            &mut err_len,
+        )
+    };
+    if ret != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if err_val != 0 {
+        return Err(io::Error::from_raw_os_error(err_val));
+    }
+
+    // Set back to blocking
+    stream.set_nonblocking(false)?;
+
+    Ok(stream)
+}
+
+/// Convert a `SocketAddr` to a raw `sockaddr_storage` for `libc::connect`.
+#[cfg(target_os = "linux")]
+fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    match addr {
+        std::net::SocketAddr::V4(v4) => {
+            let sin: &mut libc::sockaddr_in = unsafe {
+                &mut *(&mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in)
+            };
+            sin.sin_family = libc::AF_INET as libc::sa_family_t;
+            sin.sin_port = v4.port().to_be();
+            sin.sin_addr = libc::in_addr {
+                s_addr: u32::from_ne_bytes(v4.ip().octets()),
+            };
+            (storage, std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t)
+        }
+        std::net::SocketAddr::V6(v6) => {
+            let sin6: &mut libc::sockaddr_in6 = unsafe {
+                &mut *(&mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in6)
+            };
+            sin6.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+            sin6.sin6_port = v6.port().to_be();
+            sin6.sin6_addr = libc::in6_addr {
+                s6_addr: v6.ip().octets(),
+            };
+            sin6.sin6_flowinfo = v6.flowinfo();
+            sin6.sin6_scope_id = v6.scope_id();
+            (storage, std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t)
+        }
+    }
 }
 
 /// Connect and start the reader thread. Returns the writer for the driver.
@@ -294,6 +416,7 @@ mod tests {
             reconnect_wait: Duration::from_millis(100),
             max_reconnect_tries: Some(2),
             connect_timeout: Duration::from_secs(2),
+            device: None,
         }
     }
 
@@ -496,6 +619,7 @@ mod tests {
             reconnect_wait: Duration::from_millis(100),
             max_reconnect_tries: Some(0),
             connect_timeout: Duration::from_millis(500),
+            device: None,
         };
 
         let start_time = std::time::Instant::now();

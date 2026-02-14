@@ -96,6 +96,8 @@ pub struct NodeConfig {
     pub probe_port: Option<u16>,
     /// Address of the STUN probe server (for client nodes behind NAT).
     pub probe_addr: Option<std::net::SocketAddr>,
+    /// Network interface to bind outbound sockets to (e.g. "usb0").
+    pub device: Option<String>,
 }
 
 /// Interface configuration variant with its mode.
@@ -233,6 +235,7 @@ impl RnsNode {
                             target_host,
                             target_port,
                             interface_id: iface_id,
+                            device: rns_config.reticulum.device.clone(),
                             ..TcpClientConfig::default()
                         }),
                         mode: iface_mode,
@@ -704,6 +707,7 @@ impl RnsNode {
             },
             probe_port: rns_config.reticulum.probe_port,
             probe_addr,
+            device: rns_config.reticulum.device.clone(),
         };
 
         Self::start(node_config, callbacks)
@@ -730,9 +734,9 @@ impl RnsNode {
             driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
         }
 
-        // Configure probe address for hole punching
-        if let Some(addr) = config.probe_addr {
-            driver.set_probe_addr(Some(addr));
+        // Configure probe address and device for hole punching
+        if config.probe_addr.is_some() || config.device.is_some() {
+            driver.set_probe_config(config.probe_addr, config.device.clone());
         }
 
         // Start probe server if configured
@@ -1782,6 +1786,7 @@ mod tests {
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1804,6 +1809,7 @@ mod tests {
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1826,6 +1832,7 @@ mod tests {
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2255,6 +2262,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2286,6 +2294,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2312,6 +2321,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2335,6 +2345,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2365,6 +2376,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2396,6 +2408,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2424,6 +2437,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2463,6 +2477,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2495,6 +2510,7 @@ enable_transport = False
                 management: Default::default(),
                 probe_port: None,
                 probe_addr: None,
+                device: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

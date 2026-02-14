@@ -126,6 +126,7 @@ pub fn probe_endpoint(
     probe_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
     timeout: Duration,
+    device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket)> {
     let socket = match existing_socket {
         Some(s) => s,
@@ -135,7 +136,13 @@ pub fn probe_endpoint(
             } else {
                 "[::]:0".parse().unwrap()
             };
-            UdpSocket::bind(bind_addr)?
+            let sock = UdpSocket::bind(bind_addr)?;
+            #[cfg(target_os = "linux")]
+            if let Some(dev) = device {
+                use std::os::unix::io::AsRawFd;
+                crate::interface::bind_to_device(sock.as_raw_fd(), dev)?;
+            }
+            sock
         }
     };
     socket.set_read_timeout(Some(timeout))?;
@@ -237,6 +244,7 @@ mod tests {
             actual_addr,
             None,
             Duration::from_secs(3),
+            None,
         ).unwrap();
 
         // Since we're on localhost, the observed address should be 127.0.0.1

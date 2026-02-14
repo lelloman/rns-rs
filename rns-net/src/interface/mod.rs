@@ -17,6 +17,33 @@ use std::io;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::ifac::IfacState;
 
+/// Bind a socket to a specific network interface using `SO_BINDTODEVICE`.
+///
+/// Requires `CAP_NET_RAW` or root on Linux.
+#[cfg(target_os = "linux")]
+pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<()> {
+    let dev_bytes = device.as_bytes();
+    if dev_bytes.len() >= libc::IFNAMSIZ {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("device name too long: {}", device),
+        ));
+    }
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            dev_bytes.as_ptr() as *const libc::c_void,
+            dev_bytes.len() as libc::socklen_t,
+        )
+    };
+    if ret != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Writable end of an interface. Held by the driver.
 ///
 /// Each implementation wraps a socket + framing.

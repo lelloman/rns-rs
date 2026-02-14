@@ -34,6 +34,8 @@ pub struct ReticulumSection {
     pub publish_blackhole: bool,
     pub probe_port: Option<u16>,
     pub probe_addr: Option<String>,
+    /// Network interface to bind outbound sockets to (e.g. "usb0").
+    pub device: Option<String>,
 }
 
 impl Default for ReticulumSection {
@@ -53,6 +55,7 @@ impl Default for ReticulumSection {
             publish_blackhole: false,
             probe_port: None,
             probe_addr: None,
+            device: None,
         }
     }
 }
@@ -340,6 +343,9 @@ fn build_reticulum_section(
     }
     if let Some(v) = kvs.get("probe_addr") {
         section.probe_addr = Some(v.clone());
+    }
+    if let Some(v) = kvs.get("device") {
+        section.device = Some(v.clone());
     }
 
     Ok(section)

@@ -60,6 +60,8 @@ pub struct HolePunchManager {
     policy: HolePunchPolicy,
     /// Backbone probe service address (if configured).
     probe_addr: Option<SocketAddr>,
+    /// Linux network interface to bind probe/punch sockets to.
+    device: Option<String>,
     /// Next available interface ID counter for direct interfaces.
     next_interface_id: u64,
 }
@@ -87,12 +89,13 @@ pub enum HolePunchManagerAction {
 }
 
 impl HolePunchManager {
-    pub fn new(probe_addr: Option<SocketAddr>) -> Self {
+    pub fn new(probe_addr: Option<SocketAddr>, device: Option<String>) -> Self {
         HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
             policy: HolePunchPolicy::default(),
             probe_addr,
+            device,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
         }
     }
@@ -470,11 +473,12 @@ impl HolePunchManager {
 
                 let tx_clone = tx.clone();
                 let session_id_copy = session_id;
+                let device_clone = self.device.clone();
 
                 if let Err(e) = thread::Builder::new()
                     .name("probe-worker".into())
                     .spawn(move || {
-                        run_probe_worker(probe_socket_addr, session_id_copy, link_id, tx_clone);
+                        run_probe_worker(probe_socket_addr, session_id_copy, link_id, tx_clone, device_clone);
                     })
                 {
                     log::warn!("Failed to spawn probe worker: {}", e);
@@ -626,8 +630,9 @@ fn run_probe_worker(
     session_id: [u8; 16],
     link_id: [u8; 16],
     tx: EventSender,
+    device: Option<String>,
 ) {
-    match probe::probe_endpoint(probe_addr, None, std::time::Duration::from_secs(3)) {
+    match probe::probe_endpoint(probe_addr, None, std::time::Duration::from_secs(3), device.as_deref()) {
         Ok((observed, socket)) => {
             log::info!(
                 "Probe discovered endpoint: {} for session {:02x?}",
@@ -739,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_propose_creates_session_in_discovering() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0x11; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -754,7 +759,7 @@ mod tests {
 
     #[test]
     fn test_propose_rate_limited() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0x22; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -768,7 +773,7 @@ mod tests {
 
     #[test]
     fn test_reject_policy_sends_reject() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         mgr.set_policy(HolePunchPolicy::Reject);
 
         let link_id = [0x33; 16];
@@ -798,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_accept_policy_creates_session() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         mgr.set_policy(HolePunchPolicy::AcceptAll);
 
         let link_id = [0x44; 16];
@@ -829,7 +834,7 @@ mod tests {
 
     #[test]
     fn test_non_holepunch_message_not_handled() {
-        let mut mgr = HolePunchManager::new(None);
+        let mut mgr = HolePunchManager::new(None, None);
         let (tx, _rx) = make_tx();
 
         let (handled, actions) = mgr.handle_signal(
@@ -842,7 +847,7 @@ mod tests {
 
     #[test]
     fn test_link_closed_cleans_up() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0x66; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -857,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_failed_with_session() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0x77; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -873,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_failed_without_session() {
-        let mut mgr = HolePunchManager::new(None);
+        let mut mgr = HolePunchManager::new(None, None);
 
         let actions = mgr.handle_probe_failed([0x88; 16], [0x99; 16]);
         assert!(actions.is_empty());
@@ -881,7 +886,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_result_initiator_sends_request() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0xAA; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -904,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_result_responder_sends_ready() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()));
+        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
         let link_id = [0xBB; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -957,13 +962,13 @@ mod tests {
 
     #[test]
     fn test_policy_default_is_accept_all() {
-        let mgr = HolePunchManager::new(None);
+        let mgr = HolePunchManager::new(None, None);
         assert_eq!(mgr.policy(), HolePunchPolicy::AcceptAll);
     }
 
     #[test]
     fn test_set_policy() {
-        let mut mgr = HolePunchManager::new(None);
+        let mut mgr = HolePunchManager::new(None, None);
         mgr.set_policy(HolePunchPolicy::Reject);
         assert_eq!(mgr.policy(), HolePunchPolicy::Reject);
     }
@@ -978,7 +983,7 @@ mod tests {
 
     #[test]
     fn test_tick_empty_is_noop() {
-        let mut mgr = HolePunchManager::new(None);
+        let mut mgr = HolePunchManager::new(None, None);
         let (tx, _rx) = make_tx();
         let actions = mgr.tick(&tx);
         assert!(actions.is_empty());
@@ -986,7 +991,7 @@ mod tests {
 
     #[test]
     fn test_propose_without_probe_addr() {
-        let mut mgr = HolePunchManager::new(None); // No probe addr
+        let mut mgr = HolePunchManager::new(None, None); // No probe addr
         let link_id = [0xCC; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
