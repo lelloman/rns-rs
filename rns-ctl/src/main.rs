@@ -17,7 +17,7 @@ fn main() {
     }
 
     if args.has("version") {
-        println!("rns-ctl 0.1.0");
+        println!("rns-ctl {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
