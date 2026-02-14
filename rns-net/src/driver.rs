@@ -393,6 +393,9 @@ impl Driver {
                     let response = self.handle_query_mut(request);
                     let _ = response_tx.send(response);
                 }
+                Event::DeregisterLinkDestination { dest_hash } => {
+                    self.link_manager.deregister_link_destination(&dest_hash);
+                }
                 Event::RegisterLinkDestination { dest_hash, sig_prv_bytes, sig_pub_bytes } => {
                     let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
                     self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);

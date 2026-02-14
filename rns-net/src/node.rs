@@ -1431,6 +1431,13 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Deregister a link destination (stop accepting incoming links).
+    pub fn deregister_link_destination(&self, dest_hash: [u8; 16]) -> Result<(), SendError> {
+        self.tx
+            .send(Event::DeregisterLinkDestination { dest_hash })
+            .map_err(|_| SendError)
+    }
+
     /// Register a link destination that can accept incoming links.
     ///
     /// `dest_hash`: the destination hash

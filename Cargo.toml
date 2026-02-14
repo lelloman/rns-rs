@@ -3,16 +3,16 @@ members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license-file = "LICENSE"
 repository = "https://github.com/lelloman/rns-rs"
 authors = ["rns-rs contributors"]
 
 [workspace.dependencies]
-rns-crypto = { version = "0.1.0", path = "rns-crypto" }
-rns-core = { version = "0.1.0", path = "rns-core" }
-rns-net = { version = "0.2.1", path = "rns-net" }
+rns-crypto = { version = "0.1.1", path = "rns-crypto" }
+rns-core = { version = "0.1.1", path = "rns-core" }
+rns-net = { version = "0.2.2", path = "rns-net" }
 
 # Compile crypto crate with optimizations even in debug/test builds.
 # Helps curve25519-dalek performance in debug mode.

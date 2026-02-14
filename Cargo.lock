@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rns-crypto",
  "serde_json",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "serde_json",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ctrlc",
  "env_logger 0.11.8",

@@ -36,6 +36,10 @@ pub enum Event {
     DeregisterDestination {
         dest_hash: [u8; 16],
     },
+    /// Deregister a link destination (stop accepting incoming links).
+    DeregisterLinkDestination {
+        dest_hash: [u8; 16],
+    },
     /// Query driver state. Response is sent via the provided channel.
     Query(QueryRequest, mpsc::Sender<QueryResponse>),
     /// Register a link destination (accepts incoming LINKREQUEST).
@@ -340,6 +344,11 @@ impl fmt::Debug for Event {
             }
             Event::DeregisterDestination { dest_hash } => {
                 f.debug_struct("DeregisterDestination")
+                    .field("dest_hash", dest_hash)
+                    .finish()
+            }
+            Event::DeregisterLinkDestination { dest_hash } => {
+                f.debug_struct("DeregisterLinkDestination")
                     .field("dest_hash", dest_hash)
                     .finish()
             }
