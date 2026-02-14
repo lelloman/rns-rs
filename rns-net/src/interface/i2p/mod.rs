@@ -314,6 +314,9 @@ fn outbound_peer_loop(
                     wants_tunnel: false,
                     tunnel_id: None,
                     mtu: 65535,
+                    ia_freq: 0.0,
+                    started: 0.0,
+                    ingress_control: true,
                 };
 
                 // Register dynamic interface
@@ -393,6 +396,9 @@ fn acceptor_loop(
                     wants_tunnel: false,
                     tunnel_id: None,
                     mtu: 65535,
+                    ia_freq: 0.0,
+                    started: 0.0,
+                    ingress_control: true,
                 };
 
                 // Register dynamic interface

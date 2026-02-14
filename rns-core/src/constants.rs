@@ -224,6 +224,23 @@ pub const TABLES_CULL_INTERVAL: f64 = 5.0;
 /// Link check interval (seconds)
 pub const LINKS_CHECK_INTERVAL: f64 = 1.0;
 
+// --- Ingress Control (from Interface.py) ---
+
+/// Interface "new" period in seconds (2 hours).
+pub const IC_NEW_TIME: f64 = 7200.0;
+/// Announce frequency threshold for new interfaces (announces/sec).
+pub const IC_BURST_FREQ_NEW: f64 = 3.5;
+/// Announce frequency threshold for mature interfaces (announces/sec).
+pub const IC_BURST_FREQ: f64 = 12.0;
+/// Minimum burst active duration in seconds.
+pub const IC_BURST_HOLD: f64 = 60.0;
+/// Penalty delay before releasing held announces (seconds).
+pub const IC_BURST_PENALTY: f64 = 300.0;
+/// Interval between individual held announce releases (seconds).
+pub const IC_HELD_RELEASE_INTERVAL: f64 = 30.0;
+/// Maximum held announces per interface.
+pub const IC_MAX_HELD_ANNOUNCES: usize = 256;
+
 // --- Interface modes (from Interface.py) ---
 
 pub const MODE_FULL: u8 = 0x01;

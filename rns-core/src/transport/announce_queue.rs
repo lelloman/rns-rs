@@ -269,6 +269,9 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
         }
     }
 

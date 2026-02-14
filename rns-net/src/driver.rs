@@ -245,6 +245,19 @@ impl Driver {
                         data
                     };
 
+                    // Record incoming announce for frequency tracking (before engine processing)
+                    if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
+                        let now = time::now();
+                        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                            entry.stats.record_incoming_announce(now);
+                        }
+                    }
+
+                    // Sync announce frequency to engine before processing
+                    if let Some(entry) = self.interfaces.get(&interface_id) {
+                        self.engine.update_interface_freq(interface_id, entry.stats.incoming_announce_freq());
+                    }
+
                     let actions = self.engine.handle_inbound(
                         &packet,
                         interface_id,
@@ -255,6 +268,10 @@ impl Driver {
                 }
                 Event::Tick => {
                     let now = time::now();
+                    // Sync announce frequency to engine for all interfaces before tick
+                    for (id, entry) in &self.interfaces {
+                        self.engine.update_interface_freq(*id, entry.stats.incoming_announce_freq());
+                    }
                     let actions = self.engine.tick(now, &mut self.rng);
                     self.dispatch_all(actions);
                     // Tick link manager (keepalive, stale, timeout)
@@ -273,11 +290,13 @@ impl Driver {
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
-                    if let Some(info) = info {
+                    if let Some(mut info) = info {
                         // New dynamic interface (e.g., TCP server client connection)
                         log::info!("[{}] dynamic interface registered", id.0);
                         wants_tunnel = info.wants_tunnel;
                         let iface_type = infer_interface_type(&info.name);
+                        // Set started time for ingress control age tracking
+                        info.started = time::now();
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
                             self.interfaces.insert(
@@ -999,12 +1018,8 @@ impl Driver {
                     public_key,
                     app_data,
                     hops,
-                    receiving_interface,
                     ..
                 } => {
-                    if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
-                        entry.stats.record_incoming_announce(time::now());
-                    }
                     // Cache the announced identity
                     let announced = crate::destination::AnnouncedIdentity {
                         dest_hash: rns_core::types::DestHash(destination_hash),
@@ -1614,6 +1629,9 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            ia_freq: 0.0,
+            started: 0.0,
+            ingress_control: false,
         }
     }
 

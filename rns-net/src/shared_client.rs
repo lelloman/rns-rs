@@ -90,6 +90,9 @@ impl RnsNode {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: 65535,
+            ia_freq: 0.0,
+            started: time::now(),
+            ingress_control: false,
         };
 
         let writer = crate::interface::local::start_client(local_config, tx.clone())?;

@@ -804,6 +804,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: 65535,
+                        ingress_control: true,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =
@@ -859,6 +862,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: 1400,
+                        ingress_control: true,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     driver.engine.register_interface(info.clone());
@@ -907,6 +913,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: 65535,
+                        ingress_control: false,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =
@@ -949,6 +958,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: rns_core::constants::MTU as u32,
+                        ingress_control: false,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =
@@ -990,6 +1002,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: rns_core::constants::MTU as u32,
+                        ingress_control: false,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =
@@ -1031,6 +1046,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: rns_core::constants::MTU as u32,
+                        ingress_control: false,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =
@@ -1086,6 +1104,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: rns_core::constants::MTU as u32,
+                        ingress_control: false,
+                        ia_freq: 0.0,
+                        started: time::now(),
                         };
 
                         let sub_ifac = if first {
@@ -1148,6 +1169,9 @@ impl RnsNode {
                         wants_tunnel: false,
                         tunnel_id: None,
                         mtu: 65535,
+                        ingress_control: true,
+                        ia_freq: 0.0,
+                        started: time::now(),
                     };
 
                     let writer =

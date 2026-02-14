@@ -8,6 +8,7 @@ pub mod outbound;
 pub mod inbound;
 pub mod announce_queue;
 pub mod tunnel;
+pub mod ingress_control;
 pub mod jobs;
 
 use alloc::collections::BTreeMap;
@@ -33,6 +34,7 @@ use self::outbound::{route_outbound, should_transmit_announce};
 use self::pathfinder::{
     extract_random_blob, should_update_path, timebase_from_random_blob, PathDecision,
 };
+use self::ingress_control::IngressControl;
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, LinkEntry, PathEntry};
 use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
@@ -55,6 +57,7 @@ pub struct TransportEngine {
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     announce_queues: AnnounceQueues,
+    ingress_control: IngressControl,
     tunnel_table: TunnelTable,
     discovery_pr_tags: Vec<[u8; 32]>,
     // Job timing
@@ -78,6 +81,7 @@ impl TransportEngine {
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(),
+            ingress_control: IngressControl::new(),
             tunnel_table: TunnelTable::new(),
             discovery_pr_tags: Vec::new(),
             announces_last_checked: 0.0,
@@ -95,6 +99,7 @@ impl TransportEngine {
 
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
+        self.ingress_control.remove_interface(&id);
     }
 
     // =========================================================================
@@ -633,6 +638,27 @@ impl TransportEngine {
             return;
         }
 
+        // Ingress control: hold announces from unknown destinations during bursts
+        if !self.path_table.contains_key(&packet.destination_hash) {
+            if let Some(info) = self.interfaces.get(&iface) {
+                if info.ingress_control {
+                    if self.ingress_control.should_ingress_limit(iface, info.ia_freq, info.started, now) {
+                        self.ingress_control.hold_announce(
+                            iface,
+                            packet.destination_hash,
+                            ingress_control::HeldAnnounce {
+                                raw: original_raw.to_vec(),
+                                hops: packet.hops,
+                                receiving_interface: iface,
+                                timestamp: now,
+                            },
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         // Detect retransmit completion
         let received_from = if let Some(transport_id) = packet.transport_id {
             // Check if this is a retransmit we can stop
@@ -996,7 +1022,7 @@ impl TransportEngine {
     // =========================================================================
 
     /// Periodic maintenance. Call regularly (e.g., every 250ms).
-    pub fn tick(&mut self, now: f64, _rng: &mut dyn Rng) -> Vec<TransportAction> {
+    pub fn tick(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<TransportAction> {
         let mut actions = Vec::new();
 
         // Process pending announces
@@ -1019,6 +1045,22 @@ impl TransportEngine {
         // Process announce queues — dequeue waiting announces when bandwidth available
         let mut queue_actions = self.announce_queues.process_queues(now, &self.interfaces);
         actions.append(&mut queue_actions);
+
+        // Process ingress control: release held announces
+        let ic_interfaces = self.ingress_control.interfaces_with_held();
+        for iface_id in ic_interfaces {
+            let (ia_freq, started, ic_enabled) = match self.interfaces.get(&iface_id) {
+                Some(info) => (info.ia_freq, info.started, info.ingress_control),
+                None => continue,
+            };
+            if !ic_enabled {
+                continue;
+            }
+            if let Some(held) = self.ingress_control.process_held_announces(iface_id, ia_freq, started, now) {
+                let released_actions = self.handle_inbound(&held.raw, held.receiving_interface, now, rng);
+                actions.extend(released_actions);
+            }
+        }
 
         // Cull tables
         if now > self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
@@ -1328,6 +1370,7 @@ impl TransportEngine {
         self.announce_table.clear();
         self.held_announces.clear();
         self.announce_queues = AnnounceQueues::new();
+        self.ingress_control.clear();
     }
 
     /// Get the transport identity hash.
@@ -1377,6 +1420,22 @@ impl TransportEngine {
         self.blackholed_entries()
             .map(|(hash, entry)| (*hash, entry.created, entry.expires, entry.reason.clone()))
             .collect()
+    }
+
+    // =========================================================================
+    // Ingress control
+    // =========================================================================
+
+    /// Update the incoming announce frequency for an interface.
+    pub fn update_interface_freq(&mut self, id: InterfaceId, ia_freq: f64) {
+        if let Some(info) = self.interfaces.get_mut(&id) {
+            info.ia_freq = ia_freq;
+        }
+    }
+
+    /// Get the count of held announces for an interface (for management reporting).
+    pub fn held_announce_count(&self, interface: &InterfaceId) -> usize {
+        self.ingress_control.held_count(interface)
     }
 
     // =========================================================================
@@ -1436,6 +1495,9 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
         }
     }
 
@@ -1783,6 +1845,9 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
         }
     }
 
@@ -2058,6 +2123,9 @@ mod tests {
             wants_tunnel: true,
             tunnel_id: None,
             mtu: constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
         }
     }
 

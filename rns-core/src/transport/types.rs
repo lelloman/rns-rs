@@ -27,6 +27,12 @@ pub struct InterfaceInfo {
     pub tunnel_id: Option<[u8; 32]>,
     /// Maximum transmission unit for this interface in bytes.
     pub mtu: u32,
+    /// Whether ingress control is enabled for this interface.
+    pub ingress_control: bool,
+    /// Current incoming announce frequency (announces/sec), synced from driver.
+    pub ia_freq: f64,
+    /// When this interface was started (epoch seconds).
+    pub started: f64,
 }
 
 /// Actions produced by TransportEngine for the caller to execute.

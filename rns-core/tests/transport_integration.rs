@@ -126,6 +126,9 @@ impl TestHarness {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
         });
     }
 }
@@ -333,6 +336,9 @@ fn test_transport_routing_interop() {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: 0.0,
                 });
 
                 // Use route_outbound directly with a known path

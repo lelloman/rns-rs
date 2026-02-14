@@ -98,7 +98,7 @@ pub fn handle_status_request(
     let mut total_rxb: u64 = 0;
     let mut total_txb: u64 = 0;
 
-    for (_id, entry) in interfaces {
+    for (id, entry) in interfaces {
         total_rxb += entry.stats.rxb;
         total_txb += entry.stats.txb;
 
@@ -116,7 +116,7 @@ pub fn handle_status_request(
         }
         ifstats.push(("incoming_announce_freq", Value::Float(entry.stats.incoming_announce_freq())));
         ifstats.push(("outgoing_announce_freq", Value::Float(entry.stats.outgoing_announce_freq())));
-        ifstats.push(("held_announces", Value::UInt(0)));
+        ifstats.push(("held_announces", Value::UInt(engine.held_announce_count(id) as u64)));
 
         // IFAC info
         ifstats.push(("ifac_signature", Value::Nil));
@@ -395,6 +395,9 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
+            ia_freq: 0.0,
+            started: 0.0,
+            ingress_control: false,
         };
         map.insert(id, InterfaceEntry {
             id,
