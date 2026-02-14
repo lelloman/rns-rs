@@ -55,6 +55,14 @@ pub struct LinkEntry {
     pub proof_timeout: f64,
 }
 
+/// A pending discovery path request — stored when a path request arrives
+/// on a DISCOVER_PATHS_FOR interface for an unknown destination.
+#[derive(Debug, Clone)]
+pub struct DiscoveryPathRequest {
+    pub timestamp: f64,
+    pub requesting_interface: InterfaceId,
+}
+
 /// Entry in the announce rate table, keyed by destination_hash.
 #[derive(Debug, Clone)]
 pub struct RateEntry {

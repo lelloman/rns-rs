@@ -108,7 +108,7 @@ Implemented in `rns-core/src/transport/ingress_control.rs`. Per-interface burst 
 
 ## Missing Interface Configuration Options
 
-### Interface Mode Constants
+### ~~Interface Mode Constants~~ (Done)
 
 **Python Reference:** `RNS/Interfaces/Interface.py:44-56`
 
@@ -122,7 +122,15 @@ MODE_GATEWAY = 0x06
 DISCOVER_PATHS_FOR = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING]
 ```
 
-**Rust status:** Limited mode support in transport types.
+**Rust status:** Fully implemented.
+
+- Mode constants and config parsing: `constants.rs`, `node.rs:parse_interface_mode()`
+- Per-mode path expiry and roaming grace: `announce_proc.rs`, path request handler
+- Announce broadcast filtering (ROAMING/BOUNDARY/AP): `outbound.rs:should_transmit_announce()` — checks source interface mode to decide whether to forward non-local announces
+- Boundary exemption for `mark_path_unresponsive()`: boundary interfaces cannot poison path tables
+- `DISCOVER_PATHS_FOR` path request forwarding: AP/GATEWAY/ROAMING interfaces forward path requests for unknown destinations and store `DiscoveryPathRequest` entries, consumed when the announce arrives
+- ROAMING loop prevention: path requests arriving on a ROAMING interface whose known path routes back through the same interface are silently dropped
+- Discovery auto-configuration: `AutoInterface` → GATEWAY, `RNodeInterface` with `discoverable=true` → ACCESS_POINT (when mode not already set)
 
 ---
 

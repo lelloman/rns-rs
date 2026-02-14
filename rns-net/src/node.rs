@@ -206,7 +206,37 @@ impl RnsNode {
             let iface_id = rns_core::transport::types::InterfaceId(next_id_val);
             next_id_val += 1;
 
-            let iface_mode = parse_interface_mode(&iface.mode);
+            let mut iface_mode = parse_interface_mode(&iface.mode);
+
+            // Auto-configure mode when discovery is enabled (Python Reticulum.py).
+            // AutoInterface inherently uses discovery; RNodeInterface may have discoverable=true.
+            let has_discovery = match iface.interface_type.as_str() {
+                "AutoInterface" => true,
+                "RNodeInterface" => iface.params.get("discoverable")
+                    .and_then(|v| config::parse_bool_pub(v))
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if has_discovery
+                && iface_mode != rns_core::constants::MODE_ACCESS_POINT
+                && iface_mode != rns_core::constants::MODE_GATEWAY
+            {
+                let new_mode = if iface.interface_type == "RNodeInterface" {
+                    rns_core::constants::MODE_ACCESS_POINT
+                } else {
+                    rns_core::constants::MODE_GATEWAY
+                };
+                log::info!(
+                    "Interface '{}' has discovery enabled, auto-configuring mode to {}",
+                    iface.name,
+                    if new_mode == rns_core::constants::MODE_ACCESS_POINT {
+                        "ACCESS_POINT"
+                    } else {
+                        "GATEWAY"
+                    }
+                );
+                iface_mode = new_mode;
+            }
 
             // Default IFAC size depends on interface type:
             // 8 bytes for Serial/KISS/RNode, 16 for TCP/UDP/Auto/Local

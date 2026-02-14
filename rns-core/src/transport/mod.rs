@@ -36,7 +36,7 @@ use self::pathfinder::{
 };
 use self::ingress_control::IngressControl;
 use self::rate_limit::AnnounceRateLimiter;
-use self::tables::{AnnounceEntry, LinkEntry, PathEntry};
+use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry};
 use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 
 /// The core transport/routing engine.
@@ -60,6 +60,7 @@ pub struct TransportEngine {
     ingress_control: IngressControl,
     tunnel_table: TunnelTable,
     discovery_pr_tags: Vec<[u8; 32]>,
+    discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     // Job timing
     announces_last_checked: f64,
     tables_last_culled: f64,
@@ -84,6 +85,7 @@ impl TransportEngine {
             ingress_control: IngressControl::new(),
             tunnel_table: TunnelTable::new(),
             discovery_pr_tags: Vec::new(),
+            discovery_path_requests: BTreeMap::new(),
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,
         }
@@ -138,7 +140,23 @@ impl TransportEngine {
     // Path state
     // =========================================================================
 
-    pub fn mark_path_unresponsive(&mut self, dest_hash: &[u8; 16]) {
+    /// Mark a path as unresponsive.
+    ///
+    /// If `receiving_interface` is provided and points to a MODE_BOUNDARY interface,
+    /// the marking is skipped — boundary interfaces must not poison path tables.
+    /// (Python Transport.py: mark_path_unknown/unresponsive boundary exemption)
+    pub fn mark_path_unresponsive(
+        &mut self,
+        dest_hash: &[u8; 16],
+        receiving_interface: Option<InterfaceId>,
+    ) {
+        if let Some(iface_id) = receiving_interface {
+            if let Some(info) = self.interfaces.get(&iface_id) {
+                if info.mode == constants::MODE_BOUNDARY {
+                    return;
+                }
+            }
+        }
         self.path_states
             .insert(*dest_hash, constants::STATE_UNRESPONSIVE);
     }
@@ -869,10 +887,11 @@ impl TransportEngine {
     }
 
     /// Check if there's a waiting discovery path request for a destination.
-    fn discovery_path_requests_waiting(&self, _dest_hash: &[u8; 16]) -> Option<InterfaceId> {
-        // Discovery path requests are out of scope for the basic implementation.
-        // This would check Transport.discovery_path_requests in Python.
-        None
+    /// Consumes the request if found (one-shot: the caller queues the announce response).
+    fn discovery_path_requests_waiting(&mut self, dest_hash: &[u8; 16]) -> Option<InterfaceId> {
+        self.discovery_path_requests
+            .remove(dest_hash)
+            .map(|req| req.requesting_interface)
     }
 
     // =========================================================================
@@ -1069,6 +1088,9 @@ impl TransportEngine {
             jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
             jobs::cull_path_states(&mut self.path_states, &self.path_table);
             self.cull_blackholed(now);
+            // Cull expired discovery path requests
+            self.discovery_path_requests
+                .retain(|_, req| now - req.timestamp < constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
             // Cull tunnels: void missing interfaces, then remove expired
             self.tunnel_table.void_missing_interfaces(|id| self.interfaces.contains_key(id));
             self.tunnel_table.cull(now);
@@ -1143,6 +1165,7 @@ impl TransportEngine {
                                 hops,
                                 &self.local_destinations,
                                 &self.path_table,
+                                &self.interfaces,
                             )
                         })
                         .map(|(id, info)| (*id, info.bitrate, info.announce_cap))
@@ -1194,13 +1217,20 @@ impl TransportEngine {
     // =========================================================================
 
     /// Handle an incoming path request.
+    ///
+    /// Transport.py path_request_handler (~line 2700):
+    /// - Dedup via unique tag
+    /// - If local destination, caller handles announce
+    /// - If path known and transport enabled, queue retransmit (with ROAMING loop prevention)
+    /// - If path unknown and receiving interface is in DISCOVER_PATHS_FOR, store a
+    ///   DiscoveryPathRequest and forward the raw path request on other OUT interfaces
     pub fn handle_path_request(
         &mut self,
         data: &[u8],
         interface_id: InterfaceId,
         now: f64,
     ) -> Vec<TransportAction> {
-        let actions = Vec::new();
+        let mut actions = Vec::new();
 
         if data.len() < 16 {
             return actions;
@@ -1243,16 +1273,23 @@ impl TransportEngine {
 
         // If destination is local, the caller should handle the announce
         if self.local_destinations.contains_key(&destination_hash) {
-            // Caller needs to trigger local announce - we signal via PathUpdated
-            // (In practice, caller would call destination.announce(path_response=True))
             return actions;
         }
 
         // If we know the path and transport is enabled, queue retransmit
-        if (self.config.transport_enabled) && self.path_table.contains_key(&destination_hash) {
-            let path = self.path_table.get(&destination_hash).unwrap();
-            let received_from = path.next_hop;
-            let hops = path.hops;
+        if self.config.transport_enabled && self.path_table.contains_key(&destination_hash) {
+            let path = self.path_table.get(&destination_hash).unwrap().clone();
+
+            // ROAMING loop prevention (Python Transport.py:2731-2732):
+            // If the receiving interface is ROAMING and the known path's next-hop
+            // is on the same interface, don't answer — it would loop.
+            if let Some(recv_info) = self.interfaces.get(&interface_id) {
+                if recv_info.mode == constants::MODE_ROAMING
+                    && path.receiving_interface == interface_id
+                {
+                    return actions;
+                }
+            }
 
             // Check if there's already an announce in the table
             if let Some(existing) = self.announce_table.remove(&destination_hash) {
@@ -1270,17 +1307,13 @@ impl TransportEngine {
                 now + constants::PATH_REQUEST_GRACE
             };
 
-            // We need the original announce packet data to retransmit.
-            // Since we don't cache packets, we can only retransmit if we
-            // have the data in the path entry. For now, create an entry
-            // that the caller can use.
             let entry = AnnounceEntry {
                 timestamp: now,
                 retransmit_timeout,
                 retries: constants::PATHFINDER_R,
-                received_from,
-                hops,
-                packet_raw: Vec::new(), // Would need cached announce
+                received_from: path.next_hop,
+                hops: path.hops,
+                packet_raw: Vec::new(),
                 packet_data: Vec::new(),
                 destination_hash,
                 context_flag: 0,
@@ -1291,12 +1324,31 @@ impl TransportEngine {
 
             self.announce_table.insert(destination_hash, entry);
         } else if self.config.transport_enabled {
-            // Unknown path: forward request on other interfaces
-            for (_, iface_info) in self.interfaces.iter() {
-                if iface_info.id != interface_id && iface_info.out_capable {
-                    // Caller would need to send path request on this interface
-                    // For now, we don't emit an action since path request forwarding
-                    // requires building a new path request packet.
+            // Unknown path: check if receiving interface is in DISCOVER_PATHS_FOR
+            let should_discover = self
+                .interfaces
+                .get(&interface_id)
+                .map(|info| constants::DISCOVER_PATHS_FOR.contains(&info.mode))
+                .unwrap_or(false);
+
+            if should_discover {
+                // Store discovery request so we can respond when the announce arrives
+                self.discovery_path_requests.insert(
+                    destination_hash,
+                    DiscoveryPathRequest {
+                        timestamp: now,
+                        requesting_interface: interface_id,
+                    },
+                );
+
+                // Forward the raw path request data on all other OUT-capable interfaces
+                for (_, iface_info) in self.interfaces.iter() {
+                    if iface_info.id != interface_id && iface_info.out_capable {
+                        actions.push(TransportAction::SendOnInterface {
+                            interface: iface_info.id,
+                            raw: data.to_vec(),
+                        });
+                    }
                 }
             }
         }
@@ -1537,11 +1589,33 @@ mod tests {
 
         assert!(!engine.path_is_unresponsive(&dest));
 
-        engine.mark_path_unresponsive(&dest);
+        engine.mark_path_unresponsive(&dest, None);
         assert!(engine.path_is_unresponsive(&dest));
 
         engine.mark_path_responsive(&dest);
         assert!(!engine.path_is_unresponsive(&dest));
+    }
+
+    #[test]
+    fn test_boundary_exempts_unresponsive() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_BOUNDARY));
+        let dest = [0xB1; 16];
+
+        // Marking via a boundary interface should be skipped
+        engine.mark_path_unresponsive(&dest, Some(InterfaceId(1)));
+        assert!(!engine.path_is_unresponsive(&dest));
+    }
+
+    #[test]
+    fn test_non_boundary_marks_unresponsive() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let dest = [0xB2; 16];
+
+        // Marking via a non-boundary interface should work
+        engine.mark_path_unresponsive(&dest, Some(InterfaceId(1)));
+        assert!(engine.path_is_unresponsive(&dest));
     }
 
     #[test]
@@ -2307,5 +2381,113 @@ mod tests {
             }
             _ => panic!("Expected TunnelSynthesize"),
         }
+    }
+
+    // =========================================================================
+    // DISCOVER_PATHS_FOR tests
+    // =========================================================================
+
+    fn make_path_request_data(dest_hash: &[u8; 16], tag: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(dest_hash);
+        data.extend_from_slice(tag);
+        data
+    }
+
+    #[test]
+    fn test_path_request_forwarded_on_ap() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD1; 16];
+        let tag = [0x01; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        // Should forward the path request on interface 2 (the other OUT interface)
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, .. } => {
+                assert_eq!(*interface, InterfaceId(2));
+            }
+            _ => panic!("Expected SendOnInterface for forwarded path request"),
+        }
+        // Should have stored a discovery path request
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_path_request_not_forwarded_on_full() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD2; 16];
+        let tag = [0x02; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        // MODE_FULL is not in DISCOVER_PATHS_FOR, so no forwarding
+        assert!(actions.is_empty());
+        assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_roaming_loop_prevention() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ROAMING));
+
+        let dest = [0xD3; 16];
+        // Path is known and routes through the same interface (1)
+        engine.path_table.insert(
+            dest,
+            PathEntry {
+                timestamp: 900.0,
+                next_hop: [0xAA; 16],
+                hops: 2,
+                expires: 9999.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(1),
+                packet_hash: [0; 32],
+                announce_raw: None,
+            },
+        );
+
+        let tag = [0x03; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        // ROAMING interface, path next-hop on same interface → loop prevention, no action
+        assert!(actions.is_empty());
+        assert!(!engine.announce_table.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_discovery_request_consumed_on_announce() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+
+        let dest = [0xD4; 16];
+
+        // Simulate a waiting discovery request
+        engine.discovery_path_requests.insert(
+            dest,
+            DiscoveryPathRequest {
+                timestamp: 900.0,
+                requesting_interface: InterfaceId(1),
+            },
+        );
+
+        // Consume it
+        let iface = engine.discovery_path_requests_waiting(&dest);
+        assert_eq!(iface, Some(InterfaceId(1)));
+
+        // Should be gone now
+        assert!(!engine.discovery_path_requests.contains_key(&dest));
+        assert_eq!(engine.discovery_path_requests_waiting(&dest), None);
     }
 }

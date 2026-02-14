@@ -1063,7 +1063,7 @@ fn test_path_state_lifecycle() {
     assert!(harness.engine.has_path(&dest_hash));
 
     // Mark unresponsive
-    harness.engine.mark_path_unresponsive(&dest_hash);
+    harness.engine.mark_path_unresponsive(&dest_hash, None);
     assert!(harness.engine.path_is_unresponsive(&dest_hash));
 
     // New announce with same timebase should be accepted (unresponsive path recovery)

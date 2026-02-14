@@ -93,6 +93,7 @@ pub fn route_outbound(
                 packet.hops,
                 local_destinations,
                 path_table,
+                interfaces,
             );
 
             if should_transmit {
@@ -125,13 +126,20 @@ pub fn route_outbound(
 /// Determine whether an announce should be transmitted on a given interface.
 ///
 /// Applies mode-based filtering from Transport.py:1040-1165.
+///
+/// - ACCESS_POINT: never re-broadcast announces (AP is a sink)
+/// - ROAMING: allow local announces; allow non-local unless source interface is ROAMING or BOUNDARY
+/// - BOUNDARY: allow local announces; allow non-local unless source interface is ROAMING
+/// - Others (FULL, PTP, GATEWAY): always allow
 pub(crate) fn should_transmit_announce(
     iface: &InterfaceInfo,
     dest_hash: &[u8; 16],
     hops: u8,
     local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
     path_table: &alloc::collections::BTreeMap<[u8; 16], PathEntry>,
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
 ) -> bool {
+    let _ = hops;
     match iface.mode {
         constants::MODE_ACCESS_POINT => {
             // Block announce broadcast on AP mode interfaces
@@ -142,36 +150,40 @@ pub(crate) fn should_transmit_announce(
             if local_destinations.contains_key(dest_hash) {
                 return true;
             }
-            // Check from_interface mode
+            // Non-local: allow unless source interface is ROAMING or BOUNDARY
             if let Some(path) = path_table.get(dest_hash) {
-                let from_iface_id = path.receiving_interface;
-                // We can't directly check from_interface mode without the interface info,
-                // but we can check our own interface table. For now, block if coming
-                // from a roaming or boundary interface. In practice this is checked
-                // by looking up the from_interface mode.
-                // Block on roaming interfaces for non-local destinations from roaming/boundary
-                let _ = from_iface_id;
+                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
+                    if from_iface.mode == constants::MODE_ROAMING
+                        || from_iface.mode == constants::MODE_BOUNDARY
+                    {
+                        return false;
+                    }
+                }
+                return true;
             }
-            false
+            // No path known — allow (might be our own announce)
+            true
         }
         constants::MODE_BOUNDARY => {
             // Allow if destination is local
             if local_destinations.contains_key(dest_hash) {
                 return true;
             }
-            false
+            // Non-local: allow unless source interface is ROAMING
+            if let Some(path) = path_table.get(dest_hash) {
+                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
+                    if from_iface.mode == constants::MODE_ROAMING {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            // No path known — allow
+            true
         }
         _ => {
-            // FULL, POINT_TO_POINT, GATEWAY
-            // For non-local announces (hops > 0), bandwidth cap applies
-            // (handled at the caller level with announce queues)
-            if hops > 0 {
-                // Bandwidth cap would apply here in a full implementation
-                // For now, allow
-                true
-            } else {
-                true
-            }
+            // FULL, POINT_TO_POINT, GATEWAY — always allow
+            true
         }
     }
 }
@@ -434,5 +446,153 @@ mod tests {
         // Should broadcast, not use path table
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }));
+    }
+
+    // =========================================================================
+    // ROAMING/BOUNDARY mode announce filtering tests
+    // =========================================================================
+
+    #[test]
+    fn test_roaming_allows_announce_from_full() {
+        let dest = [0xA1; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_ROAMING));
+
+        // Path arrived via FULL interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let roaming_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            roaming_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_roaming_blocks_announce_from_roaming() {
+        let dest = [0xA2; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_ROAMING));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_ROAMING));
+
+        // Path arrived via ROAMING interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let roaming_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            roaming_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_roaming_blocks_announce_from_boundary() {
+        let dest = [0xA3; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_BOUNDARY));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_ROAMING));
+
+        // Path arrived via BOUNDARY interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let roaming_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            roaming_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_boundary_allows_announce_from_full() {
+        let dest = [0xA4; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_BOUNDARY));
+
+        // Path arrived via FULL interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let boundary_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            boundary_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_boundary_allows_announce_from_boundary() {
+        let dest = [0xA5; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_BOUNDARY));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_BOUNDARY));
+
+        // Path arrived via BOUNDARY interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let boundary_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            boundary_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_boundary_blocks_announce_from_roaming() {
+        let dest = [0xA6; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_ROAMING));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_BOUNDARY));
+
+        // Path arrived via ROAMING interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let boundary_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            boundary_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
     }
 }

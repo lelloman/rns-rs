@@ -250,6 +250,13 @@ pub const MODE_ROAMING: u8 = 0x04;
 pub const MODE_BOUNDARY: u8 = 0x05;
 pub const MODE_GATEWAY: u8 = 0x06;
 
+/// Interface modes that forward path requests for unknown destinations.
+/// Python: Interface.DISCOVER_PATHS_FOR = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING]
+pub const DISCOVER_PATHS_FOR: [u8; 3] = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING];
+
+/// Discovery path request expiry (seconds) — requests older than this are culled.
+pub const DISCOVERY_PATH_REQUEST_TIMEOUT: f64 = 15.0;
+
 // --- Path states ---
 
 pub const STATE_UNKNOWN: u8 = 0x00;
