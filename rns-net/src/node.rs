@@ -803,6 +803,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: 65535,
                     };
 
                     let writer =
@@ -857,6 +858,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: 1400,
                     };
 
                     driver.engine.register_interface(info.clone());
@@ -904,6 +906,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: 65535,
                     };
 
                     let writer =
@@ -945,6 +948,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: rns_core::constants::MTU as u32,
                     };
 
                     let writer =
@@ -985,6 +989,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: rns_core::constants::MTU as u32,
                     };
 
                     let writer =
@@ -1025,6 +1030,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: rns_core::constants::MTU as u32,
                     };
 
                     let writer =
@@ -1079,6 +1085,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: rns_core::constants::MTU as u32,
                         };
 
                         let sub_ifac = if first {
@@ -1140,6 +1147,7 @@ impl RnsNode {
                         is_local_client: false,
                         wants_tunnel: false,
                         tunnel_id: None,
+                        mtu: 65535,
                     };
 
                     let writer =

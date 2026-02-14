@@ -259,6 +259,7 @@ fn epoll_loop(
                                 is_local_client: false,
                                 wants_tunnel: false,
                                 tunnel_id: None,
+                                mtu: 65535,
                             };
 
                             if tx

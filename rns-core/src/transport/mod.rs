@@ -1435,6 +1435,7 @@ mod tests {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: constants::MTU as u32,
         }
     }
 
@@ -1781,6 +1782,7 @@ mod tests {
             is_local_client: true,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: constants::MTU as u32,
         }
     }
 
@@ -2055,6 +2057,7 @@ mod tests {
             is_local_client: false,
             wants_tunnel: true,
             tunnel_id: None,
+            mtu: constants::MTU as u32,
         }
     }
 

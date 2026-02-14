@@ -23,6 +23,8 @@ pub struct PunchResult {
     pub socket: UdpSocket,
     /// The peer address that responded.
     pub peer_addr: SocketAddr,
+    /// Measured RTT: time from first punch send to first valid ACK received.
+    pub rtt: Duration,
 }
 
 /// Status values for the atomic state.
@@ -116,6 +118,7 @@ fn run_udp_punch(
     let mut we_got_ack = false;
     let mut they_got_ack = false;
     let mut verified_peer: Option<SocketAddr> = None;
+    let mut first_ack_time: Option<Instant> = None;
 
     // Combine all endpoints to try
     let all_endpoints: Vec<SocketAddr> = peer_endpoints.iter()
@@ -166,6 +169,9 @@ fn run_udp_punch(
                 // Received ACK for our punch
                 if verify_ack_packet(&buf[..len], &session_id, &punch_token) {
                     we_got_ack = true;
+                    if first_ack_time.is_none() {
+                        first_ack_time = Some(Instant::now());
+                    }
                     if verified_peer.is_none() {
                         verified_peer = Some(src);
                     }
@@ -177,7 +183,8 @@ fn run_udp_punch(
                 status.store(STATUS_SUCCEEDED, Ordering::Relaxed);
                 // Set socket back to blocking with a reasonable timeout
                 let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
-                return verified_peer.map(|peer_addr| PunchResult { socket, peer_addr });
+                let rtt = first_ack_time.map(|t| t - start).unwrap_or(start.elapsed());
+                return verified_peer.map(|peer_addr| PunchResult { socket, peer_addr, rtt });
             }
         }
     }

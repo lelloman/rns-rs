@@ -827,6 +827,7 @@ fn add_peer(
         is_local_client: false,
         wants_tunnel: false,
         tunnel_id: None,
+        mtu: 1400,
     };
 
     let now = crate::time::now();

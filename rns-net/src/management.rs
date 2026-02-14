@@ -394,6 +394,7 @@ mod tests {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
         };
         map.insert(id, InterfaceEntry {
             id,

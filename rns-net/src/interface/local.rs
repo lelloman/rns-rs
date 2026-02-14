@@ -336,6 +336,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         is_local_client: false,
         wants_tunnel: false,
         tunnel_id: None,
+        mtu: 65535,
     }
 }
 

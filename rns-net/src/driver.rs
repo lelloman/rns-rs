@@ -388,8 +388,12 @@ impl Driver {
                 }
                 Event::CreateLink { dest_hash, dest_sig_pub_bytes, response_tx } => {
                     let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
+                    let mtu = self.engine.next_hop_interface(&dest_hash)
+                        .and_then(|iface_id| self.interfaces.get(&iface_id))
+                        .map(|entry| entry.info.mtu)
+                        .unwrap_or(rns_core::constants::MTU as u32);
                     let (link_id, link_actions) = self.link_manager.create_link(
-                        &dest_hash, &dest_sig_pub_bytes, hops, &mut self.rng,
+                        &dest_hash, &dest_sig_pub_bytes, hops, mtu, &mut self.rng,
                     );
                     let _ = response_tx.send(link_id);
                     self.dispatch_link_actions(link_actions);
@@ -1222,13 +1226,19 @@ impl Driver {
                     );
                     self.dispatch_link_actions(link_actions);
                 }
-                HolePunchManagerAction::DirectConnectEstablished { link_id, session_id, interface_id } => {
+                HolePunchManagerAction::DirectConnectEstablished { link_id, session_id, interface_id, rtt, mtu } => {
                     log::info!(
-                        "Direct connection established for link {:02x?} session {:02x?} iface {}",
-                        &link_id[..4], &session_id[..4], interface_id.0
+                        "Direct connection established for link {:02x?} session {:02x?} iface {} rtt={:.1}ms mtu={}",
+                        &link_id[..4], &session_id[..4], interface_id.0, rtt * 1000.0, mtu
                     );
                     // Redirect the link's path to use the direct interface
                     self.engine.redirect_path(&link_id, interface_id, time::now());
+                    // Update the link's RTT and MTU to reflect the direct path
+                    self.link_manager.set_link_rtt(&link_id, rtt);
+                    self.link_manager.set_link_mtu(&link_id, mtu);
+                    // Reset inbound timer — set_rtt shortens the keepalive/stale
+                    // intervals, so without this the link goes stale immediately
+                    self.link_manager.record_link_inbound(&link_id);
                     // Flush holepunch signaling messages from the channel window
                     self.link_manager.flush_channel_tx(&link_id);
                     self.callbacks.on_direct_connect_established(
@@ -1603,6 +1613,7 @@ mod tests {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: constants::MTU as u32,
         }
     }
 
@@ -2602,7 +2613,7 @@ mod tests {
         // Create a link via link_manager directly
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        driver.link_manager.create_link(&[0xDD; 16], &dummy_sig, 1, &mut rng);
+        driver.link_manager.create_link(&[0xDD; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Query link count — should include link_manager links
         let (resp_tx, resp_rx) = mpsc::channel();

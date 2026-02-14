@@ -79,6 +79,10 @@ pub enum HolePunchManagerAction {
         link_id: [u8; 16],
         session_id: [u8; 16],
         interface_id: rns_core::transport::types::InterfaceId,
+        /// RTT measured during punch (time from first send to first ACK).
+        rtt: f64,
+        /// MTU of the direct interface.
+        mtu: u32,
     },
     /// Direct connection failed.
     DirectConnectFailed {
@@ -293,6 +297,7 @@ impl HolePunchManager {
             succeeded: bool,
             socket: Option<std::net::UdpSocket>,
             peer_addr: Option<SocketAddr>,
+            rtt: Option<f64>,
         }
         let mut completions: Vec<PunchCompletion> = Vec::new();
 
@@ -311,12 +316,14 @@ impl HolePunchManager {
                         if succeeded {
                             if let Some(handle) = session.punch_handle.take() {
                                 if let Some(result) = handle.join() {
+                                    let rtt_secs = result.rtt.as_secs_f64();
                                     completions.push(PunchCompletion {
                                         session_id: *session_id,
                                         link_id: *link_id,
                                         succeeded: true,
                                         socket: Some(result.socket),
                                         peer_addr: Some(result.peer_addr),
+                                        rtt: Some(rtt_secs),
                                     });
                                 }
                             }
@@ -328,6 +335,7 @@ impl HolePunchManager {
                                 succeeded: false,
                                 socket: None,
                                 peer_addr: None,
+                                rtt: None,
                             });
                         }
                     }
@@ -374,6 +382,8 @@ impl HolePunchManager {
                                         link_id: completion.link_id,
                                         session_id,
                                         interface_id,
+                                        rtt: completion.rtt.unwrap_or(0.0),
+                                        mtu: 1400,
                                     });
                                 }
                                 HolePunchAction::Succeeded { session_id } => {

@@ -89,6 +89,7 @@ pub fn start_direct_interface(
         is_local_client: false,
         wants_tunnel: false,
         tunnel_id: None,
+        mtu: 1400,
     };
 
     let running_clone = running.clone();
@@ -148,7 +149,7 @@ fn run_reader(
                 last_inbound = std::time::Instant::now();
 
                 // Skip keepalive/punch packets (they have RNSH/RNSA magic)
-                if len == 56 && (buf[..4] == *b"RNSH" || buf[..4] == *b"RNSA") {
+                if len >= 4 && (buf[..4] == *b"RNSH" || buf[..4] == *b"RNSA") {
                     continue;
                 }
 

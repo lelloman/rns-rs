@@ -255,11 +255,12 @@ impl LinkManager {
         dest_hash: &[u8; 16],
         dest_sig_pub_bytes: &[u8; 32],
         hops: u8,
+        mtu: u32,
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
         let mode = LinkMode::Aes256Cbc;
         let (mut engine, request_data) =
-            LinkEngine::new_initiator(dest_hash, hops, mode, Some(constants::MTU as u32), time::now(), rng);
+            LinkEngine::new_initiator(dest_hash, hops, mode, Some(mtu), time::now(), rng);
 
         // Build the LINKREQUEST packet to compute link_id
         let flags = PacketFlags {
@@ -691,6 +692,28 @@ impl LinkManager {
             }
             LinkDataResult::Keepalive { link_id, inbound_actions } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
+                // Reply with a keepalive so the other side's last_inbound is updated.
+                // This handles asymmetric keepalive intervals (different RTTs per side).
+                if let Some(link) = self.links.get_mut(&link_id) {
+                    let now = time::now();
+                    let flags = PacketFlags {
+                        header_type: constants::HEADER_1,
+                        context_flag: constants::FLAG_UNSET,
+                        transport_type: constants::TRANSPORT_BROADCAST,
+                        destination_type: constants::DESTINATION_LINK,
+                        packet_type: constants::PACKET_TYPE_DATA,
+                    };
+                    if let Ok(pkt) = RawPacket::pack(
+                        flags, 0, &link_id, None, constants::CONTEXT_KEEPALIVE, &[],
+                    ) {
+                        actions.push(LinkManagerAction::SendPacket {
+                            raw: pkt.raw,
+                            dest_type: constants::DESTINATION_LINK,
+                            attached_interface: None,
+                        });
+                        link.engine.record_outbound(now, true);
+                    }
+                }
             }
             LinkDataResult::LinkClose { link_id, teardown_actions } => {
                 actions.extend(self.process_link_actions(&link_id, &teardown_actions));
@@ -1727,6 +1750,27 @@ impl LinkManager {
         self.links.get(link_id).and_then(|l| l.engine.rtt())
     }
 
+    /// Update the RTT of a link (e.g., after path redirect to a direct connection).
+    pub fn set_link_rtt(&mut self, link_id: &LinkId, rtt: f64) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            link.engine.set_rtt(rtt);
+        }
+    }
+
+    /// Reset the inbound timer for a link (e.g., after path redirect).
+    pub fn record_link_inbound(&mut self, link_id: &LinkId) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            link.engine.record_inbound(time::now());
+        }
+    }
+
+    /// Update the MTU of a link (e.g., after path redirect to a different interface).
+    pub fn set_link_mtu(&mut self, link_id: &LinkId, mtu: u32) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            link.engine.set_mtu(mtu);
+        }
+    }
+
     /// Get the number of active links.
     pub fn link_count(&self) -> usize {
         self.links.len()
@@ -1925,7 +1969,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
 
         let sig_pub_bytes = [0xAA; 32]; // dummy sig pub for test
-        let (link_id, actions) = mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, actions) = mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         assert_ne!(link_id, [0u8; 16]);
         // Should have RegisterLinkDest + SendPacket
         assert_eq!(actions.len(), 2);
@@ -1950,7 +1994,7 @@ mod tests {
         let mut initiator_mgr = LinkManager::new();
 
         // Step 1: Initiator creates link (needs dest signing pub key for LRPROOF verification)
-        let (link_id, init_actions) = initiator_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = initiator_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         assert_eq!(init_actions.len(), 2);
 
         // Extract the LINKREQUEST packet raw bytes
@@ -2030,7 +2074,7 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
@@ -2063,7 +2107,7 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
@@ -2108,7 +2152,7 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake (without identification)
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
@@ -2139,7 +2183,7 @@ mod tests {
         let mut mgr = LinkManager::new();
 
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&dest_hash, &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&dest_hash, &dummy_sig, 1, constants::MTU as u32, &mut rng);
         assert_eq!(mgr.link_count(), 1);
 
         let actions = mgr.teardown_link(&link_id);
@@ -2163,7 +2207,7 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
@@ -2208,10 +2252,10 @@ mod tests {
         assert_eq!(mgr.link_count(), 0);
 
         let dummy_sig = [0xAA; 32];
-        mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
         assert_eq!(mgr.link_count(), 1);
 
-        mgr.create_link(&[0x22; 16], &dummy_sig, 1, &mut rng);
+        mgr.create_link(&[0x22; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
         assert_eq!(mgr.link_count(), 2);
     }
 
@@ -2249,7 +2293,7 @@ mod tests {
         resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
         let mut init_mgr = LinkManager::new();
 
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
@@ -2281,7 +2325,7 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Default strategy is AcceptNone
         let link = mgr.links.get(&link_id).unwrap();
@@ -2293,7 +2337,7 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
         assert_eq!(mgr.links.get(&link_id).unwrap().resource_strategy, ResourceStrategy::AcceptAll);
@@ -2321,7 +2365,7 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Link is Pending, not Active
         let actions = mgr.send_resource(&link_id, b"data", None, &mut rng);
@@ -2721,7 +2765,7 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Link is Pending (no channel), should return empty
         let actions = mgr.send_channel_message(&link_id, 1, b"test", &mut rng);
@@ -2733,7 +2777,7 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, &mut rng);
+        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         let actions = mgr.send_on_link(&link_id, b"test", constants::CONTEXT_NONE, &mut rng);
         assert!(actions.is_empty(), "Cannot send on pending link");

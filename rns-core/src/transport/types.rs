@@ -25,6 +25,8 @@ pub struct InterfaceInfo {
     pub wants_tunnel: bool,
     /// Tunnel ID associated with this interface, if any.
     pub tunnel_id: Option<[u8; 32]>,
+    /// Maximum transmission unit for this interface in bytes.
+    pub mtu: u32,
 }
 
 /// Actions produced by TransportEngine for the caller to execute.

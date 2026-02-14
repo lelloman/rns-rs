@@ -216,6 +216,7 @@ mod tests {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: constants::MTU as u32,
         }
     }
 

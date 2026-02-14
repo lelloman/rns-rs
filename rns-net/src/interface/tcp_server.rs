@@ -129,6 +129,7 @@ fn listener_loop(
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: 65535,
         };
 
         // Send InterfaceUp with InterfaceInfo for dynamic registration

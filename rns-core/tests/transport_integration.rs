@@ -125,6 +125,7 @@ impl TestHarness {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
         });
     }
 }
@@ -331,6 +332,7 @@ fn test_transport_routing_interop() {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
                 });
 
                 // Use route_outbound directly with a known path

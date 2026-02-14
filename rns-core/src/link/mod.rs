@@ -438,7 +438,7 @@ impl LinkEngine {
 
     /// Check if a keepalive should be sent. Returns true if conditions are met.
     pub fn needs_keepalive(&self, now: f64) -> bool {
-        if self.state != LinkState::Active || !self.is_initiator {
+        if self.state != LinkState::Active {
             return false;
         }
         let activated = self.activated_at.unwrap_or(0.0);
@@ -529,6 +529,19 @@ impl LinkEngine {
 
     pub fn keepalive_interval(&self) -> f64 {
         self.keepalive_interval
+    }
+
+    /// Update the measured RTT (e.g., after path redirect to a direct link).
+    /// Also recalculates keepalive and stale timers.
+    pub fn set_rtt(&mut self, rtt: f64) {
+        self.rtt = Some(rtt);
+        self.update_keepalive();
+    }
+
+    /// Update the link MTU (e.g., after path redirect to a different interface).
+    pub fn set_mtu(&mut self, mtu: u32) {
+        self.mtu = mtu;
+        self.mdu = compute_mdu(mtu as usize);
     }
 
     // --- Internal ---
@@ -766,6 +779,43 @@ mod tests {
         assert!(!initiator.needs_keepalive(100.8 + ka - 1.0));
         // Past keepalive
         assert!(initiator.needs_keepalive(100.8 + ka + 1.0));
+    }
+
+    #[test]
+    fn test_needs_keepalive_responder() {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+
+        let mut rng_init = make_rng(0x10);
+        let (mut initiator, request_data) = LinkEngine::new_initiator(
+            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+        );
+        let mut hashable = Vec::new();
+        hashable.push(0x00);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&dest_hash);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&request_data);
+        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+
+        let mut rng_resp = make_rng(0x20);
+        let (mut responder, lrproof_data) = LinkEngine::new_responder(
+            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
+            &dest_hash, 1, 100.5, &mut rng_resp,
+        ).unwrap();
+
+        let mut rng_lrrtt = make_rng(0x30);
+        let (lrrtt_encrypted, _) = initiator.handle_lrproof(
+            &lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt,
+        ).unwrap();
+        responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
+
+        let ka = responder.keepalive_interval();
+        // Responder should also send keepalives
+        assert!(!responder.needs_keepalive(101.0 + ka - 1.0));
+        assert!(responder.needs_keepalive(101.0 + ka + 1.0));
     }
 
     #[test]
