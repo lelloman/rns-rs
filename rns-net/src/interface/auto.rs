@@ -275,7 +275,6 @@ struct AutoPeer {
     #[allow(dead_code)]
     ifname: String,
     last_heard: f64,
-    writer: UdpWriter,
 }
 
 /// Writer that sends UDP unicast data to a peer.
@@ -808,13 +807,6 @@ fn add_peer(
 
     let peer_id = InterfaceId(state.next_id.fetch_add(1, Ordering::Relaxed));
 
-    let writer = UdpWriter {
-        socket: send_socket.try_clone().unwrap_or_else(|_| {
-            UdpSocket::bind("[::]:0").expect("bind udp")
-        }),
-        target,
-    };
-
     // Create a boxed writer for the driver
     let driver_writer: Box<dyn Writer> = Box::new(UdpWriter {
         socket: send_socket,
@@ -845,7 +837,6 @@ fn add_peer(
             link_local_addr: peer_addr.to_string(),
             ifname: String::new(),
             last_heard: now,
-            writer,
         },
     );
 
@@ -1138,15 +1129,11 @@ mod tests {
         let next_id = Arc::new(AtomicU64::new(100));
         let mut state = SharedState::new(next_id);
 
-        let socket = UdpSocket::bind("[::]:0").unwrap();
-        let target = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 12345, 0, 0);
-
         state.peers.insert("fe80::1".to_string(), AutoPeer {
             interface_id: InterfaceId(100),
             link_local_addr: "fe80::1".to_string(),
             ifname: "eth0".to_string(),
             last_heard: 1000.0,
-            writer: UdpWriter { socket, target },
         });
 
         state.refresh_peer("fe80::1", 2000.0);

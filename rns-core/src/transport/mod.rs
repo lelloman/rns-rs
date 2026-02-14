@@ -51,7 +51,6 @@ pub struct TransportEngine {
     packet_hashlist: PacketHashlist,
     rate_limiter: AnnounceRateLimiter,
     path_states: BTreeMap<[u8; 16], u8>,
-    path_requests: BTreeMap<[u8; 16], f64>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
@@ -61,7 +60,6 @@ pub struct TransportEngine {
     // Job timing
     announces_last_checked: f64,
     tables_last_culled: f64,
-    links_last_checked: f64,
 }
 
 impl TransportEngine {
@@ -76,7 +74,6 @@ impl TransportEngine {
             packet_hashlist: PacketHashlist::new(constants::HASHLIST_MAXSIZE),
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
-            path_requests: BTreeMap::new(),
             interfaces: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
@@ -85,7 +82,6 @@ impl TransportEngine {
             discovery_pr_tags: Vec::new(),
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,
-            links_last_checked: 0.0,
         }
     }
 

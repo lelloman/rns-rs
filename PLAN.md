@@ -1313,3 +1313,18 @@ Core protocol is driven by caller via `tick()` / `handle_event()` — no threads
 | `RNS/Destination.py` | Hash computation, announce packing |
 | `RNS/Channel.py` | Envelope framing, flow control |
 | `RNS/Resource.py` | Transfer protocol, hashmap, windowing |
+
+---
+
+## Python Feature Parity Tracking
+
+Feature parity with the Python implementation is tracked separately in [docs/python-feature-gaps.md](docs/python-feature-gaps.md).
+
+This document tracks:
+- Missing interface types (BackboneClientInterface, RNodeMultiInterface, WeaveInterface, AX25KISSInterface, Android interfaces)
+- Missing ingress control system
+- Per-interface missing configuration options
+- Priority recommendations for future work
+
+The Rust implementation also includes features not present in Python:
+- **DirectLink** — NAT hole punching for direct P2P UDP connections (see Phase 10)

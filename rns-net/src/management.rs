@@ -98,7 +98,7 @@ pub fn handle_status_request(
     let mut total_rxb: u64 = 0;
     let mut total_txb: u64 = 0;
 
-    for (id, entry) in interfaces {
+    for (_id, entry) in interfaces {
         total_rxb += entry.stats.rxb;
         total_txb += entry.stats.txb;
 

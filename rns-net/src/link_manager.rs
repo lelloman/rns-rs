@@ -57,7 +57,6 @@ struct ManagedLink {
 
 /// A registered link destination that can accept incoming LINKREQUEST.
 struct LinkDestination {
-    dest_hash: [u8; 16],
     sig_prv: Ed25519PrivateKey,
     sig_pub_bytes: [u8; 32],
 }
@@ -212,7 +211,6 @@ impl LinkManager {
         sig_pub_bytes: [u8; 32],
     ) {
         self.link_destinations.insert(dest_hash, LinkDestination {
-            dest_hash,
             sig_prv,
             sig_pub_bytes,
         });

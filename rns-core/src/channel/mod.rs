@@ -21,7 +21,6 @@ use envelope::{pack_envelope, unpack_envelope};
 /// Internal envelope tracking state.
 struct Envelope {
     sequence: Sequence,
-    msgtype: MessageType,
     raw: Vec<u8>,
     tries: u8,
     sent_at: f64,
@@ -118,7 +117,6 @@ impl Channel {
 
         self.tx_ring.push_back(Envelope {
             sequence,
-            msgtype,
             raw: raw.clone(),
             tries: 1,
             sent_at: now,
@@ -133,7 +131,7 @@ impl Channel {
     /// Returns `MessageReceived` for contiguous sequences starting from
     /// `next_rx_sequence`.
     pub fn receive(&mut self, raw: &[u8], _now: f64) -> Vec<ChannelAction> {
-        let (msgtype, sequence, _payload) = match unpack_envelope(raw) {
+        let (_msgtype, sequence, _payload) = match unpack_envelope(raw) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
@@ -151,7 +149,6 @@ impl Channel {
         // Emplace in sorted order
         let envelope = Envelope {
             sequence,
-            msgtype,
             raw: raw.to_vec(),
             tries: 0,
             sent_at: 0.0,

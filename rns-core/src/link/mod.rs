@@ -40,9 +40,6 @@ pub struct LinkEngine {
 
     // Ephemeral keys
     prv: X25519PrivateKey,
-    pub_bytes: [u8; 32],
-    sig_prv: Ed25519PrivateKey,
-    sig_pub_bytes: [u8; 32],
 
     // Peer keys
     peer_pub_bytes: Option<[u8; 32]>,
@@ -101,9 +98,6 @@ impl LinkEngine {
             is_initiator: true,
             mode,
             prv,
-            pub_bytes,
-            sig_prv,
-            sig_pub_bytes,
             peer_pub_bytes: None,
             peer_sig_pub_bytes: None,
             derived_key: None,
@@ -169,7 +163,6 @@ impl LinkEngine {
         // Generate ephemeral keys for this end
         let prv = X25519PrivateKey::generate(rng);
         let pub_bytes = prv.public_key().public_bytes();
-        let sig_prv_clone = Ed25519PrivateKey::from_bytes(&owner_sig_prv.private_bytes());
         let sig_pub_bytes = *owner_sig_pub_bytes;
 
         // Perform ECDH + HKDF
@@ -194,9 +187,6 @@ impl LinkEngine {
             is_initiator: false,
             mode,
             prv,
-            pub_bytes,
-            sig_prv: sig_prv_clone,
-            sig_pub_bytes,
             peer_pub_bytes: Some(peer_pub),
             peer_sig_pub_bytes: Some(peer_sig_pub),
             derived_key: Some(derived_key),
