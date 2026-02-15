@@ -7,6 +7,11 @@ use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
+#[cfg(feature = "rns-hooks")]
+use rns_hooks::{
+    create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookResult, HookSlot,
+};
+
 use crate::event::{
     BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
     LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
@@ -17,6 +22,59 @@ use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::time;
+
+/// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
+#[cfg(feature = "rns-hooks")]
+struct EngineRef<'a> {
+    engine: &'a TransportEngine,
+    interfaces: &'a HashMap<InterfaceId, InterfaceEntry>,
+    now: f64,
+}
+
+#[cfg(feature = "rns-hooks")]
+impl<'a> EngineAccess for EngineRef<'a> {
+    fn has_path(&self, dest: &[u8; 16]) -> bool {
+        self.engine.has_path(dest)
+    }
+    fn hops_to(&self, dest: &[u8; 16]) -> Option<u8> {
+        self.engine.hops_to(dest)
+    }
+    fn next_hop(&self, dest: &[u8; 16]) -> Option<[u8; 16]> {
+        self.engine.next_hop(dest)
+    }
+    fn is_blackholed(&self, identity: &[u8; 16]) -> bool {
+        self.engine.is_blackholed(identity, self.now)
+    }
+    fn interface_name(&self, id: u64) -> Option<String> {
+        self.interfaces
+            .get(&InterfaceId(id))
+            .map(|e| e.info.name.clone())
+    }
+    fn interface_mode(&self, id: u64) -> Option<u8> {
+        self.interfaces
+            .get(&InterfaceId(id))
+            .map(|e| e.info.mode)
+    }
+    fn identity_hash(&self) -> Option<[u8; 16]> {
+        self.engine.identity_hash().copied()
+    }
+}
+
+/// Execute a hook chain on disjoint Driver fields (avoids &mut self borrow conflict).
+#[cfg(feature = "rns-hooks")]
+fn run_hook_inner(
+    programs: &mut [rns_hooks::LoadedProgram],
+    hook_manager: &Option<HookManager>,
+    engine_access: &dyn EngineAccess,
+    ctx: &HookContext,
+    now: f64,
+) -> Option<HookResult> {
+    if programs.is_empty() {
+        return None;
+    }
+    let mgr = hook_manager.as_ref()?;
+    mgr.run_chain(programs, ctx, engine_access, now)
+}
 
 /// Infer the interface type string from a dynamic interface's name.
 /// Dynamic interfaces (TCP server clients, backbone peers, auto peers, local server clients)
@@ -150,6 +208,12 @@ pub struct Driver {
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
+    /// Hook slots for the WASM hook system (one per HookPoint).
+    #[cfg(feature = "rns-hooks")]
+    pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
+    /// WASM hook manager (runtime + linker). None if initialization failed.
+    #[cfg(feature = "rns-hooks")]
+    pub(crate) hook_manager: Option<HookManager>,
 }
 
 impl Driver {
@@ -198,6 +262,10 @@ impl Driver {
             local_destinations,
             holepunch_manager: HolePunchManager::new(None, None),
             event_tx: tx,
+            #[cfg(feature = "rns-hooks")]
+            hook_slots: create_hook_slots(),
+            #[cfg(feature = "rns-hooks")]
+            hook_manager: HookManager::new().ok(),
         }
     }
 
@@ -245,6 +313,28 @@ impl Driver {
                         data
                     };
 
+                    // PreIngress hook: after IFAC, before engine processing
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Packet(&rns_hooks::PacketContext {
+                            flags: if packet.is_empty() { 0 } else { packet[0] },
+                            hops: if packet.len() > 1 { packet[1] } else { 0 },
+                            destination_hash: [0; 16],
+                            context: 0,
+                            packet_hash: [0; 32],
+                            interface_id: interface_id.0,
+                            data_offset: 0,
+                            data_len: packet.len() as u32,
+                        });
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::PreIngress as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() {
+                                continue;
+                            }
+                        }
+                    }
+
                     // Record incoming announce for frequency tracking (before engine processing)
                     if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
                         let now = time::now();
@@ -264,9 +354,37 @@ impl Driver {
                         time::now(),
                         &mut self.rng,
                     );
+
+                    // PreDispatch hook: after engine, before action dispatch
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Packet(&rns_hooks::PacketContext {
+                            flags: if packet.is_empty() { 0 } else { packet[0] },
+                            hops: if packet.len() > 1 { packet[1] } else { 0 },
+                            destination_hash: [0; 16],
+                            context: 0,
+                            packet_hash: [0; 32],
+                            interface_id: interface_id.0,
+                            data_offset: 0,
+                            data_len: packet.len() as u32,
+                        });
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::PreDispatch as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+
                     self.dispatch_all(actions);
                 }
                 Event::Tick => {
+                    // Tick hook
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Tick;
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::Tick as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+
                     let now = time::now();
                     // Sync announce frequency to engine for all interfaces before tick
                     for (id, entry) in &self.interfaces {
@@ -317,6 +435,13 @@ impl Driver {
                             );
                         }
                         self.callbacks.on_interface_up(id);
+                        #[cfg(feature = "rns-hooks")]
+                        {
+                            let ctx = HookContext::Interface { interface_id: id.0 };
+                            let now = time::now();
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        }
                     } else if let Some(entry) = self.interfaces.get_mut(&id) {
                         // Existing interface reconnected
                         log::info!("[{}] interface online", id.0);
@@ -327,6 +452,13 @@ impl Driver {
                             entry.writer = writer;
                         }
                         self.callbacks.on_interface_up(id);
+                        #[cfg(feature = "rns-hooks")]
+                        {
+                            let ctx = HookContext::Interface { interface_id: id.0 };
+                            let now = time::now();
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        }
                     } else {
                         wants_tunnel = false;
                     }
@@ -356,6 +488,13 @@ impl Driver {
                             self.interfaces.get_mut(&id).unwrap().online = false;
                         }
                         self.callbacks.on_interface_down(id);
+                        #[cfg(feature = "rns-hooks")]
+                        {
+                            let ctx = HookContext::Interface { interface_id: id.0 };
+                            let now = time::now();
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceDown as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        }
                     }
                 }
                 Event::SendOutbound { raw, dest_type, attached_interface } => {
@@ -912,6 +1051,15 @@ impl Driver {
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Interface { interface_id: interface.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::SendOnInterface as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() { continue; }
+                        }
+                    }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
@@ -933,6 +1081,15 @@ impl Driver {
                     }
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Tick; // placeholder — no specific interface
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() { continue; }
+                        }
+                    }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     for entry in self.interfaces.values_mut() {
                         if entry.online && Some(entry.id) != exclude {
@@ -958,6 +1115,25 @@ impl Driver {
                     raw,
                     packet_hash,
                 } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let pkt_ctx = rns_hooks::PacketContext {
+                            flags: 0,
+                            hops: 0,
+                            destination_hash,
+                            context: 0,
+                            packet_hash,
+                            interface_id: 0,
+                            data_offset: 0,
+                            data_len: raw.len() as u32,
+                        };
+                        let ctx = HookContext::Packet(&pkt_ctx);
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::DeliverLocal as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() { continue; }
+                        }
+                    }
                     if destination_hash == self.tunnel_synth_dest {
                         // Tunnel synthesis packet — validate and handle
                         self.handle_tunnel_synth_delivery(&raw);
@@ -1021,8 +1197,26 @@ impl Driver {
                     public_key,
                     app_data,
                     hops,
+                    receiving_interface,
                     ..
                 } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Announce {
+                            destination_hash,
+                            hops,
+                            interface_id: receiving_interface.0,
+                        };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() { continue; }
+                        }
+                    }
+                    // Suppress unused variable warning when feature is off
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = receiving_interface;
+
                     // Cache the announced identity
                     let announced = crate::destination::AnnouncedIdentity {
                         dest_hash: rns_core::types::DestHash(destination_hash),
@@ -1038,8 +1232,23 @@ impl Driver {
                 TransportAction::PathUpdated {
                     destination_hash,
                     hops,
+                    interface,
                     ..
                 } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Announce {
+                            destination_hash,
+                            hops,
+                            interface_id: interface.0,
+                        };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::PathUpdated as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = interface;
+
                     self.callbacks.on_path_updated(rns_core::types::DestHash(destination_hash), hops);
                 }
                 TransportAction::ForwardToLocalClients { raw, exclude } => {
@@ -1088,6 +1297,15 @@ impl Driver {
                     }
                 }
                 TransportAction::TunnelSynthesize { interface, data, dest_hash } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Interface { interface_id: interface.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if result.is_drop() { continue; }
+                        }
+                    }
                     // Pack as BROADCAST DATA PLAIN packet and send on interface
                     let flags = rns_core::packet::PacketFlags {
                         header_type: rns_core::constants::HEADER_1,

@@ -1,0 +1,12 @@
+[package]
+name = "rns-hooks"
+description = "WASM hook system for the Reticulum Network Stack"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+wasmtime = "29"
+log = "0.4"

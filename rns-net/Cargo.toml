@@ -7,8 +7,13 @@ license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+rns-hooks = ["dep:rns-hooks"]
+
 [dependencies]
 rns-core.workspace = true
+rns-hooks = { workspace = true, optional = true }
 rns-crypto.workspace = true
 log = "0.4"
 libc = "0.2"

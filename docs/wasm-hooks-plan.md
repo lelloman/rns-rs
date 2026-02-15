@@ -512,7 +512,7 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 
 ## Implementation Phases
 
-### Phase 1 — Zero-cost dispatch skeleton
+### Phase 1 — Zero-cost dispatch skeleton (DONE)
 
 Scaffold the `rns-hooks` crate with no wasmtime dependency yet. Establishes the core abstractions that everything else builds on.
 
@@ -521,6 +521,13 @@ Scaffold the `rns-hooks` crate with no wasmtime dependency yet. Establishes the 
 3. Implement `HookPoint` enum, `HookSlot` with function pointer swap, and `run_hook!` macro
 4. Add `hook_slots` to `Driver` (cfg-gated) with `run_hook!` calls at key points (all no-ops)
 5. Verify: `cargo build` with and without `rns-hooks` feature, zero test regressions
+
+**Status:** All 7 new files created, 3 files modified. 11 of 16 hook points wired in driver (5 deferred to Phase 4: `AnnounceRetransmit`, `LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, `InterfaceConfigChanged`). 6 unit tests passing, 420 existing lib tests unaffected.
+
+**Notes for Phase 2 — HookContext data refinement needed:**
+- `BroadcastOnAllInterfaces` currently uses `HookContext::Tick` as placeholder since there's no single interface. Needs a proper context variant (e.g. a `Packet` context with the raw bytes).
+- `SendOnInterface` and `TunnelSynthesize` use `HookContext::Interface` — only pass interface ID, no packet data. Should carry raw bytes for hooks that want to inspect outgoing traffic.
+- `PreIngress` / `PreDispatch` `PacketContext` leaves `destination_hash` and `packet_hash` zeroed since the raw packet isn't parsed at those points. At `PreDispatch` the engine has parsed the packet but only returns actions, not the parsed struct. Consider whether to parse headers at hook call sites or expose the raw bytes only.
 
 ### Phase 2 — WASM runtime and HookManager
 
