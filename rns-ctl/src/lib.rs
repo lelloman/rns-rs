@@ -1,9 +1,13 @@
 pub mod api;
+pub mod args;
 pub mod auth;
 pub mod bridge;
+pub mod cmd;
 pub mod config;
 pub mod encode;
+pub mod format;
 pub mod http;
+pub mod remote;
 pub mod server;
 pub mod sha1;
 pub mod state;

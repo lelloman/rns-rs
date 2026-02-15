@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use crate::args::Args;
 
-/// Configuration for rns-ctl.
+/// Configuration for rns-ctl HTTP server.
 pub struct CtlConfig {
     /// Bind host (default: "127.0.0.1").
     pub host: String,
@@ -32,77 +32,6 @@ impl Default for CtlConfig {
             tls_cert: None,
             tls_key: None,
         }
-    }
-}
-
-/// Parsed command-line arguments.
-pub struct Args {
-    pub flags: HashMap<String, String>,
-    pub verbosity: u8,
-}
-
-impl Args {
-    pub fn parse() -> Self {
-        Self::parse_from(std::env::args().skip(1).collect())
-    }
-
-    pub fn parse_from(args: Vec<String>) -> Self {
-        let mut flags = HashMap::new();
-        let mut verbosity: u8 = 0;
-        let mut iter = args.into_iter();
-
-        while let Some(arg) = iter.next() {
-            if arg.starts_with("--") {
-                let key = arg[2..].to_string();
-                if let Some(eq_pos) = key.find('=') {
-                    let (k, v) = key.split_at(eq_pos);
-                    flags.insert(k.to_string(), v[1..].to_string());
-                } else {
-                    match key.as_str() {
-                        "help" | "daemon" | "disable-auth" | "version" => {
-                            flags.insert(key, "true".into());
-                        }
-                        _ => {
-                            if let Some(val) = iter.next() {
-                                flags.insert(key, val);
-                            } else {
-                                flags.insert(key, "true".into());
-                            }
-                        }
-                    }
-                }
-            } else if arg.starts_with('-') && arg.len() > 1 {
-                for c in arg[1..].chars() {
-                    match c {
-                        'v' => verbosity = verbosity.saturating_add(1),
-                        'h' => {
-                            flags.insert("help".into(), "true".into());
-                        }
-                        'd' => {
-                            flags.insert("daemon".into(), "true".into());
-                        }
-                        _ => {
-                            // Short flag with value: -c /path, -p 8080, -t token
-                            if let Some(val) = iter.next() {
-                                flags.insert(c.to_string(), val);
-                            } else {
-                                flags.insert(c.to_string(), "true".into());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Args { flags, verbosity }
-    }
-
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.flags.get(key).map(|s| s.as_str())
-    }
-
-    pub fn has(&self, key: &str) -> bool {
-        self.flags.contains_key(key)
     }
 }
 
@@ -146,7 +75,7 @@ pub fn from_args_and_env(args: &Args) -> CtlConfig {
         .map(String::from)
         .or_else(|| std::env::var("RNSCTL_CONFIG_PATH").ok());
 
-    cfg.daemon_mode = args.has("daemon");
+    cfg.daemon_mode = args.has("daemon") || args.has("d");
 
     cfg.tls_cert = args
         .get("tls-cert")
@@ -159,28 +88,6 @@ pub fn from_args_and_env(args: &Args) -> CtlConfig {
         .or_else(|| std::env::var("RNSCTL_TLS_KEY").ok());
 
     cfg
-}
-
-pub fn print_help() {
-    println!(
-        "rns-ctl - HTTP/WebSocket control interface for Reticulum
-
-USAGE:
-    rns-ctl [OPTIONS]
-
-OPTIONS:
-    -c, --config PATH       Path to RNS config directory
-    -p, --port PORT         HTTP port (default: 8080, env: RNSCTL_HTTP_PORT)
-    -H, --host HOST         Bind host (default: 127.0.0.1, env: RNSCTL_HOST)
-    -t, --token TOKEN       Auth bearer token (env: RNSCTL_AUTH_TOKEN)
-    -d, --daemon            Connect as client to running rnsd
-        --disable-auth      Disable authentication
-        --tls-cert PATH     TLS certificate file (env: RNSCTL_TLS_CERT, requires 'tls' feature)
-        --tls-key PATH      TLS private key file (env: RNSCTL_TLS_KEY, requires 'tls' feature)
-    -v                      Increase verbosity (repeat for more)
-    -h, --help              Show this help
-        --version           Show version"
-    );
 }
 
 #[cfg(test)]
@@ -206,9 +113,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_daemon() {
+    fn parse_daemon_short() {
         let a = args(&["-d"]);
+        assert!(a.has("d"));
+        let cfg = from_args_and_env(&a);
+        assert!(cfg.daemon_mode);
+    }
+
+    #[test]
+    fn parse_daemon_long() {
+        let a = args(&["--daemon"]);
         assert!(a.has("daemon"));
+        let cfg = from_args_and_env(&a);
+        assert!(cfg.daemon_mode);
     }
 
     #[test]
