@@ -5,7 +5,7 @@
 Implement a programmable hook system inspired by Linux eBPF, allowing users to load/unload arbitrary WASM programs that can observe, filter, modify, and inject actions at **every stage** of the RNS transport pipeline. This is not just a packet filter — it's a general-purpose programmable pipeline where hooks can attach to any event: packet processing, announce handling, link lifecycle, interface state changes, action dispatch, and periodic ticks.
 
 **Goals:**
-- Support multiple source languages (Rust, C, AssemblyScript, TinyGo)
+- Rust SDK initially (multi-language support is a future goal)
 - Full Turing-complete capabilities (observe, filter, modify, inject)
 - Hook into all key transport events (packet ingress/egress, announces, path updates, links, interfaces, all TransportActions)
 - Safe sandboxing with resource limits (memory, execution time)
@@ -82,35 +82,32 @@ macro_rules! run_hook {
 ```rust
 pub enum HookPoint {
     // Packet lifecycle
-    PreIngress,        // After IFAC, before engine (raw bytes)
-    PostIngress,       // After parsing, before engine processing
-    PreDispatch,       // Before action dispatch
-    PostDispatch,      // After action dispatched
-    PreEgress,         // Before sending on interface
+    PreIngress,           // After IFAC, before engine (raw bytes)
+    PreDispatch,          // After engine, before action dispatch
 
     // Announce processing
-    AnnounceReceived,  // After validation, before path update
-    PathUpdated,       // After path table update
-    AnnounceRetransmit,// Before retransmission
+    AnnounceReceived,     // After validation, before path update
+    PathUpdated,          // After path table update
+    AnnounceRetransmit,   // Before retransmission (TransportAction variant)
 
-    // Link lifecycle
+    // Link lifecycle (TransportAction variants)
     LinkRequestReceived,
     LinkEstablished,
     LinkClosed,
 
-    // Interface lifecycle
+    // Interface lifecycle (Event variants, not TransportAction — see note below)
     InterfaceUp,
     InterfaceDown,
     InterfaceConfigChanged,
 
-    // Per-action hooks
+    // Per-action hooks (existing TransportAction variants)
     SendOnInterface,
     BroadcastOnAllInterfaces,
     DeliverLocal,
     TunnelSynthesize,
 
     // Periodic
-    Tick,              // Every tick cycle
+    Tick,
 }
 ```
 
@@ -367,11 +364,35 @@ Event::Frame { interface_id, data } => {
 
 Each action type gets its own hook point called in `dispatch_all()` (driver.rs ~line 908).
 
-### 3. Announce/Path Updates
+### 3. New TransportAction Variants for Lifecycle Hook Points
+
+`LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, and `AnnounceRetransmit` are internal engine state changes that currently have no corresponding `TransportAction`. To make them available as hook points, add new `TransportAction` variants:
+
+```rust
+// rns-core/src/transport/types.rs — add to TransportAction enum:
+LinkRequestReceived { link_id: [u8; 16], destination_hash: [u8; 16], receiving_interface: InterfaceId },
+LinkEstablished { link_id: [u8; 16], interface: InterfaceId },
+LinkClosed { link_id: [u8; 16] },
+AnnounceRetransmit { destination_hash: [u8; 16], raw: Vec<u8>, interface: Option<InterfaceId> },
+```
+
+Emit these from:
+- `LinkRequestReceived`: `handle_inbound()` at mod.rs:526-540 when forwarding LINKREQUEST
+- `LinkEstablished`: mod.rs:908-936 when LRPROOF validates
+- `LinkClosed`: `jobs::cull_link_table()` at jobs.rs:103-130 when links expire
+- `AnnounceRetransmit`: `jobs::process_pending_announces()` at jobs.rs:36-53
+
+Handle in `dispatch_all()` as no-ops (the side effects already happened in the engine) — they exist purely as hook attachment points.
+
+### 4. InterfaceUp/Down/ConfigChanged Hooks
+
+> **Note:** `InterfaceUp`, `InterfaceDown`, and `InterfaceConfigChanged` hooks fire in the `Event::InterfaceUp` and `Event::InterfaceDown` match arms of `Driver::run()`, not through `dispatch_all()`. These are `Event` variants (event.rs), not `TransportAction` variants. The `run_hook!` macro is used the same way.
+
+### 5. Announce/Path Updates
 
 Hook into `TransportEngine` via callback trait or Driver-level interception.
 
-### 4. Future Vision: Existing Filters as WASM Plugins
+### 6. Future Vision: Existing Filters as WASM Plugins
 
 Existing IFAC (Interface ACL) and ingress control filtering could eventually be converted to WASM plugins, where the hook system subsumes current hardcoded filtering. For now, hooks run **after** IFAC/ingress control as an additional layer.
 
@@ -379,14 +400,29 @@ Existing IFAC (Interface ACL) and ingress control filtering could eventually be 
 
 ## Hot Reload
 
-Hook management via `rns-ctl` commands:
+### Server-side (`rns-ctl/src/api.rs`)
+
+HTTP endpoints for hook management:
+
+| Method | Endpoint | Body / Params | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/api/hooks` | — | List loaded hooks and status |
+| `POST` | `/api/hook/load` | `{ path, attach_point, priority }` | Load and attach a WASM hook |
+| `POST` | `/api/hook/reload` | `{ name }` | Reload a hook from same path |
+| `DELETE` | `/api/hook/:name` | — | Unload a hook |
+
+### Client-side (`rns-cli/src/bin/rnhook.rs`)
+
+New CLI binary that calls the HTTP endpoints above:
 
 ```bash
-rns-ctl hook list                                              # List loaded hooks and their status
-rns-ctl hook load /path/to/hook.wasm --attach PreIngress --priority 100  # Load and attach
-rns-ctl hook reload packet_logger                              # Reload from same path
-rns-ctl hook unload packet_logger                              # Remove hook
+rnhook list                                                    # List loaded hooks and their status
+rnhook load /path/to/hook.wasm --attach PreIngress --priority 100  # Load and attach
+rnhook reload packet_logger                                    # Reload from same path
+rnhook unload packet_logger                                    # Remove hook
 ```
+
+### Pointer Swap
 
 On load/unload, the affected `HookSlot`'s function pointer is swapped (noop ↔ chain runner). This is the only moment the hot path is affected.
 
@@ -397,14 +433,14 @@ On load/unload, the affected `HookSlot`'s function pointer is swapped (noop ↔ 
 Uses ConfigObj format (matching the rest of the project). Hook sections are identified by the `hook_` prefix:
 
 ```ini
-[hook_packet_logger]
+[[hook_packet_logger]]
 type = wasm_hook
 path = /etc/rns/hooks/packet_logger.wasm
 enabled = yes
 attach_point = PreIngress
 priority = 100
 
-[hook_announce_filter]
+[[hook_announce_filter]]
 type = wasm_hook
 path = /etc/rns/hooks/announce_filter.wasm
 enabled = yes
@@ -412,11 +448,13 @@ attach_point = AnnounceReceived
 priority = 200
 ```
 
-This requires updating the config parser in `rns-net/src/config.rs` to recognize `hook_*` sections (similar to how `[[interface_name]]` subsections are handled today).
+Double brackets match the existing convention for subsections in ConfigObj format (used by `[[interface_name]]` sections, parsed at config.rs:132-144). This requires updating the config parser in `rns-net/src/config.rs` to recognize `hook_*` sections.
 
 ---
 
 ## SDK: `rns-hooks-sdk`
+
+**Initial release: Rust SDK only.** The `repr(C)` tagged-union layout of `ActionWire` is Rust-specific. Multi-language support (C, AssemblyScript, TinyGo) is a future goal that may require a simpler wire format (e.g., tag byte + flat struct).
 
 The SDK for writing WASM hook programs in Rust. Supports `#![no_std]` without `alloc` for simple hooks.
 
@@ -482,10 +520,11 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 8. **Create `rns-hooks-sdk`** crate — no_std repr(C) structs, arena helpers, host fn wrappers
 9. **Integrate with Driver** at key hook points (via `run_hook!` macro in `run()` Event::Frame arm + `dispatch_all()`)
 10. **Add config parsing** for `hook_*` sections in `rns-net/src/config.rs`
-11. **Add `rns-ctl hook` subcommands** — list, load, reload, unload
-12. **Write example programs** (packet_logger, announce_filter)
-13. **Add benchmarks** (baseline, no-hooks, trivial hook, complex hook)
-14. **Add tests** — unit tests for HookManager lifecycle, integration tests with example WASM
+11. **Add hook HTTP endpoints** to `rns-ctl/src/api.rs` and bridge commands to the node via `rns-ctl/src/bridge.rs`
+12. **Create `rnhook` CLI binary** (`rns-cli/src/bin/rnhook.rs`) — list, load, reload, unload via HTTP
+13. **Write example programs** (packet_logger, announce_filter)
+14. **Add benchmarks** (baseline, no-hooks, trivial hook, complex hook)
+15. **Add tests** — unit tests for HookManager lifecycle, integration tests with example WASM
 
 ---
 
@@ -495,22 +534,24 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 |------|---------|
 | `Cargo.toml` (workspace) | Add `rns-hooks` and `rns-hooks-sdk` crates |
 | `rns-hooks/` (new) | Entire new crate |
-| `rns-hooks/sdk/rns-hooks-sdk/` (new) | SDK crate for WASM programs |
-| `rns-core/src/transport/types.rs` | Add `From<InterfaceId>` / `Into<InterfaceId>` for `u64` |
+| `rns-hooks/sdk/rns-hooks-sdk/` (new) | Rust-only SDK crate for WASM programs |
+| `rns-core/src/transport/types.rs` | Add 4 new `TransportAction` variants + `From/Into<u64>` for `InterfaceId` |
+| `rns-core/src/transport/mod.rs` | Emit `LinkRequestReceived`, `LinkEstablished` actions |
+| `rns-core/src/transport/jobs.rs` | Emit `LinkClosed`, `AnnounceRetransmit` actions |
 | `rns-net/Cargo.toml` | Add `rns-hooks` feature flag, optional dep on `rns-hooks` |
-| `rns-net/src/driver.rs` | Add `hook_slots` (cfg-gated), `run_hook!` macro, integrate at all hook points |
-| `rns-net/src/config.rs` | Parse `hook_*` sections |
-| `rns-ctl` | Add `hook` subcommand (list, load, reload, unload) |
+| `rns-net/src/driver.rs` | Add `hook_slots` (cfg-gated), `run_hook!` macro, integrate at all hook points, handle new action variants in `dispatch_all()` |
+| `rns-net/src/config.rs` | Parse `[[hook_*]]` sections |
+| `rns-ctl/src/api.rs` | Add hook management HTTP endpoints |
+| `rns-ctl/src/bridge.rs` | Bridge hook commands to node |
+| `rns-cli/src/bin/rnhook.rs` (new) | CLI binary for hook management |
 
 ---
 
 ## Verification
 
 1. **Unit tests**: HookManager load/attach/run lifecycle, function pointer swap, auto-disable
-2. **Integration tests**: Load example WASM, verify hooks fire correctly at each hook point
-3. **Benchmarks**: Validate zero-cost-when-empty (baseline vs no-hooks vs trivial vs complex)
-4. **Manual testing**:
-   - Load packet_logger.wasm, verify logging output
-   - Load announce_filter.wasm, verify announce blocking
-   - Hot-reload via `rns-ctl hook reload`
-   - Verify auto-disable after repeated traps
+2. **Integration tests**: Load example WASM, verify hooks fire at each hook point
+3. **New action variants**: Verify `LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, `AnnounceRetransmit` are emitted correctly and existing behavior is unchanged (dispatch_all handles them as no-ops)
+4. **API tests**: Hook management HTTP endpoints in rns-ctl
+5. **Benchmarks**: Validate zero-cost (baseline vs no-hooks vs trivial vs complex)
+6. **Manual testing**: Load hooks via `rnhook` CLI, verify logging/filtering, hot-reload, auto-disable on traps
