@@ -84,8 +84,12 @@ pub struct NodeConfig {
     pub transport_enabled: bool,
     pub identity: Option<Identity>,
     pub interfaces: Vec<InterfaceConfig>,
-    /// Enable RPC server for external tools (rnstatus, rnpath, etc.)
+    /// Enable shared instance server for local clients (rns-ctl, etc.)
     pub share_instance: bool,
+    /// Instance name for Unix socket namespace (default: "default").
+    pub instance_name: String,
+    /// Shared instance port for local client connections (default 37428).
+    pub shared_instance_port: u16,
     /// RPC control port (default 37429). Only used when share_instance is true.
     pub rpc_port: u16,
     /// Cache directory for announce cache. If None, announce caching is disabled.
@@ -730,6 +734,8 @@ impl RnsNode {
             identity: Some(identity),
             interfaces: interface_configs,
             share_instance: rns_config.reticulum.share_instance,
+            instance_name: rns_config.reticulum.instance_name.clone(),
+            shared_instance_port: rns_config.reticulum.shared_instance_port,
             rpc_port: rns_config.reticulum.instance_control_port,
             cache_dir: Some(paths.cache),
             management: crate::management::ManagementConfig {
@@ -1406,6 +1412,31 @@ impl RnsNode {
                 }
             })?;
 
+        // Start LocalServer for shared instance clients if share_instance is enabled
+        if config.share_instance {
+            let local_server_config = LocalServerConfig {
+                instance_name: config.instance_name.clone(),
+                port: config.shared_instance_port,
+                interface_id: rns_core::transport::types::InterfaceId(0), // Not used for server
+            };
+            match crate::interface::local::start_server(
+                local_server_config,
+                tx.clone(),
+                next_dynamic_id.clone(),
+            ) {
+                Ok(()) => {
+                    log::info!(
+                        "Local shared instance server started (instance={}, port={})",
+                        config.instance_name,
+                        config.shared_instance_port
+                    );
+                }
+                Err(e) => {
+                    log::error!("Failed to start local shared instance server: {}", e);
+                }
+            }
+        }
+
         // Start RPC server if share_instance is enabled
         let rpc_server = if config.share_instance {
             let auth_key = crate::rpc::derive_auth_key(
@@ -1951,6 +1982,8 @@ mod tests {
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -1975,6 +2008,8 @@ mod tests {
                 identity: Some(identity),
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -1999,6 +2034,8 @@ mod tests {
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2430,6 +2467,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2463,6 +2502,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2491,6 +2532,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2516,6 +2559,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2548,6 +2593,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2581,6 +2628,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2611,6 +2660,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2652,6 +2703,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
@@ -2686,6 +2739,8 @@ enable_transport = False
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
+                instance_name: "default".into(),
+                shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
                 management: Default::default(),
