@@ -52,6 +52,12 @@ pub fn process_pending_announces(
                 });
             }
 
+            actions.push(TransportAction::AnnounceRetransmit {
+                destination_hash: *dest_hash,
+                hops: entry.hops,
+                interface: entry.attached_interface,
+            });
+
             // Check for held announces to reinsert
             if let Some(held) = held_announces.remove(dest_hash) {
                 // We'll reinsert it after removing completed entries
@@ -233,9 +239,10 @@ mod tests {
 
         let actions = process_pending_announces(&mut table, &mut held, &transport_hash, 1000.0);
 
-        // Should have retransmitted
-        assert_eq!(actions.len(), 1);
+        // Should have retransmitted (broadcast + announce retransmit notification)
+        assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }));
+        assert!(matches!(&actions[1], TransportAction::AnnounceRetransmit { .. }));
 
         // Retries should have increased
         assert_eq!(table[&dest].retries, 1);

@@ -141,13 +141,24 @@ fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) 
 }
 
 /// Inject an action from guest memory (action_ptr, action_len).
-/// Returns 0 on success, -1 on error. Currently a stub — full deserialization deferred.
+/// Returns 0 on success, -1 on error.
+///
+/// **Intentionally deferred**: This function is a stub. Full action injection
+/// requires deserializing an `ActionWire` from the guest's linear memory,
+/// validating it, and converting it into a `TransportAction` or
+/// `LinkManagerAction` that the driver can dispatch. This involves:
+///
+/// 1. Defining a stable binary encoding for actions in `wire.rs`
+/// 2. Bounds-checking and parsing the guest buffer
+/// 3. Mapping wire action types to internal action enums
+/// 4. Queuing the action for dispatch after the hook chain completes
+///
+/// Until this is implemented, hooks can observe and filter (Drop/Continue)
+/// but cannot inject new actions. The stub always returns -1 (error).
 fn host_inject_action(mut caller: Caller<'_, StoreData>, _action_ptr: i32, _action_len: i32) -> i32 {
-    // Action injection from WASM is complex and deferred to a later phase.
-    // For now, log that it was attempted.
     caller
         .data_mut()
         .log_messages
-        .push("inject_action called (stub)".to_string());
+        .push("inject_action called (stub — action injection deferred)".to_string());
     -1
 }

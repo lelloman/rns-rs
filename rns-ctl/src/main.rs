@@ -21,6 +21,7 @@ fn main() {
         Some("path") => cmd::path::run(strip_subcommand(args)),
         Some("id") => cmd::id::run(strip_subcommand(args)),
         Some("daemon") => cmd::daemon::run(strip_subcommand(args)),
+        Some("hook") => cmd::hook::run(strip_subcommand(args)),
         Some(other) => {
             eprintln!("Unknown subcommand: {}", other);
             print_help();
@@ -51,6 +52,7 @@ COMMANDS:
     path        Display/manage path table
     id          Identity management
     daemon      Start RNS daemon node
+    hook        Manage WASM hooks (list/load/unload)
 
 OPTIONS:
     -h, --help      Show this help

@@ -609,6 +609,7 @@ impl TransportEngine {
                     destination_hash: packet.destination_hash,
                     raw: packet.raw.clone(),
                     packet_hash: packet.packet_hash,
+                    receiving_interface: iface,
                 });
             }
         }
@@ -940,6 +941,7 @@ impl TransportEngine {
                     destination_hash: packet.destination_hash,
                     raw: packet.raw.clone(),
                     packet_hash: packet.packet_hash,
+                    receiving_interface: iface,
                 });
             }
         } else {
@@ -961,6 +963,7 @@ impl TransportEngine {
                 destination_hash: packet.destination_hash,
                 raw: packet.raw.clone(),
                 packet_hash: packet.packet_hash,
+                receiving_interface: iface,
             });
         }
     }

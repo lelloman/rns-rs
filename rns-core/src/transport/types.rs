@@ -53,6 +53,7 @@ pub enum TransportAction {
         destination_hash: [u8; 16],
         raw: Vec<u8>,
         packet_hash: [u8; 32],
+        receiving_interface: InterfaceId,
     },
     /// An announce was received and validated.
     AnnounceReceived {
@@ -98,6 +99,12 @@ pub enum TransportAction {
     TunnelEstablished {
         tunnel_id: [u8; 32],
         interface: InterfaceId,
+    },
+    /// An announce is being retransmitted (for hook notification).
+    AnnounceRetransmit {
+        destination_hash: [u8; 16],
+        hops: u8,
+        interface: Option<InterfaceId>,
     },
 }
 

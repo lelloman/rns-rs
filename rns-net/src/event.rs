@@ -135,6 +135,36 @@ pub enum Event {
         link_id: [u8; 16],
         session_id: [u8; 16],
     },
+    /// An interface's configuration changed (placeholder for future use).
+    InterfaceConfigChanged(InterfaceId),
+    /// Load a WASM hook at runtime.
+    LoadHook {
+        name: String,
+        wasm_bytes: Vec<u8>,
+        attach_point: String,
+        priority: i32,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// Unload a WASM hook at runtime.
+    UnloadHook {
+        name: String,
+        attach_point: String,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// List all loaded hooks.
+    ListHooks {
+        response_tx: mpsc::Sender<Vec<HookInfo>>,
+    },
+}
+
+/// Information about a loaded hook program.
+#[derive(Debug, Clone)]
+pub struct HookInfo {
+    pub name: String,
+    pub attach_point: String,
+    pub priority: i32,
+    pub enabled: bool,
+    pub consecutive_traps: u32,
 }
 
 /// Queries that can be sent to the driver.
@@ -452,6 +482,23 @@ impl fmt::Debug for Event {
                     .field("session_id", session_id)
                     .finish()
             }
+            Event::InterfaceConfigChanged(id) => {
+                f.debug_tuple("InterfaceConfigChanged").field(id).finish()
+            }
+            Event::LoadHook { name, attach_point, priority, .. } => {
+                f.debug_struct("LoadHook")
+                    .field("name", name)
+                    .field("attach_point", attach_point)
+                    .field("priority", priority)
+                    .finish()
+            }
+            Event::UnloadHook { name, attach_point, .. } => {
+                f.debug_struct("UnloadHook")
+                    .field("name", name)
+                    .field("attach_point", attach_point)
+                    .finish()
+            }
+            Event::ListHooks { .. } => write!(f, "ListHooks"),
         }
     }
 }

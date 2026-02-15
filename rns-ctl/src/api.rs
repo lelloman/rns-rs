@@ -76,6 +76,11 @@ pub fn handle_request(
         ("POST", "/api/path/request") => handle_post_path_request(req, node),
         ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
 
+        // Hook management
+        ("GET", "/api/hooks") => handle_list_hooks(node),
+        ("POST", "/api/hook/load") => handle_load_hook(req, node),
+        ("POST", "/api/hook/unload") => handle_unload_hook(req, node),
+
         _ => HttpResponse::not_found(),
     }
 }
@@ -738,6 +743,95 @@ fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -> HttpRespo
         match n.propose_direct_connect(link_id) {
             Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
             Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
+        }
+    })
+}
+
+// --- Hook handlers ---
+
+fn handle_list_hooks(node: &NodeHandle) -> HttpResponse {
+    with_node(node, |n| {
+        match n.list_hooks() {
+            Ok(hooks) => {
+                let list: Vec<Value> = hooks
+                    .iter()
+                    .map(|h| {
+                        json!({
+                            "name": h.name,
+                            "attach_point": h.attach_point,
+                            "priority": h.priority,
+                            "enabled": h.enabled,
+                            "consecutive_traps": h.consecutive_traps,
+                        })
+                    })
+                    .collect();
+                HttpResponse::ok(json!({"hooks": list}))
+            }
+            Err(_) => HttpResponse::internal_error("Query failed"),
+        }
+    })
+}
+
+/// Load a WASM hook from a filesystem path.
+///
+/// The `path` field in the JSON body refers to a file on the **server's** local
+/// filesystem. This means the CLI and the HTTP server must have access to the
+/// same filesystem for the path to resolve correctly.
+fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = match body["name"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing name"),
+    };
+    let path = match body["path"].as_str() {
+        Some(s) => s,
+        None => return HttpResponse::bad_request("Missing path"),
+    };
+    let attach_point = match body["attach_point"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing attach_point"),
+    };
+    let priority = body["priority"].as_i64().unwrap_or(0) as i32;
+
+    // Read WASM file
+    let wasm_bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e)),
+    };
+
+    with_node(node, |n| {
+        match n.load_hook(name, wasm_bytes, attach_point, priority) {
+            Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
+            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Err(_) => HttpResponse::internal_error("Driver unavailable"),
+        }
+    })
+}
+
+fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = match body["name"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing name"),
+    };
+    let attach_point = match body["attach_point"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing attach_point"),
+    };
+
+    with_node(node, |n| {
+        match n.unload_hook(name, attach_point) {
+            Ok(Ok(())) => HttpResponse::ok(json!({"status": "unloaded"})),
+            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Err(_) => HttpResponse::internal_error("Driver unavailable"),
         }
     })
 }

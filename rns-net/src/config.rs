@@ -15,6 +15,17 @@ pub struct RnsConfig {
     pub reticulum: ReticulumSection,
     pub logging: LoggingSection,
     pub interfaces: Vec<ParsedInterface>,
+    pub hooks: Vec<ParsedHook>,
+}
+
+/// A parsed hook from `[[subsection]]` within `[hooks]`.
+#[derive(Debug, Clone)]
+pub struct ParsedHook {
+    pub name: String,
+    pub path: String,
+    pub attach_point: String,
+    pub priority: i32,
+    pub enabled: bool,
 }
 
 /// The `[reticulum]` section.
@@ -118,6 +129,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let mut interfaces: Vec<ParsedInterface> = Vec::new();
     let mut current_iface_kvs: Option<HashMap<String, String>> = None;
     let mut current_iface_name: Option<String> = None;
+    let mut hooks: Vec<ParsedHook> = Vec::new();
+    let mut current_hook_kvs: Option<HashMap<String, String>> = None;
+    let mut current_hook_name: Option<String> = None;
 
     for line in input.lines() {
         // Strip comments (# to end of line, unless inside quotes)
@@ -132,25 +146,43 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
         // Check for subsection [[name]]
         if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
             let name = trimmed[2..trimmed.len() - 2].trim().to_string();
-            // Finalize previous subsection if any
+            // Finalize previous interface subsection if any
             if let (Some(iface_name), Some(kvs)) =
                 (current_iface_name.take(), current_iface_kvs.take())
             {
                 interfaces.push(build_parsed_interface(iface_name, kvs));
             }
+            // Finalize previous hook subsection if any
+            if let (Some(hook_name), Some(kvs)) =
+                (current_hook_name.take(), current_hook_kvs.take())
+            {
+                hooks.push(build_parsed_hook(hook_name, kvs));
+            }
             current_subsection = Some(name.clone());
-            current_iface_name = Some(name);
-            current_iface_kvs = Some(HashMap::new());
+            // Determine which section we're in to know subsection type
+            if current_section.as_deref() == Some("hooks") {
+                current_hook_name = Some(name);
+                current_hook_kvs = Some(HashMap::new());
+            } else {
+                current_iface_name = Some(name);
+                current_iface_kvs = Some(HashMap::new());
+            }
             continue;
         }
 
         // Check for section [name]
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // Finalize previous subsection if any
+            // Finalize previous interface subsection if any
             if let (Some(iface_name), Some(kvs)) =
                 (current_iface_name.take(), current_iface_kvs.take())
             {
                 interfaces.push(build_parsed_interface(iface_name, kvs));
+            }
+            // Finalize previous hook subsection if any
+            if let (Some(hook_name), Some(kvs)) =
+                (current_hook_name.take(), current_hook_kvs.take())
+            {
+                hooks.push(build_parsed_hook(hook_name, kvs));
             }
             current_subsection = None;
 
@@ -165,8 +197,14 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
             let value = trimmed[eq_pos + 1..].trim().to_string();
 
             if current_subsection.is_some() {
-                // Inside a [[subsection]] within [interfaces]
-                if let Some(ref mut kvs) = current_iface_kvs {
+                // Inside a [[subsection]] — exactly one of these should be Some
+                debug_assert!(
+                    !(current_hook_kvs.is_some() && current_iface_kvs.is_some()),
+                    "hook and interface subsections should never be active simultaneously"
+                );
+                if let Some(ref mut kvs) = current_hook_kvs {
+                    kvs.insert(key, value);
+                } else if let Some(ref mut kvs) = current_iface_kvs {
                     kvs.insert(key, value);
                 }
             } else if let Some(ref section) = current_section {
@@ -183,9 +221,12 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
         }
     }
 
-    // Finalize last subsection
+    // Finalize last subsections
     if let (Some(iface_name), Some(kvs)) = (current_iface_name.take(), current_iface_kvs.take()) {
         interfaces.push(build_parsed_interface(iface_name, kvs));
+    }
+    if let (Some(hook_name), Some(kvs)) = (current_hook_name.take(), current_hook_kvs.take()) {
+        hooks.push(build_parsed_hook(hook_name, kvs));
     }
 
     // Build typed sections
@@ -196,6 +237,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
         reticulum,
         logging,
         interfaces,
+        hooks,
     })
 }
 
@@ -255,6 +297,50 @@ fn build_parsed_interface(name: String, mut kvs: HashMap<String, String>) -> Par
         enabled,
         mode,
         params: kvs,
+    }
+}
+
+fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHook {
+    let path = kvs.remove("path").unwrap_or_default();
+    let attach_point = kvs.remove("attach_point").unwrap_or_default();
+    let priority = kvs
+        .remove("priority")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(0);
+    let enabled = kvs
+        .remove("enabled")
+        .and_then(|v| parse_bool(&v))
+        .unwrap_or(true);
+
+    ParsedHook {
+        name,
+        path,
+        attach_point,
+        priority,
+        enabled,
+    }
+}
+
+/// Map a hook point name string to its index. Returns None for unknown names.
+pub fn parse_hook_point(s: &str) -> Option<usize> {
+    match s {
+        "PreIngress" => Some(0),
+        "PreDispatch" => Some(1),
+        "AnnounceReceived" => Some(2),
+        "PathUpdated" => Some(3),
+        "AnnounceRetransmit" => Some(4),
+        "LinkRequestReceived" => Some(5),
+        "LinkEstablished" => Some(6),
+        "LinkClosed" => Some(7),
+        "InterfaceUp" => Some(8),
+        "InterfaceDown" => Some(9),
+        "InterfaceConfigChanged" => Some(10),
+        "SendOnInterface" => Some(11),
+        "BroadcastOnAllInterfaces" => Some(12),
+        "DeliverLocal" => Some(13),
+        "TunnelSynthesize" => Some(14),
+        "Tick" => Some(15),
+        _ => None,
     }
 }
 
@@ -741,5 +827,61 @@ publish_blackhole = Yes
         assert!(!config.reticulum.enable_remote_management);
         assert!(!config.reticulum.publish_blackhole);
         assert!(config.reticulum.remote_management_allowed.is_empty());
+    }
+
+    #[test]
+    fn parse_hooks_section() {
+        let input = r#"
+[hooks]
+  [[drop_tick]]
+    path = /tmp/drop_tick.wasm
+    attach_point = Tick
+    priority = 10
+    enabled = Yes
+
+  [[log_announce]]
+    path = /tmp/log_announce.wasm
+    attach_point = AnnounceReceived
+    priority = 5
+    enabled = No
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.hooks.len(), 2);
+        assert_eq!(config.hooks[0].name, "drop_tick");
+        assert_eq!(config.hooks[0].path, "/tmp/drop_tick.wasm");
+        assert_eq!(config.hooks[0].attach_point, "Tick");
+        assert_eq!(config.hooks[0].priority, 10);
+        assert!(config.hooks[0].enabled);
+        assert_eq!(config.hooks[1].name, "log_announce");
+        assert_eq!(config.hooks[1].attach_point, "AnnounceReceived");
+        assert!(!config.hooks[1].enabled);
+    }
+
+    #[test]
+    fn parse_empty_hooks() {
+        let input = "[hooks]\n";
+        let config = parse(input).unwrap();
+        assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn parse_hook_point_names() {
+        assert_eq!(parse_hook_point("PreIngress"), Some(0));
+        assert_eq!(parse_hook_point("PreDispatch"), Some(1));
+        assert_eq!(parse_hook_point("AnnounceReceived"), Some(2));
+        assert_eq!(parse_hook_point("PathUpdated"), Some(3));
+        assert_eq!(parse_hook_point("AnnounceRetransmit"), Some(4));
+        assert_eq!(parse_hook_point("LinkRequestReceived"), Some(5));
+        assert_eq!(parse_hook_point("LinkEstablished"), Some(6));
+        assert_eq!(parse_hook_point("LinkClosed"), Some(7));
+        assert_eq!(parse_hook_point("InterfaceUp"), Some(8));
+        assert_eq!(parse_hook_point("InterfaceDown"), Some(9));
+        assert_eq!(parse_hook_point("InterfaceConfigChanged"), Some(10));
+        assert_eq!(parse_hook_point("SendOnInterface"), Some(11));
+        assert_eq!(parse_hook_point("BroadcastOnAllInterfaces"), Some(12));
+        assert_eq!(parse_hook_point("DeliverLocal"), Some(13));
+        assert_eq!(parse_hook_point("TunnelSynthesize"), Some(14));
+        assert_eq!(parse_hook_point("Tick"), Some(15));
+        assert_eq!(parse_hook_point("Unknown"), None);
     }
 }

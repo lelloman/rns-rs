@@ -98,6 +98,8 @@ pub struct NodeConfig {
     pub probe_addr: Option<std::net::SocketAddr>,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
+    /// Hook configurations loaded from the config file.
+    pub hooks: Vec<config::ParsedHook>,
 }
 
 /// Interface configuration variant with its mode.
@@ -738,6 +740,7 @@ impl RnsNode {
             probe_port: rns_config.reticulum.probe_port,
             probe_addr,
             device: rns_config.reticulum.device.clone(),
+            hooks: rns_config.hooks.clone(),
         };
 
         Self::start(node_config, callbacks)
@@ -792,6 +795,57 @@ impl RnsNode {
         // Store transport identity for tunnel synthesis
         if let Some(prv_key) = identity.get_private_key() {
             driver.transport_identity = Some(Identity::from_private_key(&prv_key));
+        }
+
+        // Load hooks from config
+        #[cfg(feature = "rns-hooks")]
+        {
+            for hook_cfg in &config.hooks {
+                if !hook_cfg.enabled {
+                    continue;
+                }
+                let point_idx = match config::parse_hook_point(&hook_cfg.attach_point) {
+                    Some(idx) => idx,
+                    None => {
+                        log::warn!(
+                            "Unknown hook point '{}' for hook '{}'",
+                            hook_cfg.attach_point,
+                            hook_cfg.name,
+                        );
+                        continue;
+                    }
+                };
+                let mgr = match driver.hook_manager.as_ref() {
+                    Some(m) => m,
+                    None => {
+                        log::warn!("Hook manager not available, skipping hook '{}'", hook_cfg.name);
+                        continue;
+                    }
+                };
+                match mgr.load_file(
+                    hook_cfg.name.clone(),
+                    std::path::Path::new(&hook_cfg.path),
+                    hook_cfg.priority,
+                ) {
+                    Ok(program) => {
+                        driver.hook_slots[point_idx].attach(program);
+                        log::info!(
+                            "Loaded hook '{}' at point {} (priority {})",
+                            hook_cfg.name,
+                            hook_cfg.attach_point,
+                            hook_cfg.priority,
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to load hook '{}' from '{}': {}",
+                            hook_cfg.name,
+                            hook_cfg.path,
+                            e,
+                        );
+                    }
+                }
+            }
         }
 
         // Shared counter for dynamic interface IDs
@@ -1772,6 +1826,53 @@ impl RnsNode {
         }
     }
 
+    /// Load a WASM hook at runtime.
+    pub fn load_hook(
+        &self,
+        name: String,
+        wasm_bytes: Vec<u8>,
+        attach_point: String,
+        priority: i32,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::LoadHook {
+                name,
+                wasm_bytes,
+                attach_point,
+                priority,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Unload a WASM hook at runtime.
+    pub fn unload_hook(
+        &self,
+        name: String,
+        attach_point: String,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::UnloadHook {
+                name,
+                attach_point,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// List all loaded hooks.
+    pub fn list_hooks(&self) -> Result<Vec<crate::event::HookInfo>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::ListHooks { response_tx })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
     /// Construct an RnsNode from its constituent parts.
     /// Used by `shared_client` to build a client-mode node.
     pub(crate) fn from_parts(
@@ -1856,6 +1957,7 @@ mod tests {
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         )
@@ -1879,6 +1981,7 @@ mod tests {
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         )
@@ -1902,6 +2005,7 @@ mod tests {
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         )
@@ -2332,6 +2436,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2364,6 +2469,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2391,6 +2497,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2415,6 +2522,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2446,6 +2554,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2478,6 +2587,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2507,6 +2617,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2547,6 +2658,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2580,6 +2692,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addr: None,
                 device: None,
+                hooks: Vec::new(),
             },
             Box::new(NoopCallbacks),
         ).unwrap();

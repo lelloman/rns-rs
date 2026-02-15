@@ -60,6 +60,25 @@ impl<'a> EngineAccess for EngineRef<'a> {
     }
 }
 
+/// Extract the 16-byte destination hash from a raw packet header.
+///
+/// HEADER_1 (raw[0] & 0x40 == 0): dest at bytes 2..18
+/// HEADER_2 (raw[0] & 0x40 != 0): dest at bytes 18..34 (after transport ID)
+#[cfg(any(test, feature = "rns-hooks"))]
+fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
+    let mut dest = [0u8; 16];
+    if raw.is_empty() {
+        return dest;
+    }
+    let is_header2 = raw[0] & 0x40 != 0;
+    let start = if is_header2 { 18 } else { 2 };
+    let end = start + 16;
+    if raw.len() >= end {
+        dest.copy_from_slice(&raw[start..end]);
+    }
+    dest
+}
+
 /// Execute a hook chain on disjoint Driver fields (avoids &mut self borrow conflict).
 #[cfg(feature = "rns-hooks")]
 fn run_hook_inner(
@@ -319,7 +338,7 @@ impl Driver {
                         let ctx = HookContext::Packet(&rns_hooks::PacketContext {
                             flags: if packet.is_empty() { 0 } else { packet[0] },
                             hops: if packet.len() > 1 { packet[1] } else { 0 },
-                            destination_hash: [0; 16],
+                            destination_hash: extract_dest_hash(&packet),
                             context: 0,
                             packet_hash: [0; 32],
                             interface_id: interface_id.0,
@@ -361,7 +380,7 @@ impl Driver {
                         let ctx = HookContext::Packet(&rns_hooks::PacketContext {
                             flags: if packet.is_empty() { 0 } else { packet[0] },
                             hops: if packet.len() > 1 { packet[1] } else { 0 },
-                            destination_hash: [0; 16],
+                            destination_hash: extract_dest_hash(&packet),
                             context: 0,
                             packet_hash: [0; 32],
                             interface_id: interface_id.0,
@@ -643,6 +662,91 @@ impl Driver {
                         link_id, session_id,
                     );
                     self.dispatch_holepunch_actions(hp_actions);
+                }
+                Event::LoadHook { name, wasm_bytes, attach_point, priority, response_tx } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let mgr = self.hook_manager.as_ref()
+                                .ok_or_else(|| "hook manager not available".to_string())?;
+                            let program = mgr.compile(name.clone(), &wasm_bytes, priority)
+                                .map_err(|e| format!("compile error: {}", e))?;
+                            self.hook_slots[point_idx].attach(program);
+                            log::info!("Loaded hook '{}' at point {} (priority {})", name, attach_point, priority);
+                            Ok(())
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (name, wasm_bytes, attach_point, priority);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::UnloadHook { name, attach_point, response_tx } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            match self.hook_slots[point_idx].detach(&name) {
+                                Some(_) => {
+                                    log::info!("Unloaded hook '{}' from point {}", name, attach_point);
+                                    Ok(())
+                                }
+                                None => Err(format!("hook '{}' not found at point '{}'", name, attach_point)),
+                            }
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (name, attach_point);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::ListHooks { response_tx } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let hook_point_names = [
+                            "PreIngress", "PreDispatch", "AnnounceReceived", "PathUpdated",
+                            "AnnounceRetransmit", "LinkRequestReceived", "LinkEstablished",
+                            "LinkClosed", "InterfaceUp", "InterfaceDown", "InterfaceConfigChanged",
+                            "SendOnInterface", "BroadcastOnAllInterfaces", "DeliverLocal",
+                            "TunnelSynthesize", "Tick",
+                        ];
+                        let mut infos = Vec::new();
+                        for (idx, slot) in self.hook_slots.iter().enumerate() {
+                            let point_name = hook_point_names.get(idx).unwrap_or(&"Unknown");
+                            for prog in &slot.programs {
+                                infos.push(crate::event::HookInfo {
+                                    name: prog.name.clone(),
+                                    attach_point: point_name.to_string(),
+                                    priority: prog.priority,
+                                    enabled: prog.enabled,
+                                    consecutive_traps: prog.consecutive_traps,
+                                });
+                            }
+                        }
+                        let _ = response_tx.send(infos);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = response_tx.send(Vec::new());
+                    }
+                }
+                Event::InterfaceConfigChanged(id) => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Interface { interface_id: id.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = id;
                 }
                 Event::Shutdown => break,
             }
@@ -1053,7 +1157,17 @@ impl Driver {
                 TransportAction::SendOnInterface { interface, raw } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Interface { interface_id: interface.0 };
+                        let pkt_ctx = rns_hooks::PacketContext {
+                            flags: if raw.is_empty() { 0 } else { raw[0] },
+                            hops: if raw.len() > 1 { raw[1] } else { 0 },
+                            destination_hash: extract_dest_hash(&raw),
+                            context: 0,
+                            packet_hash: [0; 32],
+                            interface_id: interface.0,
+                            data_offset: 0,
+                            data_len: raw.len() as u32,
+                        };
+                        let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
                         if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::SendOnInterface as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
@@ -1083,7 +1197,17 @@ impl Driver {
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Tick; // placeholder — no specific interface
+                        let pkt_ctx = rns_hooks::PacketContext {
+                            flags: if raw.is_empty() { 0 } else { raw[0] },
+                            hops: if raw.len() > 1 { raw[1] } else { 0 },
+                            destination_hash: extract_dest_hash(&raw),
+                            context: 0,
+                            packet_hash: [0; 32],
+                            interface_id: 0,
+                            data_offset: 0,
+                            data_len: raw.len() as u32,
+                        };
+                        let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
                         if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
@@ -1114,6 +1238,7 @@ impl Driver {
                     destination_hash,
                     raw,
                     packet_hash,
+                    receiving_interface,
                 } => {
                     #[cfg(feature = "rns-hooks")]
                     {
@@ -1123,7 +1248,7 @@ impl Driver {
                             destination_hash,
                             context: 0,
                             packet_hash,
-                            interface_id: 0,
+                            interface_id: receiving_interface.0,
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
@@ -1150,7 +1275,7 @@ impl Driver {
                     } else if self.link_manager.is_link_destination(&destination_hash) {
                         // Link-related packet — route to link manager
                         let link_actions = self.link_manager.handle_local_delivery(
-                            destination_hash, &raw, packet_hash, &mut self.rng,
+                            destination_hash, &raw, packet_hash, receiving_interface, &mut self.rng,
                         );
                         if link_actions.is_empty() {
                             // Link manager couldn't handle (e.g. opportunistic DATA
@@ -1299,7 +1424,17 @@ impl Driver {
                 TransportAction::TunnelSynthesize { interface, data, dest_hash } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Interface { interface_id: interface.0 };
+                        let pkt_ctx = rns_hooks::PacketContext {
+                            flags: 0,
+                            hops: 0,
+                            destination_hash: dest_hash,
+                            context: 0,
+                            packet_hash: [0; 32],
+                            interface_id: interface.0,
+                            data_offset: 0,
+                            data_len: data.len() as u32,
+                        };
+                        let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
                         if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
@@ -1337,6 +1472,23 @@ impl Driver {
                 TransportAction::TunnelEstablished { tunnel_id, interface } => {
                     log::info!("Tunnel established: {:02x?} on interface {}", &tunnel_id[..4], interface.0);
                 }
+                TransportAction::AnnounceRetransmit { destination_hash, hops, interface } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Announce {
+                            destination_hash,
+                            hops,
+                            interface_id: interface.map(|i| i.0).unwrap_or(0),
+                        };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (destination_hash, hops, interface);
+                    }
+                }
             }
         }
     }
@@ -1363,6 +1515,13 @@ impl Driver {
                     }
                 }
                 LinkManagerAction::LinkEstablished { link_id, dest_hash, rtt, is_initiator } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
                     log::info!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
                         &link_id[..4], rtt, is_initiator,
@@ -1375,6 +1534,13 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     self.holepunch_manager.link_closed(&link_id);
                     self.callbacks.on_link_closed(rns_core::types::LinkId(link_id), reason);
@@ -1447,6 +1613,17 @@ impl Driver {
                 }
                 LinkManagerAction::ResponseReceived { link_id, request_id, data } => {
                     self.callbacks.on_response(rns_core::types::LinkId(link_id), request_id, data);
+                }
+                LinkManagerAction::LinkRequestReceived { link_id, receiving_interface } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: receiving_interface.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
+                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    { let _ = (link_id, receiving_interface); }
                 }
             }
         }
@@ -4053,5 +4230,66 @@ mod tests {
             super::infer_interface_type("MyAutoGroup:fe80::1"),
             "AutoInterface"
         );
+    }
+
+    // ---- extract_dest_hash tests ----
+
+    #[test]
+    fn test_extract_dest_hash_empty() {
+        assert_eq!(super::extract_dest_hash(&[]), [0u8; 16]);
+    }
+
+    #[test]
+    fn test_extract_dest_hash_too_short() {
+        // Packet too short to contain a full dest hash
+        assert_eq!(super::extract_dest_hash(&[0x00, 0x00, 0xAA]), [0u8; 16]);
+    }
+
+    #[test]
+    fn test_extract_dest_hash_header1() {
+        // HEADER_1: bit 6 = 0, dest at bytes 2..18
+        let mut raw = vec![0x00, 0x00]; // flags (header_type=0), hops
+        let dest = [0x11; 16];
+        raw.extend_from_slice(&dest);
+        raw.extend_from_slice(&[0xFF; 10]); // trailing data
+        assert_eq!(super::extract_dest_hash(&raw), dest);
+    }
+
+    #[test]
+    fn test_extract_dest_hash_header2() {
+        // HEADER_2: bit 6 = 1, transport_id at 2..18, dest at 18..34
+        let mut raw = vec![0x40, 0x00]; // flags (header_type=1), hops
+        raw.extend_from_slice(&[0xAA; 16]); // transport_id (bytes 2..18)
+        let dest = [0x22; 16];
+        raw.extend_from_slice(&dest); // dest (bytes 18..34)
+        raw.extend_from_slice(&[0xFF; 10]); // trailing data
+        assert_eq!(super::extract_dest_hash(&raw), dest);
+    }
+
+    #[test]
+    fn test_extract_dest_hash_header2_too_short() {
+        // HEADER_2 packet that's too short for the dest portion
+        let mut raw = vec![0x40, 0x00];
+        raw.extend_from_slice(&[0xAA; 16]); // transport_id only, no dest
+        assert_eq!(super::extract_dest_hash(&raw), [0u8; 16]);
+    }
+
+    #[test]
+    fn test_extract_dest_hash_other_flags_preserved() {
+        // Ensure other flag bits don't affect header type detection
+        // 0x3F = all bits set except bit 6 -> still HEADER_1
+        let mut raw = vec![0x3F, 0x00];
+        let dest = [0x33; 16];
+        raw.extend_from_slice(&dest);
+        raw.extend_from_slice(&[0xFF; 10]);
+        assert_eq!(super::extract_dest_hash(&raw), dest);
+
+        // 0xFF = all bits set including bit 6 -> HEADER_2
+        let mut raw2 = vec![0xFF, 0x00];
+        raw2.extend_from_slice(&[0xBB; 16]); // transport_id
+        let dest2 = [0x44; 16];
+        raw2.extend_from_slice(&dest2);
+        raw2.extend_from_slice(&[0xFF; 10]);
+        assert_eq!(super::extract_dest_hash(&raw2), dest2);
     }
 }

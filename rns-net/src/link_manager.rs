@@ -165,6 +165,11 @@ pub enum LinkManagerAction {
         request_id: [u8; 16],
         data: Vec<u8>,
     },
+    /// A link request was received (for hook notification).
+    LinkRequestReceived {
+        link_id: LinkId,
+        receiving_interface: rns_core::transport::types::InterfaceId,
+    },
 }
 
 /// Manages multiple links, link destinations, and request/response.
@@ -319,6 +324,7 @@ impl LinkManager {
         dest_hash: [u8; 16],
         raw: &[u8],
         packet_hash: [u8; 32],
+        receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let packet = match RawPacket::unpack(raw) {
@@ -328,7 +334,7 @@ impl LinkManager {
 
         match packet.flags.packet_type {
             constants::PACKET_TYPE_LINKREQUEST => {
-                self.handle_linkrequest(&dest_hash, &packet, rng)
+                self.handle_linkrequest(&dest_hash, &packet, receiving_interface, rng)
             }
             constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_LRPROOF => {
                 // LRPROOF: dest_hash is the link_id
@@ -346,6 +352,7 @@ impl LinkManager {
         &mut self,
         dest_hash: &[u8; 16],
         packet: &RawPacket,
+        receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         // Look up the link destination
@@ -412,6 +419,9 @@ impl LinkManager {
                 attached_interface: None,
             });
         }
+
+        // Notify hook system about the incoming link request
+        actions.push(LinkManagerAction::LinkRequestReceived { link_id, receiving_interface });
 
         actions
     }
@@ -2011,6 +2021,7 @@ mod tests {
             lr_packet.destination_hash,
             &linkrequest_raw,
             lr_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
             &mut rng,
         );
         // Should have RegisterLinkDest + SendPacket(LRPROOF)
@@ -2029,6 +2040,7 @@ mod tests {
             lrproof_packet.destination_hash,
             &lrproof_raw,
             lrproof_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
             &mut rng,
         );
 
@@ -2049,6 +2061,7 @@ mod tests {
             resp_link_id,
             &lrrtt_raw,
             lrrtt_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
             &mut rng,
         );
 
@@ -2077,13 +2090,13 @@ mod tests {
         let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, &mut rng);
+        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
 
         // Send data from initiator to responder
         let actions = init_mgr.send_on_link(&link_id, b"hello link!", constants::CONTEXT_NONE, &mut rng);
@@ -2110,13 +2123,13 @@ mod tests {
         let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, &mut rng);
+        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
 
         // Send request from initiator
         let req_actions = init_mgr.send_request(&link_id, "/status", b"query", &mut rng);
@@ -2126,7 +2139,7 @@ mod tests {
         let req_raw = extract_send_packet_from(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, &mut rng,
+            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         // Should have a response SendPacket
@@ -2155,20 +2168,20 @@ mod tests {
         let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, &mut rng);
+        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
 
         // Send request without identifying first
         let req_actions = init_mgr.send_request(&link_id, "/restricted", b"query", &mut rng);
         let req_raw = extract_send_packet_from(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, &mut rng,
+            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         // Should be denied — no response packet
@@ -2210,13 +2223,13 @@ mod tests {
         let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, &mut rng);
+        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
 
         // Identify initiator to responder
         let identity = Identity::new(&mut rng);
@@ -2227,7 +2240,7 @@ mod tests {
         let id_raw = extract_send_packet_from(&id_actions);
         let id_pkt = RawPacket::unpack(&id_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            id_pkt.destination_hash, &id_raw, id_pkt.packet_hash, &mut rng,
+            id_pkt.destination_hash, &id_raw, id_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         let has_identified = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::RemoteIdentified { .. }));
@@ -2297,17 +2310,17 @@ mod tests {
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, &mut rng,
+            lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
         let init_actions2 = init_mgr.handle_local_delivery(
-            lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, &mut rng,
+            lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
         resp_mgr.handle_local_delivery(
-            lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, &mut rng,
+            lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         assert_eq!(init_mgr.link_state(&link_id), Some(LinkState::Active));
@@ -2387,7 +2400,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 // AcceptNone: should not produce ResourceReceived, may produce SendPacket (RCL)
                 let has_resource_received = resp_actions.iter().any(|a|
@@ -2415,7 +2428,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 // AcceptAll: should accept and produce a SendPacket (request for parts)
                 let has_send = resp_actions.iter().any(|a|
@@ -2444,7 +2457,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 for a in &resp_actions {
                     if matches!(a, LinkManagerAction::ResourceAcceptQuery { .. }) {
@@ -2470,7 +2483,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 for a in &resp_actions {
                     if let LinkManagerAction::ResourceAcceptQuery { link_id: lid, resource_hash, .. } = a {
@@ -2501,7 +2514,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 for a in &resp_actions {
                     if let LinkManagerAction::ResourceAcceptQuery { link_id: lid, resource_hash, .. } = a {
@@ -2552,11 +2565,11 @@ mod tests {
                     // Deliver only to the OTHER side
                     let target_actions = if source == 'i' {
                         resp_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, &mut rng,
+                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                         )
                     } else {
                         init_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, &mut rng,
+                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                         )
                     };
 
@@ -2599,7 +2612,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
             }
         }
@@ -2688,7 +2701,7 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, &mut rng,
+                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                 );
                 for a in &resp_actions {
                     if let LinkManagerAction::ChannelMessageReceived { msgtype, payload, .. } = a {
@@ -2715,7 +2728,7 @@ mod tests {
         let raw = extract_any_send_packet(&actions);
         let pkt = RawPacket::unpack(&raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            pkt.destination_hash, &raw, pkt.packet_hash, &mut rng,
+            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         let has_data = resp_actions.iter().any(|a|
@@ -2742,7 +2755,7 @@ mod tests {
         let req_raw = extract_any_send_packet(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, &mut rng,
+            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
         let has_resp_send = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
         assert!(has_resp_send, "Handler should produce response");
@@ -2751,7 +2764,7 @@ mod tests {
         let resp_raw = extract_any_send_packet(&resp_actions);
         let resp_pkt = RawPacket::unpack(&resp_raw).unwrap();
         let init_actions = init_mgr.handle_local_delivery(
-            resp_pkt.destination_hash, &resp_raw, resp_pkt.packet_hash, &mut rng,
+            resp_pkt.destination_hash, &resp_raw, resp_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
         );
 
         let has_response_received = init_actions.iter().any(|a|
@@ -2828,11 +2841,11 @@ mod tests {
 
                     let target_actions = if source == 'i' {
                         resp_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, &mut rng,
+                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                         )
                     } else {
                         init_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, &mut rng,
+                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
                         )
                     };
 
