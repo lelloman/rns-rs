@@ -400,9 +400,22 @@ Existing IFAC (Interface ACL) and ingress control filtering could eventually be 
 
 ## Hot Reload
 
-### Server-side (`rns-ctl/src/api.rs`)
+### `rns-ctl hook` subcommand
 
-HTTP endpoints for hook management:
+`rns-ctl` is the swiss army knife for the RNS network stack. Hook management is a subcommand:
+
+```bash
+rns-ctl hook list                                              # List loaded hooks and their status
+rns-ctl hook load /path/to/hook.wasm --attach PreIngress --priority 100  # Load and attach
+rns-ctl hook reload packet_logger                              # Reload from same path
+rns-ctl hook unload packet_logger                              # Remove hook
+```
+
+These subcommands connect to the running `rns-ctl serve` instance via its HTTP API.
+
+### HTTP API (`rns-ctl/src/api.rs`)
+
+The `rns-ctl serve` subcommand (the HTTP server) exposes hook management endpoints:
 
 | Method | Endpoint | Body / Params | Description |
 |--------|----------|---------------|-------------|
@@ -410,17 +423,6 @@ HTTP endpoints for hook management:
 | `POST` | `/api/hook/load` | `{ path, attach_point, priority }` | Load and attach a WASM hook |
 | `POST` | `/api/hook/reload` | `{ name }` | Reload a hook from same path |
 | `DELETE` | `/api/hook/:name` | — | Unload a hook |
-
-### Client-side (`rns-cli/src/bin/rnhook.rs`)
-
-New CLI binary that calls the HTTP endpoints above:
-
-```bash
-rnhook list                                                    # List loaded hooks and their status
-rnhook load /path/to/hook.wasm --attach PreIngress --priority 100  # Load and attach
-rnhook reload packet_logger                                    # Reload from same path
-rnhook unload packet_logger                                    # Remove hook
-```
 
 ### Pointer Swap
 
@@ -508,23 +510,48 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 
 ---
 
-## Implementation Steps
+## Implementation Phases
 
-1. **Create `rns-hooks` crate** with basic structure and `rns-hooks` feature flag
-2. **Define repr(C) types** (`PacketContext`, `ActionWire`, `HookResult`, `Verdict`) — shared between host and SDK
-3. **Implement arena layout** — host-side write into WASM linear memory, SDK-side field accessors
-4. **Implement WasmRuntime** wrapper around wasmtime with fuel limits
-5. **Implement HookSlot + function pointer swap** — the zero-cost dispatch mechanism
-6. **Implement HookManager** (load, attach, run chain, unload, auto-disable on repeated traps)
-7. **Implement host functions** — all 11 read-only functions + `host_inject_action`
-8. **Create `rns-hooks-sdk`** crate — no_std repr(C) structs, arena helpers, host fn wrappers
-9. **Integrate with Driver** at key hook points (via `run_hook!` macro in `run()` Event::Frame arm + `dispatch_all()`)
-10. **Add config parsing** for `hook_*` sections in `rns-net/src/config.rs`
-11. **Add hook HTTP endpoints** to `rns-ctl/src/api.rs` and bridge commands to the node via `rns-ctl/src/bridge.rs`
-12. **Create `rnhook` CLI binary** (`rns-cli/src/bin/rnhook.rs`) — list, load, reload, unload via HTTP
-13. **Write example programs** (packet_logger, announce_filter)
-14. **Add benchmarks** (baseline, no-hooks, trivial hook, complex hook)
-15. **Add tests** — unit tests for HookManager lifecycle, integration tests with example WASM
+### Phase 1 — Zero-cost dispatch skeleton
+
+Scaffold the `rns-hooks` crate with no wasmtime dependency yet. Establishes the core abstractions that everything else builds on.
+
+1. Create `rns-hooks` crate with basic structure and `rns-hooks` feature flag in `rns-net`
+2. Define `repr(C)` types (`PacketContext`, `ActionWire`, `HookResult`, `Verdict`) — shared between host and SDK
+3. Implement `HookPoint` enum, `HookSlot` with function pointer swap, and `run_hook!` macro
+4. Add `hook_slots` to `Driver` (cfg-gated) with `run_hook!` calls at key points (all no-ops)
+5. Verify: `cargo build` with and without `rns-hooks` feature, zero test regressions
+
+### Phase 2 — WASM runtime and HookManager
+
+Add wasmtime, fuel limits, program lifecycle, and the fail-open error handling.
+
+6. Implement `WasmRuntime` wrapper around wasmtime with fuel limits
+7. Implement arena layout — host-side write into WASM linear memory
+8. Implement `HookManager` (load, attach, run chain, unload, auto-disable on repeated traps)
+9. Implement host functions — all 11 read-only functions + `host_inject_action`
+10. Wire `HookManager` into `HookSlot` so loaded programs actually execute
+11. Unit tests for HookManager lifecycle, function pointer swap, auto-disable
+
+### Phase 3 — SDK and example programs
+
+12. Create `rns-hooks-sdk` crate — no_std `repr(C)` structs, arena helpers, host fn wrappers
+13. Write example programs (packet_logger, announce_filter, path_modifier)
+14. Integration tests: load example WASM, verify hooks fire at each hook point
+
+### Phase 4 — Engine integration and new action variants
+
+15. Add 4 new `TransportAction` variants to `rns-core` (`LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, `AnnounceRetransmit`)
+16. Emit new actions from `rns-core` transport engine (mod.rs, jobs.rs)
+17. Handle new action variants in `dispatch_all()` (no-ops — they exist as hook attachment points)
+18. Add config parsing for `[[hook_*]]` sections in `rns-net/src/config.rs`
+
+### Phase 5 — CLI and HTTP API
+
+19. Add `rns-ctl hook` subcommand (list, load, reload, unload)
+20. Add hook management HTTP endpoints to `rns-ctl/src/api.rs`
+21. Bridge hook commands to the node via `rns-ctl/src/bridge.rs`
+22. Add benchmarks (baseline, no-hooks, trivial hook, complex hook)
 
 ---
 
@@ -541,9 +568,9 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 | `rns-net/Cargo.toml` | Add `rns-hooks` feature flag, optional dep on `rns-hooks` |
 | `rns-net/src/driver.rs` | Add `hook_slots` (cfg-gated), `run_hook!` macro, integrate at all hook points, handle new action variants in `dispatch_all()` |
 | `rns-net/src/config.rs` | Parse `[[hook_*]]` sections |
+| `rns-ctl/src/main.rs` | Add subcommand dispatch (`serve`, `hook`) |
 | `rns-ctl/src/api.rs` | Add hook management HTTP endpoints |
 | `rns-ctl/src/bridge.rs` | Bridge hook commands to node |
-| `rns-cli/src/bin/rnhook.rs` (new) | CLI binary for hook management |
 
 ---
 
@@ -554,4 +581,4 @@ pub extern "C" fn on_pre_ingress(ctx_ptr: u32) -> u32 {
 3. **New action variants**: Verify `LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, `AnnounceRetransmit` are emitted correctly and existing behavior is unchanged (dispatch_all handles them as no-ops)
 4. **API tests**: Hook management HTTP endpoints in rns-ctl
 5. **Benchmarks**: Validate zero-cost (baseline vs no-hooks vs trivial vs complex)
-6. **Manual testing**: Load hooks via `rnhook` CLI, verify logging/filtering, hot-reload, auto-disable on traps
+6. **Manual testing**: Load hooks via `rns-ctl hook`, verify logging/filtering, hot-reload, auto-disable on traps
