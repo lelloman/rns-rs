@@ -1,2 +1,5 @@
 /target/
 /e2e-config/
+rns-hooks/sdk/**/target/
+rns-hooks/examples/**/target/
+rns-hooks/target/
