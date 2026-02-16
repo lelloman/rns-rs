@@ -106,6 +106,21 @@ pub enum TransportAction {
         hops: u8,
         interface: Option<InterfaceId>,
     },
+    /// A link request was received and is being forwarded (transport relay).
+    LinkRequestReceived {
+        link_id: [u8; 16],
+        destination_hash: [u8; 16],
+        receiving_interface: InterfaceId,
+    },
+    /// A link was established via LRPROOF validation (transport relay).
+    LinkEstablished {
+        link_id: [u8; 16],
+        interface: InterfaceId,
+    },
+    /// A link entry expired and was removed from the link table.
+    LinkClosed {
+        link_id: [u8; 16],
+    },
 }
 
 /// A blackholed identity entry.

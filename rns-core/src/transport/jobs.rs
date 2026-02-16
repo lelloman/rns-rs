@@ -111,7 +111,7 @@ pub fn cull_link_table(
     link_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::LinkEntry>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
-) -> usize {
+) -> (usize, Vec<TransportAction>) {
     let mut stale = Vec::new();
     for (link_id, entry) in link_table.iter() {
         if entry.validated {
@@ -131,10 +131,14 @@ pub fn cull_link_table(
     }
 
     let count = stale.len();
+    let mut actions = Vec::new();
+    for id in &stale {
+        actions.push(TransportAction::LinkClosed { link_id: *id });
+    }
     for id in stale {
         link_table.remove(&id);
     }
-    count
+    (count, actions)
 }
 
 /// Cull expired entries from the path table.
@@ -354,8 +358,10 @@ mod tests {
         );
 
         // now > 100.0 + 900.0 = 1000.0
-        let count = cull_link_table(&mut table, &interfaces, 1100.0);
+        let (count, closed_actions) = cull_link_table(&mut table, &interfaces, 1100.0);
         assert_eq!(count, 1);
+        assert_eq!(closed_actions.len(), 1);
+        assert!(matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x33; 16]));
     }
 
     #[test]
@@ -381,8 +387,10 @@ mod tests {
         );
 
         // now > proof_timeout (200.0)
-        let count = cull_link_table(&mut table, &interfaces, 201.0);
+        let (count, closed_actions) = cull_link_table(&mut table, &interfaces, 201.0);
         assert_eq!(count, 1);
+        assert_eq!(closed_actions.len(), 1);
+        assert!(matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x44; 16]));
     }
 
     #[test]

@@ -1636,6 +1636,51 @@ impl Driver {
                         let _ = (destination_hash, hops, interface);
                     }
                 }
+                TransportAction::LinkRequestReceived { link_id, destination_hash: _, receiving_interface } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: receiving_interface.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (link_id, receiving_interface);
+                    }
+                }
+                TransportAction::LinkEstablished { link_id, interface } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: interface.0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (link_id, interface);
+                    }
+                }
+                TransportAction::LinkClosed { link_id } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let now = time::now();
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = link_id;
+                    }
+                }
             }
         }
 

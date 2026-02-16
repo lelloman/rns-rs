@@ -538,6 +538,11 @@ impl TransportEngine {
                                     proof_timeout,
                                 );
                                 self.link_table.insert(link_id, link_entry);
+                                actions.push(TransportAction::LinkRequestReceived {
+                                    link_id,
+                                    destination_hash: packet.destination_hash,
+                                    receiving_interface: iface,
+                                });
                             } else {
                                 let (trunc_hash, reverse_entry) = create_reverse_entry(
                                     &packet,
@@ -929,6 +934,11 @@ impl TransportEngine {
                             le.validated = true;
                         }
 
+                        actions.push(TransportAction::LinkEstablished {
+                            link_id: packet.destination_hash,
+                            interface: entry.received_interface,
+                        });
+
                         actions.push(TransportAction::SendOnInterface {
                             interface: entry.received_interface,
                             raw: new_raw,
@@ -1088,7 +1098,8 @@ impl TransportEngine {
         if now > self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
             jobs::cull_path_table(&mut self.path_table, &self.interfaces, now);
             jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, now);
-            jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
+            let (_culled, link_closed_actions) = jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
+            actions.extend(link_closed_actions);
             jobs::cull_path_states(&mut self.path_states, &self.path_table);
             self.cull_blackholed(now);
             // Cull expired discovery path requests
