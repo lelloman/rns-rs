@@ -11,6 +11,12 @@ pub trait EngineAccess {
     fn interface_name(&self, id: u64) -> Option<String>;
     fn interface_mode(&self, id: u64) -> Option<u8>;
     fn identity_hash(&self) -> Option<[u8; 16]>;
+    /// Outgoing announce rate for an interface, in millihertz (Hz * 1000).
+    /// Returns None if the interface is not found.
+    fn announce_rate(&self, id: u64) -> Option<i32>;
+    /// Link state as a raw u8: Pending=0, Handshake=1, Active=2, Stale=3, Closed=4.
+    /// Returns None if the link is not found.
+    fn link_state(&self, link_hash: &[u8; 16]) -> Option<u8>;
 }
 
 /// No-op implementation that returns false/None for everything.
@@ -37,6 +43,12 @@ impl EngineAccess for NullEngine {
         None
     }
     fn identity_hash(&self) -> Option<[u8; 16]> {
+        None
+    }
+    fn announce_rate(&self, _id: u64) -> Option<i32> {
+        None
+    }
+    fn link_state(&self, _link_hash: &[u8; 16]) -> Option<u8> {
         None
     }
 }

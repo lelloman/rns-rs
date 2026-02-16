@@ -16,5 +16,5 @@ pub use error::HookError;
 pub use hooks::{create_hook_slots, hook_noop, HookContext, HookFn, HookPoint, HookSlot};
 pub use manager::HookManager;
 pub use program::LoadedProgram;
-pub use result::{HookResult, Verdict};
+pub use result::{ExecuteResult, HookResult, Verdict};
 pub use wire::ActionWire;

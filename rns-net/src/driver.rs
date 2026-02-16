@@ -9,7 +9,7 @@ use rns_crypto::{OsRng, Rng};
 
 #[cfg(feature = "rns-hooks")]
 use rns_hooks::{
-    create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookResult, HookSlot,
+    create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot,
 };
 
 use crate::event::{
@@ -28,6 +28,7 @@ use crate::time;
 struct EngineRef<'a> {
     engine: &'a TransportEngine,
     interfaces: &'a HashMap<InterfaceId, InterfaceEntry>,
+    link_manager: &'a LinkManager,
     now: f64,
 }
 
@@ -58,6 +59,21 @@ impl<'a> EngineAccess for EngineRef<'a> {
     fn identity_hash(&self) -> Option<[u8; 16]> {
         self.engine.identity_hash().copied()
     }
+    fn announce_rate(&self, id: u64) -> Option<i32> {
+        self.interfaces
+            .get(&InterfaceId(id))
+            .map(|e| (e.stats.outgoing_announce_freq() * 1000.0) as i32)
+    }
+    fn link_state(&self, link_hash: &[u8; 16]) -> Option<u8> {
+        use rns_core::link::types::LinkState;
+        self.link_manager.link_state(link_hash).map(|s| match s {
+            LinkState::Pending => 0,
+            LinkState::Handshake => 1,
+            LinkState::Active => 2,
+            LinkState::Stale => 3,
+            LinkState::Closed => 4,
+        })
+    }
 }
 
 /// Extract the 16-byte destination hash from a raw packet header.
@@ -87,12 +103,97 @@ fn run_hook_inner(
     engine_access: &dyn EngineAccess,
     ctx: &HookContext,
     now: f64,
-) -> Option<HookResult> {
+) -> Option<rns_hooks::ExecuteResult> {
     if programs.is_empty() {
         return None;
     }
     let mgr = hook_manager.as_ref()?;
     mgr.run_chain(programs, ctx, engine_access, now)
+}
+
+/// Convert a Vec of ActionWire into TransportActions for dispatch.
+#[cfg(feature = "rns-hooks")]
+fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<TransportAction> {
+    actions
+        .into_iter()
+        .map(|a| {
+            use rns_hooks::ActionWire;
+            match a {
+                ActionWire::SendOnInterface { interface, raw } => {
+                    TransportAction::SendOnInterface {
+                        interface: InterfaceId(interface),
+                        raw,
+                    }
+                }
+                ActionWire::BroadcastOnAllInterfaces { raw, exclude, has_exclude } => {
+                    TransportAction::BroadcastOnAllInterfaces {
+                        raw,
+                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
+                    }
+                }
+                ActionWire::DeliverLocal { destination_hash, raw, packet_hash, receiving_interface } => {
+                    TransportAction::DeliverLocal {
+                        destination_hash,
+                        raw,
+                        packet_hash,
+                        receiving_interface: InterfaceId(receiving_interface),
+                    }
+                }
+                ActionWire::PathUpdated { destination_hash, hops, next_hop, interface } => {
+                    TransportAction::PathUpdated {
+                        destination_hash,
+                        hops,
+                        next_hop,
+                        interface: InterfaceId(interface),
+                    }
+                }
+                ActionWire::CacheAnnounce { packet_hash, raw } => {
+                    TransportAction::CacheAnnounce { packet_hash, raw }
+                }
+                ActionWire::TunnelEstablished { tunnel_id, interface } => {
+                    TransportAction::TunnelEstablished {
+                        tunnel_id,
+                        interface: InterfaceId(interface),
+                    }
+                }
+                ActionWire::TunnelSynthesize { interface, data, dest_hash } => {
+                    TransportAction::TunnelSynthesize {
+                        interface: InterfaceId(interface),
+                        data,
+                        dest_hash,
+                    }
+                }
+                ActionWire::ForwardToLocalClients { raw, exclude, has_exclude } => {
+                    TransportAction::ForwardToLocalClients {
+                        raw,
+                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
+                    }
+                }
+                ActionWire::ForwardPlainBroadcast { raw, to_local, exclude, has_exclude } => {
+                    TransportAction::ForwardPlainBroadcast {
+                        raw,
+                        to_local: to_local != 0,
+                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
+                    }
+                }
+                ActionWire::AnnounceReceived {
+                    destination_hash, identity_hash, public_key,
+                    name_hash, random_hash, app_data, hops, receiving_interface,
+                } => {
+                    TransportAction::AnnounceReceived {
+                        destination_hash,
+                        identity_hash,
+                        public_key,
+                        name_hash,
+                        random_hash,
+                        app_data,
+                        hops,
+                        receiving_interface: InterfaceId(receiving_interface),
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 /// Infer the interface type string from a dynamic interface's name.
@@ -346,10 +447,17 @@ impl Driver {
                             data_len: packet.len() as u32,
                         });
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::PreIngress as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() {
-                                continue;
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::PreIngress as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() {
+                                    let extra = convert_injected_actions(e.injected_actions.clone());
+                                    self.dispatch_all(extra);
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -388,8 +496,10 @@ impl Driver {
                             data_len: packet.len() as u32,
                         });
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::PreDispatch as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::PreDispatch as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
 
                     self.dispatch_all(actions);
@@ -400,8 +510,10 @@ impl Driver {
                     {
                         let ctx = HookContext::Tick;
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::Tick as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::Tick as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
 
                     let now = time::now();
@@ -458,8 +570,10 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            }
                         }
                     } else if let Some(entry) = self.interfaces.get_mut(&id) {
                         // Existing interface reconnected
@@ -475,8 +589,10 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            }
                         }
                     } else {
                         wants_tunnel = false;
@@ -511,8 +627,10 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                            let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceDown as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceDown as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            }
                         }
                     }
                 }
@@ -742,8 +860,10 @@ impl Driver {
                     {
                         let ctx = HookContext::Interface { interface_id: id.0 };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = id;
@@ -1152,6 +1272,9 @@ impl Driver {
 
     /// Dispatch a list of transport actions.
     fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
+        #[cfg(feature = "rns-hooks")]
+        let mut hook_injected: Vec<TransportAction> = Vec::new();
+
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
@@ -1169,9 +1292,13 @@ impl Driver {
                         };
                         let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::SendOnInterface as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() { continue; }
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::SendOnInterface as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                            }
                         }
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
@@ -1209,9 +1336,13 @@ impl Driver {
                         };
                         let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() { continue; }
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                            }
                         }
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
@@ -1254,9 +1385,13 @@ impl Driver {
                         };
                         let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::DeliverLocal as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() { continue; }
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::DeliverLocal as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                            }
                         }
                     }
                     if destination_hash == self.tunnel_synth_dest {
@@ -1333,9 +1468,13 @@ impl Driver {
                             interface_id: receiving_interface.0,
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() { continue; }
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                            }
                         }
                     }
                     // Suppress unused variable warning when feature is off
@@ -1368,8 +1507,10 @@ impl Driver {
                             interface_id: interface.0,
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::PathUpdated as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::PathUpdated as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = interface;
@@ -1436,9 +1577,13 @@ impl Driver {
                         };
                         let ctx = HookContext::Packet(&pkt_ctx);
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        if let Some(ref result) = run_hook_inner(&mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if result.is_drop() { continue; }
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        {
+                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            if let Some(ref e) = exec {
+                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                            }
                         }
                     }
                     // Pack as BROADCAST DATA PLAIN packet and send on interface
@@ -1481,8 +1626,10 @@ impl Driver {
                             interface_id: interface.map(|i| i.0).unwrap_or(0),
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     {
@@ -1491,10 +1638,19 @@ impl Driver {
                 }
             }
         }
+
+        // Dispatch any actions injected by hooks during action processing
+        #[cfg(feature = "rns-hooks")]
+        if !hook_injected.is_empty() {
+            self.dispatch_all(hook_injected);
+        }
     }
 
     /// Dispatch link manager actions.
     fn dispatch_link_actions(&mut self, actions: Vec<LinkManagerAction>) {
+        #[cfg(feature = "rns-hooks")]
+        let mut hook_injected: Vec<TransportAction> = Vec::new();
+
         for action in actions {
             match action {
                 LinkManagerAction::SendPacket { raw, dest_type, attached_interface } => {
@@ -1519,8 +1675,10 @@ impl Driver {
                     {
                         let ctx = HookContext::Link { link_id, interface_id: 0 };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     log::info!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
@@ -1538,8 +1696,10 @@ impl Driver {
                     {
                         let ctx = HookContext::Link { link_id, interface_id: 0 };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     self.holepunch_manager.link_closed(&link_id);
@@ -1619,13 +1779,21 @@ impl Driver {
                     {
                         let ctx = HookContext::Link { link_id, interface_id: receiving_interface.0 };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, now };
-                        let _ = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
+                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     { let _ = (link_id, receiving_interface); }
                 }
             }
+        }
+
+        // Dispatch any actions injected by hooks during action processing
+        #[cfg(feature = "rns-hooks")]
+        if !hook_injected.is_empty() {
+            self.dispatch_all(hook_injected);
         }
     }
 

@@ -64,7 +64,7 @@ macro_rules! run_hook {
         #[cfg(feature = "rns-hooks")]
         { ($self.hook_slots[$point as usize].runner)(&$self.hook_slots[$point as usize], &$ctx) }
         #[cfg(not(feature = "rns-hooks"))]
-        { None::<HookResult> }
+        { None::<ExecuteResult> }
     }};
 }
 ```
@@ -142,35 +142,50 @@ Arena memory layout in WASM linear memory:
 
 ### ActionWire
 
-`ActionWire` mirrors `TransportAction` with all 10 variants, using `u64` for interface IDs (with `From<InterfaceId>` / `Into<InterfaceId>` conversions on the host side).
+`ActionWire` mirrors `TransportAction` with all 10 variants, using `u64` for interface IDs and owned `Vec<u8>` for data fields. Data is copied from WASM linear memory at parse time so ActionWire values remain valid after the WASM store is dropped. Conversions to `TransportAction` (with `InterfaceId`) happen in `driver.rs`.
 
 `InterfaceId` is `pub struct InterfaceId(pub u64)` (defined in `rns-core/src/transport/types.rs:6`).
 
 ```rust
-#[repr(C)]
+// Host-side Rust enum (rns-hooks/src/wire.rs) — uses owned Vec<u8>
 pub enum ActionWire {
-    SendOnInterface { interface: u64, raw_offset: u32, raw_len: u32 },
-    BroadcastOnAllInterfaces { raw_offset: u32, raw_len: u32, exclude: u64, has_exclude: u8 },
-    DeliverLocal { destination_hash: [u8; 16], raw_offset: u32, raw_len: u32, packet_hash: [u8; 32] },
+    SendOnInterface { interface: u64, raw: Vec<u8> },
+    BroadcastOnAllInterfaces { raw: Vec<u8>, exclude: u64, has_exclude: u8 },
+    DeliverLocal { destination_hash: [u8; 16], raw: Vec<u8>, packet_hash: [u8; 32], receiving_interface: u64 },
     AnnounceReceived {
-        destination_hash: [u8; 16],
-        identity_hash: [u8; 16],
-        public_key: [u8; 64],
-        name_hash: [u8; 10],
-        random_hash: [u8; 10],
-        app_data_offset: u32,
-        app_data_len: u32,   // 0 if no app_data
-        hops: u8,
-        receiving_interface: u64,
+        destination_hash: [u8; 16], identity_hash: [u8; 16], public_key: [u8; 64],
+        name_hash: [u8; 10], random_hash: [u8; 10], app_data: Option<Vec<u8>>,
+        hops: u8, receiving_interface: u64,
     },
     PathUpdated { destination_hash: [u8; 16], hops: u8, next_hop: [u8; 16], interface: u64 },
-    ForwardToLocalClients { raw_offset: u32, raw_len: u32, exclude: u64, has_exclude: u8 },
-    ForwardPlainBroadcast { raw_offset: u32, raw_len: u32, to_local: u8, exclude: u64, has_exclude: u8 },
-    CacheAnnounce { packet_hash: [u8; 32], raw_offset: u32, raw_len: u32 },
-    TunnelSynthesize { interface: u64, data_offset: u32, data_len: u32, dest_hash: [u8; 16] },
+    ForwardToLocalClients { raw: Vec<u8>, exclude: u64, has_exclude: u8 },
+    ForwardPlainBroadcast { raw: Vec<u8>, to_local: u8, exclude: u64, has_exclude: u8 },
+    CacheAnnounce { packet_hash: [u8; 32], raw: Vec<u8> },
+    TunnelSynthesize { interface: u64, data: Vec<u8>, dest_hash: [u8; 16] },
     TunnelEstablished { tunnel_id: [u8; 32], interface: u64 },
 }
 ```
+
+#### Binary encoding in WASM guest memory
+
+When a guest calls `host_inject_action(ptr, len)`, the action is encoded as:
+- Byte 0: tag (0–9, see `wire::TAG_*` constants)
+- Remaining bytes: variant fields in declaration order, little-endian
+
+Variable-length data uses `(data_offset: u32, data_len: u32)` pairs pointing into WASM linear memory. The host copies the referenced bytes into owned `Vec<u8>` at parse time via `arena::read_action_wire()`.
+
+| Tag | Variant | Fields after tag |
+|-----|---------|-----------------|
+| 0 | SendOnInterface | interface:u64, data_offset:u32, data_len:u32 |
+| 1 | BroadcastOnAllInterfaces | data_offset:u32, data_len:u32, exclude:u64, has_exclude:u8 |
+| 2 | DeliverLocal | dest_hash:16, data_offset:u32, data_len:u32, packet_hash:32, receiving_interface:u64 |
+| 3 | AnnounceReceived | dest_hash:16, identity_hash:16, public_key:64, name_hash:10, random_hash:10, hops:u8, receiving_interface:u64, has_app_data:u8, [app_data_offset:u32, app_data_len:u32] |
+| 4 | PathUpdated | dest_hash:16, hops:u8, next_hop:16, interface:u64 |
+| 5 | ForwardToLocalClients | data_offset:u32, data_len:u32, exclude:u64, has_exclude:u8 |
+| 6 | ForwardPlainBroadcast | data_offset:u32, data_len:u32, to_local:u8, exclude:u64, has_exclude:u8 |
+| 7 | CacheAnnounce | packet_hash:32, data_offset:u32, data_len:u32 |
+| 8 | TunnelSynthesize | interface:u64, data_offset:u32, data_len:u32, dest_hash:16 |
+| 9 | TunnelEstablished | tunnel_id:32, interface:u64 |
 
 ---
 
@@ -209,20 +224,20 @@ pub enum Verdict {
 
 ## Host Functions (Exposed to WASM)
 
-### Read-only State Access
+### Read-only State Access (all 10 implemented)
 
-| Function | Purpose |
-|----------|---------|
-| `host_log(ptr, len)` | Log message (reads string from guest memory) |
-| `host_has_path(dest_ptr)` | Check if path exists for destination hash |
-| `host_get_hops(dest_ptr)` | Get hop count to destination |
-| `host_get_next_hop(dest_ptr, out_ptr)` | Get next hop hash, writes to out_ptr |
-| `host_is_blackholed(identity_ptr)` | Check if identity is blacklisted |
-| `host_get_interface_name(id, out_ptr, out_len)` | Get interface name string |
-| `host_get_interface_mode(id)` | Get interface mode (ROAMING/BOUNDARY/AP/etc.) |
-| `host_get_announce_rate(id)` | Get current announce frequency for interface |
-| `host_get_link_state(link_hash_ptr)` | Check if a link is active |
-| `host_get_transport_identity(out_ptr)` | Get this node's identity hash |
+| Function | Signature | Purpose |
+|----------|-----------|---------|
+| `host_log` | `(ptr: i32, len: i32)` | Log message (reads string from guest memory) |
+| `host_has_path` | `(dest_ptr: i32) -> i32` | Check if path exists for destination hash (16 bytes at ptr) |
+| `host_get_hops` | `(dest_ptr: i32) -> i32` | Get hop count to destination, -1 if not found |
+| `host_get_next_hop` | `(dest_ptr: i32, out_ptr: i32) -> i32` | Get next hop hash (writes 16 bytes to out_ptr), -1 if not found |
+| `host_is_blackholed` | `(identity_ptr: i32) -> i32` | Check if identity is blacklisted (16 bytes at ptr) |
+| `host_get_interface_name` | `(id: i64, out_ptr: i32, out_len: i32) -> i32` | Get interface name string, returns bytes written or -1 |
+| `host_get_interface_mode` | `(id: i64) -> i32` | Get interface mode (0=ROAMING, etc.), -1 if not found |
+| `host_get_announce_rate` | `(id: i64) -> i32` | Get announce frequency in millihertz, -1 if not found |
+| `host_get_link_state` | `(link_hash_ptr: i32) -> i32` | Get link state (0=Pending..4=Closed), -1 if not found |
+| `host_get_transport_identity` | `(out_ptr: i32) -> i32` | Get this node's identity hash (writes 16 bytes), -1 if not available |
 
 ### Action Injection
 
@@ -266,26 +281,18 @@ A buggy hook never takes down the network. The hook is silently bypassed on fail
 Inspired by eBPF's JIT patching. Each `HookPoint` has a `HookSlot` with a function pointer. Default points to a no-op. When hooks are added or removed (rare — config load, hot reload), the pointer is swapped. The hot path is a single indirect call.
 
 ```rust
-type HookFn = fn(&HookSlot, &HookContext) -> Option<HookResult>;
+type HookFn = fn(&HookSlot, &HookContext) -> Option<ExecuteResult>;
 
 /// No-op — returns immediately. This is the default for all hook points.
-fn hook_noop(_slot: &HookSlot, _ctx: &HookContext) -> Option<HookResult> {
+fn hook_noop(_slot: &HookSlot, _ctx: &HookContext) -> Option<ExecuteResult> {
     None
 }
 
-/// Runs the hook chain — only called when hooks are actually attached.
-fn hook_run_chain(slot: &HookSlot, ctx: &HookContext) -> Option<HookResult> {
-    // slot.programs is pre-sorted by priority (higher first)
-    for program in &slot.programs {
-        let result = program.invoke(ctx);
-        match result.verdict {
-            Verdict::Halt | Verdict::Drop => return Some(result),
-            Verdict::Continue => continue,
-            Verdict::Modify => { /* update ctx with modified data, continue chain */ }
-        }
-    }
-    None
-}
+/// Actual execution uses HookManager::run_chain() which:
+/// - Creates a fresh WASM store per program
+/// - Passes data_override from Modify verdicts to subsequent hooks
+/// - Accumulates injected actions across the chain
+/// - Returns ExecuteResult with hook_result, injected_actions, modified_data
 
 struct HookSlot {
     programs: Vec<LoadedProgram>,  // sorted by priority (higher first)
@@ -522,23 +529,32 @@ Scaffold the `rns-hooks` crate with no wasmtime dependency yet. Establishes the 
 4. Add `hook_slots` to `Driver` (cfg-gated) with `run_hook!` calls at key points (all no-ops)
 5. Verify: `cargo build` with and without `rns-hooks` feature, zero test regressions
 
-**Status:** All 7 new files created, 3 files modified. 11 of 16 hook points wired in driver (5 deferred to Phase 4: `AnnounceRetransmit`, `LinkRequestReceived`, `LinkEstablished`, `LinkClosed`, `InterfaceConfigChanged`). 6 unit tests passing, 420 existing lib tests unaffected.
+**Status:** All 7 new files created, 3 files modified. All 16 hook points wired in driver. 6 unit tests passing, 420 existing lib tests unaffected.
 
 **Notes for Phase 2 — HookContext data refinement needed:**
 - `BroadcastOnAllInterfaces` currently uses `HookContext::Tick` as placeholder since there's no single interface. Needs a proper context variant (e.g. a `Packet` context with the raw bytes).
 - `SendOnInterface` and `TunnelSynthesize` use `HookContext::Interface` — only pass interface ID, no packet data. Should carry raw bytes for hooks that want to inspect outgoing traffic.
 - `PreIngress` / `PreDispatch` `PacketContext` leaves `destination_hash` and `packet_hash` zeroed since the raw packet isn't parsed at those points. At `PreDispatch` the engine has parsed the packet but only returns actions, not the parsed struct. Consider whether to parse headers at hook call sites or expose the raw bytes only.
 
-### Phase 2 — WASM runtime and HookManager
+### Phase 2 — WASM runtime and HookManager (DONE)
 
 Add wasmtime, fuel limits, program lifecycle, and the fail-open error handling.
 
 6. Implement `WasmRuntime` wrapper around wasmtime with fuel limits
 7. Implement arena layout — host-side write into WASM linear memory
 8. Implement `HookManager` (load, attach, run chain, unload, auto-disable on repeated traps)
-9. Implement host functions — all 11 read-only functions + `host_inject_action`
+9. Implement host functions — all 10 read-only functions + `host_inject_action`
 10. Wire `HookManager` into `HookSlot` so loaded programs actually execute
 11. Unit tests for HookManager lifecycle, function pointer swap, auto-disable
+
+**Status:** All host functions implemented (10 read-only + inject). `HookManager` with `execute_program` and `run_chain` fully functional. `ExecuteResult` struct extracts hook result, injected actions, and modified data from WASM memory before store is dropped. Modify verdict data flow passes modified data to subsequent hooks in a chain via `write_data_override`. All 10 `ActionWire` variants parse from guest memory binary encoding. `EngineRef` delegates to `TransportEngine`, `InterfaceStats`, and `LinkManager`. 22 rns-hooks tests passing (WAT-based tests for all host functions, inject, modify, chain accumulation), 430 rns-net lib tests unaffected.
+
+**Key implementation decisions:**
+- `ActionWire` uses owned `Vec<u8>` (not offset/len pairs) — data copied from WASM memory at parse time, remains valid after store is dropped.
+- `execute_program` accepts optional `data_override: Option<&[u8]>` for chain Modify flow — writes modified data into arena before calling the next hook.
+- `EngineRef` holds `&LinkManager` for `link_state` queries and `&InterfaceStats` map for `announce_rate` queries.
+- `convert_injected_actions` in driver.rs maps `ActionWire` → `TransportAction` (the only place rns-core types enter).
+- Hooks in `dispatch_all`/`dispatch_link_actions` accumulate injected actions into a local vec, dispatched after the main loop to avoid borrow conflicts.
 
 ### Phase 3 — SDK and example programs
 

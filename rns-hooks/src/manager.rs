@@ -4,7 +4,7 @@ use crate::error::HookError;
 use crate::hooks::HookContext;
 use crate::host_fns;
 use crate::program::LoadedProgram;
-use crate::result::{HookResult, Verdict};
+use crate::result::{ExecuteResult, HookResult, Verdict};
 use crate::runtime::{StoreData, WasmRuntime};
 use wasmtime::{Linker, Store};
 
@@ -51,15 +51,21 @@ impl HookManager {
         self.compile(name, &bytes, priority)
     }
 
-    /// Execute a single program against a hook context. Returns the HookResult
-    /// on success (including Continue), or None on trap/fuel exhaustion (fail-open).
+    /// Execute a single program against a hook context. Returns an `ExecuteResult`
+    /// containing the hook result, any injected actions, and modified data (all
+    /// extracted from WASM memory before the store is dropped). Returns `None`
+    /// on trap/fuel exhaustion (fail-open).
+    ///
+    /// If `data_override` is provided (from a previous Modify verdict in a chain),
+    /// it replaces the packet data region in the arena after writing the context.
     pub fn execute_program(
         &self,
         program: &mut LoadedProgram,
         ctx: &HookContext,
         engine_access: &dyn EngineAccess,
         now: f64,
-    ) -> Option<HookResult> {
+        data_override: Option<&[u8]>,
+    ) -> Option<ExecuteResult> {
         if !program.enabled {
             return None;
         }
@@ -106,6 +112,18 @@ impl HookManager {
             return None;
         }
 
+        // If a previous hook in the chain returned Modify, override the packet data
+        if let Some(override_data) = data_override {
+            if let Err(e) = arena::write_data_override(&memory, &mut store, override_data) {
+                log::warn!(
+                    "failed to write data override for hook '{}': {}",
+                    program.name,
+                    e
+                );
+                // Non-fatal: continue with original data
+            }
+        }
+
         // Call the exported hook function
         let func = match instance.get_typed_func::<i32, i32>(&mut store, &program.export_name) {
             Ok(f) => f,
@@ -143,7 +161,22 @@ impl HookManager {
         match arena::read_result(&memory, &store, result_offset as usize) {
             Ok(result) => {
                 program.record_success();
-                Some(result)
+
+                // Extract modified data from WASM memory before store is dropped
+                let modified_data = if Verdict::from_u32(result.verdict) == Some(Verdict::Modify) {
+                    arena::read_modified_data(&memory, &store, &result)
+                } else {
+                    None
+                };
+
+                // Extract injected actions from the store
+                let injected_actions = std::mem::take(&mut store.data_mut().injected_actions);
+
+                Some(ExecuteResult {
+                    hook_result: Some(result),
+                    injected_actions,
+                    modified_data,
+                })
             }
             Err(e) => {
                 log::warn!("hook '{}' returned invalid result: {}", program.name, e);
@@ -154,29 +187,70 @@ impl HookManager {
     }
 
     /// Run a chain of programs. Stops on Drop or Halt, continues on Continue or Modify.
-    /// Returns the last meaningful result (Drop/Halt/Modify), or None if all continued.
+    /// Returns an `ExecuteResult` accumulating all injected actions across the chain
+    /// and the last meaningful hook result (Drop/Halt/Modify), or None if all continued.
+    ///
+    /// When a hook returns Modify with modified data, subsequent hooks in the chain
+    /// receive the modified data (only applicable to Packet contexts).
     pub fn run_chain(
         &self,
         programs: &mut [LoadedProgram],
         ctx: &HookContext,
         engine_access: &dyn EngineAccess,
         now: f64,
-    ) -> Option<HookResult> {
+    ) -> Option<ExecuteResult> {
+        let mut accumulated_actions = Vec::new();
         let mut last_result: Option<HookResult> = None;
+        let mut last_modified_data: Option<Vec<u8>> = None;
+        let is_packet_ctx = matches!(ctx, HookContext::Packet(_));
+
         for program in programs.iter_mut() {
             if !program.enabled {
                 continue;
             }
-            if let Some(result) = self.execute_program(program, ctx, engine_access, now) {
-                let verdict = Verdict::from_u32(result.verdict);
-                match verdict {
-                    Some(Verdict::Drop) | Some(Verdict::Halt) => return Some(result),
-                    Some(Verdict::Modify) => last_result = Some(result),
-                    _ => {} // Continue → keep going
+            let override_ref = if is_packet_ctx {
+                last_modified_data.as_deref()
+            } else {
+                None
+            };
+            if let Some(exec_result) =
+                self.execute_program(program, ctx, engine_access, now, override_ref)
+            {
+                accumulated_actions.extend(exec_result.injected_actions);
+
+                if let Some(ref result) = exec_result.hook_result {
+                    let verdict = Verdict::from_u32(result.verdict);
+                    match verdict {
+                        Some(Verdict::Drop) | Some(Verdict::Halt) => {
+                            return Some(ExecuteResult {
+                                hook_result: exec_result.hook_result,
+                                injected_actions: accumulated_actions,
+                                modified_data: exec_result.modified_data.or(last_modified_data),
+                            });
+                        }
+                        Some(Verdict::Modify) => {
+                            last_result = exec_result.hook_result;
+                            if is_packet_ctx {
+                                if let Some(data) = exec_result.modified_data {
+                                    last_modified_data = Some(data);
+                                }
+                            }
+                        }
+                        _ => {} // Continue → keep going
+                    }
                 }
             }
         }
-        last_result
+
+        if last_result.is_some() || !accumulated_actions.is_empty() {
+            Some(ExecuteResult {
+                hook_result: last_result,
+                injected_actions: accumulated_actions,
+                modified_data: last_modified_data,
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -288,9 +362,10 @@ mod tests {
             .compile("test".into(), WAT_CONTINUE.as_bytes(), 0)
             .unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
+        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
         // Continue → Some with verdict=0
-        let r = result.unwrap();
+        let exec = result.unwrap();
+        let r = exec.hook_result.unwrap();
         assert_eq!(r.verdict, Verdict::Continue as u32);
     }
 
@@ -299,8 +374,9 @@ mod tests {
         let mgr = make_manager();
         let mut prog = mgr.compile("dropper".into(), WAT_DROP.as_bytes(), 0).unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
-        let r = result.unwrap();
+        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
+        let exec = result.unwrap();
+        let r = exec.hook_result.unwrap();
         assert!(r.is_drop());
     }
 
@@ -309,7 +385,7 @@ mod tests {
         let mgr = make_manager();
         let mut prog = mgr.compile("trap".into(), WAT_TRAP.as_bytes(), 0).unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
+        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
         assert!(result.is_none());
         assert_eq!(prog.consecutive_traps, 1);
         assert!(prog.enabled);
@@ -321,7 +397,7 @@ mod tests {
         let mut prog = mgr.compile("bad".into(), WAT_TRAP.as_bytes(), 0).unwrap();
         let ctx = HookContext::Tick;
         for _ in 0..10 {
-            let _ = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
+            let _ = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
         }
         assert!(!prog.enabled);
         assert_eq!(prog.consecutive_traps, 10);
@@ -334,7 +410,7 @@ mod tests {
             .compile("loop".into(), WAT_INFINITE.as_bytes(), 0)
             .unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
+        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
         // Should fail-open (fuel exhausted = trap)
         assert!(result.is_none());
         assert_eq!(prog.consecutive_traps, 1);
@@ -357,7 +433,8 @@ mod tests {
         let ctx = HookContext::Tick;
         let result = mgr.run_chain(&mut programs, &ctx, &NullEngine, 0.0);
         // High priority drops → chain stops
-        let r = result.unwrap();
+        let exec = result.unwrap();
+        let r = exec.hook_result.unwrap();
         assert!(r.is_drop());
     }
 
@@ -426,6 +503,12 @@ mod tests {
             fn identity_hash(&self) -> Option<[u8; 16]> {
                 None
             }
+            fn announce_rate(&self, _: u64) -> Option<i32> {
+                None
+            }
+            fn link_state(&self, _: &[u8; 16]) -> Option<u8> {
+                None
+            }
         }
 
         let mgr = make_manager();
@@ -433,9 +516,10 @@ mod tests {
             .compile("pathcheck".into(), WAT_HOST_HAS_PATH.as_bytes(), 0)
             .unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &MockEngine, 0.0);
+        let result = mgr.execute_program(&mut prog, &ctx, &MockEngine, 0.0, None);
         // MockEngine.has_path returns true → WASM drops
-        let r = result.unwrap();
+        let exec = result.unwrap();
+        let r = exec.hook_result.unwrap();
         assert!(r.is_drop());
     }
 
@@ -447,8 +531,238 @@ mod tests {
             .compile("pathcheck".into(), WAT_HOST_HAS_PATH.as_bytes(), 0)
             .unwrap();
         let ctx = HookContext::Tick;
-        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0);
-        let r = result.unwrap();
+        let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
+        let exec = result.unwrap();
+        let r = exec.hook_result.unwrap();
         assert_eq!(r.verdict, Verdict::Continue as u32);
+    }
+
+    // --- New Phase 2 tests ---
+
+    /// Configurable mock engine for testing host functions.
+    struct MockEngineCustom {
+        announce_rate_val: Option<i32>,
+        link_state_val: Option<u8>,
+    }
+
+    impl EngineAccess for MockEngineCustom {
+        fn has_path(&self, _: &[u8; 16]) -> bool { false }
+        fn hops_to(&self, _: &[u8; 16]) -> Option<u8> { None }
+        fn next_hop(&self, _: &[u8; 16]) -> Option<[u8; 16]> { None }
+        fn is_blackholed(&self, _: &[u8; 16]) -> bool { false }
+        fn interface_name(&self, _: u64) -> Option<String> { None }
+        fn interface_mode(&self, _: u64) -> Option<u8> { None }
+        fn identity_hash(&self) -> Option<[u8; 16]> { None }
+        fn announce_rate(&self, _: u64) -> Option<i32> { self.announce_rate_val }
+        fn link_state(&self, _: &[u8; 16]) -> Option<u8> { self.link_state_val }
+    }
+
+    /// WAT: calls host_get_announce_rate(42), if result >= 0 → Drop, else Continue.
+    const WAT_ANNOUNCE_RATE: &str = r#"
+        (module
+            (import "env" "host_get_announce_rate" (func $get_rate (param i64) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "on_hook") (param $ctx_ptr i32) (result i32)
+                (if (i32.ge_s (call $get_rate (i64.const 42)) (i32.const 0))
+                    (then
+                        (i32.store (i32.const 0x2000) (i32.const 1)) ;; Drop
+                    )
+                    (else
+                        (i32.store (i32.const 0x2000) (i32.const 0)) ;; Continue
+                    )
+                )
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    #[test]
+    fn host_get_announce_rate_found() {
+        // announce_rate returns Some(1500) (1.5 Hz * 1000) → Drop
+        let engine = MockEngineCustom { announce_rate_val: Some(1500), link_state_val: None };
+        let mgr = make_manager();
+        let mut prog = mgr.compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        assert!(exec.hook_result.unwrap().is_drop());
+    }
+
+    #[test]
+    fn host_get_announce_rate_not_found() {
+        // announce_rate returns None → -1 → Continue
+        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: None };
+        let mgr = make_manager();
+        let mut prog = mgr.compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
+    }
+
+    /// WAT: calls host_get_link_state with 16-byte hash at 0x3000.
+    /// If state == 2 (Active) → Drop, else Continue.
+    const WAT_LINK_STATE: &str = r#"
+        (module
+            (import "env" "host_get_link_state" (func $link_state (param i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "on_hook") (param $ctx_ptr i32) (result i32)
+                (if (i32.eq (call $link_state (i32.const 0x3000)) (i32.const 2))
+                    (then
+                        (i32.store (i32.const 0x2000) (i32.const 1)) ;; Drop
+                    )
+                    (else
+                        (i32.store (i32.const 0x2000) (i32.const 0)) ;; Continue
+                    )
+                )
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    #[test]
+    fn host_get_link_state_active() {
+        // link_state returns Some(2) (Active) → Drop
+        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: Some(2) };
+        let mgr = make_manager();
+        let mut prog = mgr.compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        assert!(exec.hook_result.unwrap().is_drop());
+    }
+
+    #[test]
+    fn host_get_link_state_not_found() {
+        // link_state returns None → -1, which != 2 → Continue
+        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: None };
+        let mgr = make_manager();
+        let mut prog = mgr.compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
+    }
+
+    /// WAT: writes a SendOnInterface ActionWire at 0x3000 and calls host_inject_action.
+    /// Binary: tag=0 (SendOnInterface), interface=1 (u64 LE), data_offset=0x3100, data_len=4
+    /// Data at 0x3100: [0xDE, 0xAD, 0xBE, 0xEF]
+    /// Returns Continue.
+    const WAT_INJECT_ACTION: &str = r#"
+        (module
+            (import "env" "host_inject_action" (func $inject (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "on_hook") (param $ctx_ptr i32) (result i32)
+                ;; Write the data payload at 0x3100
+                (i32.store8 (i32.const 0x3100) (i32.const 0xDE))
+                (i32.store8 (i32.const 0x3101) (i32.const 0xAD))
+                (i32.store8 (i32.const 0x3102) (i32.const 0xBE))
+                (i32.store8 (i32.const 0x3103) (i32.const 0xEF))
+
+                ;; Write ActionWire at 0x3000:
+                ;; byte 0: tag = 0 (SendOnInterface)
+                (i32.store8 (i32.const 0x3000) (i32.const 0))
+                ;; bytes 1-8: interface = 1 (u64 LE)
+                (i64.store (i32.const 0x3001) (i64.const 1))
+                ;; bytes 9-12: data_offset = 0x3100 (u32 LE)
+                (i32.store (i32.const 0x3009) (i32.const 0x3100))
+                ;; bytes 13-16: data_len = 4 (u32 LE)
+                (i32.store (i32.const 0x300D) (i32.const 4))
+
+                ;; Call inject: ptr=0x3000, len=17 (1 + 8 + 4 + 4)
+                (drop (call $inject (i32.const 0x3000) (i32.const 17)))
+
+                ;; Return Continue
+                (i32.store (i32.const 0x2000) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    #[test]
+    fn host_inject_action_send() {
+        let mgr = make_manager();
+        let mut prog = mgr.compile("inject".into(), WAT_INJECT_ACTION.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
+        assert_eq!(exec.injected_actions.len(), 1);
+        match &exec.injected_actions[0] {
+            crate::wire::ActionWire::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, 1);
+                assert_eq!(raw, &[0xDE, 0xAD, 0xBE, 0xEF]);
+            }
+            other => panic!("expected SendOnInterface, got {:?}", other),
+        }
+    }
+
+    /// WAT: returns Modify (verdict=2) with modified data at 0x2100 (4 bytes).
+    const WAT_MODIFY: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (func (export "on_hook") (param $ctx_ptr i32) (result i32)
+                ;; Write modified data at 0x2100
+                (i32.store8 (i32.const 0x2100) (i32.const 0xAA))
+                (i32.store8 (i32.const 0x2101) (i32.const 0xBB))
+                (i32.store8 (i32.const 0x2102) (i32.const 0xCC))
+                (i32.store8 (i32.const 0x2103) (i32.const 0xDD))
+
+                ;; verdict = 2 (Modify)
+                (i32.store (i32.const 0x2000) (i32.const 2))
+                ;; modified_data_offset = 0x2100
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0x2100))
+                ;; modified_data_len = 4
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 4))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    #[test]
+    fn modify_extracts_data() {
+        let mgr = make_manager();
+        let mut prog = mgr.compile("mod".into(), WAT_MODIFY.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+        let exec = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let r = exec.hook_result.unwrap();
+        assert_eq!(r.verdict, Verdict::Modify as u32);
+        let data = exec.modified_data.unwrap();
+        assert_eq!(data, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn chain_accumulates_injected_actions() {
+        // Chain: inject_action module (Continue) + Drop module
+        // Both should contribute to the result; injected actions should be accumulated
+        let mgr = make_manager();
+        let injector = mgr.compile("injector".into(), WAT_INJECT_ACTION.as_bytes(), 100).unwrap();
+        let dropper = mgr.compile("dropper".into(), WAT_DROP.as_bytes(), 0).unwrap();
+        let mut programs = vec![injector, dropper];
+        programs.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+        let ctx = HookContext::Tick;
+        let exec = mgr.run_chain(&mut programs, &ctx, &NullEngine, 0.0).unwrap();
+        // Chain should drop (second hook)
+        assert!(exec.hook_result.unwrap().is_drop());
+        // But injected action from first hook should be present
+        assert_eq!(exec.injected_actions.len(), 1);
     }
 }

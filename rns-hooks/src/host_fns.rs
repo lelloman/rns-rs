@@ -11,6 +11,8 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), was
     linker.func_wrap("env", "host_get_interface_name", host_get_interface_name)?;
     linker.func_wrap("env", "host_get_interface_mode", host_get_interface_mode)?;
     linker.func_wrap("env", "host_get_transport_identity", host_get_transport_identity)?;
+    linker.func_wrap("env", "host_get_announce_rate", host_get_announce_rate)?;
+    linker.func_wrap("env", "host_get_link_state", host_get_link_state)?;
     linker.func_wrap("env", "host_inject_action", host_inject_action)?;
     Ok(())
 }
@@ -140,25 +142,44 @@ fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) 
     1
 }
 
+/// Get the outgoing announce rate for an interface in millihertz.
+/// Returns -1 if the interface is not found.
+fn host_get_announce_rate(caller: Caller<'_, StoreData>, id: i64) -> i32 {
+    match unsafe { caller.data().engine().announce_rate(id as u64) } {
+        Some(rate) => rate,
+        None => -1,
+    }
+}
+
+/// Get the state of a link. Returns the state as u8 (Pending=0, Handshake=1, Active=2,
+/// Stale=3, Closed=4), or -1 if the link is not found.
+fn host_get_link_state(mut caller: Caller<'_, StoreData>, link_hash_ptr: i32) -> i32 {
+    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let data = memory.data(&caller);
+    let Some(hash) = read_16(data, link_hash_ptr as usize) else { return -1 };
+    match unsafe { caller.data().engine().link_state(&hash) } {
+        Some(state) => state as i32,
+        None => -1,
+    }
+}
+
 /// Inject an action from guest memory (action_ptr, action_len).
 /// Returns 0 on success, -1 on error.
 ///
-/// **Intentionally deferred**: This function is a stub. Full action injection
-/// requires deserializing an `ActionWire` from the guest's linear memory,
-/// validating it, and converting it into a `TransportAction` or
-/// `LinkManagerAction` that the driver can dispatch. This involves:
-///
-/// 1. Defining a stable binary encoding for actions in `wire.rs`
-/// 2. Bounds-checking and parsing the guest buffer
-/// 3. Mapping wire action types to internal action enums
-/// 4. Queuing the action for dispatch after the hook chain completes
-///
-/// Until this is implemented, hooks can observe and filter (Drop/Continue)
-/// but cannot inject new actions. The stub always returns -1 (error).
-fn host_inject_action(mut caller: Caller<'_, StoreData>, _action_ptr: i32, _action_len: i32) -> i32 {
-    caller
-        .data_mut()
-        .log_messages
-        .push("inject_action called (stub — action injection deferred)".to_string());
-    -1
+/// The guest writes a binary-encoded action into linear memory, then calls
+/// this function. The host parses it into an `ActionWire` and queues it in
+/// `StoreData.injected_actions` for dispatch after the hook chain completes.
+fn host_inject_action(mut caller: Caller<'_, StoreData>, action_ptr: i32, action_len: i32) -> i32 {
+    if action_ptr < 0 || action_len <= 0 {
+        return -1;
+    }
+    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let data = memory.data(&caller);
+    match crate::arena::read_action_wire(data, action_ptr as usize, action_len as usize) {
+        Some(action) => {
+            caller.data_mut().injected_actions.push(action);
+            0
+        }
+        None => -1,
+    }
 }

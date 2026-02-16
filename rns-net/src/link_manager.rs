@@ -2892,4 +2892,11 @@ mod tests {
         assert!(matches!(result[2], LinkManagerAction::ResourceFailed { .. }));
         assert!(matches!(result[3], LinkManagerAction::ResourceProgress { received: 10, total: 20, .. }));
     }
+
+    #[test]
+    fn test_link_state_empty() {
+        let mgr = LinkManager::new();
+        let fake_id = [0xAA; 16];
+        assert!(mgr.link_state(&fake_id).is_none());
+    }
 }
