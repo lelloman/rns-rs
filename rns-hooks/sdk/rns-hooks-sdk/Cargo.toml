@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "rns-hooks-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Guest-side SDK for writing rns-hooks WASM programs"
+license = "MIT"
+
+[features]
+default = []
+alloc = []
+
+[dependencies]
+
+[lib]
