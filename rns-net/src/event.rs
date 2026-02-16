@@ -151,6 +151,13 @@ pub enum Event {
         attach_point: String,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
+    /// Reload a WASM hook at runtime (detach + recompile + reattach with same priority).
+    ReloadHook {
+        name: String,
+        attach_point: String,
+        wasm_bytes: Vec<u8>,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
     /// List all loaded hooks.
     ListHooks {
         response_tx: mpsc::Sender<Vec<HookInfo>>,
@@ -494,6 +501,12 @@ impl fmt::Debug for Event {
             }
             Event::UnloadHook { name, attach_point, .. } => {
                 f.debug_struct("UnloadHook")
+                    .field("name", name)
+                    .field("attach_point", attach_point)
+                    .finish()
+            }
+            Event::ReloadHook { name, attach_point, .. } => {
+                f.debug_struct("ReloadHook")
                     .field("name", name)
                     .field("attach_point", attach_point)
                     .finish()

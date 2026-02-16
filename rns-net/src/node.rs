@@ -1895,6 +1895,25 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
+    /// Reload a WASM hook at runtime (detach + recompile + reattach with same priority).
+    pub fn reload_hook(
+        &self,
+        name: String,
+        attach_point: String,
+        wasm_bytes: Vec<u8>,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::ReloadHook {
+                name,
+                attach_point,
+                wasm_bytes,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
     /// List all loaded hooks.
     pub fn list_hooks(&self) -> Result<Vec<crate::event::HookInfo>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();

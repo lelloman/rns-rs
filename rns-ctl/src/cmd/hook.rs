@@ -20,6 +20,7 @@ pub fn run(args: Args) {
         Some("list") => do_list(&base_url, token.as_deref()),
         Some("load") => do_load(&args, &base_url, token.as_deref()),
         Some("unload") => do_unload(&args, &base_url, token.as_deref()),
+        Some("reload") => do_reload(&args, &base_url, token.as_deref()),
         _ => print_usage(),
     }
 }
@@ -150,6 +151,48 @@ fn do_unload(args: &Args, base_url: &str, token: Option<&str>) {
     }
 }
 
+fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
+    let name = match args.positional.get(1) {
+        Some(n) => n,
+        None => {
+            eprintln!("Missing hook name");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+    let attach_point = match args.get("point") {
+        Some(p) => p.to_string(),
+        None => {
+            eprintln!("Missing --point <HookPoint>");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+    let path = match args.get("path") {
+        Some(p) => p.to_string(),
+        None => {
+            eprintln!("Missing --path <wasm_file>");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+
+    let body = serde_json::json!({
+        "name": name,
+        "path": path,
+        "attach_point": attach_point,
+    });
+
+    let url = format!("{}/api/hook/reload", base_url);
+    match simple_post(&url, &body.to_string(), token) {
+        Ok(resp) => println!("{}", resp),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Simple HTTP GET using std::net::TcpStream (no external HTTP client dependency).
 fn simple_get(url: &str, token: Option<&str>) -> Result<String, String> {
     let (host, port, path) = parse_url(url)?;
@@ -239,6 +282,8 @@ fn print_usage() {
     println!("    load <path> --point <HookPoint>     Load a WASM hook");
     println!("         [--priority N] [--name name]");
     println!("    unload <name> --point <HookPoint>   Unload a hook");
+    println!("    reload <name> --point <HookPoint>   Reload a hook with new WASM");
+    println!("         --path <wasm_file>");
     println!();
     println!("OPTIONS:");
     println!("    --url URL          HTTP server URL (default: http://127.0.0.1:8080)");

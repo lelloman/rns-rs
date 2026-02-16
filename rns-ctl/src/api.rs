@@ -80,6 +80,7 @@ pub fn handle_request(
         ("GET", "/api/hooks") => handle_list_hooks(node),
         ("POST", "/api/hook/load") => handle_load_hook(req, node),
         ("POST", "/api/hook/unload") => handle_unload_hook(req, node),
+        ("POST", "/api/hook/reload") => handle_reload_hook(req, node),
 
         _ => HttpResponse::not_found(),
     }
@@ -830,6 +831,39 @@ fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     with_node(node, |n| {
         match n.unload_hook(name, attach_point) {
             Ok(Ok(())) => HttpResponse::ok(json!({"status": "unloaded"})),
+            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Err(_) => HttpResponse::internal_error("Driver unavailable"),
+        }
+    })
+}
+
+fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = match body["name"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing name"),
+    };
+    let path = match body["path"].as_str() {
+        Some(s) => s,
+        None => return HttpResponse::bad_request("Missing path"),
+    };
+    let attach_point = match body["attach_point"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing attach_point"),
+    };
+
+    let wasm_bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e)),
+    };
+
+    with_node(node, |n| {
+        match n.reload_hook(name, attach_point, wasm_bytes) {
+            Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
             Ok(Err(e)) => HttpResponse::bad_request(&e),
             Err(_) => HttpResponse::internal_error("Driver unavailable"),
         }

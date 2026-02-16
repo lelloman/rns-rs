@@ -825,6 +825,42 @@ impl Driver {
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
+                Event::ReloadHook { name, attach_point, wasm_bytes, response_tx } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let old = self.hook_slots[point_idx].detach(&name)
+                                .ok_or_else(|| format!("hook '{}' not found at point '{}'", name, attach_point))?;
+                            let priority = old.priority;
+                            let mgr = match self.hook_manager.as_ref() {
+                                Some(m) => m,
+                                None => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    return Err("hook manager not available".to_string());
+                                }
+                            };
+                            match mgr.compile(name.clone(), &wasm_bytes, priority) {
+                                Ok(program) => {
+                                    self.hook_slots[point_idx].attach(program);
+                                    log::info!("Reloaded hook '{}' at point {} (priority {})", name, attach_point, priority);
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    Err(format!("compile error: {}", e))
+                                }
+                            }
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (name, attach_point, wasm_bytes);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
                 Event::ListHooks { response_tx } => {
                     #[cfg(feature = "rns-hooks")]
                     {
