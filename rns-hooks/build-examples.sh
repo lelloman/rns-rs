@@ -11,6 +11,12 @@ EXAMPLES=(
     announce_filter:announce-filter
     packet_logger:packet-logger
     path_modifier:path-modifier
+    rate_limiter:rate-limiter
+    allowlist:allowlist
+    packet_mirror:packet-mirror
+    link_guard:link-guard
+    announce_dedup:announce-dedup
+    metrics:metrics
 )
 
 for entry in "${EXAMPLES[@]}"; do

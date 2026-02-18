@@ -9,8 +9,9 @@ pub const DEFAULT_MAX_MEMORY: usize = 16 * 1024 * 1024;
 /// Data stored in each wasmtime `Store`.
 ///
 /// Uses a raw pointer for `EngineAccess` because `Linker<T>` requires `T`
-/// without lifetime parameters. The pointer is valid for the duration of
-/// a single hook call within `Driver::run()`.
+/// without lifetime parameters. The Store is cached across calls for instance
+/// persistence, but `engine_access` is refreshed each call via `reset_per_call`
+/// and must only be dereferenced during the active call.
 pub struct StoreData {
     pub engine_access: *const dyn EngineAccess,
     pub now: f64,
@@ -19,7 +20,8 @@ pub struct StoreData {
 }
 
 // Safety: StoreData is only used within a single-threaded driver loop.
-// The raw pointer is valid for the duration of the Store's lifetime.
+// The `engine_access` raw pointer is refreshed each call and only dereferenced
+// during that call while the borrow is live.
 unsafe impl Send for StoreData {}
 unsafe impl Sync for StoreData {}
 
@@ -30,6 +32,18 @@ impl StoreData {
     /// The caller must ensure the pointer is still valid.
     pub unsafe fn engine(&self) -> &dyn EngineAccess {
         &*self.engine_access
+    }
+
+    /// Reset per-call fields while preserving the store (and WASM linear memory).
+    pub fn reset_per_call(
+        &mut self,
+        engine_access: *const dyn EngineAccess,
+        now: f64,
+    ) {
+        self.engine_access = engine_access;
+        self.now = now;
+        self.injected_actions.clear();
+        self.log_messages.clear();
     }
 }
 

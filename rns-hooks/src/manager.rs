@@ -58,6 +58,11 @@ impl HookManager {
     ///
     /// If `data_override` is provided (from a previous Modify verdict in a chain),
     /// it replaces the packet data region in the arena after writing the context.
+    ///
+    /// The store and instance are cached in the program for cross-call state
+    /// persistence (WASM linear memory survives across invocations). On each call
+    /// we reset fuel and per-call StoreData fields but keep the WASM globals and
+    /// memory intact.
     pub fn execute_program(
         &self,
         program: &mut LoadedProgram,
@@ -70,30 +75,48 @@ impl HookManager {
             return None;
         }
 
-        let store_data = StoreData {
-            // Safety: transmute erases the lifetime on the fat pointer. The pointer
-            // is only dereferenced during this function call, while the borrow is valid.
-            engine_access: unsafe {
-                std::mem::transmute(engine_access as *const dyn EngineAccess)
-            },
-            now,
-            injected_actions: Vec::new(),
-            log_messages: Vec::new(),
+        // Safety: transmute erases the lifetime on the fat pointer. The pointer
+        // is only dereferenced during this function call, while the borrow is valid.
+        let engine_access_ptr: *const dyn EngineAccess = unsafe {
+            std::mem::transmute(engine_access as *const dyn EngineAccess)
         };
 
-        let mut store = Store::new(self.runtime.engine(), store_data);
-        if let Err(e) = store.set_fuel(self.runtime.fuel()) {
-            log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
-            return None;
-        }
-
-        let instance = match self.linker.instantiate(&mut store, &program.module) {
-            Ok(inst) => inst,
-            Err(e) => {
-                log::warn!("failed to instantiate hook '{}': {}", program.name, e);
-                program.record_trap();
+        // Take the cached store+instance out of program (or create fresh).
+        // We take ownership to avoid borrow-checker conflicts with program.record_*().
+        let (mut store, instance) = if let Some(cached) = program.cached.take() {
+            let (mut s, i) = cached;
+            // Reset per-call state: fuel, engine_access, injected_actions, log_messages
+            s.data_mut().reset_per_call(engine_access_ptr, now);
+            if let Err(e) = s.set_fuel(self.runtime.fuel()) {
+                log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
+                program.cached = Some((s, i));
                 return None;
             }
+            (s, i)
+        } else {
+            let store_data = StoreData {
+                engine_access: engine_access_ptr,
+                now,
+                injected_actions: Vec::new(),
+                log_messages: Vec::new(),
+            };
+
+            let mut store = Store::new(self.runtime.engine(), store_data);
+            if let Err(e) = store.set_fuel(self.runtime.fuel()) {
+                log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
+                return None;
+            }
+
+            let instance = match self.linker.instantiate(&mut store, &program.module) {
+                Ok(inst) => inst,
+                Err(e) => {
+                    log::warn!("failed to instantiate hook '{}': {}", program.name, e);
+                    program.record_trap();
+                    return None;
+                }
+            };
+
+            (store, instance)
         };
 
         // Write context into guest memory
@@ -102,6 +125,7 @@ impl HookManager {
             None => {
                 log::warn!("hook '{}' has no exported memory", program.name);
                 program.record_trap();
+                program.cached = Some((store, instance));
                 return None;
             }
         };
@@ -109,6 +133,7 @@ impl HookManager {
         if let Err(e) = arena::write_context(&memory, &mut store, ctx) {
             log::warn!("failed to write context for hook '{}': {}", program.name, e);
             program.record_trap();
+            program.cached = Some((store, instance));
             return None;
         }
 
@@ -135,6 +160,7 @@ impl HookManager {
                     e
                 );
                 program.record_trap();
+                program.cached = Some((store, instance));
                 return None;
             }
         };
@@ -153,16 +179,17 @@ impl HookManager {
                 } else {
                     log::warn!("hook '{}' trapped: {}", program.name, e);
                 }
+                program.cached = Some((store, instance));
                 return None;
             }
         };
 
         // Read result from guest memory
-        match arena::read_result(&memory, &store, result_offset as usize) {
+        let ret = match arena::read_result(&memory, &store, result_offset as usize) {
             Ok(result) => {
                 program.record_success();
 
-                // Extract modified data from WASM memory before store is dropped
+                // Extract modified data from WASM memory
                 let modified_data = if Verdict::from_u32(result.verdict) == Some(Verdict::Modify) {
                     arena::read_modified_data(&memory, &store, &result)
                 } else {
@@ -183,7 +210,11 @@ impl HookManager {
                 program.record_trap();
                 None
             }
-        }
+        };
+
+        // Put the store+instance back for next call
+        program.cached = Some((store, instance));
+        ret
     }
 
     /// Run a chain of programs. Stops on Drop or Halt, continues on Continue or Modify.
@@ -764,5 +795,77 @@ mod tests {
         assert!(exec.hook_result.unwrap().is_drop());
         // But injected action from first hook should be present
         assert_eq!(exec.injected_actions.len(), 1);
+    }
+
+    // --- Instance persistence tests ---
+
+    /// WAT module with a mutable global counter. Each call increments it and
+    /// writes the counter value into the verdict field (abusing it as an integer).
+    /// This lets us verify that the global persists across calls.
+    const WAT_COUNTER: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (global $counter (mut i32) (i32.const 0))
+            (func (export "on_hook") (param i32) (result i32)
+                ;; Increment counter
+                (global.set $counter (i32.add (global.get $counter) (i32.const 1)))
+                ;; Write counter value at 0x3000 (scratch area)
+                (i32.store (i32.const 0x3000) (global.get $counter))
+                ;; Return Continue with the counter stashed in modified_data region
+                ;; verdict = 2 (Modify) so we can extract the counter via modified_data
+                (i32.store (i32.const 0x2000) (i32.const 2))
+                ;; modified_data_offset = 0x3000
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0x3000))
+                ;; modified_data_len = 4
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 4))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    fn extract_counter(exec: &ExecuteResult) -> u32 {
+        let data = exec.modified_data.as_ref().expect("no modified data");
+        assert_eq!(data.len(), 4);
+        u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+    }
+
+    #[test]
+    fn instance_persistence_counter() {
+        let mgr = make_manager();
+        let mut prog = mgr.compile("counter".into(), WAT_COUNTER.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+
+        // Call 3 times — counter should increment across calls
+        let exec1 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(extract_counter(&exec1), 1);
+
+        let exec2 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(extract_counter(&exec2), 2);
+
+        let exec3 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(extract_counter(&exec3), 3);
+    }
+
+    #[test]
+    fn instance_persistence_resets_on_drop_cache() {
+        let mgr = make_manager();
+        let mut prog = mgr.compile("counter".into(), WAT_COUNTER.as_bytes(), 0).unwrap();
+        let ctx = HookContext::Tick;
+
+        // Increment twice
+        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec2 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(extract_counter(&exec2), 2);
+
+        // Drop cache (simulates reload)
+        prog.drop_cache();
+
+        // Counter should restart at 1
+        let exec3 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        assert_eq!(extract_counter(&exec3), 1);
     }
 }

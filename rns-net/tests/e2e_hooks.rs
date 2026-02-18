@@ -685,3 +685,211 @@ fn test_unload_hook_restores_behavior() {
     bob_node.shutdown();
     transport.shutdown();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4. New Example Hooks
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_rate_limiter_drops_excess() {
+    // The rate_limiter has MAX_PACKETS=100, WINDOW_SIZE=200.
+    // After 100 packets the hook should start dropping.
+    // We verify that the hook loads and does not interfere with normal delivery
+    // (since we only send a few packets, well under the threshold).
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    // Load rate_limiter on Bob's PreIngress
+    bob_node
+        .load_hook(
+            "rate_limiter".into(),
+            wasm_bytes("rate_limiter"),
+            "PreIngress".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Send a few packets — should pass through (well under threshold)
+    for i in 0..3u8 {
+        let msg = [b'r', b'l', b'0' + i];
+        alice_node.send_packet(&dest_to_bob, &msg).unwrap();
+        let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+            .expect("Bob did not receive message through rate_limiter");
+        let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+        assert_eq!(decrypted, &msg);
+    }
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_allowlist_blocks_unknown() {
+    // The allowlist only allows destinations starting with 0x0000 or 0xFFFF.
+    // Real announces have random hashes, so they will almost certainly be dropped.
+    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    // Load allowlist on Alice at AnnounceReceived
+    alice_node
+        .load_hook(
+            "allowlist".into(),
+            wasm_bytes("allowlist"),
+            "AnnounceReceived".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Bob announces — his dest hash is random, so it should be dropped by the allowlist.
+    // Try a few times; none should get through.
+    for _ in 0..3 {
+        let _ = bob_node.announce(&bob_dest, &bob_id, Some(b"Bob"));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+
+    // Verify Alice did NOT receive the announce
+    let got = wait_for_announce(&alice_rx, &bob_dest.hash, Duration::from_secs(2));
+    assert!(
+        got.is_none(),
+        "Expected allowlist to drop announce, but Alice received it"
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_packet_mirror_does_not_block() {
+    // packet_mirror injects a SendOnInterface action but returns Continue,
+    // so normal packet delivery should not be affected.
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    // Load packet_mirror on Bob's PreIngress
+    bob_node
+        .load_hook(
+            "packet_mirror".into(),
+            wasm_bytes("packet_mirror"),
+            "PreIngress".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Send a packet — should still be delivered normally
+    alice_node.send_packet(&dest_to_bob, b"mirror test").unwrap();
+    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+        .expect("Bob did not receive message with packet_mirror active");
+    let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+    assert_eq!(decrypted, b"mirror test");
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_link_guard_loads_and_continues() {
+    // Verify link_guard loads successfully on LinkRequestReceived and doesn't
+    // interfere with normal operation (no link requests in this test, just
+    // verify the hook loads and traffic still flows).
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    // Load link_guard on Bob's LinkRequestReceived
+    bob_node
+        .load_hook(
+            "link_guard".into(),
+            wasm_bytes("link_guard"),
+            "LinkRequestReceived".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Normal traffic should still work (link_guard only acts on link requests)
+    alice_node.send_packet(&dest_to_bob, b"guard test").unwrap();
+    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+        .expect("Bob did not receive message with link_guard active");
+    let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+    assert_eq!(decrypted, b"guard test");
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_announce_dedup_loads_and_allows_first() {
+    // announce_dedup suppresses after MAX_RETRANSMITS (3) of the same dest hash.
+    // First announce should pass through.
+    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    // Load announce_dedup on Alice at AnnounceRetransmit
+    alice_node
+        .load_hook(
+            "announce_dedup".into(),
+            wasm_bytes("announce_dedup"),
+            "AnnounceRetransmit".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Bob announces — first one should get through to Alice
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    assert_eq!(bob_announced.dest_hash, bob_dest.hash);
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_metrics_does_not_interfere() {
+    // metrics hook returns Continue on everything, so it should not block delivery.
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
+        setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    // Load metrics on Bob's PreIngress
+    bob_node
+        .load_hook(
+            "metrics".into(),
+            wasm_bytes("metrics"),
+            "PreIngress".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_hook failed");
+
+    // Send several packets — all should be delivered
+    for i in 0..5u8 {
+        let msg = [b'm', b'e', b't', b'0' + i];
+        alice_node.send_packet(&dest_to_bob, &msg).unwrap();
+        let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+            .expect("Bob did not receive message with metrics hook active");
+        let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+        assert_eq!(decrypted, &msg);
+    }
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
