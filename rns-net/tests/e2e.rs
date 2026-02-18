@@ -578,6 +578,11 @@ fn setup_two_peers() -> (
         .register_destination_with_proof(&bob_dest, Some(bob_identity.get_private_key().unwrap()))
         .unwrap();
 
+    // Wait for both TCP interfaces to come up, then let transport settle
+    wait_for_event(&alice_rx, TIMEOUT, |e| matches!(e, TestEvent::InterfaceUp(_)).then_some(()))
+        .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| matches!(e, TestEvent::InterfaceUp(_)).then_some(()))
+        .expect("Bob InterfaceUp timed out");
     std::thread::sleep(SETTLE);
 
     (
@@ -594,6 +599,8 @@ fn setup_two_peers() -> (
 }
 
 /// Set up two peers with announces already exchanged.
+/// Uses announce-with-retry since the transport relay may not be fully ready
+/// to forward even after InterfaceUp fires on both clients.
 /// Returns everything from setup_two_peers plus the announced identities.
 #[allow(clippy::type_complexity)]
 fn setup_two_peers_announced() -> (
@@ -612,17 +619,33 @@ fn setup_two_peers_announced() -> (
     let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest) =
         setup_two_peers();
 
-    alice_node
-        .announce(&alice_dest, &alice_id, Some(b"Alice"))
-        .unwrap();
-    bob_node
-        .announce(&bob_dest, &bob_id, Some(b"Bob"))
-        .unwrap();
+    let mut bob_announced = None;
+    let mut alice_announced = None;
 
-    let bob_announced = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT)
-        .expect("Alice timed out waiting for Bob's announce");
-    let alice_announced = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
-        .expect("Bob timed out waiting for Alice's announce");
+    for _ in 0..10 {
+        if bob_announced.is_none() {
+            let _ = bob_node.announce(&bob_dest, &bob_id, Some(b"Bob"));
+        }
+        if alice_announced.is_none() {
+            let _ = alice_node.announce(&alice_dest, &alice_id, Some(b"Alice"));
+        }
+
+        let wait = Duration::from_secs(2);
+
+        if bob_announced.is_none() {
+            bob_announced = wait_for_announce(&alice_rx, &bob_dest.hash, wait);
+        }
+        if alice_announced.is_none() {
+            alice_announced = wait_for_announce(&bob_rx, &alice_dest.hash, wait);
+        }
+
+        if bob_announced.is_some() && alice_announced.is_some() {
+            break;
+        }
+    }
+
+    let bob_announced = bob_announced.expect("Alice never received Bob's announce after retries");
+    let alice_announced = alice_announced.expect("Bob never received Alice's announce after retries");
 
     (
         transport,
