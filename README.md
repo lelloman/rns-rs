@@ -10,9 +10,9 @@ This is a faithful port of the Python reference implementation, validated agains
 |-------|----------|-------------|
 | `rns-crypto` | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
 | `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
-| `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto interfaces, config parsing, driver loop, DirectLink NAT hole punching |
+| `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
 | `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid` |
-| `rns-ctl` | No | HTTP/WebSocket control server: REST API + WebSocket for monitoring and controlling RNS nodes |
+| `rns-ctl` | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
 | `rns-hooks` | No | WASM hook system: 16 programmable hook points across the transport pipeline, powered by wasmtime. Inspired by eBPF — fail-open, fuel-limited, hot-reloadable |
 | `rns-hooks-sdk` | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
 
@@ -20,6 +20,24 @@ This is a faithful port of the Python reference implementation, validated agains
 
 ```bash
 cargo build
+```
+
+### Feature Flags
+
+| Flag | Effect |
+|------|--------|
+| `rns-hooks` | Enables the WASM hook system (compiles in wasmtime) |
+| `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
+
+```bash
+cargo build --features rns-hooks    # Enable WASM hooks
+cargo build --features tls          # Enable TLS in rns-ctl
+```
+
+To build WASM hooks, add the WASM target:
+
+```bash
+rustup target add wasm32-unknown-unknown
 ```
 
 ## Running Tests
@@ -40,6 +58,18 @@ cargo test -p rns-net
 cargo test -p rns-cli
 cargo test -p rns-ctl
 cargo test -p rns-hooks
+```
+
+### Docker E2E Tests
+
+There are 19 Docker-based end-to-end test suites that validate multi-node behaviour across chain, mesh, and star topologies:
+
+```bash
+# Run all Docker e2e tests
+cd tests/docker && ./run-all.sh
+
+# Run a specific suite
+cd tests/docker && ./run.sh chain 01_health
 ```
 
 ## CLI Tools
@@ -177,10 +207,10 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 **CLI management:**
 
 ```bash
-rns-ctl hook list          # list loaded hooks and their status
-rns-ctl hook load <name>   # load a hook from config
-rns-ctl hook unload <name> # unload a running hook
-rns-ctl hook reload        # hot-reload all hooks
+rns-ctl hook list                                                # list loaded hooks and their status
+rns-ctl hook load <path> --point <HookPoint> [--priority N] [--name name]  # load a WASM hook
+rns-ctl hook unload <name> --point <HookPoint>                   # unload a running hook
+rns-ctl hook reload <name> --point <HookPoint> --path <wasm_file>  # hot-reload a hook
 ```
 
 **Writing hooks:**
@@ -190,14 +220,14 @@ Use the `rns-hooks-sdk` crate to write hooks in `no_std` Rust. Each hook exports
 | Example | Description |
 |---------|-------------|
 | `packet_logger` | Log packets passing through a hook point |
-| `announce_filter` | Filter announces by destination hash prefix |
+| `announce_filter` | Drop announces exceeding a configurable hop count |
 | `announce_dedup` | Deduplicate repeated announces using persistent state |
 | `allowlist` | Allow only packets from known source hashes |
 | `link_guard` | Guard link establishment with custom policies |
 | `rate_limiter` | Rate-limit packets per interface |
 | `metrics` | Collect counters and statistics across hook invocations |
 | `packet_mirror` | Mirror packets to an additional destination |
-| `path_modifier` | Modify path table entries on announce |
+| `path_modifier` | Demonstrate the Modify verdict by prepending a marker byte to packet data |
 
 ## Interoperability
 
