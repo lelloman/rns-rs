@@ -128,3 +128,146 @@ fn bench_identity_encrypt() {
         elapsed.as_secs_f64() * 1000.0 / n as f64
     );
 }
+
+#[test]
+fn bench_sha256() {
+    let data = vec![0xABu8; 1024];
+    let n = 10_000;
+
+    let _ = sha256::sha256(&data);
+
+    let start = now();
+    for _ in 0..n {
+        let _ = sha256::sha256(&data);
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "SHA-256 (1 KB x {}): {:.3} ms/op",
+        n,
+        elapsed.as_secs_f64() * 1000.0 / n as f64,
+    );
+}
+
+#[test]
+fn bench_sha512() {
+    let data = vec![0xABu8; 1024];
+    let n = 10_000;
+
+    let _ = sha512::sha512(&data);
+
+    let start = now();
+    for _ in 0..n {
+        let _ = sha512::sha512(&data);
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "SHA-512 (1 KB x {}): {:.3} ms/op",
+        n,
+        elapsed.as_secs_f64() * 1000.0 / n as f64,
+    );
+}
+
+#[test]
+fn bench_hmac_sha256() {
+    let key = [0x42u8; 32];
+    let data = vec![0xABu8; 1024];
+    let n = 10_000;
+
+    let _ = hmac::hmac_sha256(&key, &data);
+
+    let start = now();
+    for _ in 0..n {
+        let _ = hmac::hmac_sha256(&key, &data);
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "HMAC-SHA256 (1 KB x {}): {:.3} ms/op",
+        n,
+        elapsed.as_secs_f64() * 1000.0 / n as f64,
+    );
+}
+
+#[test]
+fn bench_aes128_cbc() {
+    let key = [0x42u8; 16];
+    let iv = [0x00u8; 16];
+    let plaintext = vec![0xABu8; 1024];
+    let padded = pkcs7::pad(&plaintext, 16);
+    let n = 10_000;
+
+    let cipher = aes128::Aes128::new(&key);
+    let ciphertext = cipher.encrypt_cbc(&padded, &iv);
+
+    let start = now();
+    for _ in 0..n {
+        let _ = cipher.encrypt_cbc(&padded, &iv);
+    }
+    let enc = start.elapsed();
+
+    let start = now();
+    for _ in 0..n {
+        let _ = cipher.decrypt_cbc(&ciphertext, &iv);
+    }
+    let dec = start.elapsed();
+
+    println!(
+        "AES-128-CBC (1 KB x {}): encrypt {:.3} ms/op, decrypt {:.3} ms/op",
+        n,
+        enc.as_secs_f64() * 1000.0 / n as f64,
+        dec.as_secs_f64() * 1000.0 / n as f64,
+    );
+}
+
+#[test]
+fn bench_aes256_cbc() {
+    let key = [0x42u8; 32];
+    let iv = [0x00u8; 16];
+    let plaintext = vec![0xABu8; 1024];
+    let padded = pkcs7::pad(&plaintext, 16);
+    let n = 10_000;
+
+    let cipher = aes256::Aes256::new(&key);
+    let ciphertext = cipher.encrypt_cbc(&padded, &iv);
+
+    let start = now();
+    for _ in 0..n {
+        let _ = cipher.encrypt_cbc(&padded, &iv);
+    }
+    let enc = start.elapsed();
+
+    let start = now();
+    for _ in 0..n {
+        let _ = cipher.decrypt_cbc(&ciphertext, &iv);
+    }
+    let dec = start.elapsed();
+
+    println!(
+        "AES-256-CBC (1 KB x {}): encrypt {:.3} ms/op, decrypt {:.3} ms/op",
+        n,
+        enc.as_secs_f64() * 1000.0 / n as f64,
+        dec.as_secs_f64() * 1000.0 / n as f64,
+    );
+}
+
+#[test]
+fn bench_token() {
+    let key = [0x42u8; 32];
+    let plaintext = vec![0xABu8; 1024];
+    let n = 1_000;
+
+    let tok = token::Token::new(&key).unwrap();
+
+    let start = now();
+    for _ in 0..n {
+        let mut rng = FixedRng::new(&(0..128).collect::<Vec<u8>>());
+        let ct = tok.encrypt(&plaintext, &mut rng);
+        let _ = tok.decrypt(&ct).unwrap();
+    }
+    let elapsed = start.elapsed();
+
+    println!(
+        "Token encrypt+decrypt (1 KB x {}): {:.3} ms/op",
+        n,
+        elapsed.as_secs_f64() * 1000.0 / n as f64,
+    );
+}

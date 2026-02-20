@@ -1,91 +1,43 @@
 use alloc::vec::Vec;
-use crate::aes::{
-    self, bytes_to_matrix, matrix_to_bytes, xor_bytes,
-    add_round_key, sub_bytes, inv_sub_bytes,
-    shift_rows, inv_shift_rows, mix_columns, inv_mix_columns,
-};
 
-const ROUNDS: usize = 10;
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+
 const BLOCK_SIZE: usize = 16;
 
+type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
 pub struct Aes128 {
-    round_keys: Vec<Vec<Vec<u8>>>,
+    key: [u8; 16],
 }
 
 impl Aes128 {
     pub fn new(key: &[u8; 16]) -> Self {
-        let round_keys = aes::expand_key(key, ROUNDS);
-        Aes128 { round_keys }
-    }
-
-    fn encrypt_block(&self, plaintext: &[u8]) -> [u8; 16] {
-        assert_eq!(plaintext.len(), BLOCK_SIZE);
-        let mut state = bytes_to_matrix(plaintext);
-
-        add_round_key(&mut state, &self.round_keys[0]);
-
-        for i in 1..ROUNDS {
-            sub_bytes(&mut state);
-            shift_rows(&mut state);
-            mix_columns(&mut state);
-            add_round_key(&mut state, &self.round_keys[i]);
-        }
-
-        sub_bytes(&mut state);
-        shift_rows(&mut state);
-        add_round_key(&mut state, &self.round_keys[ROUNDS]);
-
-        matrix_to_bytes(&state)
-    }
-
-    fn decrypt_block(&self, ciphertext: &[u8]) -> [u8; 16] {
-        assert_eq!(ciphertext.len(), BLOCK_SIZE);
-        let mut state = bytes_to_matrix(ciphertext);
-
-        add_round_key(&mut state, &self.round_keys[ROUNDS]);
-        inv_shift_rows(&mut state);
-        inv_sub_bytes(&mut state);
-
-        for i in (1..ROUNDS).rev() {
-            add_round_key(&mut state, &self.round_keys[i]);
-            inv_mix_columns(&mut state);
-            inv_shift_rows(&mut state);
-            inv_sub_bytes(&mut state);
-        }
-
-        add_round_key(&mut state, &self.round_keys[0]);
-
-        matrix_to_bytes(&state)
+        Aes128 { key: *key }
     }
 
     pub fn encrypt_cbc(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         assert_eq!(plaintext.len() % BLOCK_SIZE, 0);
-        let mut ciphertext = Vec::with_capacity(plaintext.len());
-        let mut previous = iv.to_vec();
-
-        for block in plaintext.chunks(BLOCK_SIZE) {
-            let xorred = xor_bytes(block, &previous);
-            let encrypted = self.encrypt_block(&xorred);
-            previous = encrypted.to_vec();
-            ciphertext.extend_from_slice(&encrypted);
-        }
-
-        ciphertext
+        let mut buf = plaintext.to_vec();
+        let mut enc = Aes128CbcEnc::new(&self.key.into(), iv.into());
+        enc.encrypt_blocks_mut(bytemuck_cast_blocks_mut(&mut buf));
+        buf
     }
 
     pub fn decrypt_cbc(&self, ciphertext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         assert_eq!(ciphertext.len() % BLOCK_SIZE, 0);
-        let mut plaintext = Vec::with_capacity(ciphertext.len());
-        let mut previous = iv.to_vec();
+        let mut buf = ciphertext.to_vec();
+        let mut dec = Aes128CbcDec::new(&self.key.into(), iv.into());
+        dec.decrypt_blocks_mut(bytemuck_cast_blocks_mut(&mut buf));
+        buf
+    }
+}
 
-        for block in ciphertext.chunks(BLOCK_SIZE) {
-            let decrypted = self.decrypt_block(block);
-            let xorred = xor_bytes(&previous, &decrypted);
-            plaintext.extend_from_slice(&xorred);
-            previous = block.to_vec();
-        }
-
-        plaintext
+fn bytemuck_cast_blocks_mut(buf: &mut [u8]) -> &mut [aes::Block] {
+    assert_eq!(buf.len() % 16, 0);
+    // SAFETY: aes::Block is [u8; 16] with repr transparent via GenericArray
+    unsafe {
+        core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut aes::Block, buf.len() / 16)
     }
 }
 
@@ -96,11 +48,12 @@ mod tests {
     #[test]
     fn test_aes128_encrypt_decrypt_block() {
         let key = [0u8; 16];
+        let iv = [0u8; 16];
         let cipher = Aes128::new(&key);
         let plaintext = [0u8; 16];
-        let encrypted = cipher.encrypt_block(&plaintext);
-        let decrypted = cipher.decrypt_block(&encrypted);
-        assert_eq!(decrypted, plaintext);
+        let encrypted = cipher.encrypt_cbc(&plaintext, &iv);
+        let decrypted = cipher.decrypt_cbc(&encrypted, &iv);
+        assert_eq!(decrypted, plaintext.to_vec());
     }
 
     #[test]
@@ -108,7 +61,6 @@ mod tests {
         let key = [0x01u8; 16];
         let iv = [0x02u8; 16];
         let cipher = Aes128::new(&key);
-        // Two blocks
         let plaintext = [0x03u8; 32];
         let encrypted = cipher.encrypt_cbc(&plaintext, &iv);
         let decrypted = cipher.decrypt_cbc(&encrypted, &iv);
@@ -117,10 +69,7 @@ mod tests {
 
     #[test]
     fn test_aes128_known_vector() {
-        // NIST AES-128 test vector
-        // Key:       2b7e151628aed2a6abf7158809cf4f3c
-        // Plaintext: 6bc1bee22e409f96e93d7e117393172a
-        // Expected:  3ad77bb40d7a3660a89ecaf32466ef97
+        // NIST AES-128 ECB test vector, verified via single-block CBC with zero IV
         let key: [u8; 16] = [
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
             0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
@@ -134,7 +83,8 @@ mod tests {
             0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97,
         ];
         let cipher = Aes128::new(&key);
-        let result = cipher.encrypt_block(&plaintext);
-        assert_eq!(result, expected);
+        let iv = [0u8; 16];
+        let result = cipher.encrypt_cbc(&plaintext, &iv);
+        assert_eq!(&result[..16], &expected);
     }
 }
