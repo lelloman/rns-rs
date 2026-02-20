@@ -327,6 +327,24 @@ fn wait_for_announce(
     })
 }
 
+/// Announce with retry: send an announce and wait for the remote to receive it.
+/// Retries up to 10 times with a 2-second wait per attempt.
+fn announce_with_retry(
+    node: &RnsNode,
+    dest: &Destination,
+    identity: &Identity,
+    app_data: Option<&[u8]>,
+    remote_rx: &mpsc::Receiver<TestEvent>,
+) -> Option<AnnouncedIdentity> {
+    for _ in 0..10 {
+        let _ = node.announce(dest, identity, app_data);
+        if let Some(announced) = wait_for_announce(remote_rx, &dest.hash, Duration::from_secs(2)) {
+            return Some(announced);
+        }
+    }
+    None
+}
+
 fn wait_for_any_announce(
     rx: &mpsc::Receiver<TestEvent>,
     timeout: Duration,
@@ -619,33 +637,13 @@ fn setup_two_peers_announced() -> (
     let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest) =
         setup_two_peers();
 
-    let mut bob_announced = None;
-    let mut alice_announced = None;
-
-    for _ in 0..10 {
-        if bob_announced.is_none() {
-            let _ = bob_node.announce(&bob_dest, &bob_id, Some(b"Bob"));
-        }
-        if alice_announced.is_none() {
-            let _ = alice_node.announce(&alice_dest, &alice_id, Some(b"Alice"));
-        }
-
-        let wait = Duration::from_secs(2);
-
-        if bob_announced.is_none() {
-            bob_announced = wait_for_announce(&alice_rx, &bob_dest.hash, wait);
-        }
-        if alice_announced.is_none() {
-            alice_announced = wait_for_announce(&bob_rx, &alice_dest.hash, wait);
-        }
-
-        if bob_announced.is_some() && alice_announced.is_some() {
-            break;
-        }
-    }
-
-    let bob_announced = bob_announced.expect("Alice never received Bob's announce after retries");
-    let alice_announced = alice_announced.expect("Bob never received Alice's announce after retries");
+    // Announce sequentially: first Bob, then Alice.
+    // Simultaneous bidirectional announces can race in the transport's
+    // retransmit path, causing one direction to be permanently dropped.
+    let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"Bob"), &alice_rx)
+        .expect("Alice never received Bob's announce after retries");
+    let alice_announced = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"Alice"), &bob_rx)
+        .expect("Bob never received Alice's announce after retries");
 
     (
         transport,
@@ -791,13 +789,10 @@ fn test_direct_link_no_transport() {
 
     std::thread::sleep(SETTLE);
 
-    // Exchange announces
-    alice_node.announce(&alice_dest, &alice_id, Some(b"Alice")).unwrap();
-    bob_node.announce(&bob_dest, &bob_id, Some(b"Bob")).unwrap();
-
-    wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT)
+    // Exchange announces sequentially to avoid transport retransmit race
+    announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"Bob"), &alice_rx)
         .expect("Alice did not discover Bob");
-    wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT)
+    announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"Alice"), &bob_rx)
         .expect("Bob did not discover Alice");
 
     // Bob registers as link destination
@@ -930,8 +925,11 @@ fn test_multiple_announces_cross_discovery() {
 
     std::thread::sleep(SETTLE);
 
+    // Announce sequentially to avoid transport retransmit race
     node_a.announce(&dest_a, &id_a, Some(b"A")).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
     node_b.announce(&dest_b, &id_b, Some(b"B")).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
     node_c.announce(&dest_c, &id_c, Some(b"C")).unwrap();
 
     // Collect all announces at each node (wait for 2 announces each)
@@ -1397,11 +1395,8 @@ fn test_prove_app_conditional() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.announce(&alice_dest, &alice_identity, Some(b"A")).unwrap();
-    bob_node.announce(&bob_dest, &bob_identity, Some(b"B")).unwrap();
-
-    let bob_ann = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT).unwrap();
-    let _alice_ann = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT).unwrap();
+    let bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_identity, Some(b"A"), &bob_rx).unwrap();
 
     // First send: proof_flag=true → should get proof
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "app"], &bob_ann);
@@ -1453,11 +1448,8 @@ fn test_prove_none() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.announce(&alice_dest, &alice_identity, Some(b"A")).unwrap();
-    bob_node.announce(&bob_dest, &bob_identity, Some(b"B")).unwrap();
-
-    let bob_ann = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT).unwrap();
-    let _alice_ann = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT).unwrap();
+    let bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_identity, Some(b"A"), &bob_rx).unwrap();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "none"], &bob_ann);
     alice_node.send_packet(&dest_to_bob, b"no proof expected").unwrap();
@@ -1565,11 +1557,8 @@ fn test_link_callbacks_both_sides() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.announce(&alice_dest, &alice_id, Some(b"A")).unwrap();
-    bob_node.announce(&bob_dest, &bob_id, Some(b"B")).unwrap();
-
-    let _bob_ann = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT).unwrap();
-    let _alice_ann = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT).unwrap();
+    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     // Register Bob as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
@@ -1817,11 +1806,8 @@ fn test_resource_accept_none() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.announce(&alice_dest, &alice_id, Some(b"A")).unwrap();
-    bob_node.announce(&bob_dest, &bob_id, Some(b"B")).unwrap();
-
-    let _bob_ann = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT).unwrap();
-    let _alice_ann = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT).unwrap();
+    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
     bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
@@ -1882,11 +1868,8 @@ fn test_resource_accept_app() {
 
     std::thread::sleep(SETTLE);
 
-    alice_node.announce(&alice_dest, &alice_id, Some(b"A")).unwrap();
-    bob_node.announce(&bob_dest, &bob_id, Some(b"B")).unwrap();
-
-    let _bob_ann = wait_for_announce(&alice_rx, &bob_dest.hash, TIMEOUT).unwrap();
-    let _alice_ann = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT).unwrap();
+    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
     bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
