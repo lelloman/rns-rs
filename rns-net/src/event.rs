@@ -239,6 +239,11 @@ pub enum QueryRequest {
         hops: u8,
         received_at: f64,
     },
+    /// Get discovered interfaces.
+    DiscoveredInterfaces {
+        only_available: bool,
+        only_transport: bool,
+    },
 }
 
 /// Responses to queries.
@@ -265,6 +270,8 @@ pub enum QueryResponse {
     Resources(Vec<ResourceInfoEntry>),
     InjectPath(bool),
     InjectIdentity(bool),
+    /// List of discovered interfaces.
+    DiscoveredInterfaces(Vec<crate::discovery::DiscoveredInterface>),
 }
 
 /// Interface statistics response.

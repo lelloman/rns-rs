@@ -25,6 +25,7 @@ pub mod management;
 pub mod shared_client;
 pub mod destination;
 pub mod holepunch;
+pub mod discovery;
 
 pub use driver::Callbacks;
 pub use event::{

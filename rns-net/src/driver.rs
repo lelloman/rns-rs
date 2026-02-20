@@ -329,6 +329,10 @@ pub struct Driver {
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
+    /// Storage for discovered interfaces.
+    pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
+    /// Required stamp value for accepting discovered interfaces.
+    pub(crate) discovery_required_value: u8,
     /// Hook slots for the WASM hook system (one per HookPoint).
     #[cfg(feature = "rns-hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
@@ -383,6 +387,10 @@ impl Driver {
             local_destinations,
             holepunch_manager: HolePunchManager::new(None, None),
             event_tx: tx,
+            discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
+                std::env::temp_dir().join("rns-discovered-interfaces")
+            ),
+            discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
             #[cfg(feature = "rns-hooks")]
             hook_slots: create_hook_slots(),
             #[cfg(feature = "rns-hooks")]
@@ -1073,6 +1081,10 @@ impl Driver {
             }
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
+            }
+            QueryRequest::DiscoveredInterfaces { .. } => {
+                // TODO: wire up discovery tracker
+                QueryResponse::DiscoveredInterfaces(Vec::new())
             }
         }
     }

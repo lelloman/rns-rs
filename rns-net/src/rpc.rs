@@ -328,6 +328,21 @@ fn handle_rpc_request(
                         Ok(PickleValue::None)
                     }
                 }
+                "discovered_interfaces" => {
+                    let only_available = request.get("only_available")
+                        .and_then(|v| v.as_bool()).unwrap_or(false);
+                    let only_transport = request.get("only_transport")
+                        .and_then(|v| v.as_bool()).unwrap_or(false);
+                    let resp = send_query(event_tx, QueryRequest::DiscoveredInterfaces {
+                        only_available,
+                        only_transport,
+                    })?;
+                    if let QueryResponse::DiscoveredInterfaces(interfaces) = resp {
+                        Ok(discovered_interfaces_to_pickle(&interfaces))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
             };
         }
@@ -554,6 +569,112 @@ fn blackholed_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {
         } else {
             dict.push((PickleValue::String("reason".into()), PickleValue::None));
         }
+        PickleValue::Dict(dict)
+    }).collect();
+    PickleValue::List(list)
+}
+
+fn discovered_interfaces_to_pickle(interfaces: &[crate::discovery::DiscoveredInterface]) -> PickleValue {
+    use crate::discovery::DiscoveredStatus;
+
+    let list: Vec<PickleValue> = interfaces.iter().map(|iface| {
+        let mut dict = vec![
+            (PickleValue::String("type".into()), PickleValue::String(iface.interface_type.clone())),
+            (PickleValue::String("transport".into()), PickleValue::Bool(iface.transport)),
+            (PickleValue::String("name".into()), PickleValue::String(iface.name.clone())),
+            (PickleValue::String("discovered".into()), PickleValue::Float(iface.discovered)),
+            (PickleValue::String("last_heard".into()), PickleValue::Float(iface.last_heard)),
+            (PickleValue::String("heard_count".into()), PickleValue::Int(iface.heard_count as i64)),
+            (PickleValue::String("status".into()), PickleValue::String(iface.status.as_str().into())),
+            (PickleValue::String("stamp".into()), PickleValue::Bytes(iface.stamp.clone())),
+            (PickleValue::String("value".into()), PickleValue::Int(iface.stamp_value as i64)),
+            (PickleValue::String("transport_id".into()), PickleValue::Bytes(iface.transport_id.to_vec())),
+            (PickleValue::String("network_id".into()), PickleValue::Bytes(iface.network_id.to_vec())),
+            (PickleValue::String("hops".into()), PickleValue::Int(iface.hops as i64)),
+        ];
+
+        // Optional location fields
+        if let Some(v) = iface.latitude {
+            dict.push((PickleValue::String("latitude".into()), PickleValue::Float(v)));
+        } else {
+            dict.push((PickleValue::String("latitude".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.longitude {
+            dict.push((PickleValue::String("longitude".into()), PickleValue::Float(v)));
+        } else {
+            dict.push((PickleValue::String("longitude".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.height {
+            dict.push((PickleValue::String("height".into()), PickleValue::Float(v)));
+        } else {
+            dict.push((PickleValue::String("height".into()), PickleValue::None));
+        }
+
+        // Connection info
+        if let Some(ref v) = iface.reachable_on {
+            dict.push((PickleValue::String("reachable_on".into()), PickleValue::String(v.clone())));
+        } else {
+            dict.push((PickleValue::String("reachable_on".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.port {
+            dict.push((PickleValue::String("port".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("port".into()), PickleValue::None));
+        }
+
+        // RNode/RF specific
+        if let Some(v) = iface.frequency {
+            dict.push((PickleValue::String("frequency".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("frequency".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.bandwidth {
+            dict.push((PickleValue::String("bandwidth".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("bandwidth".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.spreading_factor {
+            dict.push((PickleValue::String("sf".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("sf".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.coding_rate {
+            dict.push((PickleValue::String("cr".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("cr".into()), PickleValue::None));
+        }
+        if let Some(ref v) = iface.modulation {
+            dict.push((PickleValue::String("modulation".into()), PickleValue::String(v.clone())));
+        } else {
+            dict.push((PickleValue::String("modulation".into()), PickleValue::None));
+        }
+        if let Some(v) = iface.channel {
+            dict.push((PickleValue::String("channel".into()), PickleValue::Int(v as i64)));
+        } else {
+            dict.push((PickleValue::String("channel".into()), PickleValue::None));
+        }
+
+        // IFAC info
+        if let Some(ref v) = iface.ifac_netname {
+            dict.push((PickleValue::String("ifac_netname".into()), PickleValue::String(v.clone())));
+        } else {
+            dict.push((PickleValue::String("ifac_netname".into()), PickleValue::None));
+        }
+        if let Some(ref v) = iface.ifac_netkey {
+            dict.push((PickleValue::String("ifac_netkey".into()), PickleValue::String(v.clone())));
+        } else {
+            dict.push((PickleValue::String("ifac_netkey".into()), PickleValue::None));
+        }
+
+        // Config entry
+        if let Some(ref v) = iface.config_entry {
+            dict.push((PickleValue::String("config_entry".into()), PickleValue::String(v.clone())));
+        } else {
+            dict.push((PickleValue::String("config_entry".into()), PickleValue::None));
+        }
+
+        dict.push((PickleValue::String("discovery_hash".into()), PickleValue::Bytes(iface.discovery_hash.to_vec())));
+
         PickleValue::Dict(dict)
     }).collect();
     PickleValue::List(list)

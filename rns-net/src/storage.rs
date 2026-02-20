@@ -338,6 +338,7 @@ mod tests {
         assert!(paths.storage.exists());
         assert!(paths.cache.exists());
         assert!(paths.identities.exists());
+        assert!(paths.discovered_interfaces.exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
