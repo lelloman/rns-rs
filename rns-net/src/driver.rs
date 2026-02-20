@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use rns_core::packet::RawPacket;
+use rns_core::transport::tables::PathEntry;
 use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
@@ -1039,6 +1040,14 @@ impl Driver {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::BlackholeResult(false)
             }
+            QueryRequest::InjectPath { .. } => {
+                // Mutating queries handled by handle_query_mut
+                QueryResponse::InjectPath(false)
+            }
+            QueryRequest::InjectIdentity { .. } => {
+                // Mutating queries handled by handle_query_mut
+                QueryResponse::InjectIdentity(false)
+            }
             QueryRequest::HasPath { dest_hash } => {
                 QueryResponse::HasPath(self.engine.has_path(&dest_hash))
             }
@@ -1089,6 +1098,59 @@ impl Driver {
             QueryRequest::DropAnnounceQueues => {
                 self.engine.drop_announce_queues();
                 QueryResponse::DropAnnounceQueues
+            }
+            QueryRequest::InjectPath {
+                dest_hash,
+                next_hop,
+                hops,
+                expires,
+                interface_name,
+                packet_hash,
+            } => {
+                // Resolve interface_name → InterfaceId
+                let iface_id = self
+                    .interfaces
+                    .iter()
+                    .find(|(_, entry)| entry.info.name == interface_name)
+                    .map(|(id, _)| *id);
+                match iface_id {
+                    Some(id) => {
+                        let entry = PathEntry {
+                            timestamp: time::now(),
+                            next_hop,
+                            hops,
+                            expires,
+                            random_blobs: Vec::new(),
+                            receiving_interface: id,
+                            packet_hash,
+                            announce_raw: None,
+                        };
+                        self.engine.inject_path(dest_hash, entry);
+                        QueryResponse::InjectPath(true)
+                    }
+                    None => QueryResponse::InjectPath(false),
+                }
+            }
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash,
+                public_key,
+                app_data,
+                hops,
+                received_at,
+            } => {
+                self.known_destinations.insert(
+                    dest_hash,
+                    crate::destination::AnnouncedIdentity {
+                        dest_hash: rns_core::types::DestHash(dest_hash),
+                        identity_hash: rns_core::types::IdentityHash(identity_hash),
+                        public_key,
+                        app_data,
+                        hops,
+                        received_at,
+                    },
+                );
+                QueryResponse::InjectIdentity(true)
             }
             other => self.handle_query(other),
         }

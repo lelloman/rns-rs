@@ -1419,6 +1419,11 @@ impl TransportEngine {
         }
     }
 
+    /// Inject a path entry directly into the path table.
+    pub fn inject_path(&mut self, dest_hash: [u8; 16], entry: PathEntry) {
+        self.path_table.insert(dest_hash, entry);
+    }
+
     /// Drop a path from the path table.
     pub fn drop_path(&mut self, dest_hash: &[u8; 16]) -> bool {
         self.path_table.remove(dest_hash).is_some()

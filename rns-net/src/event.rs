@@ -221,6 +221,24 @@ pub enum QueryRequest {
     Links,
     /// Get active resource transfers.
     Resources,
+    /// Inject a path entry into the path table.
+    InjectPath {
+        dest_hash: [u8; 16],
+        next_hop: [u8; 16],
+        hops: u8,
+        expires: f64,
+        interface_name: String,
+        packet_hash: [u8; 32],
+    },
+    /// Inject an identity into the known destinations cache.
+    InjectIdentity {
+        dest_hash: [u8; 16],
+        identity_hash: [u8; 16],
+        public_key: [u8; 64],
+        app_data: Option<Vec<u8>>,
+        hops: u8,
+        received_at: f64,
+    },
 }
 
 /// Responses to queries.
@@ -245,6 +263,8 @@ pub enum QueryResponse {
     LocalDestinations(Vec<LocalDestinationEntry>),
     Links(Vec<LinkInfoEntry>),
     Resources(Vec<ResourceInfoEntry>),
+    InjectPath(bool),
+    InjectIdentity(bool),
 }
 
 /// Interface statistics response.

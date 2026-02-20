@@ -20,6 +20,8 @@ pub struct StoragePaths {
     pub storage: PathBuf,
     pub cache: PathBuf,
     pub identities: PathBuf,
+    /// Directory for discovered interface data: storage/discovery/interfaces
+    pub discovered_interfaces: PathBuf,
 }
 
 /// A known destination entry.
@@ -37,17 +39,20 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let cache = config_dir.join("cache");
     let identities = storage.join("identities");
     let announces = cache.join("announces");
+    let discovered_interfaces = storage.join("discovery").join("interfaces");
 
     fs::create_dir_all(&storage)?;
     fs::create_dir_all(&cache)?;
     fs::create_dir_all(&identities)?;
     fs::create_dir_all(&announces)?;
+    fs::create_dir_all(&discovered_interfaces)?;
 
     Ok(StoragePaths {
         config_dir: config_dir.to_path_buf(),
         storage,
         cache,
         identities,
+        discovered_interfaces,
     })
 }
 
