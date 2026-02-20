@@ -12,5 +12,6 @@ default = []
 alloc = []
 
 [dependencies]
+rns-hooks-abi = { path = "../rns-hooks-abi" }
 
 [lib]

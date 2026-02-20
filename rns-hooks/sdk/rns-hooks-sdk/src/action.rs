@@ -1,14 +1,5 @@
-/// Action tag bytes — must match `wire.rs` on the host side.
-pub const TAG_SEND_ON_INTERFACE: u8 = 0;
-pub const TAG_BROADCAST: u8 = 1;
-pub const TAG_DELIVER_LOCAL: u8 = 2;
-pub const TAG_ANNOUNCE_RECEIVED: u8 = 3;
-pub const TAG_PATH_UPDATED: u8 = 4;
-pub const TAG_FORWARD_LOCAL_CLIENTS: u8 = 5;
-pub const TAG_FORWARD_PLAIN_BROADCAST: u8 = 6;
-pub const TAG_CACHE_ANNOUNCE: u8 = 7;
-pub const TAG_TUNNEL_SYNTHESIZE: u8 = 8;
-pub const TAG_TUNNEL_ESTABLISHED: u8 = 9;
+// Import tag constants from shared ABI crate.
+pub use rns_hooks_abi::wire::*;
 
 fn write_u32(buf: &mut [u8], off: usize, val: u32) {
     buf[off..off + 4].copy_from_slice(&val.to_le_bytes());

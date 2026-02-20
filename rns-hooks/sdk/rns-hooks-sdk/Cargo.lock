@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "rns-hooks-abi"
+version = "0.1.0"
+
+[[package]]
 name = "rns-hooks-sdk"
 version = "0.1.0"
+dependencies = [
+ "rns-hooks-abi",
+]

@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "packet-logger"
+name = "allowlist"
 version = "0.1.0"
 dependencies = [
  "rns-hooks-sdk",

@@ -1503,8 +1503,13 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "log",
+ "rns-hooks-abi",
  "wasmtime",
 ]
+
+[[package]]
+name = "rns-hooks-abi"
+version = "0.1.0"
 
 [[package]]
 name = "rns-net"

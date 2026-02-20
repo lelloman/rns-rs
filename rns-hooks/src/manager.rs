@@ -1,5 +1,5 @@
 use crate::arena;
-use crate::engine_access::EngineAccess;
+use crate::engine_access::{EngineAccess, NullEngine};
 use crate::error::HookError;
 use crate::hooks::HookContext;
 use crate::host_fns;
@@ -7,6 +7,9 @@ use crate::program::LoadedProgram;
 use crate::result::{ExecuteResult, HookResult, Verdict};
 use crate::runtime::{StoreData, WasmRuntime};
 use wasmtime::{Linker, Store};
+
+/// ABI version the host expects from compiled hook modules.
+const HOST_ABI_VERSION: i32 = rns_hooks_abi::ABI_VERSION;
 
 /// Central manager for WASM hook execution.
 ///
@@ -27,6 +30,9 @@ impl HookManager {
     }
 
     /// Compile WASM bytes into a LoadedProgram.
+    ///
+    /// Validates that the module exports `__rns_abi_version` returning the
+    /// expected ABI version before accepting it.
     pub fn compile(
         &self,
         name: String,
@@ -37,7 +43,67 @@ impl HookManager {
             .runtime
             .compile(bytes)
             .map_err(|e| HookError::CompileError(e.to_string()))?;
+        self.validate_abi_version(&name, &module)?;
         Ok(LoadedProgram::new(name, module, priority))
+    }
+
+    /// Check that the module exports `__rns_abi_version() -> i32` and that
+    /// the returned value matches [`HOST_ABI_VERSION`].
+    fn validate_abi_version(
+        &self,
+        name: &str,
+        module: &wasmtime::Module,
+    ) -> Result<(), HookError> {
+        // Check if the export exists in the module's type information.
+        let has_export = module
+            .exports()
+            .any(|e| e.name() == "__rns_abi_version");
+        if !has_export {
+            return Err(HookError::AbiVersionMismatch {
+                hook_name: name.to_string(),
+                expected: HOST_ABI_VERSION,
+                found: None,
+            });
+        }
+
+        // Instantiate the module to call the function and read the version.
+        static NULL_ENGINE: NullEngine = NullEngine;
+        let mut store = Store::new(self.runtime.engine(), StoreData {
+            engine_access: &NULL_ENGINE as *const dyn EngineAccess,
+            now: 0.0,
+            injected_actions: Vec::new(),
+            log_messages: Vec::new(),
+        });
+        store
+            .set_fuel(self.runtime.fuel())
+            .map_err(|e| HookError::CompileError(e.to_string()))?;
+
+        let instance = self
+            .linker
+            .instantiate(&mut store, module)
+            .map_err(|e| HookError::InstantiationError(e.to_string()))?;
+
+        let func = instance
+            .get_typed_func::<(), i32>(&mut store, "__rns_abi_version")
+            .map_err(|e| HookError::CompileError(format!(
+                "__rns_abi_version has wrong signature: {}", e
+            )))?;
+
+        let version = func
+            .call(&mut store, ())
+            .map_err(|e| HookError::Trap(format!(
+                "__rns_abi_version trapped: {}", e
+            )))?;
+
+        if version != HOST_ABI_VERSION {
+            return Err(HookError::AbiVersionMismatch {
+                hook_name: name.to_string(),
+                expected: HOST_ABI_VERSION,
+                found: Some(version),
+            });
+        }
+
+        Ok(())
     }
 
     /// Compile a WASM file from disk.
@@ -298,6 +364,7 @@ mod tests {
     const WAT_CONTINUE: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param i32) (result i32)
                 ;; Write HookResult at offset 0x2000
                 ;; verdict = 0 (Continue)
@@ -323,6 +390,7 @@ mod tests {
     const WAT_DROP: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param i32) (result i32)
                 (i32.store (i32.const 0x2000) (i32.const 1))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
@@ -340,6 +408,7 @@ mod tests {
     const WAT_TRAP: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param i32) (result i32)
                 unreachable
             )
@@ -350,6 +419,7 @@ mod tests {
     const WAT_INFINITE: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param i32) (result i32)
                 (loop $inf (br $inf))
                 (i32.const 0)
@@ -362,6 +432,7 @@ mod tests {
         (module
             (import "env" "host_has_path" (func $has_path (param i32) (result i32)))
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Check if path exists for a 16-byte dest at offset 0x3000
                 ;; (we'll write the dest hash there in the test)
@@ -593,6 +664,7 @@ mod tests {
         (module
             (import "env" "host_get_announce_rate" (func $get_rate (param i64) (result i32)))
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 (if (i32.ge_s (call $get_rate (i64.const 42)) (i32.const 0))
                     (then
@@ -641,6 +713,7 @@ mod tests {
         (module
             (import "env" "host_get_link_state" (func $link_state (param i32) (result i32)))
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 (if (i32.eq (call $link_state (i32.const 0x3000)) (i32.const 2))
                     (then
@@ -691,6 +764,7 @@ mod tests {
         (module
             (import "env" "host_inject_action" (func $inject (param i32 i32) (result i32)))
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Write the data payload at 0x3100
                 (i32.store8 (i32.const 0x3100) (i32.const 0xDE))
@@ -745,6 +819,7 @@ mod tests {
     const WAT_MODIFY: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Write modified data at 0x2100
                 (i32.store8 (i32.const 0x2100) (i32.const 0xAA))
@@ -805,6 +880,7 @@ mod tests {
     const WAT_COUNTER: &str = r#"
         (module
             (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
             (global $counter (mut i32) (i32.const 0))
             (func (export "on_hook") (param i32) (result i32)
                 ;; Increment counter
@@ -867,5 +943,77 @@ mod tests {
         // Counter should restart at 1
         let exec3 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
         assert_eq!(extract_counter(&exec3), 1);
+    }
+
+    // --- ABI version validation tests ---
+
+    /// WAT module without __rns_abi_version export.
+    const WAT_NO_ABI_VERSION: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (func (export "on_hook") (param i32) (result i32)
+                (i32.store (i32.const 0x2000) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    /// WAT module with wrong ABI version (9999).
+    const WAT_WRONG_ABI_VERSION: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 9999))
+            (func (export "on_hook") (param i32) (result i32)
+                (i32.store (i32.const 0x2000) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    #[test]
+    fn rejects_missing_abi_version() {
+        let mgr = make_manager();
+        let result = mgr.compile("no_abi".into(), WAT_NO_ABI_VERSION.as_bytes(), 0);
+        match result {
+            Err(HookError::AbiVersionMismatch { hook_name, expected, found }) => {
+                assert_eq!(hook_name, "no_abi");
+                assert_eq!(expected, HOST_ABI_VERSION);
+                assert_eq!(found, None);
+            }
+            other => panic!("expected AbiVersionMismatch with found=None, got {:?}", other.err()),
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_abi_version() {
+        let mgr = make_manager();
+        let result = mgr.compile("bad_abi".into(), WAT_WRONG_ABI_VERSION.as_bytes(), 0);
+        match result {
+            Err(HookError::AbiVersionMismatch { hook_name, expected, found }) => {
+                assert_eq!(hook_name, "bad_abi");
+                assert_eq!(expected, HOST_ABI_VERSION);
+                assert_eq!(found, Some(9999));
+            }
+            other => panic!("expected AbiVersionMismatch with found=Some(9999), got {:?}", other.err()),
+        }
+    }
+
+    #[test]
+    fn accepts_correct_abi_version() {
+        let mgr = make_manager();
+        let result = mgr.compile("good_abi".into(), WAT_CONTINUE.as_bytes(), 0);
+        assert!(result.is_ok(), "compile should succeed with correct ABI version");
     }
 }

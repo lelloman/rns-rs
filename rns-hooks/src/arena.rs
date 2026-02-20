@@ -4,64 +4,10 @@ use crate::result::HookResult;
 use crate::result::Verdict;
 use crate::runtime::StoreData;
 
-/// Base address in WASM linear memory where context is written.
-pub const ARENA_BASE: usize = 0x1000;
-
-/// Context type discriminants written at the start of the arena.
-pub const CTX_TYPE_PACKET: u32 = 0;
-pub const CTX_TYPE_INTERFACE: u32 = 1;
-pub const CTX_TYPE_TICK: u32 = 2;
-pub const CTX_TYPE_ANNOUNCE: u32 = 3;
-pub const CTX_TYPE_LINK: u32 = 4;
-
-/// repr(C) arena struct for Packet context.
-#[repr(C)]
-struct ArenaPacket {
-    context_type: u32,
-    flags: u8,
-    hops: u8,
-    _pad: [u8; 2],
-    destination_hash: [u8; 16],
-    context: u8,
-    _pad2: [u8; 3],
-    packet_hash: [u8; 32],
-    interface_id: u64,
-    data_offset: u32,
-    data_len: u32,
-}
-
-/// repr(C) arena struct for Interface context.
-#[repr(C)]
-struct ArenaInterface {
-    context_type: u32,
-    _pad: u32,
-    interface_id: u64,
-}
-
-/// repr(C) arena struct for Tick context.
-#[repr(C)]
-struct ArenaTick {
-    context_type: u32,
-}
-
-/// repr(C) arena struct for Announce context.
-#[repr(C)]
-struct ArenaAnnounce {
-    context_type: u32,
-    hops: u8,
-    _pad: [u8; 3],
-    destination_hash: [u8; 16],
-    interface_id: u64,
-}
-
-/// repr(C) arena struct for Link context.
-#[repr(C)]
-struct ArenaLink {
-    context_type: u32,
-    _pad: u32,
-    link_id: [u8; 16],
-    interface_id: u64,
-}
+pub use rns_hooks_abi::context::{
+    AnnounceContext, InterfaceContext, LinkContext, PacketContext, TickContext, ARENA_BASE,
+    CTX_TYPE_ANNOUNCE, CTX_TYPE_INTERFACE, CTX_TYPE_LINK, CTX_TYPE_PACKET, CTX_TYPE_TICK,
+};
 
 /// Write a HookContext into WASM linear memory at ARENA_BASE.
 /// Returns the number of bytes written.
@@ -73,7 +19,7 @@ pub fn write_context(
     let mem_size = memory.data_size(&store);
     match ctx {
         HookContext::Packet(pkt) => {
-            let size = std::mem::size_of::<ArenaPacket>() + pkt.data_len as usize;
+            let size = std::mem::size_of::<PacketContext>() + pkt.data_len as usize;
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Packet context".into()));
             }
@@ -95,7 +41,7 @@ pub fn write_context(
             write_u32(data, base + 60, 0);
             write_u64(data, base + 64, pkt.interface_id);
             // data_offset: offset from arena base to the variable data
-            let header_size = std::mem::size_of::<ArenaPacket>();
+            let header_size = std::mem::size_of::<PacketContext>();
             write_u32(data, base + 72, header_size as u32);
             write_u32(data, base + 76, pkt.data_len);
             // Note: we don't have the actual packet data bytes here (PacketContext only
@@ -104,7 +50,7 @@ pub fn write_context(
             Ok(size)
         }
         HookContext::Interface { interface_id } => {
-            let size = std::mem::size_of::<ArenaInterface>();
+            let size = std::mem::size_of::<InterfaceContext>();
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Interface context".into()));
             }
@@ -116,7 +62,7 @@ pub fn write_context(
             Ok(size)
         }
         HookContext::Tick => {
-            let size = std::mem::size_of::<ArenaTick>();
+            let size = std::mem::size_of::<TickContext>();
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Tick context".into()));
             }
@@ -129,7 +75,7 @@ pub fn write_context(
             hops,
             interface_id,
         } => {
-            let size = std::mem::size_of::<ArenaAnnounce>();
+            let size = std::mem::size_of::<AnnounceContext>();
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Announce context".into()));
             }
@@ -148,7 +94,7 @@ pub fn write_context(
             link_id,
             interface_id,
         } => {
-            let size = std::mem::size_of::<ArenaLink>();
+            let size = std::mem::size_of::<LinkContext>();
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Link context".into()));
             }
@@ -230,6 +176,7 @@ pub fn read_action_wire(
     action_len: usize,
 ) -> Option<crate::wire::ActionWire> {
     use crate::wire::*;
+    use rns_hooks_abi::wire as tags;
 
     let end = action_ptr.checked_add(action_len)?;
     if end > wasm_data.len() || action_len == 0 {
@@ -240,7 +187,7 @@ pub fn read_action_wire(
     let b = &buf[1..];
 
     match tag {
-        TAG_SEND_ON_INTERFACE => {
+        tags::TAG_SEND_ON_INTERFACE => {
             // interface: u64 (8) + data_offset: u32 (4) + data_len: u32 (4) = 16
             if b.len() < 16 { return None; }
             let interface = u64::from_le_bytes(b[0..8].try_into().ok()?);
@@ -249,7 +196,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::SendOnInterface { interface, raw })
         }
-        TAG_BROADCAST => {
+        tags::TAG_BROADCAST => {
             // data_offset: u32 (4) + data_len: u32 (4) + exclude: u64 (8) + has_exclude: u8 (1) = 17
             if b.len() < 17 { return None; }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
@@ -259,7 +206,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::BroadcastOnAllInterfaces { raw, exclude, has_exclude })
         }
-        TAG_DELIVER_LOCAL => {
+        tags::TAG_DELIVER_LOCAL => {
             // dest_hash: 16 + data_offset: 4 + data_len: 4 + packet_hash: 32 + receiving_interface: 8 = 64
             if b.len() < 64 { return None; }
             let destination_hash: [u8; 16] = b[0..16].try_into().ok()?;
@@ -270,7 +217,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::DeliverLocal { destination_hash, raw, packet_hash, receiving_interface })
         }
-        TAG_PATH_UPDATED => {
+        tags::TAG_PATH_UPDATED => {
             // dest_hash: 16 + hops: 1 + next_hop: 16 + interface: 8 = 41
             if b.len() < 41 { return None; }
             let destination_hash: [u8; 16] = b[0..16].try_into().ok()?;
@@ -279,7 +226,7 @@ pub fn read_action_wire(
             let interface = u64::from_le_bytes(b[33..41].try_into().ok()?);
             Some(ActionWire::PathUpdated { destination_hash, hops, next_hop, interface })
         }
-        TAG_ANNOUNCE_RECEIVED => {
+        tags::TAG_ANNOUNCE_RECEIVED => {
             // dest_hash: 16 + identity_hash: 16 + public_key: 64 + name_hash: 10 +
             // random_hash: 10 + hops: 1 + receiving_interface: 8 + has_app_data: 1 = 126 minimum
             if b.len() < 126 { return None; }
@@ -305,7 +252,7 @@ pub fn read_action_wire(
                 random_hash, app_data, hops, receiving_interface,
             })
         }
-        TAG_FORWARD_LOCAL_CLIENTS => {
+        tags::TAG_FORWARD_LOCAL_CLIENTS => {
             // data_offset: u32 (4) + data_len: u32 (4) + exclude: u64 (8) + has_exclude: u8 (1) = 17
             if b.len() < 17 { return None; }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
@@ -315,7 +262,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::ForwardToLocalClients { raw, exclude, has_exclude })
         }
-        TAG_FORWARD_PLAIN_BROADCAST => {
+        tags::TAG_FORWARD_PLAIN_BROADCAST => {
             // data_offset: u32 (4) + data_len: u32 (4) + to_local: u8 (1) + exclude: u64 (8) + has_exclude: u8 (1) = 18
             if b.len() < 18 { return None; }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
@@ -326,7 +273,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::ForwardPlainBroadcast { raw, to_local, exclude, has_exclude })
         }
-        TAG_CACHE_ANNOUNCE => {
+        tags::TAG_CACHE_ANNOUNCE => {
             // packet_hash: 32 + data_offset: 4 + data_len: 4 = 40
             if b.len() < 40 { return None; }
             let packet_hash: [u8; 32] = b[0..32].try_into().ok()?;
@@ -335,7 +282,7 @@ pub fn read_action_wire(
             let raw = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::CacheAnnounce { packet_hash, raw })
         }
-        TAG_TUNNEL_SYNTHESIZE => {
+        tags::TAG_TUNNEL_SYNTHESIZE => {
             // interface: u64 (8) + data_offset: u32 (4) + data_len: u32 (4) + dest_hash: 16 = 32
             if b.len() < 32 { return None; }
             let interface = u64::from_le_bytes(b[0..8].try_into().ok()?);
@@ -345,7 +292,7 @@ pub fn read_action_wire(
             let data = read_slice(wasm_data, data_offset, data_len)?;
             Some(ActionWire::TunnelSynthesize { interface, data, dest_hash })
         }
-        TAG_TUNNEL_ESTABLISHED => {
+        tags::TAG_TUNNEL_ESTABLISHED => {
             // tunnel_id: 32 + interface: 8 = 40
             if b.len() < 40 { return None; }
             let tunnel_id: [u8; 32] = b[0..32].try_into().ok()?;
@@ -384,7 +331,7 @@ pub fn write_data_override(
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     new_data: &[u8],
 ) -> Result<(), HookError> {
-    let header_size = std::mem::size_of::<ArenaPacket>();
+    let header_size = std::mem::size_of::<PacketContext>();
     let data_start = ARENA_BASE + header_size;
     let mem_size = memory.data_size(&store);
     if data_start + new_data.len() > mem_size {

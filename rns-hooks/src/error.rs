@@ -19,6 +19,12 @@ pub enum HookError {
     InvalidHookPoint(String),
     /// I/O error loading a WASM module.
     IoError(std::io::Error),
+    /// WASM module was compiled against an incompatible ABI version.
+    AbiVersionMismatch {
+        hook_name: String,
+        expected: i32,
+        found: Option<i32>,
+    },
 }
 
 impl fmt::Display for HookError {
@@ -34,6 +40,22 @@ impl fmt::Display for HookError {
             }
             HookError::InvalidHookPoint(msg) => write!(f, "invalid hook point: {}", msg),
             HookError::IoError(e) => write!(f, "I/O error: {}", e),
+            HookError::AbiVersionMismatch { hook_name, expected, found } => {
+                match found {
+                    Some(v) => write!(
+                        f,
+                        "hook '{}' ABI version mismatch: host expects {}, hook has {}. \
+                         Recompile the hook against the current rns-hooks-sdk.",
+                        hook_name, expected, v
+                    ),
+                    None => write!(
+                        f,
+                        "hook '{}' missing __rns_abi_version export (expected ABI version {}). \
+                         Recompile the hook against the current rns-hooks-sdk.",
+                        hook_name, expected
+                    ),
+                }
+            }
         }
     }
 }
