@@ -272,7 +272,7 @@ impl LinkManager {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,
             transport_type: constants::TRANSPORT_BROADCAST,
-            destination_type: constants::DESTINATION_LINK,
+            destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_LINKREQUEST,
         };
 
