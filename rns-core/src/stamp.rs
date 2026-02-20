@@ -88,16 +88,16 @@ mod tests {
     #[test]
     fn test_leading_zeros_first_byte_nonzero() {
         let mut hash = [0u8; 32];
-        hash[0] = 0x80; // 1 leading zero bit
+        hash[0] = 0x80; // 10000000 - 0 leading zero bits
+        assert_eq!(leading_zeros(&hash), 0);
+
+        hash[0] = 0x40; // 01000000 - 1 leading zero bit
         assert_eq!(leading_zeros(&hash), 1);
 
-        hash[0] = 0x40; // 2 leading zero bits
-        assert_eq!(leading_zeros(&hash), 2);
-
-        hash[0] = 0x01; // 7 leading zero bits
+        hash[0] = 0x01; // 00000001 - 7 leading zero bits
         assert_eq!(leading_zeros(&hash), 7);
 
-        hash[0] = 0xFF; // 0 leading zero bits
+        hash[0] = 0xFF; // 11111111 - 0 leading zero bits
         assert_eq!(leading_zeros(&hash), 0);
     }
 
@@ -105,10 +105,10 @@ mod tests {
     fn test_leading_zeros_multiple_bytes() {
         let mut hash = [0u8; 32];
         hash[0] = 0;
-        hash[1] = 0x80; // 8 + 1 = 9 leading zero bits
-        assert_eq!(leading_zeros(&hash), 9);
+        hash[1] = 0x80; // 8 (from 0x00) + 0 (from 0x80) = 8 leading zero bits
+        assert_eq!(leading_zeros(&hash), 8);
 
-        hash[1] = 0x01; // 8 + 7 = 15 leading zero bits
+        hash[1] = 0x01; // 8 (from 0x00) + 7 (from 0x01) = 15 leading zero bits
         assert_eq!(leading_zeros(&hash), 15);
     }
 

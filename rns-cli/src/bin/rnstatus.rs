@@ -51,11 +51,74 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1.0);
     let remote_hash = args.get("R").map(|s| s.to_string());
+    let show_discovered = args.has("d");
+    let show_discovered_config = args.has("D");
     let filter = args.positional.first().cloned();
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
         remote_status(hash_str, config_path.as_deref());
+        return;
+    }
+
+    // Discovered interfaces query via -d or -D flag
+    if show_discovered || show_discovered_config {
+        // Load config to get RPC address and auth key
+        let config_dir = storage::resolve_config_dir(
+            config_path.as_ref().map(|s| Path::new(s.as_str())),
+        );
+        let config_file = config_dir.join("config");
+        let rns_config = if config_file.exists() {
+            match config::parse_file(&config_file) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error reading config: {}", e);
+                    process::exit(1);
+                }
+            }
+        } else {
+            match config::parse("") {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            }
+        };
+
+        let paths = match storage::ensure_storage_dirs(&config_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        };
+
+        let identity = match storage::load_or_create_identity(&paths.identities) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Error loading identity: {}", e);
+                process::exit(1);
+            }
+        };
+
+        let auth_key = derive_auth_key(
+            &identity.get_private_key().unwrap_or([0u8; 64]),
+        );
+
+        let rpc_port = rns_config.reticulum.instance_control_port;
+        let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
+
+        let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Could not connect to rnsd: {}", e);
+                eprintln!("Is rnsd running?");
+                process::exit(1);
+            }
+        };
+
+        show_discovered_interfaces(&mut client, show_discovered_config, json_output);
         return;
     }
 
@@ -370,6 +433,188 @@ fn remote_status(hash_str: &str, config_path: Option<&str>) {
     let _ = (dest_hash, config_path);
 }
 
+/// Show discovered interfaces
+fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_output: bool) {
+    let response = match client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("get".into()), PickleValue::String("discovered_interfaces".into())),
+    ])) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("RPC error: {}", e);
+            process::exit(1);
+        }
+    };
+
+    if json_output {
+        print_json(&response);
+        return;
+    }
+
+    let interfaces = match response.as_list() {
+        Some(list) => list,
+        None => {
+            println!("No discovered interfaces found.");
+            return;
+        }
+    };
+
+    if interfaces.is_empty() {
+        println!("No discovered interfaces found.");
+        return;
+    }
+
+    if show_config {
+        // Detailed view with config entries
+        for (idx, iface) in interfaces.iter().enumerate() {
+            if idx > 0 {
+                println!("{}", "=".repeat(32));
+            }
+
+            let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let if_type = iface.get("type").and_then(|v| v.as_str())
+                .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
+                .unwrap_or("Unknown");
+            let status = iface.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let transport = iface.get("transport").and_then(|v| v.as_bool()).unwrap_or(false);
+            let hops = iface.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
+            let value = iface.get("value").or_else(|| iface.get("stamp_value"))
+                .and_then(|v| v.as_int()).unwrap_or(0);
+            let last_heard = iface.get("last_heard").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let discovered = iface.get("discovered").and_then(|v| v.as_float()).unwrap_or(0.0);
+
+            let transport_id = iface.get("transport_id").and_then(|v| v.as_bytes())
+                .map(|b| prettyhexrep(&b[..b.len().min(8)]))
+                .unwrap_or_default();
+            let network_id = iface.get("network_id").and_then(|v| v.as_bytes())
+                .map(|b| prettyhexrep(&b[..b.len().min(8)]))
+                .unwrap_or_default();
+
+            if !network_id.is_empty() {
+                println!("Network   ID : {}", network_id);
+            }
+            if !transport_id.is_empty() {
+                println!("Transport ID : {}", transport_id);
+            }
+
+            println!("Name         : {}", name);
+            println!("Type         : {}", if_type);
+            println!("Status       : {}", status);
+            println!("Transport    : {}", if transport { "Enabled" } else { "Disabled" });
+            println!("Distance     : {} hop{}", hops, if hops == 1 { "" } else { "s" });
+
+            let now = rns_net::time::now();
+            if discovered > 0.0 {
+                println!("Discovered   : {} ago", prettytime(now - discovered));
+            }
+            if last_heard > 0.0 {
+                println!("Last Heard   : {} ago", prettytime(now - last_heard));
+            }
+
+            // Location
+            let lat = iface.get("latitude").and_then(|v| v.as_float());
+            let lon = iface.get("longitude").and_then(|v| v.as_float());
+            let height = iface.get("height").and_then(|v| v.as_float());
+            if let (Some(lat), Some(lon)) = (lat, lon) {
+                let height_str = height.map(|h| format!(", {}m h", h)).unwrap_or_default();
+                println!("Location     : {:.4}, {:.4}{}", lat, lon, height_str);
+            }
+
+            // Interface-specific fields
+            if let Some(freq) = iface.get("frequency").and_then(|v| v.as_int()) {
+                println!("Frequency    : {} Hz", freq);
+            }
+            if let Some(bw) = iface.get("bandwidth").and_then(|v| v.as_int()) {
+                println!("Bandwidth    : {} Hz", bw);
+            }
+            if let Some(sf) = iface.get("sf").or_else(|| iface.get("spreading_factor")).and_then(|v| v.as_int()) {
+                println!("Sprd. Factor : {}", sf);
+            }
+            if let Some(cr) = iface.get("cr").or_else(|| iface.get("coding_rate")).and_then(|v| v.as_int()) {
+                println!("Coding Rate  : {}", cr);
+            }
+            if let Some(modulation) = iface.get("modulation").and_then(|v| v.as_str()) {
+                println!("Modulation   : {}", modulation);
+            }
+            if let Some(reachable) = iface.get("reachable_on").and_then(|v| v.as_str()) {
+                println!("Address      : {}", reachable);
+            }
+            if let Some(port) = iface.get("port").and_then(|v| v.as_int()) {
+                println!("Port         : {}", port);
+            }
+
+            println!("Stamp Value  : {}", value);
+
+            // Config entry
+            if let Some(config) = iface.get("config_entry").and_then(|v| v.as_str()) {
+                println!("\nConfiguration Entry:");
+                for line in config.lines() {
+                    println!("  {}", line);
+                }
+            }
+
+            println!();
+        }
+    } else {
+        // Table view
+        println!("{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
+            "Name", "Type", "Status", "Last Heard", "Value", "Location");
+        println!("{}", "-".repeat(89));
+
+        let now = rns_net::time::now();
+
+        for iface in interfaces {
+            let name_full = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let name = if name_full.len() > 24 {
+                format!("{}...", &name_full[..21])
+            } else {
+                name_full.to_string()
+            };
+
+            let if_type = iface.get("type").and_then(|v| v.as_str())
+                .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
+                .unwrap_or("Unknown")
+                .replace("Interface", "");
+
+            let status = iface.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let status_display = match status {
+                "available" => "Available",
+                "unknown" => "Unknown",
+                "stale" => "Stale",
+                _ => status,
+            };
+
+            let last_heard = iface.get("last_heard").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let last_heard_display = if last_heard > 0.0 {
+                let diff = now - last_heard;
+                if diff < 60.0 {
+                    "Just now".to_string()
+                } else if diff < 3600.0 {
+                    format!("{}m ago", (diff / 60.0) as i32)
+                } else if diff < 86400.0 {
+                    format!("{}h ago", (diff / 3600.0) as i32)
+                } else {
+                    format!("{}d ago", (diff / 86400.0) as i32)
+                }
+            } else {
+                "N/A".to_string()
+            };
+
+            let value = iface.get("value").or_else(|| iface.get("stamp_value"))
+                .and_then(|v| v.as_int()).unwrap_or(0);
+
+            let lat = iface.get("latitude").and_then(|v| v.as_float());
+            let lon = iface.get("longitude").and_then(|v| v.as_float());
+            let location = match (lat, lon) {
+                (Some(lat), Some(lon)) => format!("{:.4}, {:.4}", lat, lon),
+                _ => "N/A".to_string(),
+            };
+
+            println!("{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
+                name, if_type, status_display, last_heard_display, value, location);
+        }
+    }
+}
+
 fn print_usage() {
     println!("Usage: rnstatus [OPTIONS] [FILTER]");
     println!();
@@ -382,6 +627,8 @@ fn print_usage() {
     println!("  -t                      Show traffic totals");
     println!("  -l                      Show link count");
     println!("  -A                      Show announce statistics");
+    println!("  -d                      Show discovered interfaces");
+    println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
     println!("  -I SECONDS              Monitor interval (default: 1.0)");
     println!("  -R HASH                 Query remote node via management link");

@@ -575,8 +575,6 @@ fn blackholed_to_pickle(entries: &[BlackholeInfo]) -> PickleValue {
 }
 
 fn discovered_interfaces_to_pickle(interfaces: &[crate::discovery::DiscoveredInterface]) -> PickleValue {
-    use crate::discovery::DiscoveredStatus;
-
     let list: Vec<PickleValue> = interfaces.iter().map(|iface| {
         let mut dict = vec![
             (PickleValue::String("type".into()), PickleValue::String(iface.interface_type.clone())),
