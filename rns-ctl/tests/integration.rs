@@ -109,6 +109,7 @@ fn start_test_server_with_config(
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         callbacks,
     )
@@ -600,6 +601,7 @@ fn start_test_pair() -> TestPair {
         }),
         mode: MODE_FULL,
         ifac: None,
+        discovery: None,
     }];
 
     let server_a = start_test_server_with_config(cfg_a, ifaces_a);
@@ -626,6 +628,7 @@ fn start_test_pair() -> TestPair {
         }),
         mode: MODE_FULL,
         ifac: None,
+        discovery: None,
     }];
 
     let server_b = start_test_server_with_config(cfg_b, ifaces_b);

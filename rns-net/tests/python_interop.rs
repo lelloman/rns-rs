@@ -139,6 +139,7 @@ except (KeyboardInterrupt, SystemExit):
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -150,6 +151,7 @@ except (KeyboardInterrupt, SystemExit):
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         Box::new(TestCallbacks { announce_tx }),
     )

@@ -47,6 +47,9 @@ pub struct ReticulumSection {
     pub probe_addr: Option<String>,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
+    /// Enable interface discovery (advertise discoverable interfaces and
+    /// listen for discovery announces from the network).
+    pub discover_interfaces: bool,
 }
 
 impl Default for ReticulumSection {
@@ -67,6 +70,7 @@ impl Default for ReticulumSection {
             probe_port: None,
             probe_addr: None,
             device: None,
+            discover_interfaces: false,
         }
     }
 }
@@ -432,6 +436,12 @@ fn build_reticulum_section(
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
+    }
+    if let Some(v) = kvs.get("discover_interfaces") {
+        section.discover_interfaces = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "discover_interfaces".into(),
+            value: v.clone(),
+        })?;
     }
 
     Ok(section)

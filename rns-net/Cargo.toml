@@ -16,6 +16,7 @@ rns-core.workspace = true
 rns-hooks = { workspace = true, optional = true }
 rns-crypto.workspace = true
 log = "0.4"
+rayon = "1"
 libc = "0.2"
 socket2 = { version = "0.5", features = ["all"] }
 

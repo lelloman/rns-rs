@@ -159,6 +159,7 @@ fn main() {
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -170,6 +171,7 @@ fn main() {
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -212,6 +214,7 @@ fn main() {
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -223,6 +226,7 @@ fn main() {
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         Box::new(PeerCallbacks {
             name: "alice",
@@ -262,6 +266,7 @@ fn main() {
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -273,6 +278,7 @@ fn main() {
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         Box::new(PeerCallbacks {
             name: "bob",

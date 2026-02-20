@@ -333,6 +333,14 @@ pub struct Driver {
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
     pub(crate) discovery_required_value: u8,
+    /// Destination hash for interface discovery announces.
+    pub(crate) discovery_dest: [u8; 16],
+    /// Whether interface discovery is enabled.
+    pub(crate) discover_interfaces: bool,
+    /// Announcer for discoverable interfaces (None if nothing to announce).
+    pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
+    /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
+    pub(crate) discovery_cleanup_counter: u32,
     /// Hook slots for the WASM hook system (one per HookPoint).
     #[cfg(feature = "rns-hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
@@ -359,13 +367,17 @@ impl Driver {
             &["path", "request"],
             None,
         );
+        let discovery_dest = crate::discovery::discovery_dest_hash();
         let mut engine = TransportEngine::new(config);
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         // Register path request destination so inbound path requests are delivered locally
         engine.register_destination(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
+        // Register discovery destination so interface discovery announces are delivered locally
+        engine.register_destination(discovery_dest, rns_core::constants::DESTINATION_PLAIN);
         let mut local_destinations = HashMap::new();
         local_destinations.insert(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         local_destinations.insert(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
+        local_destinations.insert(discovery_dest, rns_core::constants::DESTINATION_PLAIN);
         Driver {
             engine,
             interfaces: HashMap::new(),
@@ -391,6 +403,10 @@ impl Driver {
                 std::env::temp_dir().join("rns-discovered-interfaces")
             ),
             discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
+            discovery_dest,
+            discover_interfaces: false,
+            interface_announcer: None,
+            discovery_cleanup_counter: 0,
             #[cfg(feature = "rns-hooks")]
             hook_slots: create_hook_slots(),
             #[cfg(feature = "rns-hooks")]
@@ -545,6 +561,66 @@ impl Driver {
                     self.tick_management_announces(now);
                     // Cull expired sent packet tracking entries (no proof received within 60s)
                     self.sent_packets.retain(|_, (_, sent_time)| now - *sent_time < 60.0);
+
+                    // Discovery: kick off background stamp generation if due
+                    if let Some(ref mut announcer) = self.interface_announcer {
+                        announcer.maybe_start(now);
+                    }
+                    // Discovery: check for completed stamp results (non-blocking)
+                    if let Some(ref mut announcer) = self.interface_announcer {
+                        if let Some(stamp_result) = announcer.poll_ready() {
+                            if let Some(ref identity) = self.transport_identity {
+                                let disc_dest = self.discovery_dest;
+                                let name_hash = rns_core::destination::name_hash(
+                                    crate::discovery::APP_NAME,
+                                    &["discovery", "interface"],
+                                );
+                                let mut random_hash = [0u8; 10];
+                                self.rng.fill_bytes(&mut random_hash);
+                                if let Ok((announce_data, _)) = rns_core::announce::AnnounceData::pack(
+                                    identity,
+                                    &disc_dest,
+                                    &name_hash,
+                                    &random_hash,
+                                    None,
+                                    Some(&stamp_result.app_data),
+                                ) {
+                                    let flags = rns_core::packet::PacketFlags {
+                                        header_type: rns_core::constants::HEADER_1,
+                                        context_flag: rns_core::constants::FLAG_UNSET,
+                                        transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+                                        destination_type: rns_core::constants::DESTINATION_PLAIN,
+                                        packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+                                    };
+                                    if let Ok(packet) = rns_core::packet::RawPacket::pack(
+                                        flags, 0, &disc_dest, None,
+                                        rns_core::constants::CONTEXT_NONE, &announce_data,
+                                    ) {
+                                        let outbound_actions = self.engine.handle_outbound(
+                                            &packet,
+                                            rns_core::constants::DESTINATION_PLAIN,
+                                            None,
+                                            now,
+                                        );
+                                        self.dispatch_all(outbound_actions);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Periodic discovery cleanup (every ~3600 ticks = ~1 hour)
+                    if self.discover_interfaces {
+                        self.discovery_cleanup_counter += 1;
+                        if self.discovery_cleanup_counter >= 3600 {
+                            self.discovery_cleanup_counter = 0;
+                            if let Ok(removed) = self.discovered_interfaces.cleanup() {
+                                if removed > 0 {
+                                    log::info!("Discovery cleanup: removed {} stale entries", removed);
+                                }
+                            }
+                        }
+                    }
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
@@ -1082,9 +1158,12 @@ impl Driver {
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
             }
-            QueryRequest::DiscoveredInterfaces { .. } => {
-                // TODO: wire up discovery tracker
-                QueryResponse::DiscoveredInterfaces(Vec::new())
+            QueryRequest::DiscoveredInterfaces { only_available, only_transport } => {
+                let mut interfaces = self.discovered_interfaces.list().unwrap_or_default();
+                crate::discovery::filter_and_sort_interfaces(
+                    &mut interfaces, only_available, only_transport,
+                );
+                QueryResponse::DiscoveredInterfaces(interfaces)
             }
         }
     }
@@ -1590,6 +1669,39 @@ impl Driver {
                     // Suppress unused variable warning when feature is off
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = receiving_interface;
+
+                    // Check if this is a discovery announce
+                    if destination_hash == self.discovery_dest {
+                        if self.discover_interfaces {
+                            if let Some(ref app_data) = app_data {
+                                if let Some(mut discovered) = crate::discovery::parse_interface_announce(
+                                    app_data,
+                                    &identity_hash,
+                                    hops,
+                                    self.discovery_required_value,
+                                ) {
+                                    // Check if we already have this interface
+                                    if let Ok(Some(existing)) = self.discovered_interfaces.load(&discovered.discovery_hash) {
+                                        discovered.discovered = existing.discovered;
+                                        discovered.heard_count = existing.heard_count + 1;
+                                    }
+                                    if let Err(e) = self.discovered_interfaces.store(&discovered) {
+                                        log::warn!("Failed to store discovered interface: {}", e);
+                                    } else {
+                                        log::info!(
+                                            "Discovered interface '{}' ({}) at {}:{} [stamp={}]",
+                                            discovered.name,
+                                            discovered.interface_type,
+                                            discovered.reachable_on.as_deref().unwrap_or("?"),
+                                            discovered.port.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                                            discovered.stamp_value,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        // Still cache the identity and notify callbacks
+                    }
 
                     // Cache the announced identity
                     let announced = crate::destination::AnnouncedIdentity {
@@ -4426,8 +4538,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // Should contain the two internal destinations (tunnel_synth + path_request)
-                assert_eq!(entries.len(), 2);
+                // Should contain the three internal destinations (tunnel_synth + path_request + discovery)
+                assert_eq!(entries.len(), 3);
                 for entry in &entries {
                     assert_eq!(entry.dest_type, rns_core::constants::DESTINATION_PLAIN);
                 }
@@ -4456,8 +4568,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // 2 internal + 1 registered
-                assert_eq!(entries.len(), 3);
+                // 3 internal + 1 registered
+                assert_eq!(entries.len(), 4);
                 assert!(entries.iter().any(|e| e.hash == dest_hash
                     && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
             }
@@ -4486,8 +4598,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // 2 internal + 1 link destination
-                assert_eq!(entries.len(), 3);
+                // 3 internal + 1 link destination
+                assert_eq!(entries.len(), 4);
                 assert!(entries.iter().any(|e| e.hash == dest_hash
                     && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
             }

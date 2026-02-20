@@ -195,6 +195,7 @@ fn start_transport_node(port: u16) -> RnsNode {
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -206,6 +207,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -233,6 +235,7 @@ fn start_client_node(
                 }),
                 mode: MODE_FULL,
                 ifac: None,
+                discovery: None,
             }],
             share_instance: false,
             instance_name: "default".into(),
@@ -244,6 +247,7 @@ fn start_client_node(
             probe_addr: None,
             device: None,
             hooks: Vec::new(),
+            discover_interfaces: false,
         },
         callbacks,
     )

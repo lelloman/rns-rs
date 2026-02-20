@@ -79,6 +79,49 @@ fn extract_ifac_config(params: &std::collections::HashMap<String, String>, defau
     Some(IfacConfig { netname, netkey, size })
 }
 
+/// Extract discovery configuration from interface params, if `discoverable` is set.
+fn extract_discovery_config(
+    iface_name: &str,
+    iface_type: &str,
+    params: &std::collections::HashMap<String, String>,
+) -> Option<crate::discovery::DiscoveryConfig> {
+    let discoverable = params.get("discoverable")
+        .and_then(|v| config::parse_bool_pub(v))
+        .unwrap_or(false);
+    if !discoverable {
+        return None;
+    }
+
+    let discovery_name = params.get("discovery_name")
+        .cloned()
+        .unwrap_or_else(|| iface_name.to_string());
+
+    // Config value is in minutes, convert to seconds. Min 300s (5min), default 21600s (6h).
+    let announce_interval = params.get("announce_interval")
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|mins| (mins * 60).max(300))
+        .unwrap_or(21600);
+
+    let stamp_value = params.get("discovery_stamp_value")
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(crate::discovery::DEFAULT_STAMP_VALUE);
+
+    let reachable_on = params.get("reachable_on").cloned();
+
+    let listen_port = params.get("listen_port")
+        .or_else(|| params.get("port"))
+        .and_then(|v| v.parse().ok());
+
+    Some(crate::discovery::DiscoveryConfig {
+        discovery_name,
+        announce_interval,
+        stamp_value,
+        reachable_on,
+        interface_type: iface_type.to_string(),
+        listen_port,
+    })
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -104,6 +147,8 @@ pub struct NodeConfig {
     pub device: Option<String>,
     /// Hook configurations loaded from the config file.
     pub hooks: Vec<config::ParsedHook>,
+    /// Enable interface discovery.
+    pub discover_interfaces: bool,
 }
 
 /// Interface configuration variant with its mode.
@@ -113,6 +158,8 @@ pub struct InterfaceConfig {
     pub mode: u8,
     /// IFAC (Interface Access Code) configuration, if enabled.
     pub ifac: Option<IfacConfig>,
+    /// Discovery configuration, if this interface is discoverable.
+    pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
 
 /// IFAC configuration for an interface.
@@ -251,6 +298,9 @@ impl RnsNode {
                 _ => 16,
             };
             let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
+            let discovery_config = extract_discovery_config(
+                &iface.name, &iface.interface_type, &iface.params,
+            );
 
             match iface.interface_type.as_str() {
                 "TCPClientInterface" => {
@@ -276,6 +326,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "TCPServerInterface" => {
@@ -299,6 +350,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "UDPInterface" => {
@@ -329,6 +381,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "SerialInterface" => {
@@ -364,6 +417,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "KISSInterface" => {
@@ -425,6 +479,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "RNodeInterface" => {
@@ -491,6 +546,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "PipeInterface" => {
@@ -515,6 +571,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "BackboneInterface" => {
@@ -540,6 +597,7 @@ impl RnsNode {
                             }),
                             mode: iface_mode,
                             ifac: ifac_config,
+                            discovery: discovery_config.clone(),
                         });
                     } else {
                         // Server mode
@@ -561,6 +619,7 @@ impl RnsNode {
                             }),
                             mode: iface_mode,
                             ifac: ifac_config,
+                            discovery: discovery_config.clone(),
                         });
                     }
                 }
@@ -643,6 +702,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 "I2PInterface" => {
@@ -684,6 +744,7 @@ impl RnsNode {
                         }),
                         mode: iface_mode,
                         ifac: ifac_config,
+                        discovery: discovery_config.clone(),
                     });
                 }
                 _ => {
@@ -747,6 +808,7 @@ impl RnsNode {
             probe_addr,
             device: rns_config.reticulum.device.clone(),
             hooks: rns_config.hooks.clone(),
+            discover_interfaces: rns_config.reticulum.discover_interfaces,
         };
 
         Self::start(node_config, callbacks)
@@ -854,13 +916,29 @@ impl RnsNode {
             }
         }
 
+        // Configure discovery
+        driver.discover_interfaces = config.discover_interfaces;
+
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
+
+        // Collect discoverable interface configs for the announcer
+        let mut discoverable_interfaces = Vec::new();
 
         // Start each interface
         for iface_config in config.interfaces {
             let iface_mode = iface_config.mode;
             let ifac_cfg = iface_config.ifac;
+
+            // Collect discovery config before consuming ifac_cfg
+            if let Some(ref disc) = iface_config.discovery {
+                discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
+                    config: disc.clone(),
+                    transport_enabled: config.transport_enabled,
+                    ifac_netname: ifac_cfg.as_ref().and_then(|ic| ic.netname.clone()),
+                    ifac_netkey: ifac_cfg.as_ref().and_then(|ic| ic.netkey.clone()),
+                });
+            }
 
             // Derive IFAC state if configured
             let mut ifac_state = ifac_cfg.as_ref().and_then(|ic| {
@@ -1304,6 +1382,29 @@ impl RnsNode {
                     // per-peer interfaces are registered dynamically via InterfaceUp
                 }
             }
+        }
+
+        // Set up interface announcer if we have discoverable interfaces
+        if !discoverable_interfaces.is_empty() {
+            let transport_id = *identity.hash();
+            let announcer = crate::discovery::InterfaceAnnouncer::new(
+                transport_id,
+                discoverable_interfaces,
+            );
+            log::info!("Interface discovery announcer initialized");
+            driver.interface_announcer = Some(announcer);
+        }
+
+        // Set up discovered interfaces storage path
+        if let Some(ref cache_dir) = config.cache_dir {
+            let disc_path = std::path::PathBuf::from(cache_dir)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("storage")
+                .join("discovery")
+                .join("interfaces");
+            let _ = std::fs::create_dir_all(&disc_path);
+            driver.discovered_interfaces = crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
         }
 
         // Set up management destinations if enabled
@@ -2010,6 +2111,7 @@ mod tests {
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2036,6 +2138,7 @@ mod tests {
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2062,6 +2165,7 @@ mod tests {
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2495,6 +2599,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2530,6 +2635,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2560,6 +2666,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2587,6 +2694,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2621,6 +2729,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2656,6 +2765,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2688,6 +2798,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2731,6 +2842,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2767,6 +2879,7 @@ enable_transport = False
                 probe_addr: None,
                 device: None,
                 hooks: Vec::new(),
+                discover_interfaces: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

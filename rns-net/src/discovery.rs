@@ -64,6 +64,27 @@ const STATUS_UNKNOWN: i32 = 100;
 const STATUS_AVAILABLE: i32 = 1000;
 
 // ============================================================================
+// Per-interface discovery configuration
+// ============================================================================
+
+/// Per-interface discovery configuration parsed from config file.
+#[derive(Debug, Clone)]
+pub struct DiscoveryConfig {
+    /// Human-readable name to advertise (defaults to interface name).
+    pub discovery_name: String,
+    /// Announce interval in seconds (default 21600 = 6h, min 300 = 5min).
+    pub announce_interval: u64,
+    /// Stamp cost for discovery PoW (default 14).
+    pub stamp_value: u8,
+    /// IP/hostname this interface is reachable on.
+    pub reachable_on: Option<String>,
+    /// Interface type string (e.g. "BackboneInterface").
+    pub interface_type: String,
+    /// Listen port of the discoverable interface.
+    pub listen_port: Option<u16>,
+}
+
+// ============================================================================
 // Data Structures
 // ============================================================================
 
@@ -736,6 +757,241 @@ pub fn filter_and_sort_interfaces(
 }
 
 // ============================================================================
+// Stamp Generation (parallel PoW search)
+// ============================================================================
+
+/// Generate a discovery stamp with the given cost using rayon parallel iterators.
+///
+/// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
+pub fn generate_discovery_stamp(
+    packed_data: &[u8],
+    stamp_cost: u8,
+) -> ([u8; STAMP_SIZE], u32) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use rns_crypto::{OsRng, Rng};
+
+    let infohash = sha256(packed_data);
+    let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+
+    let found: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let result: Arc<Mutex<Option<[u8; STAMP_SIZE]>>> = Arc::new(Mutex::new(None));
+
+    let num_threads = rayon::current_num_threads();
+
+    rayon::scope(|s| {
+        for _ in 0..num_threads {
+            let found = found.clone();
+            let result = result.clone();
+            let workblock = &workblock;
+            s.spawn(move |_| {
+                let mut rng = OsRng;
+                let mut nonce = [0u8; STAMP_SIZE];
+                loop {
+                    if found.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    rng.fill_bytes(&mut nonce);
+                    if stamp_valid(&nonce, stamp_cost, workblock) {
+                        let mut r = result.lock().unwrap();
+                        if r.is_none() {
+                            *r = Some(nonce);
+                        }
+                        found.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            });
+        }
+    });
+
+    let stamp = result.lock().unwrap().take().expect("stamp search must find result");
+    let value = stamp_value(&workblock, &stamp);
+    (stamp, value)
+}
+
+// ============================================================================
+// Interface Announcer
+// ============================================================================
+
+/// Info about a single discoverable interface, ready for announcing.
+#[derive(Debug, Clone)]
+pub struct DiscoverableInterface {
+    pub config: DiscoveryConfig,
+    /// Whether the node has transport enabled.
+    pub transport_enabled: bool,
+    /// IFAC network name, if configured.
+    pub ifac_netname: Option<String>,
+    /// IFAC passphrase, if configured.
+    pub ifac_netkey: Option<String>,
+}
+
+/// Result of a completed background stamp generation.
+pub struct StampResult {
+    /// Index of the interface this stamp is for.
+    pub index: usize,
+    /// The complete app_data: [flags][packed][stamp].
+    pub app_data: Vec<u8>,
+}
+
+/// Manages periodic announcing of discoverable interfaces.
+///
+/// Stamp generation (PoW) runs on a background thread so it never blocks the
+/// driver event loop.  The driver calls `poll_ready()` each tick to collect
+/// finished results.
+pub struct InterfaceAnnouncer {
+    /// Transport identity hash (16 bytes).
+    transport_id: [u8; 16],
+    /// Discoverable interfaces with their configs.
+    interfaces: Vec<DiscoverableInterface>,
+    /// Last announce time per interface (indexed same as `interfaces`).
+    last_announced: Vec<f64>,
+    /// Receiver for completed stamp results from background threads.
+    stamp_rx: std::sync::mpsc::Receiver<StampResult>,
+    /// Sender cloned into background threads.
+    stamp_tx: std::sync::mpsc::Sender<StampResult>,
+    /// Whether a background stamp job is currently running.
+    stamp_pending: bool,
+}
+
+impl InterfaceAnnouncer {
+    /// Create a new announcer.
+    pub fn new(transport_id: [u8; 16], interfaces: Vec<DiscoverableInterface>) -> Self {
+        let n = interfaces.len();
+        let (stamp_tx, stamp_rx) = std::sync::mpsc::channel();
+        InterfaceAnnouncer {
+            transport_id,
+            interfaces,
+            last_announced: vec![0.0; n],
+            stamp_rx,
+            stamp_tx,
+            stamp_pending: false,
+        }
+    }
+
+    /// If any interface is due for an announce and no stamp job is already
+    /// running, spawns a background thread for PoW.  The result will be
+    /// available via `poll_ready()`.
+    pub fn maybe_start(&mut self, now: f64) {
+        if self.stamp_pending {
+            return;
+        }
+        let due_index = self.interfaces.iter().enumerate().find_map(|(i, iface)| {
+            let elapsed = now - self.last_announced[i];
+            if elapsed >= iface.config.announce_interval as f64 {
+                Some(i)
+            } else {
+                None
+            }
+        });
+
+        if let Some(idx) = due_index {
+            let packed = self.pack_interface_info(idx);
+            let stamp_cost = self.interfaces[idx].config.stamp_value;
+            let name = self.interfaces[idx].config.discovery_name.clone();
+            let tx = self.stamp_tx.clone();
+
+            log::info!(
+                "Spawning discovery stamp generation (cost={}) for '{}'...",
+                stamp_cost,
+                name,
+            );
+
+            self.stamp_pending = true;
+            self.last_announced[idx] = now;
+
+            std::thread::spawn(move || {
+                let (stamp, value) = generate_discovery_stamp(&packed, stamp_cost);
+                log::info!(
+                    "Discovery stamp generated (value={}) for '{}'",
+                    value,
+                    name,
+                );
+
+                let flags: u8 = 0x00; // no encryption
+                let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
+                app_data.push(flags);
+                app_data.extend_from_slice(&packed);
+                app_data.extend_from_slice(&stamp);
+
+                let _ = tx.send(StampResult {
+                    index: idx,
+                    app_data,
+                });
+            });
+        }
+    }
+
+    /// Non-blocking poll: returns completed app_data if a background stamp
+    /// job has finished.
+    pub fn poll_ready(&mut self) -> Option<StampResult> {
+        match self.stamp_rx.try_recv() {
+            Ok(result) => {
+                self.stamp_pending = false;
+                Some(result)
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Pack interface metadata as msgpack map with integer keys.
+    fn pack_interface_info(&self, index: usize) -> Vec<u8> {
+        let iface = &self.interfaces[index];
+        let mut entries: Vec<(msgpack::Value, msgpack::Value)> = Vec::new();
+
+        entries.push((
+            msgpack::Value::UInt(INTERFACE_TYPE as u64),
+            msgpack::Value::Str(iface.config.interface_type.clone()),
+        ));
+        entries.push((
+            msgpack::Value::UInt(TRANSPORT as u64),
+            msgpack::Value::Bool(iface.transport_enabled),
+        ));
+        entries.push((
+            msgpack::Value::UInt(NAME as u64),
+            msgpack::Value::Str(iface.config.discovery_name.clone()),
+        ));
+        entries.push((
+            msgpack::Value::UInt(TRANSPORT_ID as u64),
+            msgpack::Value::Bin(self.transport_id.to_vec()),
+        ));
+        if let Some(ref reachable) = iface.config.reachable_on {
+            entries.push((
+                msgpack::Value::UInt(REACHABLE_ON as u64),
+                msgpack::Value::Str(reachable.clone()),
+            ));
+        }
+        if let Some(port) = iface.config.listen_port {
+            entries.push((
+                msgpack::Value::UInt(PORT as u64),
+                msgpack::Value::UInt(port as u64),
+            ));
+        }
+        if let Some(ref netname) = iface.ifac_netname {
+            entries.push((
+                msgpack::Value::UInt(IFAC_NETNAME as u64),
+                msgpack::Value::Str(netname.clone()),
+            ));
+        }
+        if let Some(ref netkey) = iface.ifac_netkey {
+            entries.push((
+                msgpack::Value::UInt(IFAC_NETKEY as u64),
+                msgpack::Value::Str(netkey.clone()),
+            ));
+        }
+
+        msgpack::pack(&msgpack::Value::Map(entries))
+    }
+
+}
+
+/// Compute the discovery destination hash.
+/// This is a PLAIN destination: `rnstransport.discovery.interface`.
+pub fn discovery_dest_hash() -> [u8; 16] {
+    rns_core::destination::destination_hash(APP_NAME, &["discovery", "interface"], None)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1012,5 +1268,111 @@ mod tests {
         // Should have only low-value-available
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "low-value-available");
+    }
+
+    #[test]
+    fn test_discovery_dest_hash_is_deterministic() {
+        let h1 = discovery_dest_hash();
+        let h2 = discovery_dest_hash();
+        assert_eq!(h1, h2);
+        // Must be 16 bytes (truncated hash)
+        assert_eq!(h1.len(), 16);
+        // Verify it's the PLAIN dest for "rnstransport.discovery.interface"
+        let expected = rns_core::destination::destination_hash(
+            APP_NAME,
+            &["discovery", "interface"],
+            None,
+        );
+        assert_eq!(h1, expected);
+    }
+
+    #[test]
+    fn test_announcer_next_due_and_maybe_start() {
+        let transport_id = [0xABu8; 16];
+        let iface = DiscoverableInterface {
+            config: DiscoveryConfig {
+                discovery_name: "TestBB".into(),
+                announce_interval: 600, // 10 minutes
+                stamp_value: 8,         // low cost for fast test
+                reachable_on: Some("10.0.0.1".into()),
+                interface_type: "BackboneInterface".into(),
+                listen_port: Some(4242),
+            },
+            transport_enabled: true,
+            ifac_netname: None,
+            ifac_netkey: None,
+        };
+        let mut announcer = InterfaceAnnouncer::new(transport_id, vec![iface]);
+
+        // At t=0 all interfaces are due (last_announced = 0.0, interval = 600)
+        // maybe_start should kick off a background thread
+        announcer.maybe_start(1000.0);
+        assert!(announcer.stamp_pending);
+
+        // Calling again while pending should be a no-op
+        announcer.maybe_start(1000.0);
+        assert!(announcer.stamp_pending);
+
+        // Wait for the stamp to complete (low cost = fast)
+        let result = announcer.stamp_rx.recv_timeout(std::time::Duration::from_secs(30))
+            .expect("stamp generation timed out");
+        assert_eq!(result.index, 0);
+        assert!(!result.app_data.is_empty());
+        // First byte is flags
+        assert_eq!(result.app_data[0], 0x00);
+        // Last 64 bytes are stamp
+        assert!(result.app_data.len() > STAMP_SIZE + 1);
+
+        // Clear the pending flag via poll_ready
+        announcer.stamp_pending = false;
+
+        // After announcing at t=1000, should not be due until t=1600
+        assert!(announcer.poll_ready().is_none()); // channel already drained
+    }
+
+    #[test]
+    fn test_pack_parse_roundtrip() {
+        // Build announce data via the announcer, then parse it back
+        let transport_id = [0x42u8; 16];
+        let identity_hash = [0xFFu8; 16];
+        let iface = DiscoverableInterface {
+            config: DiscoveryConfig {
+                discovery_name: "RoundtripNode".into(),
+                announce_interval: 300,
+                stamp_value: 8, // low for fast test
+                reachable_on: Some("192.168.1.100".into()),
+                interface_type: "TCPServerInterface".into(),
+                listen_port: Some(5555),
+            },
+            transport_enabled: true,
+            ifac_netname: Some("testnet".into()),
+            ifac_netkey: Some("secretkey".into()),
+        };
+        let mut announcer = InterfaceAnnouncer::new(transport_id, vec![iface]);
+
+        // Kick off stamp generation
+        announcer.maybe_start(1000.0);
+        let result = announcer.stamp_rx.recv_timeout(std::time::Duration::from_secs(30))
+            .expect("stamp generation timed out");
+
+        // Parse the app_data back through parse_interface_announce
+        let discovered = parse_interface_announce(
+            &result.app_data,
+            &identity_hash,
+            0, // hops
+            8, // required stamp value matches what we generated
+        ).expect("parse_interface_announce should succeed on our own data");
+
+        assert_eq!(discovered.interface_type, "TCPServerInterface");
+        assert_eq!(discovered.name, "RoundtripNode");
+        assert_eq!(discovered.transport, true);
+        assert_eq!(discovered.transport_id, transport_id);
+        assert_eq!(discovered.network_id, identity_hash);
+        assert_eq!(discovered.reachable_on.as_deref(), Some("192.168.1.100"));
+        assert_eq!(discovered.port, Some(5555));
+        assert_eq!(discovered.ifac_netname.as_deref(), Some("testnet"));
+        assert_eq!(discovered.ifac_netkey.as_deref(), Some("secretkey"));
+        assert!(discovered.stamp_value >= 8);
+        assert_eq!(discovered.hops, 0);
     }
 }
