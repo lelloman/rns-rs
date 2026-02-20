@@ -15,7 +15,7 @@ use crate::format::{size_str, speed_str, prettytime, prettyhexrep, prettyfrequen
 
 pub fn run(args: Args) {
     if args.has("version") {
-        println!("rns-ctl {}", env!("CARGO_PKG_VERSION"));
+        println!("rns-ctl {}", env!("FULL_VERSION"));
         return;
     }
 

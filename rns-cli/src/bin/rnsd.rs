@@ -10,7 +10,7 @@ use rns_net::{Callbacks, InterfaceId, RnsNode};
 use rns_net::storage;
 use rns_cli::args::Args;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("FULL_VERSION");
 
 struct DaemonCallbacks;
 

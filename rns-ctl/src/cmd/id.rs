@@ -17,7 +17,7 @@ const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024; // 16 MB
 
 pub fn run(args: Args) {
     if args.has("version") {
-        println!("rns-ctl {}", env!("CARGO_PKG_VERSION"));
+        println!("rns-ctl {}", env!("FULL_VERSION"));
         return;
     }
 

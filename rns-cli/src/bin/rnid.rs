@@ -13,7 +13,7 @@ use rns_core::destination::destination_hash;
 use rns_cli::args::Args;
 use rns_cli::format::{prettyhexrep, base32_encode, base32_decode};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("FULL_VERSION");
 const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024; // 16 MB
 
 fn main() {

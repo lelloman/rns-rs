@@ -15,7 +15,7 @@ use rns_net::storage;
 use rns_cli::args::Args;
 use rns_cli::format::prettyhexrep;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_TIMEOUT: f64 = 15.0;
 
 fn main() {

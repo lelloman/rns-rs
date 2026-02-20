@@ -13,7 +13,7 @@ use rns_net::storage;
 use rns_cli::args::Args;
 use rns_cli::format::{size_str, speed_str, prettytime, prettyhexrep, prettyfrequency};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("FULL_VERSION");
 
 fn main() {
     let args = Args::parse();

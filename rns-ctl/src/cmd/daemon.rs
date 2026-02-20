@@ -44,7 +44,7 @@ fn hex(bytes: &[u8]) -> String {
 
 pub fn run(args: Args) {
     if args.has("version") {
-        println!("rns-ctl {}", env!("CARGO_PKG_VERSION"));
+        println!("rns-ctl {}", env!("FULL_VERSION"));
         return;
     }
 
@@ -106,7 +106,7 @@ pub fn run(args: Args) {
             .init();
     }
 
-    log::info!("Starting rnsd {}", env!("CARGO_PKG_VERSION"));
+    log::info!("Starting rnsd {}", env!("FULL_VERSION"));
 
     let node = RnsNode::from_config(
         config_path.as_ref().map(|s| Path::new(s.as_str())),
