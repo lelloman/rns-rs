@@ -59,6 +59,7 @@ struct ManagedLink {
 struct LinkDestination {
     sig_prv: Ed25519PrivateKey,
     sig_pub_bytes: [u8; 32],
+    resource_strategy: ResourceStrategy,
 }
 
 /// A registered request handler for a path.
@@ -214,10 +215,12 @@ impl LinkManager {
         dest_hash: [u8; 16],
         sig_prv: Ed25519PrivateKey,
         sig_pub_bytes: [u8; 32],
+        resource_strategy: ResourceStrategy,
     ) {
         self.link_destinations.insert(dest_hash, LinkDestination {
             sig_prv,
             sig_pub_bytes,
+            resource_strategy,
         });
     }
 
@@ -392,7 +395,7 @@ impl LinkManager {
             dest_sig_pub_bytes: None,
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
-            resource_strategy: ResourceStrategy::default(),
+            resource_strategy: ld.resource_strategy,
         };
         self.links.insert(link_id, managed);
 
@@ -1965,7 +1968,7 @@ mod tests {
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
         let dest_hash = [0xDD; 16];
 
-        mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
         assert!(mgr.is_link_destination(&dest_hash));
 
         mgr.deregister_link_destination(&dest_hash);
@@ -1998,7 +2001,7 @@ mod tests {
         // Setup responder
         let mut responder_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        responder_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        responder_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
 
         // Setup initiator
         let mut initiator_mgr = LinkManager::new();
@@ -2083,7 +2086,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
         let mut init_mgr = LinkManager::new();
 
         // Handshake
@@ -2110,7 +2113,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
 
         // Register a request handler
         resp_mgr.register_request_handler("/status", None, |_link_id, _path, _data, _remote| {
@@ -2153,7 +2156,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
 
         // Register handler with ACL (only allow specific identity)
         resp_mgr.register_request_handler(
@@ -2216,7 +2219,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake
@@ -2303,7 +2306,7 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
         let mut init_mgr = LinkManager::new();
 
         let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);

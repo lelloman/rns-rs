@@ -47,6 +47,7 @@ pub enum Event {
         dest_hash: [u8; 16],
         sig_prv_bytes: [u8; 32],
         sig_pub_bytes: [u8; 32],
+        resource_strategy: u8,
     },
     /// Register a request handler for a path on established links.
     RegisterRequestHandler {

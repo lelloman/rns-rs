@@ -1,7 +1,7 @@
 [package]
 name = "rns-ctl"
 description = "Reticulum Network Stack control tool"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true

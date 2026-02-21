@@ -1459,6 +1459,7 @@ impl RnsNode {
                     mgmt_dest,
                     sig_prv,
                     sig_pub_bytes,
+                    crate::link_manager::ResourceStrategy::AcceptNone,
                 );
 
                 // Register management path hashes
@@ -1506,6 +1507,7 @@ impl RnsNode {
                     bh_dest,
                     sig_prv,
                     sig_pub_bytes,
+                    crate::link_manager::ResourceStrategy::AcceptNone,
                 );
                 driver.link_manager.register_management_path(
                     crate::management::list_path_hash(),
@@ -1690,12 +1692,14 @@ impl RnsNode {
         dest_hash: [u8; 16],
         sig_prv_bytes: [u8; 32],
         sig_pub_bytes: [u8; 32],
+        resource_strategy: u8,
     ) -> Result<(), SendError> {
         self.tx
             .send(Event::RegisterLinkDestination {
                 dest_hash,
                 sig_prv_bytes,
                 sig_pub_bytes,
+                resource_strategy,
             })
             .map_err(|_| SendError)
     }

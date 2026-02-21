@@ -455,7 +455,7 @@ fn handle_post_destination(
                         sig_prv.copy_from_slice(&prv[32..64]);
                         let mut sig_pub = [0u8; 32];
                         sig_pub.copy_from_slice(&pubk[32..64]);
-                        let _ = n.register_link_destination(dest.hash.0, sig_prv, sig_pub);
+                        let _ = n.register_link_destination(dest.hash.0, sig_prv, sig_pub, 0);
                     }
                 }
 

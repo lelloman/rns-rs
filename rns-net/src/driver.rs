@@ -719,9 +719,14 @@ impl Driver {
                 Event::DeregisterLinkDestination { dest_hash } => {
                     self.link_manager.deregister_link_destination(&dest_hash);
                 }
-                Event::RegisterLinkDestination { dest_hash, sig_prv_bytes, sig_pub_bytes } => {
+                Event::RegisterLinkDestination { dest_hash, sig_prv_bytes, sig_pub_bytes, resource_strategy } => {
                     let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
-                    self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+                    let strat = match resource_strategy {
+                        1 => crate::link_manager::ResourceStrategy::AcceptAll,
+                        2 => crate::link_manager::ResourceStrategy::AcceptApp,
+                        _ => crate::link_manager::ResourceStrategy::AcceptNone,
+                    };
+                    self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, strat);
                     // Also register in transport engine so inbound packets are delivered locally
                     self.engine.register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                     self.local_destinations.insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
@@ -3456,6 +3461,7 @@ mod tests {
             dest_hash,
             sig_prv_bytes,
             sig_pub_bytes,
+            resource_strategy: 0,
         }).unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
@@ -3526,7 +3532,7 @@ mod tests {
         let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
         let dest_hash = [0xEE; 16];
-        driver.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes);
+        driver.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, crate::link_manager::ResourceStrategy::AcceptNone);
 
         // dispatch_all with a DeliverLocal for that dest should route to link_manager
         // (not to callbacks). We can't easily test this via run() since we need
@@ -4724,6 +4730,7 @@ mod tests {
             dest_hash,
             sig_prv_bytes: [0x11; 32],
             sig_pub_bytes: [0x22; 32],
+            resource_strategy: 0,
         }).unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();

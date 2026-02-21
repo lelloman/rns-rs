@@ -689,7 +689,7 @@ fn setup_link() -> (
     // Bob registers as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
     bob_node
-        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub)
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
         .unwrap();
 
     // Give Bob's driver time to process the registration
@@ -809,7 +809,7 @@ fn test_direct_link_no_transport() {
 
     // Bob registers as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
+    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     // Alice creates link
@@ -1586,7 +1586,7 @@ fn test_link_callbacks_both_sides() {
 
     // Register Bob as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
+    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_for_link = [0u8; 32];
@@ -1834,7 +1834,7 @@ fn test_resource_accept_none() {
     let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
+    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_link = [0u8; 32];
@@ -1896,7 +1896,7 @@ fn test_resource_accept_app() {
     let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub).unwrap();
+    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_link = [0u8; 32];
