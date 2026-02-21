@@ -1,7 +1,7 @@
 [package]
 name = "rns-cli"
 description = "CLI tools for the Reticulum Network Stack"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
