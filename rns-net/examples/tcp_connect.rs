@@ -71,6 +71,7 @@ fn main() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(LoggingCallbacks),
     )

@@ -244,6 +244,15 @@ pub enum QueryRequest {
         only_available: bool,
         only_transport: bool,
     },
+    /// Send a probe packet to a destination and return (packet_hash, hops).
+    SendProbe {
+        dest_hash: [u8; 16],
+        payload_size: usize,
+    },
+    /// Check if a proof was received for a probe packet.
+    CheckProof {
+        packet_hash: [u8; 32],
+    },
 }
 
 /// Responses to queries.
@@ -272,6 +281,10 @@ pub enum QueryResponse {
     InjectIdentity(bool),
     /// List of discovered interfaces.
     DiscoveredInterfaces(Vec<crate::discovery::DiscoveredInterface>),
+    /// Probe sent: (packet_hash, hops) or None if identity unknown.
+    SendProbe(Option<([u8; 32], u8)>),
+    /// Proof check: RTT if received, None if still pending.
+    CheckProof(Option<f64>),
 }
 
 /// Interface statistics response.
@@ -285,6 +298,8 @@ pub struct InterfaceStatsResponse {
     pub total_rxb: u64,
     /// Total transmitted bytes across all interfaces.
     pub total_txb: u64,
+    /// Probe responder destination hash (if enabled).
+    pub probe_responder: Option<[u8; 16]>,
 }
 
 /// Statistics for a single interface.

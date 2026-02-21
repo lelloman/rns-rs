@@ -348,6 +348,62 @@ fn handle_rpc_request(
         }
     }
 
+    // Handle "request_path" -- trigger a path request to the network
+    if let Some(hash_val) = request.get("request_path") {
+        if let Some(hash_bytes) = hash_val.as_bytes() {
+            if hash_bytes.len() >= 16 {
+                let mut dest_hash = [0u8; 16];
+                dest_hash.copy_from_slice(&hash_bytes[..16]);
+                let _ = event_tx.send(crate::event::Event::RequestPath { dest_hash });
+                return Ok(PickleValue::Bool(true));
+            }
+        }
+    }
+
+    // Handle "send_probe" requests
+    if let Some(hash_val) = request.get("send_probe") {
+        if let Some(hash_bytes) = hash_val.as_bytes() {
+            if hash_bytes.len() >= 16 {
+                let mut dest_hash = [0u8; 16];
+                dest_hash.copy_from_slice(&hash_bytes[..16]);
+                let payload_size = request.get("size")
+                    .and_then(|v| v.as_int())
+                    .and_then(|n| if n > 0 && n <= 400 { Some(n as usize) } else { None })
+                    .unwrap_or(16);
+                let resp = send_query(event_tx, QueryRequest::SendProbe {
+                    dest_hash,
+                    payload_size,
+                })?;
+                if let QueryResponse::SendProbe(Some((packet_hash, hops))) = resp {
+                    return Ok(PickleValue::Dict(vec![
+                        (PickleValue::String("packet_hash".into()), PickleValue::Bytes(packet_hash.to_vec())),
+                        (PickleValue::String("hops".into()), PickleValue::Int(hops as i64)),
+                    ]));
+                } else {
+                    return Ok(PickleValue::None);
+                }
+            }
+        }
+    }
+
+    // Handle "check_proof" requests
+    if let Some(hash_val) = request.get("check_proof") {
+        if let Some(hash_bytes) = hash_val.as_bytes() {
+            if hash_bytes.len() >= 32 {
+                let mut packet_hash = [0u8; 32];
+                packet_hash.copy_from_slice(&hash_bytes[..32]);
+                let resp = send_query(event_tx, QueryRequest::CheckProof {
+                    packet_hash,
+                })?;
+                if let QueryResponse::CheckProof(Some(rtt)) = resp {
+                    return Ok(PickleValue::Float(rtt));
+                } else {
+                    return Ok(PickleValue::None);
+                }
+            }
+        }
+    }
+
     // Handle "blackhole" requests
     if let Some(hash_val) = request.get("blackhole") {
         if let Some(hash_bytes) = hash_val.as_bytes() {
@@ -482,6 +538,18 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
     } else {
         dict.push((
             PickleValue::String("transport_id".into()),
+            PickleValue::None,
+        ));
+    }
+
+    if let Some(pr) = stats.probe_responder {
+        dict.push((
+            PickleValue::String("probe_responder".into()),
+            PickleValue::Bytes(pr.to_vec()),
+        ));
+    } else {
+        dict.push((
+            PickleValue::String("probe_responder".into()),
             PickleValue::None,
         ));
     }
@@ -887,6 +955,7 @@ mod tests {
                             transport_uptime: 3600.0,
                             total_rxb: 1000,
                             total_txb: 2000,
+                            probe_responder: None,
                         }));
                     }
                     _ => break,
@@ -985,6 +1054,7 @@ mod tests {
             transport_uptime: 3600.0,
             total_rxb: 100,
             total_txb: 200,
+            probe_responder: None,
         };
 
         let pickle = interface_stats_to_pickle(&stats);
@@ -995,6 +1065,183 @@ mod tests {
         assert_eq!(decoded.get("transport_enabled").unwrap().as_bool().unwrap(), true);
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+    }
+
+    #[test]
+    fn send_probe_rpc_unknown_dest() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::SendProbe { dest_hash, payload_size }, resp_tx)) = event_rx.recv() {
+                assert_eq!(dest_hash, [0xAA; 16]);
+                assert_eq!(payload_size, 16); // default
+                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("send_probe".into()), PickleValue::Bytes(vec![0xAA; 16])),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::None);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn send_probe_rpc_with_result() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let packet_hash = [0xBB; 32];
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::SendProbe { dest_hash, payload_size }, resp_tx)) = event_rx.recv() {
+                assert_eq!(dest_hash, [0xCC; 16]);
+                assert_eq!(payload_size, 32);
+                let _ = resp_tx.send(QueryResponse::SendProbe(Some((packet_hash, 3))));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("send_probe".into()), PickleValue::Bytes(vec![0xCC; 16])),
+            (PickleValue::String("size".into()), PickleValue::Int(32)),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let ph = response.get("packet_hash").unwrap().as_bytes().unwrap();
+        assert_eq!(ph, &[0xBB; 32]);
+        assert_eq!(response.get("hops").unwrap().as_int().unwrap(), 3);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn send_probe_rpc_size_validation() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        // Negative size should be clamped to default (16)
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::SendProbe { payload_size, .. }, resp_tx)) = event_rx.recv() {
+                assert_eq!(payload_size, 16); // default, not negative
+                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("send_probe".into()), PickleValue::Bytes(vec![0xDD; 16])),
+            (PickleValue::String("size".into()), PickleValue::Int(-1)),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::None);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn send_probe_rpc_size_too_large() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        // Size > 400 should be clamped to default (16)
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::SendProbe { payload_size, .. }, resp_tx)) = event_rx.recv() {
+                assert_eq!(payload_size, 16); // default, not 999
+                let _ = resp_tx.send(QueryResponse::SendProbe(None));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("send_probe".into()), PickleValue::Bytes(vec![0xDD; 16])),
+            (PickleValue::String("size".into()), PickleValue::Int(999)),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::None);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn check_proof_rpc_not_found() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::CheckProof { packet_hash }, resp_tx)) = event_rx.recv() {
+                assert_eq!(packet_hash, [0xEE; 32]);
+                let _ = resp_tx.send(QueryResponse::CheckProof(None));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("check_proof".into()), PickleValue::Bytes(vec![0xEE; 32])),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::None);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn check_proof_rpc_found() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::CheckProof { packet_hash }, resp_tx)) = event_rx.recv() {
+                assert_eq!(packet_hash, [0xFF; 32]);
+                let _ = resp_tx.send(QueryResponse::CheckProof(Some(0.352)));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("check_proof".into()), PickleValue::Bytes(vec![0xFF; 32])),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        if let PickleValue::Float(rtt) = response {
+            assert!((rtt - 0.352).abs() < 0.001);
+        } else {
+            panic!("Expected Float, got {:?}", response);
+        }
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn request_path_rpc() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            match event_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Event::RequestPath { dest_hash }) => {
+                    assert_eq!(dest_hash, [0x11; 16]);
+                }
+                other => panic!("Expected RequestPath event, got {:?}", other),
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (PickleValue::String("request_path".into()), PickleValue::Bytes(vec![0x11; 16])),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::Bool(true));
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn interface_stats_with_probe_responder() {
+        let probe_hash = [0x42; 16];
+        let stats = InterfaceStatsResponse {
+            interfaces: vec![],
+            transport_id: None,
+            transport_enabled: true,
+            transport_uptime: 100.0,
+            total_rxb: 0,
+            total_txb: 0,
+            probe_responder: Some(probe_hash),
+        };
+
+        let pickle = interface_stats_to_pickle(&stats);
+        let encoded = pickle::encode(&pickle);
+        let decoded = pickle::decode(&encoded).unwrap();
+
+        let pr = decoded.get("probe_responder").unwrap().as_bytes().unwrap();
+        assert_eq!(pr, &probe_hash);
     }
 
     // Helper: create a connected TCP pair

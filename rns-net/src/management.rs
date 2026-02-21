@@ -54,6 +54,52 @@ pub fn blackhole_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
     destination_hash("rnstransport", &["info", "blackhole"], Some(transport_identity_hash))
 }
 
+/// Compute the probe responder destination hash.
+///
+/// Destination: `rnstransport.probe` with transport identity.
+pub fn probe_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
+    destination_hash("rnstransport", &["probe"], Some(transport_identity_hash))
+}
+
+/// Build an announce packet for the probe responder destination.
+///
+/// Returns raw packet bytes ready for `engine.handle_outbound()`.
+pub fn build_probe_announce(
+    identity: &rns_crypto::identity::Identity,
+    rng: &mut dyn rns_crypto::Rng,
+) -> Option<Vec<u8>> {
+    let identity_hash = *identity.hash();
+    let dest_hash = probe_dest_hash(&identity_hash);
+    let name_hash = rns_core::destination::name_hash("rnstransport", &["probe"]);
+    let mut random_hash = [0u8; 10];
+    rng.fill_bytes(&mut random_hash);
+
+    let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+        identity,
+        &dest_hash,
+        &name_hash,
+        &random_hash,
+        None,
+        None,
+    )
+    .ok()?;
+
+    let flags = rns_core::packet::PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+
+    let packet = rns_core::packet::RawPacket::pack(
+        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+    )
+    .ok()?;
+
+    Some(packet.raw)
+}
+
 /// Management configuration.
 #[derive(Debug, Clone)]
 pub struct ManagementConfig {
@@ -84,6 +130,7 @@ pub fn handle_status_request(
     engine: &TransportEngine,
     interfaces: &HashMap<rns_core::transport::types::InterfaceId, InterfaceEntry>,
     started: f64,
+    probe_responder_hash: Option<[u8; 16]>,
 ) -> Option<Vec<u8>> {
     // Decode request data
     let include_lstats = match msgpack::unpack_exact(data) {
@@ -152,7 +199,10 @@ pub fn handle_status_request(
         stats.push(("transport_id", Value::Bin(identity_hash.to_vec())));
         stats.push(("transport_uptime", Value::Float(time::now() - started)));
     }
-    stats.push(("probe_responder", Value::Nil));
+    stats.push(("probe_responder", match probe_responder_hash {
+        Some(hash) => Value::Bin(hash.to_vec()),
+        None => Value::Nil,
+    }));
     stats.push(("rss", Value::Nil));
 
     let stats_map = stats.into_iter()
@@ -475,7 +525,7 @@ mod tests {
 
         // Request with include_lstats = false
         let request = msgpack::pack(&Value::Array(vec![Value::Bool(false)]));
-        let response = handle_status_request(&request, &engine, &interfaces, started).unwrap();
+        let response = handle_status_request(&request, &engine, &interfaces, started, None).unwrap();
 
         // Decode response
         let val = msgpack::unpack_exact(&response).unwrap();
@@ -532,7 +582,7 @@ mod tests {
         let started = time::now();
 
         let request = msgpack::pack(&Value::Array(vec![Value::Bool(true)]));
-        let response = handle_status_request(&request, &engine, &interfaces, started).unwrap();
+        let response = handle_status_request(&request, &engine, &interfaces, started, None).unwrap();
 
         let val = msgpack::unpack_exact(&response).unwrap();
         match val {
@@ -551,7 +601,7 @@ mod tests {
         let started = time::now();
 
         // Empty data should still work (include_lstats defaults to false)
-        let response = handle_status_request(&[], &engine, &interfaces, started).unwrap();
+        let response = handle_status_request(&[], &engine, &interfaces, started, None).unwrap();
         let val = msgpack::unpack_exact(&response).unwrap();
         match val {
             Value::Array(arr) => assert_eq!(arr.len(), 1),
@@ -678,6 +728,48 @@ mod tests {
         let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
         assert!(result.is_ok(), "Blackhole announce should validate: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_probe_dest_hash() {
+        let id_hash = [0x42; 16];
+        let dh = probe_dest_hash(&id_hash);
+        // Should be deterministic
+        assert_eq!(dh, probe_dest_hash(&id_hash));
+        // Different identity → different hash
+        assert_ne!(dh, probe_dest_hash(&[0x43; 16]));
+        // Different from management and blackhole dests
+        assert_ne!(dh, management_dest_hash(&id_hash));
+        assert_ne!(dh, blackhole_dest_hash(&id_hash));
+    }
+
+    #[test]
+    fn test_build_probe_announce() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_probe_announce(&identity, &mut OsRng);
+        assert!(raw.is_some(), "Should build probe announce");
+
+        let raw = raw.unwrap();
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        assert_eq!(pkt.flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
+        assert_eq!(pkt.flags.destination_type, constants::DESTINATION_SINGLE);
+        assert_eq!(pkt.destination_hash, probe_dest_hash(identity.hash()));
+    }
+
+    #[test]
+    fn test_probe_announce_validates() {
+        use rns_crypto::identity::Identity;
+        use rns_crypto::OsRng;
+
+        let identity = Identity::new(&mut OsRng);
+        let raw = build_probe_announce(&identity, &mut OsRng).unwrap();
+        let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
+        let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
+        let result = ann.validate(&pkt.destination_hash);
+        assert!(result.is_ok(), "Probe announce should validate: {:?}", result.err());
     }
 
     #[test]

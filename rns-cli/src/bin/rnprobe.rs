@@ -1,7 +1,8 @@
 //! rnprobe - Reticulum Network Probe Utility
 //!
-//! Probes reachability to a Reticulum destination by checking path availability.
-//! Uses RPC to query a running rnsd daemon.
+//! Sends a real probe packet to a Reticulum destination, waits for the
+//! proof (delivery receipt), and reports RTT and hop count.
+//! Uses RPC to communicate with a running rnsd daemon.
 
 use std::path::Path;
 use std::process;
@@ -17,6 +18,7 @@ use rns_cli::format::prettyhexrep;
 
 const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_TIMEOUT: f64 = 15.0;
+const DEFAULT_PAYLOAD_SIZE: usize = 16;
 
 fn main() {
     let args = Args::parse();
@@ -45,6 +47,18 @@ fn main() {
         .or_else(|| args.get("timeout"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_TIMEOUT);
+    let payload_size: usize = args.get("s")
+        .or_else(|| args.get("size"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_PAYLOAD_SIZE);
+    let count: usize = args.get("n")
+        .or_else(|| args.get("count"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let wait: f64 = args.get("w")
+        .or_else(|| args.get("wait"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
     let verbosity = args.verbosity;
 
     // Positional args: destination_hash
@@ -113,82 +127,240 @@ fn main() {
     let auth_key = derive_auth_key(&prv_key);
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
 
-    // Check if path exists
-    let start = Instant::now();
+    // First, ensure we have a path
+    let timeout_dur = Duration::from_secs_f64(timeout);
+    if !wait_for_path(&rpc_addr, &auth_key, &dest_hash, timeout_dur, verbosity) {
+        process::exit(1);
+    }
 
-    match query_path_info(&rpc_addr, &auth_key, &dest_hash) {
-        Ok(Some(info)) => {
-            let elapsed = start.elapsed().as_secs_f64();
-            println!(
-                "Path to {} found, {} hops",
-                prettyhexrep(&dest_hash),
-                info.hops,
-            );
-            if verbosity > 0 {
-                println!(
-                    "  via {} on {}",
-                    prettyhexrep(&info.next_hop),
-                    info.interface_name,
-                );
-                println!("  lookup completed in {:.3}s", elapsed);
-            }
-            process::exit(0);
+    // Send probe(s)
+    let mut any_failed = false;
+    for i in 0..count {
+        if i > 0 && wait > 0.0 {
+            std::thread::sleep(Duration::from_secs_f64(wait));
         }
-        Ok(None) => {
-            // No path known, poll for it
-        }
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
+
+        if !send_and_wait_probe(
+            &rpc_addr, &auth_key, &dest_hash, payload_size, timeout_dur, verbosity,
+        ) {
+            any_failed = true;
         }
     }
 
-    // No path known — poll waiting for path to appear
-    print!(
-        "Waiting for path to {}... ",
-        prettyhexrep(&dest_hash),
-    );
+    if any_failed {
+        process::exit(1);
+    }
+}
 
-    let request_start = Instant::now();
-    let timeout_dur = Duration::from_secs_f64(timeout);
+/// Wait for a path to the destination, requesting it if needed.
+fn wait_for_path(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    dest_hash: &[u8; 16],
+    timeout: Duration,
+    verbosity: u8,
+) -> bool {
+    // Check if path already exists
+    match query_has_path(addr, auth_key, dest_hash) {
+        Ok(true) => return true,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("RPC error: {}", e);
+            return false;
+        }
+    }
 
-    let mut found = false;
-    while request_start.elapsed() < timeout_dur {
+    // Request path
+    if let Err(e) = request_path(addr, auth_key, dest_hash) {
+        eprintln!("RPC error requesting path: {}", e);
+        return false;
+    }
+
+    eprint!("Waiting for path to {}... ", prettyhexrep(dest_hash));
+
+    let start = Instant::now();
+    while start.elapsed() < timeout {
         std::thread::sleep(Duration::from_millis(250));
-
-        match query_path_info(&rpc_addr, &auth_key, &dest_hash) {
-            Ok(Some(info)) => {
-                let elapsed = request_start.elapsed().as_secs_f64();
-                println!("found!");
-                println!(
-                    "Path to {} found in {:.3}s, {} hops",
-                    prettyhexrep(&dest_hash),
-                    elapsed,
-                    info.hops,
-                );
+        match query_has_path(addr, auth_key, dest_hash) {
+            Ok(true) => {
+                eprintln!("found!");
                 if verbosity > 0 {
-                    println!(
-                        "  via {} on {}",
-                        prettyhexrep(&info.next_hop),
-                        info.interface_name,
-                    );
+                    if let Ok(Some(info)) = query_path_info(addr, auth_key, dest_hash) {
+                        eprintln!(
+                            "  via {} on {}, {} hops",
+                            prettyhexrep(&info.next_hop),
+                            info.interface_name,
+                            info.hops,
+                        );
+                    }
                 }
-                found = true;
-                break;
+                return true;
+            }
+            Ok(false) => continue,
+            Err(_) => continue,
+        }
+    }
+
+    eprintln!("timeout!");
+    eprintln!(
+        "Path to {} not found within {:.1}s",
+        prettyhexrep(dest_hash),
+        timeout.as_secs_f64(),
+    );
+    false
+}
+
+/// Send a probe and wait for the proof.
+fn send_and_wait_probe(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    dest_hash: &[u8; 16],
+    payload_size: usize,
+    timeout: Duration,
+    verbosity: u8,
+) -> bool {
+    // Send probe
+    let (packet_hash, hops) = match send_probe_rpc(addr, auth_key, dest_hash, payload_size) {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            eprintln!(
+                "Could not send probe to {} (identity not known)",
+                prettyhexrep(dest_hash),
+            );
+            return false;
+        }
+        Err(e) => {
+            eprintln!("RPC error sending probe: {}", e);
+            return false;
+        }
+    };
+
+    if verbosity > 0 {
+        if let Ok(Some(info)) = query_path_info(addr, auth_key, dest_hash) {
+            println!(
+                "Sent probe ({} bytes) to {} via {} on {}",
+                payload_size,
+                prettyhexrep(dest_hash),
+                prettyhexrep(&info.next_hop),
+                info.interface_name,
+            );
+        } else {
+            println!(
+                "Sent probe ({} bytes) to {}",
+                payload_size,
+                prettyhexrep(dest_hash),
+            );
+        }
+    } else {
+        println!(
+            "Sent probe ({} bytes) to {}",
+            payload_size,
+            prettyhexrep(dest_hash),
+        );
+    }
+
+    // Poll for proof
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        std::thread::sleep(Duration::from_millis(100));
+        match check_proof_rpc(addr, auth_key, &packet_hash) {
+            Ok(Some(rtt)) => {
+                let rtt_ms = rtt * 1000.0;
+                println!(
+                    "Probe reply received in {:.0}ms, {} hops",
+                    rtt_ms, hops,
+                );
+                return true;
             }
             Ok(None) => continue,
             Err(_) => continue,
         }
     }
 
-    if !found {
-        println!("timeout!");
-        eprintln!(
-            "Path to {} not found within {:.1}s",
-            prettyhexrep(&dest_hash),
-            timeout,
-        );
-        process::exit(1);
+    println!("Probe timed out after {:.1}s", timeout.as_secs_f64());
+    false
+}
+
+// --- RPC helpers ---
+
+fn query_has_path(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    dest_hash: &[u8; 16],
+) -> Result<bool, String> {
+    let mut client = RpcClient::connect(addr, auth_key)
+        .map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("get".into()), PickleValue::String("next_hop".into())),
+        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
+    ])).map_err(|e| format!("RPC call: {}", e))?;
+    Ok(response.as_bytes().map_or(false, |b| b.len() == 16))
+}
+
+fn request_path(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    dest_hash: &[u8; 16],
+) -> Result<(), String> {
+    let mut client = RpcClient::connect(addr, auth_key)
+        .map_err(|e| format!("RPC connect: {}", e))?;
+    let _ = client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("request_path".into()), PickleValue::Bytes(dest_hash.to_vec())),
+    ])).map_err(|e| format!("RPC call: {}", e))?;
+    Ok(())
+}
+
+fn send_probe_rpc(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    dest_hash: &[u8; 16],
+    payload_size: usize,
+) -> Result<Option<([u8; 32], u8)>, String> {
+    let mut client = RpcClient::connect(addr, auth_key)
+        .map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("send_probe".into()), PickleValue::Bytes(dest_hash.to_vec())),
+        (PickleValue::String("size".into()), PickleValue::Int(payload_size as i64)),
+    ])).map_err(|e| format!("RPC call: {}", e))?;
+
+    match &response {
+        PickleValue::Dict(entries) => {
+            let packet_hash = entries.iter()
+                .find(|(k, _)| *k == PickleValue::String("packet_hash".into()))
+                .and_then(|(_, v)| v.as_bytes());
+            let hops = entries.iter()
+                .find(|(k, _)| *k == PickleValue::String("hops".into()))
+                .and_then(|(_, v)| v.as_int());
+            if let (Some(ph), Some(h)) = (packet_hash, hops) {
+                if ph.len() >= 32 {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(&ph[..32]);
+                    Ok(Some((hash, h as u8)))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn check_proof_rpc(
+    addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    packet_hash: &[u8; 32],
+) -> Result<Option<f64>, String> {
+    let mut client = RpcClient::connect(addr, auth_key)
+        .map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client.call(&PickleValue::Dict(vec![
+        (PickleValue::String("check_proof".into()), PickleValue::Bytes(packet_hash.to_vec())),
+    ])).map_err(|e| format!("RPC call: {}", e))?;
+
+    match &response {
+        PickleValue::Float(rtt) => Ok(Some(*rtt)),
+        _ => Ok(None),
     }
 }
 
@@ -200,13 +372,11 @@ struct PathInfo {
 }
 
 /// Query path information for a destination via RPC.
-/// Combines next_hop and next_hop_if_name queries, plus path_table for hop count.
 fn query_path_info(
     addr: &RpcAddr,
     auth_key: &[u8; 32],
     dest_hash: &[u8; 16],
 ) -> Result<Option<PathInfo>, String> {
-    // Query next hop
     let mut client = RpcClient::connect(addr, auth_key)
         .map_err(|e| format!("RPC connect: {}", e))?;
 
@@ -240,7 +410,7 @@ fn query_path_info(
         }
     };
 
-    // Query hop count from path table
+    // Query hop count
     let hops = {
         let mut client3 = RpcClient::connect(addr, auth_key)
             .map_err(|e| format!("RPC connect: {}", e))?;
@@ -264,7 +434,6 @@ fn extract_hops_from_path_table(response: &PickleValue, dest_hash: &[u8; 16]) ->
     if let PickleValue::List(entries) = response {
         for entry in entries {
             if let PickleValue::List(fields) = entry {
-                // Path table entry format: [hash_bytes, timestamp, via, hops, expires, if_name]
                 if fields.len() >= 4 {
                     if let Some(hash_bytes) = fields[0].as_bytes() {
                         if hash_bytes == dest_hash {
@@ -300,7 +469,7 @@ fn parse_dest_hash(hex: &str) -> Option<[u8; 16]> {
 fn print_usage() {
     println!("Usage: rnprobe [OPTIONS] <destination_hash>");
     println!();
-    println!("Probe a Reticulum destination to check path availability.");
+    println!("Send a probe packet to a Reticulum destination and measure RTT.");
     println!();
     println!("Arguments:");
     println!("  <destination_hash>    Hex hash of the destination (32 chars)");
@@ -308,6 +477,9 @@ fn print_usage() {
     println!("Options:");
     println!("  -c, --config PATH     Config directory path");
     println!("  -t, --timeout SECS    Timeout in seconds (default: 15)");
+    println!("  -s, --size BYTES      Probe payload size (default: 16)");
+    println!("  -n, --count N         Number of probes to send (default: 1)");
+    println!("  -w, --wait SECS       Seconds between probes (default: 0)");
     println!("  -v, --verbose         Increase verbosity");
     println!("      --version         Show version");
     println!("  -h, --help            Show this help");

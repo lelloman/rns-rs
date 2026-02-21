@@ -163,6 +163,8 @@ pub struct NodeConfig {
     pub discover_interfaces: bool,
     /// Minimum stamp value for accepting discovered interfaces (default: 14).
     pub discovery_required_value: Option<u8>,
+    /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
+    pub respond_to_probes: bool,
 }
 
 /// Interface configuration variant with its mode.
@@ -824,6 +826,7 @@ impl RnsNode {
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
             discovery_required_value: rns_config.reticulum.required_discovery_value,
+            respond_to_probes: rns_config.reticulum.respond_to_probes,
         };
 
         Self::start(node_config, callbacks)
@@ -1515,6 +1518,41 @@ impl RnsNode {
             }
         }
 
+        // Set up probe responder if enabled
+        if config.respond_to_probes && config.transport_enabled {
+            let identity_hash = *identity.hash();
+            let probe_dest = crate::management::probe_dest_hash(&identity_hash);
+
+            // Register as SINGLE destination in transport engine
+            driver.engine.register_destination(
+                probe_dest,
+                rns_core::constants::DESTINATION_SINGLE,
+            );
+            driver.local_destinations.insert(
+                probe_dest,
+                rns_core::constants::DESTINATION_SINGLE,
+            );
+
+            // Register PROVE_ALL proof strategy with transport identity
+            let probe_identity = rns_crypto::identity::Identity::from_private_key(
+                &identity.get_private_key().unwrap(),
+            );
+            driver.proof_strategies.insert(
+                probe_dest,
+                (
+                    rns_core::types::ProofStrategy::ProveAll,
+                    Some(probe_identity),
+                ),
+            );
+
+            driver.probe_responder_hash = Some(probe_dest);
+
+            log::info!(
+                "Probe responder enabled on {:02x?}",
+                &probe_dest[..4],
+            );
+        }
+
         // Spawn timer thread with configurable tick interval
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let timer_tx = tx.clone();
@@ -2131,6 +2169,7 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2159,6 +2198,7 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2187,6 +2227,7 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2622,6 +2663,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2659,6 +2701,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2691,6 +2734,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2720,6 +2764,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2756,6 +2801,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2793,6 +2839,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2827,6 +2874,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2872,6 +2920,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2910,6 +2959,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
+            respond_to_probes: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

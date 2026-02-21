@@ -515,6 +515,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -557,6 +558,7 @@ fn start_client_node(
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         callbacks,
     )
@@ -780,6 +782,7 @@ fn test_direct_link_no_transport() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1194,6 +1197,7 @@ fn test_plain_message_delivery() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1265,6 +1269,7 @@ fn test_group_message_delivery() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1333,6 +1338,7 @@ fn test_group_wrong_key_fails() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2137,6 +2143,7 @@ fn test_udp_announce_and_message() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2173,6 +2180,7 @@ fn test_udp_announce_and_message() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2303,6 +2311,7 @@ fn discovery_announce_received_by_client() {
             hooks: Vec::new(),
             discover_interfaces: true,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -2347,6 +2356,7 @@ fn discovery_announce_received_by_client() {
             hooks: Vec::new(),
             discover_interfaces: true,
             discovery_required_value: Some(8),
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2445,6 +2455,7 @@ fn discovery_announce_through_relay() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -2495,6 +2506,7 @@ fn discovery_announce_through_relay() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -2537,6 +2549,7 @@ fn discovery_announce_through_relay() {
             hooks: Vec::new(),
             discover_interfaces: true,
             discovery_required_value: Some(8),
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )

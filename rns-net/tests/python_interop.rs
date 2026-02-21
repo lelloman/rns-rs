@@ -153,6 +153,7 @@ except (KeyboardInterrupt, SystemExit):
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TestCallbacks { announce_tx }),
     )

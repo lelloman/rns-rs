@@ -323,6 +323,8 @@ pub struct Driver {
     pub(crate) proof_strategies: HashMap<[u8; 16], (rns_core::types::ProofStrategy, Option<rns_crypto::identity::Identity>)>,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
+    /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
+    pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
     /// Hole-punch manager for direct P2P connections.
@@ -335,6 +337,8 @@ pub struct Driver {
     pub(crate) discovery_required_value: u8,
     /// Name hash for interface discovery announces ("rnstransport.discovery.interface").
     pub(crate) discovery_name_hash: [u8; 10],
+    /// Destination hash for the probe responder (if respond_to_probes is enabled).
+    pub(crate) probe_responder_hash: Option<[u8; 16]>,
     /// Whether interface discovery is enabled.
     pub(crate) discover_interfaces: bool,
     /// Announcer for discoverable interfaces (None if nothing to announce).
@@ -395,6 +399,7 @@ impl Driver {
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
+            completed_proofs: HashMap::new(),
             local_destinations,
             holepunch_manager: HolePunchManager::new(None, None),
             event_tx: tx,
@@ -403,6 +408,7 @@ impl Driver {
             ),
             discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
             discovery_name_hash,
+            probe_responder_hash: None,
             discover_interfaces: false,
             interface_announcer: None,
             discovery_cleanup_counter: 0,
@@ -560,6 +566,8 @@ impl Driver {
                     self.tick_management_announces(now);
                     // Cull expired sent packet tracking entries (no proof received within 60s)
                     self.sent_packets.retain(|_, (_, sent_time)| now - *sent_time < 60.0);
+                    // Cull old completed proof entries (older than 120s)
+                    self.completed_proofs.retain(|_, (_, received)| now - *received < 120.0);
 
                     self.tick_discovery_announcer(now);
 
@@ -983,6 +991,7 @@ impl Driver {
                     transport_uptime: time::now() - self.started,
                     total_rxb,
                     total_txb,
+                    probe_responder: self.probe_responder_hash,
                 })
             }
             QueryRequest::PathTable { max_hops } => {
@@ -1119,6 +1128,9 @@ impl Driver {
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
+            // Mutating queries handled by handle_query_mut
+            QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
+            QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
         }
     }
 
@@ -1196,6 +1208,75 @@ impl Driver {
                     },
                 );
                 QueryResponse::InjectIdentity(true)
+            }
+            QueryRequest::SendProbe { dest_hash, payload_size } => {
+                // Look up the identity for this destination hash
+                let announced = self.known_destinations.get(&dest_hash).cloned();
+                match announced {
+                    Some(recalled) => {
+                        // Encrypt random payload with remote public key
+                        let remote_id = rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
+                        let mut payload = vec![0u8; payload_size];
+                        self.rng.fill_bytes(&mut payload);
+                        match remote_id.encrypt(&payload, &mut self.rng) {
+                            Ok(ciphertext) => {
+                                // Build DATA SINGLE BROADCAST packet to dest_hash
+                                let flags = rns_core::packet::PacketFlags {
+                                    header_type: rns_core::constants::HEADER_1,
+                                    context_flag: rns_core::constants::FLAG_UNSET,
+                                    transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+                                    destination_type: rns_core::constants::DESTINATION_SINGLE,
+                                    packet_type: rns_core::constants::PACKET_TYPE_DATA,
+                                };
+                                match RawPacket::pack(
+                                    flags, 0, &dest_hash, None,
+                                    rns_core::constants::CONTEXT_NONE, &ciphertext,
+                                ) {
+                                    Ok(packet) => {
+                                        let packet_hash = packet.packet_hash;
+                                        let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
+                                        // Track for proof matching
+                                        self.sent_packets.insert(
+                                            packet_hash,
+                                            (dest_hash, time::now()),
+                                        );
+                                        // Send via engine
+                                        let actions = self.engine.handle_outbound(
+                                            &packet,
+                                            rns_core::constants::DESTINATION_SINGLE,
+                                            None,
+                                            time::now(),
+                                        );
+                                        self.dispatch_all(actions);
+                                        log::debug!(
+                                            "Sent probe ({} bytes) to {:02x?}",
+                                            payload_size, &dest_hash[..4],
+                                        );
+                                        QueryResponse::SendProbe(Some((packet_hash, hops)))
+                                    }
+                                    Err(_) => {
+                                        log::warn!("Failed to pack probe packet");
+                                        QueryResponse::SendProbe(None)
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                log::warn!("Failed to encrypt probe payload");
+                                QueryResponse::SendProbe(None)
+                            }
+                        }
+                    }
+                    None => {
+                        log::debug!("No known identity for probe dest {:02x?}", &dest_hash[..4]);
+                        QueryResponse::SendProbe(None)
+                    }
+                }
+            }
+            QueryRequest::CheckProof { packet_hash } => {
+                match self.completed_proofs.remove(&packet_hash) {
+                    Some((rtt, _received)) => QueryResponse::CheckProof(Some(rtt)),
+                    None => QueryResponse::CheckProof(None),
+                }
             }
             other => self.handle_query(other),
         }
@@ -1395,11 +1476,13 @@ impl Driver {
                 );
             }
 
-            let rtt = time::now() - sent_time;
+            let now = time::now();
+            let rtt = now - sent_time;
             log::debug!(
                 "Proof received for {:02x?} rtt={:.3}s",
                 &tracked_hash[..4], rtt,
             );
+            self.completed_proofs.insert(tracked_hash, (rtt, now));
             self.callbacks.on_proof(
                 rns_core::types::DestHash(tracked_dest),
                 rns_core::types::PacketHash(tracked_hash),
@@ -2206,6 +2289,12 @@ impl Driver {
             None
         };
 
+        let probe_raw = if self.probe_responder_hash.is_some() {
+            management::build_probe_announce(identity, &mut self.rng)
+        } else {
+            None
+        };
+
         if let Some(raw) = mgmt_raw {
             if let Ok(packet) = RawPacket::unpack(&raw) {
                 let actions = self.engine.handle_outbound(
@@ -2229,6 +2318,19 @@ impl Driver {
                 );
                 self.dispatch_all(actions);
                 log::debug!("Emitted blackhole info announce");
+            }
+        }
+
+        if let Some(raw) = probe_raw {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    rns_core::constants::DESTINATION_SINGLE,
+                    None,
+                    now,
+                );
+                self.dispatch_all(actions);
+                log::debug!("Emitted probe responder announce");
             }
         }
     }
@@ -2264,7 +2366,7 @@ impl Driver {
         }
 
         let response_data = if path_hash == management::status_path_hash() {
-            management::handle_status_request(&data, &self.engine, &self.interfaces, self.started)
+            management::handle_status_request(&data, &self.engine, &self.interfaces, self.started, self.probe_responder_hash)
         } else if path_hash == management::path_path_hash() {
             management::handle_path_request(&data, &self.engine)
         } else if path_hash == management::list_path_hash() {

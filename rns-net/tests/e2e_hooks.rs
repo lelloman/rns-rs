@@ -208,6 +208,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -248,6 +250,8 @@ fn start_client_node(
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
+            respond_to_probes: false,
         },
         callbacks,
     )

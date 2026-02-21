@@ -263,6 +263,11 @@ fn print_status(
             print!("running for {}", prettytime(*uptime));
         }
         println!();
+        if let Some(pr) = response.get("probe_responder").and_then(|v| v.as_bytes()) {
+            if !pr.is_empty() {
+                println!("   Probe responder at {}", prettyhexrep(pr));
+            }
+        }
         println!();
     }
 

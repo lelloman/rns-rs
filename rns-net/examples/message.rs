@@ -173,6 +173,7 @@ fn main() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -229,6 +230,7 @@ fn main() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(PeerCallbacks {
             name: "alice",
@@ -282,6 +284,7 @@ fn main() {
             hooks: Vec::new(),
             discover_interfaces: false,
             discovery_required_value: None,
+            respond_to_probes: false,
         },
         Box::new(PeerCallbacks {
             name: "bob",
