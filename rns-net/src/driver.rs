@@ -4809,6 +4809,355 @@ mod tests {
         assert_eq!(super::extract_dest_hash(&[]), [0u8; 16]);
     }
 
+    // =========================================================================
+    // Probe tests: SendProbe, CheckProof, completed_proofs, probe_responder
+    // =========================================================================
+
+    #[test]
+    fn send_probe_unknown_dest_returns_none() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // SendProbe for a dest_hash with no known identity should return None
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::SendProbe {
+            dest_hash: [0xAA; 16],
+            payload_size: 16,
+        }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::SendProbe(None) => {}
+            other => panic!("expected SendProbe(None), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn send_probe_known_dest_returns_packet_hash() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Inject a known identity so SendProbe can encrypt to it
+        let remote_identity = Identity::new(&mut OsRng);
+        let dest_hash = rns_core::destination::destination_hash(
+            "rnstransport", &["probe"], Some(remote_identity.hash()),
+        );
+
+        // First inject the identity via announce
+        let (inject_tx, inject_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *remote_identity.hash(),
+            public_key: remote_identity.get_public_key().unwrap(),
+            app_data: None,
+            hops: 1,
+            received_at: 0.0,
+        }, inject_tx)).unwrap();
+
+        // Now send the probe
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::SendProbe {
+            dest_hash,
+            payload_size: 16,
+        }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Verify injection succeeded
+        match inject_rx.recv().unwrap() {
+            QueryResponse::InjectIdentity(true) => {}
+            other => panic!("expected InjectIdentity(true), got {:?}", other),
+        }
+
+        // Verify probe sent
+        match resp_rx.recv().unwrap() {
+            QueryResponse::SendProbe(Some((packet_hash, _hops))) => {
+                // Packet hash should be non-zero
+                assert_ne!(packet_hash, [0u8; 32]);
+                // Should be tracked in sent_packets
+                assert!(driver.sent_packets.contains_key(&packet_hash));
+                // Should have sent a DATA packet on the wire
+                let sent_data = sent.lock().unwrap();
+                assert!(!sent_data.is_empty(), "Probe packet should be sent on wire");
+                // Verify it's a DATA SINGLE packet
+                let raw = &sent_data[0];
+                let flags = PacketFlags::unpack(raw[0] & 0x7F);
+                assert_eq!(flags.packet_type, constants::PACKET_TYPE_DATA);
+                assert_eq!(flags.destination_type, constants::DESTINATION_SINGLE);
+            }
+            other => panic!("expected SendProbe(Some(..)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn check_proof_not_found_returns_none() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::CheckProof {
+            packet_hash: [0xBB; 32],
+        }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::CheckProof(None) => {}
+            other => panic!("expected CheckProof(None), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn check_proof_found_returns_rtt() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        // Pre-populate completed_proofs
+        let packet_hash = [0xCC; 32];
+        driver.completed_proofs.insert(packet_hash, (0.123, time::now()));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::CheckProof {
+            packet_hash,
+        }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::CheckProof(Some(rtt)) => {
+                assert!((rtt - 0.123).abs() < 0.001, "RTT should be ~0.123, got {}", rtt);
+            }
+            other => panic!("expected CheckProof(Some(..)), got {:?}", other),
+        }
+        // Should be consumed (removed) after checking
+        assert!(!driver.completed_proofs.contains_key(&packet_hash));
+    }
+
+    #[test]
+    fn inbound_proof_populates_completed_proofs() {
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Register a destination with ProveAll so we can get a proof back
+        let dest = [0xDD; 16];
+        let identity = Identity::new(&mut OsRng);
+        let prv_key = identity.get_private_key().unwrap();
+        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(dest, (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(Identity::from_private_key(&prv_key)),
+        ));
+
+        // Build and send a DATA packet to the dest (this creates a sent_packet + proof)
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let data_packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"probe data").unwrap();
+        let data_packet_hash = data_packet.packet_hash;
+
+        // Track it as a sent packet so the proof handler recognizes it
+        driver.sent_packets.insert(data_packet_hash, (dest, time::now()));
+
+        // Deliver the frame — this generates a proof which gets sent on wire
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: data_packet.raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // The proof was generated and sent on the wire
+        let sent_packets = sent.lock().unwrap();
+        let proof_packets: Vec<_> = sent_packets.iter().filter(|raw| {
+            let flags = PacketFlags::unpack(raw[0] & 0x7F);
+            flags.packet_type == constants::PACKET_TYPE_PROOF
+        }).collect();
+        assert!(!proof_packets.is_empty(), "Should have sent a proof packet");
+
+        // Now feed the proof packet back to the driver so handle_inbound_proof fires.
+        // We need a fresh driver run since the previous one shut down.
+        // Instead, verify the data flow: the proof was sent on wire, and when
+        // handle_inbound_proof processes a matching proof, completed_proofs gets populated.
+        // Since our DATA packet was both delivered locally AND tracked in sent_packets,
+        // the proof was generated on delivery. But the proof is for the *sender* to verify --
+        // the proof gets sent back to the sender. So in this test (same driver = both sides),
+        // the proof was sent on wire but not yet received back.
+        //
+        // Let's verify handle_inbound_proof directly by feeding the proof frame back.
+        let proof_raw = proof_packets[0].clone();
+        drop(sent_packets); // release lock
+
+        // Create a new event loop to handle the proof frame
+        let (tx2, rx2) = event::channel();
+        let proofs2 = Arc::new(Mutex::new(Vec::new()));
+        let cbs2 = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs2.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut driver2 = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx2,
+            tx2.clone(),
+            Box::new(cbs2),
+        );
+        let info2 = make_interface_info(1);
+        driver2.engine.register_interface(info2);
+        let (writer2, _sent2) = MockWriter::new();
+        driver2.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer2), true));
+
+        // Track the original sent packet in driver2 so it recognizes the proof
+        driver2.sent_packets.insert(data_packet_hash, (dest, time::now()));
+
+        // Feed the proof frame
+        tx2.send(Event::Frame { interface_id: InterfaceId(1), data: proof_raw }).unwrap();
+        tx2.send(Event::Shutdown).unwrap();
+        driver2.run();
+
+        // The on_proof callback should have fired
+        let proof_events = proofs2.lock().unwrap();
+        assert_eq!(proof_events.len(), 1, "on_proof callback should fire once");
+        assert_eq!(proof_events[0].1.0, data_packet_hash, "proof should match original packet hash");
+        assert!(proof_events[0].2 >= 0.0, "RTT should be non-negative");
+
+        // completed_proofs should contain the entry
+        assert!(driver2.completed_proofs.contains_key(&data_packet_hash),
+            "completed_proofs should contain the packet hash");
+        let (rtt, _received) = driver2.completed_proofs[&data_packet_hash];
+        assert!(rtt >= 0.0, "RTT should be non-negative");
+    }
+
+    #[test]
+    fn interface_stats_includes_probe_responder() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]) },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        // Set probe_responder_hash
+        driver.probe_responder_hash = Some([0xEE; 16]);
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::InterfaceStats(stats) => {
+                assert_eq!(stats.probe_responder, Some([0xEE; 16]));
+            }
+            other => panic!("expected InterfaceStats, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn interface_stats_probe_responder_none_when_disabled() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::InterfaceStats(stats) => {
+                assert_eq!(stats.probe_responder, None);
+            }
+            other => panic!("expected InterfaceStats, got {:?}", other),
+        }
+    }
+
     #[test]
     fn test_extract_dest_hash_too_short() {
         // Packet too short to contain a full dest hash
