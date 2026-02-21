@@ -1305,38 +1305,49 @@ impl TransportEngine {
                 }
             }
 
-            // Check if there's already an announce in the table
-            if let Some(existing) = self.announce_table.remove(&destination_hash) {
-                self.held_announces.insert(destination_hash, existing);
-            }
-
-            let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&interface_id) {
-                let base = now + constants::PATH_REQUEST_GRACE;
-                if iface_info.mode == constants::MODE_ROAMING {
-                    base + constants::PATH_REQUEST_RG
-                } else {
-                    base
+            // We need the original announce raw bytes to build a valid retransmit.
+            // Without them we can't populate packet_raw/packet_data and the response
+            // would be a header-only packet that Python RNS discards.
+            if let Some(ref raw) = path.announce_raw {
+                // Check if there's already an announce in the table
+                if let Some(existing) = self.announce_table.remove(&destination_hash) {
+                    self.held_announces.insert(destination_hash, existing);
                 }
-            } else {
-                now + constants::PATH_REQUEST_GRACE
-            };
+                let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&interface_id) {
+                    let base = now + constants::PATH_REQUEST_GRACE;
+                    if iface_info.mode == constants::MODE_ROAMING {
+                        base + constants::PATH_REQUEST_RG
+                    } else {
+                        base
+                    }
+                } else {
+                    now + constants::PATH_REQUEST_GRACE
+                };
 
-            let entry = AnnounceEntry {
-                timestamp: now,
-                retransmit_timeout,
-                retries: constants::PATHFINDER_R,
-                received_from: path.next_hop,
-                hops: path.hops,
-                packet_raw: Vec::new(),
-                packet_data: Vec::new(),
-                destination_hash,
-                context_flag: 0,
-                local_rebroadcasts: 0,
-                block_rebroadcasts: true,
-                attached_interface: Some(interface_id),
-            };
+                let (packet_data, context_flag) = match RawPacket::unpack(raw) {
+                    Ok(parsed) => (parsed.data, parsed.flags.context_flag),
+                    Err(_) => {
+                        return actions;
+                    }
+                };
 
-            self.announce_table.insert(destination_hash, entry);
+                let entry = AnnounceEntry {
+                    timestamp: now,
+                    retransmit_timeout,
+                    retries: constants::PATHFINDER_R,
+                    received_from: path.next_hop,
+                    hops: path.hops,
+                    packet_raw: raw.clone(),
+                    packet_data,
+                    destination_hash,
+                    context_flag,
+                    local_rebroadcasts: 0,
+                    block_rebroadcasts: true,
+                    attached_interface: Some(interface_id),
+                };
+
+                self.announce_table.insert(destination_hash, entry);
+            }
         } else if self.config.transport_enabled {
             // Unknown path: check if receiving interface is in DISCOVER_PATHS_FOR
             let should_discover = self
@@ -2481,6 +2492,86 @@ mod tests {
         let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
 
         // ROAMING interface, path next-hop on same interface → loop prevention, no action
+        assert!(actions.is_empty());
+        assert!(!engine.announce_table.contains_key(&dest));
+    }
+
+    /// Build a minimal HEADER_1 announce raw packet for testing.
+    fn make_announce_raw(dest_hash: &[u8; 16], payload: &[u8]) -> Vec<u8> {
+        // HEADER_1: [flags:1][hops:1][dest:16][context:1][data:*]
+        // flags: HEADER_1(0) << 6 | context_flag(0) << 5 | TRANSPORT_BROADCAST(0) << 4 | SINGLE(0) << 2 | ANNOUNCE(1)
+        let flags: u8 = 0x01; // HEADER_1, no context, broadcast, single, announce
+        let mut raw = Vec::new();
+        raw.push(flags);
+        raw.push(0x02); // hops
+        raw.extend_from_slice(dest_hash);
+        raw.push(constants::CONTEXT_NONE);
+        raw.extend_from_slice(payload);
+        raw
+    }
+
+    #[test]
+    fn test_path_request_populates_announce_entry_from_raw() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD5; 16];
+        let payload = vec![0xAB; 32]; // simulated announce data (pubkey, sig, etc.)
+        let announce_raw = make_announce_raw(&dest, &payload);
+
+        engine.path_table.insert(
+            dest,
+            PathEntry {
+                timestamp: 900.0,
+                next_hop: [0xBB; 16],
+                hops: 2,
+                expires: 9999.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(2),
+                packet_hash: [0; 32],
+                announce_raw: Some(announce_raw.clone()),
+            },
+        );
+
+        let tag = [0x05; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let _actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        // The announce table should now have an entry with populated packet_raw/packet_data
+        let entry = engine.announce_table.get(&dest).expect("announce entry must exist");
+        assert_eq!(entry.packet_raw, announce_raw);
+        assert_eq!(entry.packet_data, payload);
+        assert!(entry.block_rebroadcasts);
+    }
+
+    #[test]
+    fn test_path_request_skips_when_no_announce_raw() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD6; 16];
+
+        engine.path_table.insert(
+            dest,
+            PathEntry {
+                timestamp: 900.0,
+                next_hop: [0xCC; 16],
+                hops: 1,
+                expires: 9999.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(2),
+                packet_hash: [0; 32],
+                announce_raw: None, // no raw data available
+            },
+        );
+
+        let tag = [0x06; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        // Should NOT create an announce entry without raw data
         assert!(actions.is_empty());
         assert!(!engine.announce_table.contains_key(&dest));
     }
