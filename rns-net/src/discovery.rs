@@ -48,7 +48,7 @@ pub const DEFAULT_STAMP_VALUE: u8 = 14;
 pub const WORKBLOCK_EXPAND_ROUNDS: u32 = 20;
 
 /// Stamp size in bytes
-pub const STAMP_SIZE: usize = 64;
+pub const STAMP_SIZE: usize = 32;
 
 // Status thresholds (in seconds)
 /// 24 hours - status becomes "unknown"
@@ -82,6 +82,12 @@ pub struct DiscoveryConfig {
     pub interface_type: String,
     /// Listen port of the discoverable interface.
     pub listen_port: Option<u16>,
+    /// Geographic latitude in decimal degrees.
+    pub latitude: Option<f64>,
+    /// Geographic longitude in decimal degrees.
+    pub longitude: Option<f64>,
+    /// Height/altitude in meters.
+    pub height: Option<f64>,
 }
 
 // ============================================================================
@@ -967,6 +973,24 @@ impl InterfaceAnnouncer {
                 msgpack::Value::UInt(port as u64),
             ));
         }
+        if let Some(lat) = iface.config.latitude {
+            entries.push((
+                msgpack::Value::UInt(LATITUDE as u64),
+                msgpack::Value::Float(lat),
+            ));
+        }
+        if let Some(lon) = iface.config.longitude {
+            entries.push((
+                msgpack::Value::UInt(LONGITUDE as u64),
+                msgpack::Value::Float(lon),
+            ));
+        }
+        if let Some(h) = iface.config.height {
+            entries.push((
+                msgpack::Value::UInt(HEIGHT as u64),
+                msgpack::Value::Float(h),
+            ));
+        }
         if let Some(ref netname) = iface.ifac_netname {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETNAME as u64),
@@ -985,10 +1009,12 @@ impl InterfaceAnnouncer {
 
 }
 
-/// Compute the discovery destination hash.
-/// This is a PLAIN destination: `rnstransport.discovery.interface`.
-pub fn discovery_dest_hash() -> [u8; 16] {
-    rns_core::destination::destination_hash(APP_NAME, &["discovery", "interface"], None)
+/// Compute the name hash for the discovery destination: `rnstransport.discovery.interface`.
+///
+/// Discovery is a SINGLE destination — its dest hash varies with the sender's identity.
+/// We match incoming announces by comparing their name_hash to this constant.
+pub fn discovery_name_hash() -> [u8; 10] {
+    rns_core::destination::name_hash(APP_NAME, &["discovery", "interface"])
 }
 
 // ============================================================================
@@ -1271,17 +1297,16 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_dest_hash_is_deterministic() {
-        let h1 = discovery_dest_hash();
-        let h2 = discovery_dest_hash();
+    fn test_discovery_name_hash_is_deterministic() {
+        let h1 = discovery_name_hash();
+        let h2 = discovery_name_hash();
         assert_eq!(h1, h2);
-        // Must be 16 bytes (truncated hash)
-        assert_eq!(h1.len(), 16);
-        // Verify it's the PLAIN dest for "rnstransport.discovery.interface"
-        let expected = rns_core::destination::destination_hash(
+        // Must be 10 bytes (name hash length)
+        assert_eq!(h1.len(), 10);
+        // Verify it matches the name hash for "rnstransport.discovery.interface"
+        let expected = rns_core::destination::name_hash(
             APP_NAME,
             &["discovery", "interface"],
-            None,
         );
         assert_eq!(h1, expected);
     }
@@ -1297,6 +1322,9 @@ mod tests {
                 reachable_on: Some("10.0.0.1".into()),
                 interface_type: "BackboneInterface".into(),
                 listen_port: Some(4242),
+                latitude: None,
+                longitude: None,
+                height: None,
             },
             transport_enabled: true,
             ifac_netname: None,
@@ -1343,6 +1371,9 @@ mod tests {
                 reachable_on: Some("192.168.1.100".into()),
                 interface_type: "TCPServerInterface".into(),
                 listen_port: Some(5555),
+                latitude: Some(45.464),
+                longitude: Some(9.190),
+                height: Some(120.0),
             },
             transport_enabled: true,
             ifac_netname: Some("testnet".into()),
@@ -1374,5 +1405,8 @@ mod tests {
         assert_eq!(discovered.ifac_netkey.as_deref(), Some("secretkey"));
         assert!(discovered.stamp_value >= 8);
         assert_eq!(discovered.hops, 0);
+        assert!((discovered.latitude.unwrap() - 45.464).abs() < 0.001);
+        assert!((discovered.longitude.unwrap() - 9.190).abs() < 0.001);
+        assert!((discovered.height.unwrap() - 120.0).abs() < 0.1);
     }
 }

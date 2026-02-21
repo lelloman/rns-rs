@@ -70,6 +70,7 @@ fn main() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(LoggingCallbacks),
     )

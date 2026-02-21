@@ -152,6 +152,7 @@ except (KeyboardInterrupt, SystemExit):
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks { announce_tx }),
     )

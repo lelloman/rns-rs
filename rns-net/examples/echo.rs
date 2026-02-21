@@ -140,6 +140,7 @@ fn main() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(ServerCallbacks { delivery_tx }),
     )
@@ -183,6 +184,7 @@ fn main() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(ClientCallbacks {
             announce_tx,

@@ -126,4 +126,28 @@ mod tests {
         let wb2 = stamp_workblock(material, 5);
         assert_eq!(wb1, wb2);
     }
+
+    #[test]
+    fn test_python_interop_workblock_and_stamp() {
+        // Values from Python:
+        //   packed = b"test data"
+        //   infohash = RNS.Identity.full_hash(packed)
+        //   wb = LXStamper.stamp_workblock(infohash, expand_rounds=20)
+        //   stamp = LXStamper.generate_stamp(infohash, stamp_cost=8, expand_rounds=20)[0]
+        let infohash = hex_to_bytes("916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9");
+        let expected_wb_prefix = hex_to_bytes("9e36b853221f04ca1cf54447abce3e9eb47d01d55215414ee5b540eaa796caf2");
+        let stamp = hex_to_bytes("4a1aa3a295482fa9a340b05f2c4779e701b53cd0f158c1bbe559730ae5ff6d17");
+
+        let wb = stamp_workblock(&infohash, 20);
+        assert_eq!(wb.len(), 5120);
+        assert_eq!(&wb[..32], &expected_wb_prefix[..]);
+
+        let value = stamp_value(&wb, &stamp);
+        assert_eq!(value, 8);
+        assert!(stamp_valid(&stamp, 8, &wb));
+    }
+
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).unwrap()).collect()
+    }
 }

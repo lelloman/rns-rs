@@ -514,6 +514,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -555,6 +556,7 @@ fn start_client_node(
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         callbacks,
     )
@@ -777,6 +779,7 @@ fn test_direct_link_no_transport() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1190,6 +1193,7 @@ fn test_plain_message_delivery() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1260,6 +1264,7 @@ fn test_group_message_delivery() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1327,6 +1332,7 @@ fn test_group_wrong_key_fails() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2130,6 +2136,7 @@ fn test_udp_announce_and_message() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2165,6 +2172,7 @@ fn test_udp_announce_and_message() {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            discovery_required_value: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2243,4 +2251,324 @@ fn test_rapid_announces() {
     alice_node.shutdown();
     bob_node.shutdown();
     transport.shutdown();
+}
+
+// ─── Discovery E2E ──────────────────────────────────────────────────────────
+
+/// Test that a node with a discoverable backbone interface announces it,
+/// and a connected client with discover_interfaces=true stores it.
+#[test]
+fn discovery_announce_received_by_client() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let port = find_free_port();
+    let transport_identity = Identity::new(&mut OsRng);
+
+    // Transport node: TCP server with a discoverable interface config
+    let transport = RnsNode::start(
+        NodeConfig {
+            transport_enabled: true,
+            identity: Some(Identity::from_private_key(
+                &transport_identity.get_private_key().unwrap(),
+            )),
+            interfaces: vec![InterfaceConfig {
+                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                    name: "Discoverable TCP".into(),
+                    listen_ip: "127.0.0.1".into(),
+                    listen_port: port,
+                    interface_id: InterfaceId(1),
+                }),
+                mode: MODE_FULL,
+                ifac: None,
+                discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    discovery_name: "TestBackbone".into(),
+                    announce_interval: 300, // minimum
+                    stamp_value: 8,         // low for fast test
+                    reachable_on: Some("10.0.0.1".into()),
+                    interface_type: "BackboneInterface".into(),
+                    listen_port: Some(port),
+                    latitude: Some(40.85),
+                    longitude: Some(14.27),
+                    height: Some(100.0),
+                }),
+            }],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: true,
+            discovery_required_value: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start transport node");
+
+    // Client node: connects to backbone, discover_interfaces enabled
+    let client_identity = Identity::new(&mut OsRng);
+    let (client_tx, client_rx) = mpsc::channel();
+
+    // Use a temp dir for cache so discovered interfaces get stored
+    let tmp_dir = std::env::temp_dir().join(format!("rns-e2e-discovery-{}", std::process::id()));
+    let cache_dir = tmp_dir.join("cache");
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    let client = RnsNode::start(
+        NodeConfig {
+            transport_enabled: false,
+            identity: Some(Identity::from_private_key(
+                &client_identity.get_private_key().unwrap(),
+            )),
+            interfaces: vec![InterfaceConfig {
+                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                    name: "Client TCP".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: port,
+                    interface_id: InterfaceId(1),
+                    ..Default::default()
+                }),
+                mode: MODE_FULL,
+                ifac: None,
+                discovery: None,
+            }],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: Some(cache_dir.clone()),
+            management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: true,
+            discovery_required_value: Some(8),
+        },
+        Box::new(TestCallbacks::new(client_tx)),
+    )
+    .expect("Failed to start client node");
+
+    // Wait for the client to connect
+    wait_for_event(&client_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Client InterfaceUp timed out");
+
+    // The transport's announcer fires on the first tick (last_announced=0, so it's
+    // immediately due). Stamp generation at cost=8 is near-instant. The announce
+    // should propagate to the client within a few ticks (~seconds).
+    // Wait up to 30s for the client to receive the discovery announce.
+    let mut found = false;
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_secs(1));
+        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) = client.query(
+            QueryRequest::DiscoveredInterfaces {
+                only_available: false,
+                only_transport: false,
+            },
+        ) {
+            if !interfaces.is_empty() {
+                let iface = &interfaces[0];
+                assert_eq!(iface.name, "TestBackbone");
+                assert_eq!(iface.interface_type, "BackboneInterface");
+                assert_eq!(iface.reachable_on.as_deref(), Some("10.0.0.1"));
+                assert_eq!(iface.port, Some(port));
+                assert!(iface.stamp_value >= 8, "stamp should meet minimum cost");
+                found = true;
+                break;
+            }
+        }
+    }
+
+    assert!(found, "Client should have discovered the transport's backbone interface");
+
+    // Clean up
+    client.shutdown();
+    transport.shutdown();
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+/// Test that a discovery announce propagates through a relay transport node.
+///
+/// Topology: Discoverable (TCP server:A) ← Relay (TCP client→A + TCP server:B) ← Client (TCP client→B)
+///
+/// The relay is a plain transport node (no discovery config). It should forward the
+/// discovery announce from Discoverable to Client.
+#[test]
+fn discovery_announce_through_relay() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let port_a = find_free_port();
+    let port_b = find_free_port();
+    let transport_identity = Identity::new(&mut OsRng);
+
+    // Discoverable node: TCP server with discovery config
+    let discoverable = RnsNode::start(
+        NodeConfig {
+            transport_enabled: true,
+            identity: Some(Identity::from_private_key(
+                &transport_identity.get_private_key().unwrap(),
+            )),
+            interfaces: vec![InterfaceConfig {
+                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                    name: "Discoverable TCP".into(),
+                    listen_ip: "127.0.0.1".into(),
+                    listen_port: port_a,
+                    interface_id: InterfaceId(1),
+                }),
+                mode: MODE_FULL,
+                ifac: None,
+                discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    discovery_name: "RelayedBackbone".into(),
+                    announce_interval: 300,
+                    stamp_value: 8,
+                    reachable_on: Some("10.0.0.1".into()),
+                    interface_type: "BackboneInterface".into(),
+                    listen_port: Some(port_a),
+                    latitude: None,
+                    longitude: None,
+                    height: None,
+                }),
+            }],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: false,
+            discovery_required_value: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start discoverable node");
+
+    // Wait for discoverable to be listening
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Relay node: transport, connects to discoverable, serves on port_b
+    let relay = RnsNode::start(
+        NodeConfig {
+            transport_enabled: true,
+            identity: Some(Identity::new(&mut OsRng)),
+            interfaces: vec![
+                InterfaceConfig {
+                    variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                        name: "Relay Upstream".into(),
+                        target_host: "127.0.0.1".into(),
+                        target_port: port_a,
+                        interface_id: InterfaceId(1),
+                        ..Default::default()
+                    }),
+                    mode: MODE_FULL,
+                    ifac: None,
+                    discovery: None,
+                },
+                InterfaceConfig {
+                    variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                        name: "Relay Downstream".into(),
+                        listen_ip: "127.0.0.1".into(),
+                        listen_port: port_b,
+                        interface_id: InterfaceId(2),
+                    }),
+                    mode: MODE_FULL,
+                    ifac: None,
+                    discovery: None,
+                },
+            ],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: false,
+            discovery_required_value: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start relay node");
+
+    // Wait for relay to connect upstream
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Client node: connects to relay, discover_interfaces enabled
+    let (client_tx, _client_rx) = mpsc::channel();
+    let tmp_dir = std::env::temp_dir().join(format!("rns-e2e-relay-{}", std::process::id()));
+    let cache_dir = tmp_dir.join("cache");
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    let client = RnsNode::start(
+        NodeConfig {
+            transport_enabled: false,
+            identity: Some(Identity::new(&mut OsRng)),
+            interfaces: vec![InterfaceConfig {
+                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                    name: "Client TCP".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: port_b,
+                    interface_id: InterfaceId(1),
+                    ..Default::default()
+                }),
+                mode: MODE_FULL,
+                ifac: None,
+                discovery: None,
+            }],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: Some(cache_dir.clone()),
+            management: Default::default(),
+            probe_port: None,
+            probe_addr: None,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: true,
+            discovery_required_value: Some(8),
+        },
+        Box::new(TestCallbacks::new(client_tx)),
+    )
+    .expect("Failed to start client node");
+
+    // Wait for the discovery announce to propagate through the relay
+    let mut found = false;
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_secs(1));
+        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) = client.query(
+            QueryRequest::DiscoveredInterfaces {
+                only_available: false,
+                only_transport: false,
+            },
+        ) {
+            if !interfaces.is_empty() {
+                let iface = &interfaces[0];
+                assert_eq!(iface.name, "RelayedBackbone");
+                assert_eq!(iface.interface_type, "BackboneInterface");
+                assert_eq!(iface.reachable_on.as_deref(), Some("10.0.0.1"));
+                assert!(iface.hops >= 1, "should have at least 1 hop through relay");
+                found = true;
+                break;
+            }
+        }
+    }
+
+    assert!(found, "Client should have discovered the interface through the relay");
+
+    // Clean up
+    client.shutdown();
+    relay.shutdown();
+    discoverable.shutdown();
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 }

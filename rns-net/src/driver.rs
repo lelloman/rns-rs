@@ -333,8 +333,8 @@ pub struct Driver {
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
     pub(crate) discovery_required_value: u8,
-    /// Destination hash for interface discovery announces.
-    pub(crate) discovery_dest: [u8; 16],
+    /// Name hash for interface discovery announces ("rnstransport.discovery.interface").
+    pub(crate) discovery_name_hash: [u8; 10],
     /// Whether interface discovery is enabled.
     pub(crate) discover_interfaces: bool,
     /// Announcer for discoverable interfaces (None if nothing to announce).
@@ -367,17 +367,16 @@ impl Driver {
             &["path", "request"],
             None,
         );
-        let discovery_dest = crate::discovery::discovery_dest_hash();
+        let discovery_name_hash = crate::discovery::discovery_name_hash();
         let mut engine = TransportEngine::new(config);
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         // Register path request destination so inbound path requests are delivered locally
         engine.register_destination(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
-        // Register discovery destination so interface discovery announces are delivered locally
-        engine.register_destination(discovery_dest, rns_core::constants::DESTINATION_PLAIN);
+        // Note: discovery destination is NOT registered as local — it's a SINGLE destination
+        // whose hash depends on the sender's identity. We match it by name_hash instead.
         let mut local_destinations = HashMap::new();
         local_destinations.insert(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         local_destinations.insert(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
-        local_destinations.insert(discovery_dest, rns_core::constants::DESTINATION_PLAIN);
         Driver {
             engine,
             interfaces: HashMap::new(),
@@ -403,7 +402,7 @@ impl Driver {
                 std::env::temp_dir().join("rns-discovered-interfaces")
             ),
             discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
-            discovery_dest,
+            discovery_name_hash,
             discover_interfaces: false,
             interface_announcer: None,
             discovery_cleanup_counter: 0,
@@ -562,52 +561,7 @@ impl Driver {
                     // Cull expired sent packet tracking entries (no proof received within 60s)
                     self.sent_packets.retain(|_, (_, sent_time)| now - *sent_time < 60.0);
 
-                    // Discovery: kick off background stamp generation if due
-                    if let Some(ref mut announcer) = self.interface_announcer {
-                        announcer.maybe_start(now);
-                    }
-                    // Discovery: check for completed stamp results (non-blocking)
-                    if let Some(ref mut announcer) = self.interface_announcer {
-                        if let Some(stamp_result) = announcer.poll_ready() {
-                            if let Some(ref identity) = self.transport_identity {
-                                let disc_dest = self.discovery_dest;
-                                let name_hash = rns_core::destination::name_hash(
-                                    crate::discovery::APP_NAME,
-                                    &["discovery", "interface"],
-                                );
-                                let mut random_hash = [0u8; 10];
-                                self.rng.fill_bytes(&mut random_hash);
-                                if let Ok((announce_data, _)) = rns_core::announce::AnnounceData::pack(
-                                    identity,
-                                    &disc_dest,
-                                    &name_hash,
-                                    &random_hash,
-                                    None,
-                                    Some(&stamp_result.app_data),
-                                ) {
-                                    let flags = rns_core::packet::PacketFlags {
-                                        header_type: rns_core::constants::HEADER_1,
-                                        context_flag: rns_core::constants::FLAG_UNSET,
-                                        transport_type: rns_core::constants::TRANSPORT_BROADCAST,
-                                        destination_type: rns_core::constants::DESTINATION_PLAIN,
-                                        packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
-                                    };
-                                    if let Ok(packet) = rns_core::packet::RawPacket::pack(
-                                        flags, 0, &disc_dest, None,
-                                        rns_core::constants::CONTEXT_NONE, &announce_data,
-                                    ) {
-                                        let outbound_actions = self.engine.handle_outbound(
-                                            &packet,
-                                            rns_core::constants::DESTINATION_PLAIN,
-                                            None,
-                                            now,
-                                        );
-                                        self.dispatch_all(outbound_actions);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.tick_discovery_announcer(now);
 
                     // Periodic discovery cleanup (every ~3600 ticks = ~1 hour)
                     if self.discover_interfaces {
@@ -1491,6 +1445,9 @@ impl Driver {
                         }
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+                    if is_announce {
+                        log::debug!("Dispatching announce to interface {} (len={})", interface.0, raw.len());
+                    }
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
                             let data = if let Some(ref ifac_state) = entry.ifac {
@@ -1644,6 +1601,7 @@ impl Driver {
                     destination_hash,
                     identity_hash,
                     public_key,
+                    name_hash,
                     app_data,
                     hops,
                     receiving_interface,
@@ -1670,8 +1628,10 @@ impl Driver {
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = receiving_interface;
 
-                    // Check if this is a discovery announce
-                    if destination_hash == self.discovery_dest {
+                    // Check if this is a discovery announce (matched by name_hash
+                    // since discovery is a SINGLE destination — its dest hash varies
+                    // with the sender's identity).
+                    if name_hash == self.discovery_name_hash {
                         if self.discover_interfaces {
                             if let Some(ref app_data) = app_data {
                                 if let Some(mut discovered) = crate::discovery::parse_interface_announce(
@@ -2124,6 +2084,79 @@ impl Driver {
 
     /// Delay before first management announce after startup.
     const MANAGEMENT_ANNOUNCE_DELAY: f64 = 5.0;
+
+    /// Tick the discovery announcer: start stamp generation if due, send announce if ready.
+    fn tick_discovery_announcer(&mut self, now: f64) {
+        let announcer = match self.interface_announcer.as_mut() {
+            Some(a) => a,
+            None => return,
+        };
+
+        announcer.maybe_start(now);
+
+        let stamp_result = match announcer.poll_ready() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let identity = match self.transport_identity.as_ref() {
+            Some(id) => id,
+            None => {
+                log::warn!("Discovery: stamp ready but no transport identity");
+                return;
+            }
+        };
+
+        // Discovery is a SINGLE destination — the dest hash includes the transport identity
+        let identity_hash = identity.hash();
+        let disc_dest = rns_core::destination::destination_hash(
+            crate::discovery::APP_NAME,
+            &["discovery", "interface"],
+            Some(&identity_hash),
+        );
+        let name_hash = self.discovery_name_hash;
+        let mut random_hash = [0u8; 10];
+        self.rng.fill_bytes(&mut random_hash);
+
+        let (announce_data, _) = match rns_core::announce::AnnounceData::pack(
+            identity, &disc_dest, &name_hash, &random_hash,
+            None, Some(&stamp_result.app_data),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("Discovery: failed to pack announce: {}", e);
+                return;
+            }
+        };
+
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_SINGLE,
+            packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+        };
+
+        let packet = match RawPacket::pack(
+            flags, 0, &disc_dest, None,
+            rns_core::constants::CONTEXT_NONE, &announce_data,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Discovery: failed to pack packet: {}", e);
+                return;
+            }
+        };
+
+        let outbound_actions = self.engine.handle_outbound(
+            &packet, rns_core::constants::DESTINATION_SINGLE, None, now,
+        );
+        log::info!(
+            "Discovery announce sent for interface #{} ({} actions, dest={:02x?})",
+            stamp_result.index, outbound_actions.len(), &disc_dest[..4],
+        );
+        self.dispatch_all(outbound_actions);
+    }
 
     /// Emit management and/or blackhole announces if enabled and due.
     fn tick_management_announces(&mut self, now: f64) {
@@ -4538,8 +4571,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // Should contain the three internal destinations (tunnel_synth + path_request + discovery)
-                assert_eq!(entries.len(), 3);
+                // Should contain the two internal destinations (tunnel_synth + path_request)
+                assert_eq!(entries.len(), 2);
                 for entry in &entries {
                     assert_eq!(entry.dest_type, rns_core::constants::DESTINATION_PLAIN);
                 }
@@ -4568,8 +4601,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // 3 internal + 1 registered
-                assert_eq!(entries.len(), 4);
+                // 2 internal + 1 registered
+                assert_eq!(entries.len(), 3);
                 assert!(entries.iter().any(|e| e.hash == dest_hash
                     && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
             }
@@ -4598,8 +4631,8 @@ mod tests {
 
         match resp_rx.recv().unwrap() {
             QueryResponse::LocalDestinations(entries) => {
-                // 3 internal + 1 link destination
-                assert_eq!(entries.len(), 4);
+                // 2 internal + 1 link destination
+                assert_eq!(entries.len(), 3);
                 assert!(entries.iter().any(|e| e.hash == dest_hash
                     && e.dest_type == rns_core::constants::DESTINATION_SINGLE));
             }

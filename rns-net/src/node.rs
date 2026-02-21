@@ -96,10 +96,10 @@ fn extract_discovery_config(
         .cloned()
         .unwrap_or_else(|| iface_name.to_string());
 
-    // Config value is in minutes, convert to seconds. Min 300s (5min), default 21600s (6h).
+    // Config value is in seconds. Min 300s (5min), default 21600s (6h).
     let announce_interval = params.get("announce_interval")
         .and_then(|v| v.parse::<u64>().ok())
-        .map(|mins| (mins * 60).max(300))
+        .map(|secs| secs.max(300))
         .unwrap_or(21600);
 
     let stamp_value = params.get("discovery_stamp_value")
@@ -112,6 +112,15 @@ fn extract_discovery_config(
         .or_else(|| params.get("port"))
         .and_then(|v| v.parse().ok());
 
+    let latitude = params.get("latitude")
+        .or_else(|| params.get("lat"))
+        .and_then(|v| v.parse().ok());
+    let longitude = params.get("longitude")
+        .or_else(|| params.get("lon"))
+        .and_then(|v| v.parse().ok());
+    let height = params.get("height")
+        .and_then(|v| v.parse().ok());
+
     Some(crate::discovery::DiscoveryConfig {
         discovery_name,
         announce_interval,
@@ -119,6 +128,9 @@ fn extract_discovery_config(
         reachable_on,
         interface_type: iface_type.to_string(),
         listen_port,
+        latitude,
+        longitude,
+        height,
     })
 }
 
@@ -149,6 +161,8 @@ pub struct NodeConfig {
     pub hooks: Vec<config::ParsedHook>,
     /// Enable interface discovery.
     pub discover_interfaces: bool,
+    /// Minimum stamp value for accepting discovered interfaces (default: 14).
+    pub discovery_required_value: Option<u8>,
 }
 
 /// Interface configuration variant with its mode.
@@ -809,6 +823,7 @@ impl RnsNode {
             device: rns_config.reticulum.device.clone(),
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
+            discovery_required_value: rns_config.reticulum.required_discovery_value,
         };
 
         Self::start(node_config, callbacks)
@@ -918,6 +933,9 @@ impl RnsNode {
 
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
+        if let Some(val) = config.discovery_required_value {
+            driver.discovery_required_value = val;
+        }
 
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
@@ -2112,6 +2130,7 @@ mod tests {
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2139,6 +2158,7 @@ mod tests {
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2166,6 +2186,7 @@ mod tests {
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2600,6 +2621,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2636,6 +2658,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2667,6 +2690,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2695,6 +2719,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2730,6 +2755,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2766,6 +2792,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2799,6 +2826,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2843,6 +2871,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2880,6 +2909,7 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                discovery_required_value: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

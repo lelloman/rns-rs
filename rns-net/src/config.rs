@@ -50,6 +50,8 @@ pub struct ReticulumSection {
     /// Enable interface discovery (advertise discoverable interfaces and
     /// listen for discovery announces from the network).
     pub discover_interfaces: bool,
+    /// Minimum stamp value for accepting discovered interfaces.
+    pub required_discovery_value: Option<u8>,
 }
 
 impl Default for ReticulumSection {
@@ -71,6 +73,7 @@ impl Default for ReticulumSection {
             probe_addr: None,
             device: None,
             discover_interfaces: false,
+            required_discovery_value: None,
         }
     }
 }
@@ -442,6 +445,12 @@ fn build_reticulum_section(
             key: "discover_interfaces".into(),
             value: v.clone(),
         })?;
+    }
+    if let Some(v) = kvs.get("required_discovery_value") {
+        section.required_discovery_value = Some(v.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
+            key: "required_discovery_value".into(),
+            value: v.clone(),
+        })?);
     }
 
     Ok(section)
@@ -893,5 +902,39 @@ publish_blackhole = Yes
         assert_eq!(parse_hook_point("TunnelSynthesize"), Some(14));
         assert_eq!(parse_hook_point("Tick"), Some(15));
         assert_eq!(parse_hook_point("Unknown"), None);
+    }
+
+    #[test]
+    fn backbone_extra_params_preserved() {
+        let config = r#"
+[reticulum]
+enable_transport = True
+
+[interfaces]
+  [[Public Entrypoint]]
+    type = BackboneInterface
+    enabled = yes
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+    interface_mode = gateway
+    discoverable = Yes
+    discovery_name = PizzaSpaghettiMandolino
+    announce_interval = 600
+    discovery_stamp_value = 24
+    reachable_on = 87.106.8.245
+"#;
+        let parsed = parse(config).unwrap();
+        assert_eq!(parsed.interfaces.len(), 1);
+        let iface = &parsed.interfaces[0];
+        assert_eq!(iface.name, "Public Entrypoint");
+        assert_eq!(iface.interface_type, "BackboneInterface");
+        // After removing type, enabled, interface_mode, remaining params should include discovery keys
+        assert_eq!(iface.params.get("discoverable").map(|s| s.as_str()), Some("Yes"));
+        assert_eq!(iface.params.get("discovery_name").map(|s| s.as_str()), Some("PizzaSpaghettiMandolino"));
+        assert_eq!(iface.params.get("announce_interval").map(|s| s.as_str()), Some("600"));
+        assert_eq!(iface.params.get("discovery_stamp_value").map(|s| s.as_str()), Some("24"));
+        assert_eq!(iface.params.get("reachable_on").map(|s| s.as_str()), Some("87.106.8.245"));
+        assert_eq!(iface.params.get("listen_ip").map(|s| s.as_str()), Some("0.0.0.0"));
+        assert_eq!(iface.params.get("listen_port").map(|s| s.as_str()), Some("4242"));
     }
 }
