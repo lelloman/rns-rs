@@ -20,6 +20,7 @@ pub mod md5;
 pub mod pickle;
 pub mod rpc;
 pub mod announce_cache;
+pub mod compressor;
 pub mod link_manager;
 pub mod management;
 pub mod shared_client;

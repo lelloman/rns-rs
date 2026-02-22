@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use rns_core::buffer::types::NoopCompressor;
+use crate::compressor::Bzip2Compressor;
 use rns_core::channel::Channel;
 use rns_core::constants;
 use rns_core::link::types::{LinkId, LinkState, TeardownReason};
@@ -1348,7 +1348,7 @@ impl LinkManager {
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 link.engine.decrypt(ciphertext).map_err(|_| ())
             };
-            let assemble_actions = link.incoming_resources[idx].assemble(&decrypt_fn, &NoopCompressor);
+            let assemble_actions = link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
             all_actions.extend(assemble_actions);
         }
 
@@ -1607,10 +1607,10 @@ impl LinkManager {
             metadata,
             constants::RESOURCE_SDU,
             &encrypt_fn,
-            &NoopCompressor,
+            &Bzip2Compressor,
             rng,
             now,
-            false, // auto_compress (we use NoopCompressor)
+            true, // auto_compress
             false, // is_response
             None,  // request_id
             1,     // segment_index
@@ -1747,7 +1747,7 @@ impl LinkManager {
                 let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                     link.engine.decrypt(ciphertext).map_err(|_| ())
                 };
-                receiver_actions.extend(receiver.tick(now, &decrypt_fn, &NoopCompressor));
+                receiver_actions.extend(receiver.tick(now, &decrypt_fn, &Bzip2Compressor));
             }
 
             // Clean up completed/failed resources
