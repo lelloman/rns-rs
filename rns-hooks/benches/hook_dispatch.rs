@@ -22,7 +22,7 @@ fn bench_noop_slot(c: &mut Criterion) {
         data_offset: 0,
         data_len: 64,
     };
-    let ctx = HookContext::Packet(&pkt_ctx);
+    let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &[] };
 
     c.bench_function("noop_slot", |b| {
         b.iter(|| {
@@ -101,7 +101,7 @@ fn bench_complex_hook(c: &mut Criterion) {
         data_offset: 0,
         data_len: 128,
     };
-    let ctx = HookContext::Packet(&pkt_ctx);
+    let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &[] };
 
     c.bench_function("complex_hook", |b| {
         b.iter(|| {

@@ -299,7 +299,7 @@ impl HookManager {
         let mut accumulated_actions = Vec::new();
         let mut last_result: Option<HookResult> = None;
         let mut last_modified_data: Option<Vec<u8>> = None;
-        let is_packet_ctx = matches!(ctx, HookContext::Packet(_));
+        let is_packet_ctx = matches!(ctx, HookContext::Packet { .. });
 
         for program in programs.iter_mut() {
             if !program.enabled {

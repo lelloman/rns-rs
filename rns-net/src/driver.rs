@@ -471,7 +471,7 @@ impl Driver {
                     // PreIngress hook: after IFAC, before engine processing
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Packet(&rns_hooks::PacketContext {
+                        let pkt_ctx = rns_hooks::PacketContext {
                             flags: if packet.is_empty() { 0 } else { packet[0] },
                             hops: if packet.len() > 1 { packet[1] } else { 0 },
                             destination_hash: extract_dest_hash(&packet),
@@ -480,7 +480,8 @@ impl Driver {
                             interface_id: interface_id.0,
                             data_offset: 0,
                             data_len: packet.len() as u32,
-                        });
+                        };
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &packet };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         {
@@ -520,7 +521,7 @@ impl Driver {
                     // PreDispatch hook: after engine, before action dispatch
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Packet(&rns_hooks::PacketContext {
+                        let pkt_ctx2 = rns_hooks::PacketContext {
                             flags: if packet.is_empty() { 0 } else { packet[0] },
                             hops: if packet.len() > 1 { packet[1] } else { 0 },
                             destination_hash: extract_dest_hash(&packet),
@@ -529,7 +530,8 @@ impl Driver {
                             interface_id: interface_id.0,
                             data_offset: 0,
                             data_len: packet.len() as u32,
-                        });
+                        };
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx2, raw: &packet };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::PreDispatch as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
@@ -1540,7 +1542,7 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet(&pkt_ctx);
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         {
@@ -1601,7 +1603,7 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet(&pkt_ctx);
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         {
@@ -1650,7 +1652,7 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet(&pkt_ctx);
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         {
@@ -1878,7 +1880,7 @@ impl Driver {
                             data_offset: 0,
                             data_len: data.len() as u32,
                         };
-                        let ctx = HookContext::Packet(&pkt_ctx);
+                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &data };
                         let now = time::now();
                         let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
                         {

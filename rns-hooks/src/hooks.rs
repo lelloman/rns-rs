@@ -44,7 +44,7 @@ impl HookPoint {
 /// This enum carries the relevant data for each hook invocation.
 /// The WASM runtime serializes this into the guest's linear memory.
 pub enum HookContext<'a> {
-    Packet(&'a crate::context::PacketContext),
+    Packet { ctx: &'a crate::context::PacketContext, raw: &'a [u8] },
     Interface { interface_id: u64 },
     Tick,
     Announce {

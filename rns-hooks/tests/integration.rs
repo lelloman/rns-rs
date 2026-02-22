@@ -89,7 +89,7 @@ fn packet_logger_continue_on_packet() {
         data_offset: 0,
         data_len: 0,
     };
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -144,7 +144,7 @@ fn path_modifier_modify_on_packet() {
         data_offset: 0,
         data_len: 0,
     };
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -216,7 +216,7 @@ fn rate_limiter_continues_below_threshold() {
     let Some(mut prog) = load_example(&mgr, "rate_limiter") else { return };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     // First call — well below MAX_PACKETS=100
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
@@ -230,7 +230,7 @@ fn rate_limiter_drops_after_threshold() {
     let Some(mut prog) = load_example(&mgr, "rate_limiter") else { return };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     // Send 100 packets (all should continue)
     for _ in 0..100 {
         let exec = mgr
@@ -330,7 +330,7 @@ fn packet_mirror_continues_and_injects_action() {
     let Some(mut prog) = load_example(&mgr, "packet_mirror") else { return };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -495,7 +495,7 @@ fn metrics_continues_on_all_context_types() {
 
     let pkt = make_packet_ctx();
     let contexts: Vec<HookContext> = vec![
-        HookContext::Packet(&pkt),
+        HookContext::Packet { ctx: &pkt, raw: &[] },
         HookContext::Tick,
         HookContext::Announce {
             destination_hash: [0x11; 16],
@@ -527,7 +527,7 @@ fn metrics_no_injected_actions() {
     let Some(mut prog) = load_example(&mgr, "metrics") else { return };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet(&pkt);
+    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();

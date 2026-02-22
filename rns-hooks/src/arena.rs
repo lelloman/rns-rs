@@ -18,8 +18,9 @@ pub fn write_context(
 ) -> Result<usize, HookError> {
     let mem_size = memory.data_size(&store);
     match ctx {
-        HookContext::Packet(pkt) => {
-            let size = std::mem::size_of::<PacketContext>() + pkt.data_len as usize;
+        HookContext::Packet { ctx: pkt, raw } => {
+            let header_size = std::mem::size_of::<PacketContext>();
+            let size = header_size + raw.len();
             if ARENA_BASE + size > mem_size {
                 return Err(HookError::InvalidResult("arena overflow for Packet context".into()));
             }
@@ -40,13 +41,14 @@ pub fn write_context(
             // 4 bytes padding at offset 60 for u64 alignment
             write_u32(data, base + 60, 0);
             write_u64(data, base + 64, pkt.interface_id);
-            // data_offset: offset from arena base to the variable data
-            let header_size = std::mem::size_of::<PacketContext>();
+            // data_offset: offset from start of struct to variable data
             write_u32(data, base + 72, header_size as u32);
-            write_u32(data, base + 76, pkt.data_len);
-            // Note: we don't have the actual packet data bytes here (PacketContext only
-            // has offset/len). The guest will see data_len=N but the data area is zeroed.
-            // In a full implementation the caller would copy packet bytes after the header.
+            write_u32(data, base + 76, raw.len() as u32);
+            // Copy raw packet bytes after the header
+            if !raw.is_empty() {
+                let data_start = base + header_size;
+                data[data_start..data_start + raw.len()].copy_from_slice(raw);
+            }
             Ok(size)
         }
         HookContext::Interface { interface_id } => {
