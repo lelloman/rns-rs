@@ -434,6 +434,11 @@ impl Driver {
 
             match event {
                 Event::Frame { interface_id, data } => {
+                    // Log incoming announces
+                    if data.len() > 2 && (data[0] & 0x03) == 0x01 {
+                        log::info!("Frame: announce from iface {} (len={}, flags=0x{:02x})",
+                            interface_id.0, data.len(), data[0]);
+                    }
                     // Update rx stats
                     if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                         entry.stats.rxb += data.len() as u64;
@@ -684,6 +689,11 @@ impl Driver {
                 Event::SendOutbound { raw, dest_type, attached_interface } => {
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
+                            let is_announce = packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE;
+                            if is_announce {
+                                log::info!("SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
+                                    &packet.destination_hash[..4], raw.len(), dest_type, attached_interface);
+                            }
                             // Track sent DATA packets for proof matching
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
                                 self.sent_packets.insert(
@@ -697,6 +707,15 @@ impl Driver {
                                 attached_interface,
                                 time::now(),
                             );
+                            if is_announce {
+                                log::info!("SendOutbound: announce routed to {} actions: {:?}",
+                                    actions.len(),
+                                    actions.iter().map(|a| match a {
+                                        TransportAction::SendOnInterface { interface, .. } => format!("SendOn({})", interface.0),
+                                        TransportAction::BroadcastOnAllInterfaces { .. } => "BroadcastAll".to_string(),
+                                        _ => "other".to_string(),
+                                    }).collect::<Vec<_>>());
+                            }
                             self.dispatch_all(actions);
                         }
                         Err(e) => {
@@ -1534,7 +1553,9 @@ impl Driver {
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if is_announce {
-                        log::debug!("Dispatching announce to interface {} (len={})", interface.0, raw.len());
+                        log::info!("Dispatching announce to interface {} (len={}, online={})",
+                            interface.0, raw.len(),
+                            self.interfaces.get(&interface).map(|e| e.online).unwrap_or(false));
                     }
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
@@ -1551,6 +1572,18 @@ impl Driver {
                             }
                             if let Err(e) = entry.writer.send_frame(&data) {
                                 log::warn!("[{}] send failed: {}", entry.info.id.0, e);
+                            } else if is_announce {
+                                // For HEADER_2 (transported), dest hash is at bytes 18-33
+                                // For HEADER_1 (original), dest hash is at bytes 2-17
+                                let header_type = (data[0] >> 6) & 0x03;
+                                let dest_start = if header_type == 1 { 18usize } else { 2usize };
+                                let dest_preview = if data.len() >= dest_start + 4 {
+                                    format!("{:02x?}", &data[dest_start..dest_start+4])
+                                } else {
+                                    "??".into()
+                                };
+                                log::info!("Announce SENT OK on interface {} (len={}, h={}, dest=[{}])",
+                                    interface.0, data.len(), header_type, dest_preview);
                             }
                         }
                     }
