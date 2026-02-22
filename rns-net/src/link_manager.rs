@@ -513,7 +513,7 @@ impl LinkManager {
         &mut self,
         link_id_bytes: &[u8; 16],
         packet: &RawPacket,
-        _packet_hash: [u8; 32],
+        packet_hash: [u8; 32],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         // First pass: perform engine operations, collect results
@@ -525,7 +525,7 @@ impl LinkManager {
             Channel { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
             Request { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
             Response { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
-            Generic { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8>, context: u8 },
+            Generic { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8>, context: u8, packet_hash: [u8; 32] },
             /// Resource advertisement (link-decrypted).
             ResourceAdv { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
             /// Resource part request (link-decrypted).
@@ -679,7 +679,7 @@ impl LinkManager {
                         Ok(plaintext) => {
                             let inbound_actions = link.engine.record_inbound(time::now());
                             let link_id = *link.engine.link_id();
-                            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context: packet.context }
+                            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context: packet.context, packet_hash }
                         }
                         Err(_) => LinkDataResult::Error,
                     }
@@ -752,13 +752,41 @@ impl LinkManager {
                 // Unpack msgpack response: [Bin(request_id), response_value]
                 actions.extend(self.handle_response(&link_id, &plaintext));
             }
-            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context } => {
+            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context, packet_hash } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.push(LinkManagerAction::LinkDataReceived {
                     link_id,
                     context,
                     data: plaintext,
                 });
+
+                // Generate proof for the link packet (Python: Link.prove_packet)
+                if let Some(link) = self.links.get(&link_id) {
+                    if let Some(ld) = self.link_destinations.get(&link.dest_hash) {
+                        let signature = ld.sig_prv.sign(&packet_hash);
+                        let mut proof_data = Vec::with_capacity(96);
+                        proof_data.extend_from_slice(&packet_hash);
+                        proof_data.extend_from_slice(&signature);
+
+                        let flags = PacketFlags {
+                            header_type: constants::HEADER_1,
+                            context_flag: constants::FLAG_UNSET,
+                            transport_type: constants::TRANSPORT_BROADCAST,
+                            destination_type: constants::DESTINATION_LINK,
+                            packet_type: constants::PACKET_TYPE_PROOF,
+                        };
+                        if let Ok(pkt) = RawPacket::pack(
+                            flags, 0, &link_id, None,
+                            constants::CONTEXT_NONE, &proof_data,
+                        ) {
+                            actions.push(LinkManagerAction::SendPacket {
+                                raw: pkt.raw,
+                                dest_type: constants::DESTINATION_LINK,
+                                attached_interface: None,
+                            });
+                        }
+                    }
+                }
             }
             LinkDataResult::ResourceAdv { link_id, inbound_actions, plaintext } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
