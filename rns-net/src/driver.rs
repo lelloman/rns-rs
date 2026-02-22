@@ -436,7 +436,7 @@ impl Driver {
                 Event::Frame { interface_id, data } => {
                     // Log incoming announces
                     if data.len() > 2 && (data[0] & 0x03) == 0x01 {
-                        log::info!("Frame: announce from iface {} (len={}, flags=0x{:02x})",
+                        log::debug!("Frame: announce from iface {} (len={}, flags=0x{:02x})",
                             interface_id.0, data.len(), data[0]);
                     }
                     // Update rx stats
@@ -693,7 +693,7 @@ impl Driver {
                         Ok(packet) => {
                             let is_announce = packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE;
                             if is_announce {
-                                log::info!("SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
+                                log::debug!("SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
                                     &packet.destination_hash[..4], raw.len(), dest_type, attached_interface);
                             }
                             // Track sent DATA packets for proof matching
@@ -710,7 +710,7 @@ impl Driver {
                                 time::now(),
                             );
                             if is_announce {
-                                log::info!("SendOutbound: announce routed to {} actions: {:?}",
+                                log::debug!("SendOutbound: announce routed to {} actions: {:?}",
                                     actions.len(),
                                     actions.iter().map(|a| match a {
                                         TransportAction::SendOnInterface { interface, .. } => format!("SendOn({})", interface.0),
@@ -1555,7 +1555,7 @@ impl Driver {
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if is_announce {
-                        log::info!("Dispatching announce to interface {} (len={}, online={})",
+                        log::debug!("Dispatching announce to interface {} (len={}, online={})",
                             interface.0, raw.len(),
                             self.interfaces.get(&interface).map(|e| e.online).unwrap_or(false));
                     }
@@ -1584,7 +1584,7 @@ impl Driver {
                                 } else {
                                     "??".into()
                                 };
-                                log::info!("Announce SENT OK on interface {} (len={}, h={}, dest=[{}])",
+                                log::debug!("Announce SENT OK on interface {} (len={}, h={}, dest=[{}])",
                                     interface.0, data.len(), header_type, dest_preview);
                             }
                         }
@@ -1771,7 +1771,7 @@ impl Driver {
                                     if let Err(e) = self.discovered_interfaces.store(&discovered) {
                                         log::warn!("Failed to store discovered interface: {}", e);
                                     } else {
-                                        log::info!(
+                                        log::debug!(
                                             "Discovered interface '{}' ({}) at {}:{} [stamp={}]",
                                             discovered.name,
                                             discovered.interface_type,
@@ -2274,7 +2274,7 @@ impl Driver {
         let outbound_actions = self.engine.handle_outbound(
             &packet, rns_core::constants::DESTINATION_SINGLE, None, now,
         );
-        log::info!(
+        log::debug!(
             "Discovery announce sent for interface #{} ({} actions, dest={:02x?})",
             stamp_result.index, outbound_actions.len(), &disc_dest[..4],
         );
