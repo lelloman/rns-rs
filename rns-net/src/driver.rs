@@ -436,7 +436,7 @@ impl Driver {
                 Event::Frame { interface_id, data } => {
                     // Log incoming announces
                     if data.len() > 2 && (data[0] & 0x03) == 0x01 {
-                        log::info!("ANNOUNCE_DBG: frame from iface {} (len={}, flags=0x{:02x})",
+                        log::debug!("Announce:frame from iface {} (len={}, flags=0x{:02x})",
                             interface_id.0, data.len(), data[0]);
                     }
                     // Update rx stats
@@ -1555,7 +1555,7 @@ impl Driver {
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if is_announce {
-                        log::info!("ANNOUNCE_DBG: dispatching to iface {} (len={}, online={})",
+                        log::debug!("Announce:dispatching to iface {} (len={}, online={})",
                             interface.0, raw.len(),
                             self.interfaces.get(&interface).map(|e| e.online).unwrap_or(false));
                     }
@@ -1584,7 +1584,7 @@ impl Driver {
                                 } else {
                                     "??".into()
                                 };
-                                log::info!("ANNOUNCE_DBG: SENT on iface {} (len={}, h={}, dest=[{}])",
+                                log::debug!("Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
                                     interface.0, data.len(), header_type, dest_preview);
                             }
                         }
@@ -1797,7 +1797,7 @@ impl Driver {
                     };
                     self.known_destinations.insert(destination_hash, announced.clone());
                     log::info!(
-                        "ANNOUNCE_DBG: validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
+                        "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
                         destination_hash[0], destination_hash[1], destination_hash[2], destination_hash[3],
                         hops,
                     );
