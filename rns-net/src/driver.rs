@@ -2698,7 +2698,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, announces, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2724,7 +2724,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2748,7 +2748,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2775,7 +2775,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2802,7 +2802,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2824,7 +2824,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2839,7 +2839,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, announces, paths, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2870,7 +2870,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2904,7 +2904,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2942,7 +2942,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, iface_ups, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2985,7 +2985,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, iface_downs) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3021,7 +3021,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, iface_ups, iface_downs) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3052,7 +3052,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3080,7 +3080,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3105,7 +3105,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3134,7 +3134,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3165,7 +3165,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3200,7 +3200,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3238,7 +3238,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3276,7 +3276,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3315,7 +3315,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0xAA; 16]), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some([0xAA; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3339,7 +3339,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3361,7 +3361,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3383,7 +3383,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3406,7 +3406,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3429,7 +3429,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3455,7 +3455,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3481,7 +3481,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3515,7 +3515,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _link_established, _, _) = MockCallbacks::with_link_tracking();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3557,7 +3557,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3590,7 +3590,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3632,7 +3632,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3664,7 +3664,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3691,7 +3691,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3728,7 +3728,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3760,7 +3760,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3794,7 +3794,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3829,7 +3829,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3875,7 +3875,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3910,7 +3910,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3960,7 +3960,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3992,7 +3992,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0xBB; 16]), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some([0xBB; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4026,7 +4026,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4050,7 +4050,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4079,7 +4079,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4105,7 +4105,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4146,7 +4146,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4198,7 +4198,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4247,7 +4247,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4309,7 +4309,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4380,7 +4380,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4452,7 +4452,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4513,7 +4513,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4593,7 +4593,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4651,7 +4651,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4709,7 +4709,7 @@ mod tests {
     fn query_local_destinations_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false };
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4733,7 +4733,7 @@ mod tests {
     fn query_local_destinations_with_registered() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false };
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xAA; 16];
@@ -4762,7 +4762,7 @@ mod tests {
     fn query_local_destinations_tracks_link_dest() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false };
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xBB; 16];
@@ -4793,7 +4793,7 @@ mod tests {
     fn query_links_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false };
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4813,7 +4813,7 @@ mod tests {
     fn query_resources_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false };
+        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4865,7 +4865,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4895,7 +4895,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4962,7 +4962,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4986,7 +4986,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5037,7 +5037,7 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5119,7 +5119,7 @@ mod tests {
             proof_requested: Arc::new(Mutex::new(Vec::new())),
         };
         let mut driver2 = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx2,
             tx2.clone(),
             Box::new(cbs2),
@@ -5155,7 +5155,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false },
+            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5184,7 +5184,7 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false },
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
             rx,
             tx.clone(),
             Box::new(cbs),

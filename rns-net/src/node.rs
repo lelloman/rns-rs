@@ -169,6 +169,9 @@ pub struct NodeConfig {
     /// is a duplicate of the existing path entry.  Default `false` preserves
     /// Python-compatible anti-replay behaviour.
     pub prefer_shorter_path: bool,
+    /// Maximum number of alternative paths stored per destination.
+    /// Default 1 (single path, backward-compatible).
+    pub max_paths_per_destination: usize,
 }
 
 /// Interface configuration variant with its mode.
@@ -832,6 +835,7 @@ impl RnsNode {
             discovery_required_value: rns_config.reticulum.required_discovery_value,
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
+            max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
         };
 
         Self::start(node_config, callbacks)
@@ -847,6 +851,7 @@ impl RnsNode {
             transport_enabled: config.transport_enabled,
             identity_hash: Some(*identity.hash()),
             prefer_shorter_path: config.prefer_shorter_path,
+            max_paths_per_destination: config.max_paths_per_destination,
         };
 
         let (tx, rx) = event::channel();
@@ -2181,6 +2186,7 @@ mod tests {
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         )
@@ -2211,6 +2217,7 @@ mod tests {
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         )
@@ -2241,6 +2248,7 @@ mod tests {
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         )
@@ -2678,6 +2686,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2717,6 +2726,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2751,6 +2761,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2782,6 +2793,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2820,6 +2832,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2859,6 +2872,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2895,6 +2909,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2942,6 +2957,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2982,6 +2998,7 @@ enable_transport = False
                 discovery_required_value: None,
             respond_to_probes: false,
                 prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

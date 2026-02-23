@@ -55,6 +55,9 @@ pub struct ReticulumSection {
     /// Accept an announce with strictly fewer hops even when the random_blob
     /// is a duplicate of the existing path entry.
     pub prefer_shorter_path: bool,
+    /// Maximum number of alternative paths stored per destination.
+    /// Default 1 (single path, backward-compatible).
+    pub max_paths_per_destination: usize,
 }
 
 impl Default for ReticulumSection {
@@ -78,6 +81,7 @@ impl Default for ReticulumSection {
             discover_interfaces: false,
             required_discovery_value: None,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         }
     }
 }
@@ -461,6 +465,13 @@ fn build_reticulum_section(
             key: "prefer_shorter_path".into(),
             value: v.clone(),
         })?;
+    }
+    if let Some(v) = kvs.get("max_paths_per_destination") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "max_paths_per_destination".into(),
+            value: v.clone(),
+        })?;
+        section.max_paths_per_destination = n.max(1);
     }
 
     Ok(section)

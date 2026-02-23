@@ -1,4 +1,4 @@
-use super::tables::PathEntry;
+use super::tables::{PathEntry, PathSet};
 use crate::constants;
 
 /// Extract emission timestamp from bytes [5:10] of a random_blob (big-endian u64).
@@ -96,6 +96,81 @@ pub fn should_update_path(
         }
 
         PathDecision::Reject
+    }
+}
+
+/// Decision for multi-path announce processing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MultiPathDecision {
+    /// Replace/update the primary path (or the path with the same next_hop).
+    ReplacePrimary,
+    /// Accept as an alternative path via a new next_hop.
+    AddAlternative,
+    /// Reject this announce.
+    Reject,
+}
+
+/// Multi-path aware announce decision.
+///
+/// Determines whether an incoming announce should update the primary path,
+/// be stored as an alternative, or be rejected.
+///
+/// - No existing `PathSet` → `ReplacePrimary` (first path for this dest)
+/// - Same `next_hop` exists in the set → delegate to `should_update_path`
+///   against **that** specific path entry
+/// - New `next_hop` → accept as `AddAlternative` if the blob is genuinely
+///   new (not in any stored path's blobs) and emission timestamp is valid
+pub fn decide_announce_multipath(
+    existing_set: Option<&PathSet>,
+    announce_hops: u8,
+    announce_emitted_ts: u64,
+    random_blob: &[u8; 10],
+    next_hop: &[u8; 16],
+    path_is_unresponsive: bool,
+    now: f64,
+    prefer_shorter_path: bool,
+) -> MultiPathDecision {
+    // Hop limit
+    if announce_hops >= constants::PATHFINDER_M + 1 {
+        return MultiPathDecision::Reject;
+    }
+
+    let path_set = match existing_set {
+        None => return MultiPathDecision::ReplacePrimary,
+        Some(ps) if ps.is_empty() => return MultiPathDecision::ReplacePrimary,
+        Some(ps) => ps,
+    };
+
+    // Check if there's already a path with the same next_hop
+    if let Some(existing_path) = path_set.find_by_next_hop(next_hop) {
+        let decision = should_update_path(
+            Some(existing_path),
+            announce_hops,
+            announce_emitted_ts,
+            random_blob,
+            path_is_unresponsive,
+            now,
+            prefer_shorter_path,
+        );
+        match decision {
+            PathDecision::Add => MultiPathDecision::ReplacePrimary,
+            PathDecision::Reject => MultiPathDecision::Reject,
+        }
+    } else {
+        // New next_hop — check if blob is genuinely new across all paths
+        let all_blobs = path_set.all_random_blobs();
+        let blob_is_new = !all_blobs.contains(random_blob);
+
+        if !blob_is_new {
+            return MultiPathDecision::Reject;
+        }
+
+        let max_timebase = timebase_from_random_blobs(&all_blobs);
+        if announce_emitted_ts >= max_timebase {
+            MultiPathDecision::AddAlternative
+        } else {
+            MultiPathDecision::Reject
+        }
     }
 }
 
@@ -349,6 +424,94 @@ mod tests {
         assert_eq!(
             should_update_path(Some(&entry), 5, 100, &blob, false, 1000.0, true),
             PathDecision::Reject
+        );
+    }
+
+    // --- MultiPathDecision tests ---
+
+    #[test]
+    fn test_multipath_no_existing_set_replace_primary() {
+        let blob = make_blob(100);
+        assert_eq!(
+            decide_announce_multipath(None, 3, 100, &blob, &[0xBB; 16], false, 1000.0, false),
+            MultiPathDecision::ReplacePrimary
+        );
+    }
+
+    #[test]
+    fn test_multipath_same_nexthop_update() {
+        let blob_old = make_blob(100);
+        let blob_new = make_blob(200);
+        let entry = make_path_entry(3, &[blob_old], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        // Same next_hop, newer blob → ReplacePrimary
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 2, 200, &blob_new, &[0xAA; 16], false, 1000.0, false),
+            MultiPathDecision::ReplacePrimary
+        );
+    }
+
+    #[test]
+    fn test_multipath_same_nexthop_reject() {
+        let blob = make_blob(100);
+        let entry = make_path_entry(3, &[blob], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        // Same next_hop, same blob → Reject
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 3, 100, &blob, &[0xAA; 16], false, 1000.0, false),
+            MultiPathDecision::Reject
+        );
+    }
+
+    #[test]
+    fn test_multipath_new_nexthop_novel_blob_add_alternative() {
+        let blob_existing = make_blob(100);
+        let blob_new = make_blob(200);
+        let entry = make_path_entry(3, &[blob_existing], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        // Different next_hop, novel blob, newer emission → AddAlternative
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 4, 200, &blob_new, &[0xCC; 16], false, 1000.0, false),
+            MultiPathDecision::AddAlternative
+        );
+    }
+
+    #[test]
+    fn test_multipath_new_nexthop_known_blob_reject() {
+        let blob = make_blob(100);
+        let entry = make_path_entry(3, &[blob], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        // Different next_hop but blob already known → Reject
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 4, 100, &blob, &[0xCC; 16], false, 1000.0, false),
+            MultiPathDecision::Reject
+        );
+    }
+
+    #[test]
+    fn test_multipath_new_nexthop_older_emission_reject() {
+        let blob_existing = make_blob(200);
+        let blob_new = make_blob(100); // older emission
+        let entry = make_path_entry(3, &[blob_existing], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        // Novel blob but older emission timestamp → Reject
+        assert_eq!(
+            decide_announce_multipath(Some(&ps), 4, 100, &blob_new, &[0xCC; 16], false, 1000.0, false),
+            MultiPathDecision::Reject
+        );
+    }
+
+    #[test]
+    fn test_multipath_hop_limit_reject() {
+        let blob = make_blob(100);
+        assert_eq!(
+            decide_announce_multipath(None, 129, 100, &blob, &[0xBB; 16], false, 1000.0, false),
+            MultiPathDecision::Reject
         );
     }
 }

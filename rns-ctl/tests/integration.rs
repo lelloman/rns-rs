@@ -112,6 +112,8 @@ fn start_test_server_with_config(
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         callbacks,
     )
@@ -851,6 +853,8 @@ mod tls_tests {
                 discover_interfaces: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
             },
             callbacks,
         )

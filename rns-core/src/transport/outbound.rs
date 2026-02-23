@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::types::{InterfaceId, InterfaceInfo, TransportAction};
-use super::tables::PathEntry;
+use super::tables::PathSet;
 use crate::constants;
 use crate::packet::RawPacket;
 
@@ -12,7 +12,7 @@ use crate::packet::RawPacket;
 /// 2. If path known and hops == 1 → send as-is on path interface
 /// 3. No path → broadcast on all OUT interfaces (with mode filtering for announces)
 pub fn route_outbound(
-    path_table: &alloc::collections::BTreeMap<[u8; 16], PathEntry>,
+    path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
     local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
     packet: &RawPacket,
@@ -28,7 +28,7 @@ pub fn route_outbound(
         && dest_type != constants::DESTINATION_GROUP;
 
     if use_path_table {
-        if let Some(path_entry) = path_table.get(&packet.destination_hash) {
+        if let Some(path_entry) = path_table.get(&packet.destination_hash).and_then(|ps| ps.primary()) {
             if path_entry.hops > 1 {
                 if packet.flags.header_type == constants::HEADER_1 {
                     // Rewrite H1 → H2 with transport
@@ -136,7 +136,7 @@ pub(crate) fn should_transmit_announce(
     dest_hash: &[u8; 16],
     hops: u8,
     local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
-    path_table: &alloc::collections::BTreeMap<[u8; 16], PathEntry>,
+    path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
 ) -> bool {
     let _ = hops;
@@ -151,7 +151,7 @@ pub(crate) fn should_transmit_announce(
                 return true;
             }
             // Non-local: allow unless source interface is ROAMING or BOUNDARY
-            if let Some(path) = path_table.get(dest_hash) {
+            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
                 if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
                     if from_iface.mode == constants::MODE_ROAMING
                         || from_iface.mode == constants::MODE_BOUNDARY
@@ -170,7 +170,7 @@ pub(crate) fn should_transmit_announce(
                 return true;
             }
             // Non-local: allow unless source interface is ROAMING
-            if let Some(path) = path_table.get(dest_hash) {
+            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
                 if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
                     if from_iface.mode == constants::MODE_ROAMING {
                         return false;
@@ -216,8 +216,10 @@ mod tests {
         }
     }
 
-    fn make_path(hops: u8, iface: u64) -> PathEntry {
-        PathEntry {
+    use super::super::tables::PathEntry;
+
+    fn make_path(hops: u8, iface: u64) -> PathSet {
+        PathSet::from_single(PathEntry {
             timestamp: 1000.0,
             next_hop: [0xAA; 16],
             hops,
@@ -226,7 +228,7 @@ mod tests {
             receiving_interface: InterfaceId(iface),
             packet_hash: [0; 32],
             announce_raw: None,
-        }
+        }, 1)
     }
 
     fn make_data_packet(dest_hash: &[u8; 16]) -> RawPacket {

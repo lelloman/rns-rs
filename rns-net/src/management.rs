@@ -425,6 +425,7 @@ mod tests {
             transport_enabled: true,
             identity_hash: Some([0xAA; 16]),
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         })
     }
 

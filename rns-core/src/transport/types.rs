@@ -143,6 +143,11 @@ pub struct TransportConfig {
     /// is a duplicate of the existing path entry.  Default `false` preserves
     /// Python-compatible anti-replay behaviour.
     pub prefer_shorter_path: bool,
+    /// Maximum number of alternative paths stored per destination.
+    /// When >1, failover to the next-best path happens automatically
+    /// when the primary becomes unresponsive.  Default 1 (single path,
+    /// backward-compatible with Python Reticulum behaviour).
+    pub max_paths_per_destination: usize,
 }
 
 #[cfg(test)]
@@ -163,9 +168,11 @@ mod tests {
             transport_enabled: false,
             identity_hash: None,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
         assert!(!cfg.prefer_shorter_path);
+        assert_eq!(cfg.max_paths_per_destination, 1);
     }
 }

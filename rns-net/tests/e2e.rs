@@ -517,6 +517,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TransportCallbacks),
     )
@@ -561,6 +562,7 @@ fn start_client_node(
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         callbacks,
     )
@@ -786,6 +788,7 @@ fn test_direct_link_no_transport() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1202,6 +1205,7 @@ fn test_plain_message_delivery() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1275,6 +1279,7 @@ fn test_group_message_delivery() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1345,6 +1350,7 @@ fn test_group_wrong_key_fails() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2151,6 +2157,7 @@ fn test_udp_announce_and_message() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2189,6 +2196,7 @@ fn test_udp_announce_and_message() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2321,6 +2329,7 @@ fn discovery_announce_received_by_client() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TransportCallbacks),
     )
@@ -2367,6 +2376,7 @@ fn discovery_announce_received_by_client() {
             discovery_required_value: Some(8),
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2467,6 +2477,7 @@ fn discovery_announce_through_relay() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TransportCallbacks),
     )
@@ -2519,6 +2530,7 @@ fn discovery_announce_through_relay() {
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TransportCallbacks),
     )
@@ -2563,6 +2575,7 @@ fn discovery_announce_through_relay() {
             discovery_required_value: Some(8),
             respond_to_probes: false,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )

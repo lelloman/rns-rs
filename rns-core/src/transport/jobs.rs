@@ -142,35 +142,32 @@ pub fn cull_link_table(
 }
 
 /// Cull expired entries from the path table.
+///
+/// Culls individual paths within each PathSet, then removes empty PathSets.
 pub fn cull_path_table(
-    path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathEntry>,
+    path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
 ) -> usize {
-    let mut stale = Vec::new();
-    for (dest_hash, entry) in path_table.iter() {
-        if now > entry.expires {
-            stale.push(*dest_hash);
-        } else if !interfaces.contains_key(&entry.receiving_interface) {
-            stale.push(*dest_hash);
-        }
+    let mut culled = 0usize;
+    for ps in path_table.values_mut() {
+        let before = ps.len();
+        ps.cull(now, |iface_id| interfaces.contains_key(iface_id));
+        culled += before - ps.len();
     }
-
-    let count = stale.len();
-    for hash in stale {
-        path_table.remove(&hash);
-    }
-    count
+    path_table.retain(|_, ps| !ps.is_empty());
+    culled
 }
 
 /// Remove path state entries that no longer have a corresponding path.
 pub fn cull_path_states(
     path_states: &mut alloc::collections::BTreeMap<[u8; 16], u8>,
-    path_table: &alloc::collections::BTreeMap<[u8; 16], super::tables::PathEntry>,
+    path_table: &alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
 ) -> usize {
     let mut stale = Vec::new();
     for dest_hash in path_states.keys() {
-        if !path_table.contains_key(dest_hash) {
+        let has_path = path_table.get(dest_hash).map_or(false, |ps| !ps.is_empty());
+        if !has_path {
             stale.push(*dest_hash);
         }
     }
@@ -401,7 +398,7 @@ mod tests {
 
         table.insert(
             [0x55; 16],
-            PathEntry {
+            super::super::tables::PathSet::from_single(PathEntry {
                 timestamp: 100.0,
                 next_hop: [0; 16],
                 hops: 2,
@@ -410,7 +407,7 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
-            },
+            }, 1),
         );
 
         let count = cull_path_table(&mut table, &interfaces, 600.0);
@@ -438,7 +435,7 @@ mod tests {
 
         table.insert(
             [0x88; 16],
-            PathEntry {
+            super::super::tables::PathSet::from_single(PathEntry {
                 timestamp: 1000.0,
                 next_hop: [0; 16],
                 hops: 1,
@@ -447,7 +444,7 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
-            },
+            }, 1),
         );
 
         let count = cull_path_table(&mut table, &interfaces, 1100.0);

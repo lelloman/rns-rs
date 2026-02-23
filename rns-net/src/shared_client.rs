@@ -61,6 +61,7 @@ impl RnsNode {
             transport_enabled: false,
             identity_hash: None,
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         };
 
         let (tx, rx) = event::channel();

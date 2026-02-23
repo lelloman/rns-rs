@@ -32,11 +32,12 @@ use self::inbound::{
 };
 use self::outbound::{route_outbound, should_transmit_announce};
 use self::pathfinder::{
-    extract_random_blob, should_update_path, timebase_from_random_blob, PathDecision,
+    extract_random_blob, timebase_from_random_blob,
+    decide_announce_multipath, MultiPathDecision,
 };
 use self::ingress_control::IngressControl;
 use self::rate_limit::AnnounceRateLimiter;
-use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry};
+use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
 use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 
 /// The core transport/routing engine.
@@ -45,7 +46,7 @@ use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, T
 /// Returns `Vec<TransportAction>` that the caller must execute.
 pub struct TransportEngine {
     config: TransportConfig,
-    path_table: BTreeMap<[u8; 16], PathEntry>,
+    path_table: BTreeMap<[u8; 16], PathSet>,
     announce_table: BTreeMap<[u8; 16], AnnounceEntry>,
     reverse_table: BTreeMap<[u8; 16], tables::ReverseEntry>,
     link_table: BTreeMap<[u8; 16], LinkEntry>,
@@ -121,19 +122,19 @@ impl TransportEngine {
     // =========================================================================
 
     pub fn has_path(&self, dest_hash: &[u8; 16]) -> bool {
-        self.path_table.contains_key(dest_hash)
+        self.path_table.get(dest_hash).map_or(false, |ps| !ps.is_empty())
     }
 
     pub fn hops_to(&self, dest_hash: &[u8; 16]) -> Option<u8> {
-        self.path_table.get(dest_hash).map(|e| e.hops)
+        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.hops)
     }
 
     pub fn next_hop(&self, dest_hash: &[u8; 16]) -> Option<[u8; 16]> {
-        self.path_table.get(dest_hash).map(|e| e.next_hop)
+        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.next_hop)
     }
 
     pub fn next_hop_interface(&self, dest_hash: &[u8; 16]) -> Option<InterfaceId> {
-        self.path_table.get(dest_hash).map(|e| e.receiving_interface)
+        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.receiving_interface)
     }
 
     // =========================================================================
@@ -157,6 +158,17 @@ impl TransportEngine {
                 }
             }
         }
+
+        // Failover: if we have alternative paths, promote the next one
+        if let Some(ps) = self.path_table.get_mut(dest_hash) {
+            if ps.len() > 1 {
+                ps.failover(false); // demote old primary to back
+                // Clear unresponsive state since we promoted a fresh primary
+                self.path_states.remove(dest_hash);
+                return;
+            }
+        }
+
         self.path_states
             .insert(*dest_hash, constants::STATE_UNRESPONSIVE);
     }
@@ -171,9 +183,8 @@ impl TransportEngine {
     }
 
     pub fn expire_path(&mut self, dest_hash: &[u8; 16]) {
-        if let Some(entry) = self.path_table.get_mut(dest_hash) {
-            entry.timestamp = 0.0;
-            entry.expires = 0.0;
+        if let Some(ps) = self.path_table.get_mut(dest_hash) {
+            ps.expire_all();
         }
     }
 
@@ -271,8 +282,9 @@ impl TransportEngine {
         let restored_paths = self.tunnel_table.handle_tunnel(tunnel_id, interface, now);
 
         // Restore paths to path table if they're better than existing
+        let max_paths = self.config.max_paths_per_destination;
         for (dest_hash, tunnel_path) in &restored_paths {
-            let should_restore = match self.path_table.get(dest_hash) {
+            let should_restore = match self.path_table.get(dest_hash).and_then(|ps| ps.primary()) {
                 Some(existing) => {
                     // Restore if fewer hops or existing expired
                     tunnel_path.hops <= existing.hops || existing.expires < now
@@ -281,18 +293,19 @@ impl TransportEngine {
             };
 
             if should_restore {
+                let entry = PathEntry {
+                    timestamp: tunnel_path.timestamp,
+                    next_hop: tunnel_path.received_from,
+                    hops: tunnel_path.hops,
+                    expires: tunnel_path.expires,
+                    random_blobs: tunnel_path.random_blobs.clone(),
+                    receiving_interface: interface,
+                    packet_hash: tunnel_path.packet_hash,
+                    announce_raw: None,
+                };
                 self.path_table.insert(
                     *dest_hash,
-                    PathEntry {
-                        timestamp: tunnel_path.timestamp,
-                        next_hop: tunnel_path.received_from,
-                        hops: tunnel_path.hops,
-                        expires: tunnel_path.expires,
-                        random_blobs: tunnel_path.random_blobs.clone(),
-                        receiving_interface: interface,
-                        packet_hash: tunnel_path.packet_hash,
-                        announce_raw: None,
-                    },
+                    PathSet::from_single(entry, max_paths),
                 );
             }
         }
@@ -510,7 +523,7 @@ impl TransportEngine {
             {
                 if let Some(ref identity_hash) = self.config.identity_hash {
                     if packet.transport_id.as_ref() == Some(identity_hash) {
-                        if let Some(path_entry) = self.path_table.get(&packet.destination_hash) {
+                        if let Some(path_entry) = self.path_table.get(&packet.destination_hash).and_then(|ps| ps.primary()) {
                             let next_hop = path_entry.next_hop;
                             let remaining_hops = path_entry.hops;
                             let outbound_interface = path_entry.receiving_interface;
@@ -559,7 +572,7 @@ impl TransportEngine {
                             });
 
                             // Update path timestamp
-                            if let Some(entry) = self.path_table.get_mut(&packet.destination_hash) {
+                            if let Some(entry) = self.path_table.get_mut(&packet.destination_hash).and_then(|ps| ps.primary_mut()) {
                                 entry.timestamp = now;
                             }
                         }
@@ -668,7 +681,7 @@ impl TransportEngine {
         }
 
         // Ingress control: hold announces from unknown destinations during bursts
-        if !self.path_table.contains_key(&packet.destination_hash) {
+        if !self.has_path(&packet.destination_hash) {
             if let Some(info) = self.interfaces.get(&iface) {
                 if info.ingress_control {
                     if self.ingress_control.should_ingress_limit(iface, info.ia_freq, info.started, now) {
@@ -731,21 +744,22 @@ impl TransportEngine {
 
         let announce_emitted = timebase_from_random_blob(&random_blob);
 
-        // Path update decision
-        let existing = self.path_table.get(&packet.destination_hash);
+        // Multi-path aware decision
+        let existing_set = self.path_table.get(&packet.destination_hash);
         let is_unresponsive = self.path_is_unresponsive(&packet.destination_hash);
 
-        let decision = should_update_path(
-            existing,
+        let mp_decision = decide_announce_multipath(
+            existing_set,
             packet.hops,
             announce_emitted,
             &random_blob,
+            &received_from,
             is_unresponsive,
             now,
             self.config.prefer_shorter_path,
         );
 
-        if decision == PathDecision::Reject {
+        if mp_decision == MultiPathDecision::Reject {
             log::debug!(
                 "Announce:path decision REJECT for dest={:02x}{:02x}{:02x}{:02x}..",
                 packet.destination_hash[0], packet.destination_hash[1],
@@ -780,10 +794,11 @@ impl TransportEngine {
 
         let expires = compute_path_expires(now, interface_mode);
 
-        // Get existing random blobs
+        // Get existing random blobs from the matching path (same next_hop) or empty
         let existing_blobs = self
             .path_table
             .get(&packet.destination_hash)
+            .and_then(|ps| ps.find_by_next_hop(&received_from))
             .map(|e| e.random_blobs.clone())
             .unwrap_or_default();
 
@@ -820,15 +835,23 @@ impl TransportEngine {
             raw: original_raw.to_vec(),
         });
 
-        // Store path
-        self.path_table
-            .insert(packet.destination_hash, path_entry);
+        // Store path via upsert into PathSet
+        let max_paths = self.config.max_paths_per_destination;
+        if let Some(ps) = self.path_table.get_mut(&packet.destination_hash) {
+            ps.upsert(path_entry);
+        } else {
+            self.path_table.insert(
+                packet.destination_hash,
+                PathSet::from_single(path_entry, max_paths),
+            );
+        }
 
         // If receiving interface has a tunnel_id, store path in tunnel table too
         if let Some(tunnel_id) = self.interfaces.get(&iface).and_then(|i| i.tunnel_id) {
             let blobs = self
                 .path_table
                 .get(&packet.destination_hash)
+                .and_then(|ps| ps.find_by_next_hop(&received_from))
                 .map(|e| e.random_blobs.clone())
                 .unwrap_or_default();
             self.tunnel_table.store_tunnel_path(
@@ -1302,8 +1325,8 @@ impl TransportEngine {
         }
 
         // If we know the path and transport is enabled, queue retransmit
-        if self.config.transport_enabled && self.path_table.contains_key(&destination_hash) {
-            let path = self.path_table.get(&destination_hash).unwrap().clone();
+        if self.config.transport_enabled && self.has_path(&destination_hash) {
+            let path = self.path_table.get(&destination_hash).unwrap().primary().unwrap().clone();
 
             // ROAMING loop prevention (Python Transport.py:2731-2732):
             // If the receiving interface is ROAMING and the known path's next-hop
@@ -1396,8 +1419,13 @@ impl TransportEngine {
     // Public read accessors
     // =========================================================================
 
-    /// Iterate over all path table entries.
+    /// Iterate over primary path entries (one per destination).
     pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
+        self.path_table.iter().filter_map(|(k, ps)| ps.primary().map(|e| (k, e)))
+    }
+
+    /// Iterate over all path sets (exposing alternatives).
+    pub fn path_table_sets(&self) -> impl Iterator<Item = (&[u8; 16], &PathSet)> {
         self.path_table.iter()
     }
 
@@ -1424,11 +1452,12 @@ impl TransportEngine {
     /// Redirect a path entry to a different interface (e.g. after direct connect).
     /// If no entry exists, creates a minimal direct path (hops=1).
     pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
-        if let Some(entry) = self.path_table.get_mut(dest_hash) {
+        if let Some(entry) = self.path_table.get_mut(dest_hash).and_then(|ps| ps.primary_mut()) {
             entry.receiving_interface = interface;
             entry.hops = 1;
         } else {
-            self.path_table.insert(*dest_hash, PathEntry {
+            let max_paths = self.config.max_paths_per_destination;
+            self.path_table.insert(*dest_hash, PathSet::from_single(PathEntry {
                 timestamp: now,
                 next_hop: [0u8; 16],
                 hops: 1,
@@ -1437,13 +1466,14 @@ impl TransportEngine {
                 receiving_interface: interface,
                 packet_hash: [0u8; 32],
                 announce_raw: None,
-            });
+            }, max_paths));
         }
     }
 
-    /// Inject a path entry directly into the path table.
+    /// Inject a path entry directly into the path table (full override).
     pub fn inject_path(&mut self, dest_hash: [u8; 16], entry: PathEntry) {
-        self.path_table.insert(dest_hash, entry);
+        let max_paths = self.config.max_paths_per_destination;
+        self.path_table.insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
     /// Drop a path from the path table.
@@ -1452,10 +1482,18 @@ impl TransportEngine {
     }
 
     /// Drop all paths that route via a given transport hash.
+    ///
+    /// Removes matching individual paths from each PathSet, then removes
+    /// any PathSets that become empty.
     pub fn drop_all_via(&mut self, transport_hash: &[u8; 16]) -> usize {
-        let before = self.path_table.len();
-        self.path_table.retain(|_, entry| &entry.next_hop != transport_hash);
-        before - self.path_table.len()
+        let mut removed = 0usize;
+        for ps in self.path_table.values_mut() {
+            let before = ps.len();
+            ps.retain(|entry| &entry.next_hop != transport_hash);
+            removed += before - ps.len();
+        }
+        self.path_table.retain(|_, ps| !ps.is_empty());
+        removed
     }
 
     /// Drop all pending announce retransmissions and bandwidth queues.
@@ -1483,18 +1521,21 @@ impl TransportEngine {
 
     /// Get path table entries as tuples for management queries.
     /// Returns (dest_hash, timestamp, next_hop, hops, expires, interface_name).
+    /// Reports primaries only for backward compatibility.
     pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<([u8; 16], f64, [u8; 16], u8, f64, alloc::string::String)> {
         let mut result = Vec::new();
-        for (dest_hash, entry) in self.path_table.iter() {
-            if let Some(max) = max_hops {
-                if entry.hops > max {
-                    continue;
+        for (dest_hash, ps) in self.path_table.iter() {
+            if let Some(entry) = ps.primary() {
+                if let Some(max) = max_hops {
+                    if entry.hops > max {
+                        continue;
+                    }
                 }
+                let iface_name = self.interfaces.get(&entry.receiving_interface)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_else(|| alloc::format!("Interface({})", entry.receiving_interface.0));
+                result.push((*dest_hash, entry.timestamp, entry.next_hop, entry.hops, entry.expires, iface_name));
             }
-            let iface_name = self.interfaces.get(&entry.receiving_interface)
-                .map(|i| i.name.clone())
-                .unwrap_or_else(|| alloc::format!("Interface({})", entry.receiving_interface.0));
-            result.push((*dest_hash, entry.timestamp, entry.next_hop, entry.hops, entry.expires, iface_name));
         }
         result
     }
@@ -1536,7 +1577,7 @@ impl TransportEngine {
     // =========================================================================
 
     #[cfg(test)]
-    pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathEntry> {
+    pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathSet> {
         &self.path_table
     }
 
@@ -1570,6 +1611,7 @@ mod tests {
                 None
             },
             prefer_shorter_path: false,
+            max_paths_per_destination: 1,
         }
     }
 
@@ -1668,7 +1710,7 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathEntry {
+            PathSet::from_single(PathEntry {
                 timestamp: 1000.0,
                 next_hop: [0; 16],
                 hops: 2,
@@ -1677,14 +1719,14 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
-            },
+            }, 1),
         );
 
         assert!(engine.has_path(&dest));
         engine.expire_path(&dest);
         // Path still exists but expires = 0
         assert!(engine.has_path(&dest));
-        assert_eq!(engine.path_table[&dest].expires, 0.0);
+        assert_eq!(engine.path_table[&dest].primary().unwrap().expires, 0.0);
     }
 
     #[test]
@@ -1921,7 +1963,7 @@ mod tests {
         let dest = [0x66; 16];
         engine.path_table.insert(
             dest,
-            PathEntry {
+            PathSet::from_single(PathEntry {
                 timestamp: 100.0,
                 next_hop: [0; 16],
                 hops: 2,
@@ -1930,7 +1972,7 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
-            },
+            }, 1),
         );
 
         assert!(engine.has_path(&dest));
@@ -2349,7 +2391,7 @@ mod tests {
 
         // Should restore the path
         assert!(engine.has_path(&dest));
-        let path = engine.path_table.get(&dest).unwrap();
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
         assert_eq!(path.hops, 3);
         assert_eq!(path.receiving_interface, InterfaceId(2));
 
@@ -2487,7 +2529,7 @@ mod tests {
         // Path is known and routes through the same interface (1)
         engine.path_table.insert(
             dest,
-            PathEntry {
+            PathSet::from_single(PathEntry {
                 timestamp: 900.0,
                 next_hop: [0xAA; 16],
                 hops: 2,
@@ -2496,7 +2538,7 @@ mod tests {
                 receiving_interface: InterfaceId(1),
                 packet_hash: [0; 32],
                 announce_raw: None,
-            },
+            }, 1),
         );
 
         let tag = [0x03; 16];
@@ -2535,7 +2577,7 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathEntry {
+            PathSet::from_single(PathEntry {
                 timestamp: 900.0,
                 next_hop: [0xBB; 16],
                 hops: 2,
@@ -2544,7 +2586,7 @@ mod tests {
                 receiving_interface: InterfaceId(2),
                 packet_hash: [0; 32],
                 announce_raw: Some(announce_raw.clone()),
-            },
+            }, 1),
         );
 
         let tag = [0x05; 16];
@@ -2568,7 +2610,7 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathEntry {
+            PathSet::from_single(PathEntry {
                 timestamp: 900.0,
                 next_hop: [0xCC; 16],
                 hops: 1,
@@ -2577,7 +2619,7 @@ mod tests {
                 receiving_interface: InterfaceId(2),
                 packet_hash: [0; 32],
                 announce_raw: None, // no raw data available
-            },
+            }, 1),
         );
 
         let tag = [0x06; 16];
