@@ -424,6 +424,7 @@ mod tests {
         TransportEngine::new(TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0xAA; 16]),
+            prefer_shorter_path: false,
         })
     }
 

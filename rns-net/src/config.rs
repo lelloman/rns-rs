@@ -52,6 +52,9 @@ pub struct ReticulumSection {
     pub discover_interfaces: bool,
     /// Minimum stamp value for accepting discovered interfaces.
     pub required_discovery_value: Option<u8>,
+    /// Accept an announce with strictly fewer hops even when the random_blob
+    /// is a duplicate of the existing path entry.
+    pub prefer_shorter_path: bool,
 }
 
 impl Default for ReticulumSection {
@@ -74,6 +77,7 @@ impl Default for ReticulumSection {
             device: None,
             discover_interfaces: false,
             required_discovery_value: None,
+            prefer_shorter_path: false,
         }
     }
 }
@@ -451,6 +455,12 @@ fn build_reticulum_section(
             key: "required_discovery_value".into(),
             value: v.clone(),
         })?);
+    }
+    if let Some(v) = kvs.get("prefer_shorter_path") {
+        section.prefer_shorter_path = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "prefer_shorter_path".into(),
+            value: v.clone(),
+        })?;
     }
 
     Ok(section)

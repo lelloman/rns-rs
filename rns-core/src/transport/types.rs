@@ -139,6 +139,10 @@ pub struct BlackholeEntry {
 pub struct TransportConfig {
     pub transport_enabled: bool,
     pub identity_hash: Option<[u8; 16]>,
+    /// Accept an announce with strictly fewer hops even when the random_blob
+    /// is a duplicate of the existing path entry.  Default `false` preserves
+    /// Python-compatible anti-replay behaviour.
+    pub prefer_shorter_path: bool,
 }
 
 #[cfg(test)]
@@ -158,8 +162,10 @@ mod tests {
         let cfg = TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            prefer_shorter_path: false,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
+        assert!(!cfg.prefer_shorter_path);
     }
 }

@@ -50,6 +50,7 @@ pub fn should_update_path(
     random_blob: &[u8; 10],
     path_is_unresponsive: bool,
     now: f64,
+    prefer_shorter_path: bool,
 ) -> PathDecision {
     // Hop limit
     if announce_hops >= constants::PATHFINDER_M + 1 {
@@ -65,6 +66,10 @@ pub fn should_update_path(
     let blob_is_new = !existing.random_blobs.contains(random_blob);
 
     if announce_hops <= existing.hops {
+        // Accept strictly shorter path even with duplicate blob
+        if prefer_shorter_path && announce_hops < existing.hops {
+            return PathDecision::Add;
+        }
         // Equal or fewer hops: accept if new blob AND newer emission
         if blob_is_new && announce_emitted_ts > path_timebase {
             return PathDecision::Add;
@@ -161,7 +166,7 @@ mod tests {
     fn test_no_existing_path_always_add() {
         let blob = make_blob(100);
         assert_eq!(
-            should_update_path(None, 3, 100, &blob, false, 1000.0),
+            should_update_path(None, 3, 100, &blob, false, 1000.0, false),
             PathDecision::Add
         );
     }
@@ -170,7 +175,7 @@ mod tests {
     fn test_hop_limit_reject() {
         let blob = make_blob(100);
         assert_eq!(
-            should_update_path(None, 129, 100, &blob, false, 1000.0),
+            should_update_path(None, 129, 100, &blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -181,7 +186,7 @@ mod tests {
         let new_blob = make_blob(200);
         let entry = make_path_entry(5, &[old_blob], 9999.0);
         assert_eq!(
-            should_update_path(Some(&entry), 3, 200, &new_blob, false, 1000.0),
+            should_update_path(Some(&entry), 3, 200, &new_blob, false, 1000.0, false),
             PathDecision::Add
         );
     }
@@ -191,7 +196,7 @@ mod tests {
         let blob = make_blob(100);
         let entry = make_path_entry(5, &[blob], 9999.0);
         assert_eq!(
-            should_update_path(Some(&entry), 3, 200, &blob, false, 1000.0),
+            should_update_path(Some(&entry), 3, 200, &blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -205,7 +210,7 @@ mod tests {
 
         let entry = make_path_entry(5, &[old_blob], 9999.0);
         assert_eq!(
-            should_update_path(Some(&entry), 3, 100, &different_blob, true, 1000.0),
+            should_update_path(Some(&entry), 3, 100, &different_blob, true, 1000.0, false),
             PathDecision::Add
         );
     }
@@ -219,7 +224,7 @@ mod tests {
 
         let entry = make_path_entry(5, &[old_blob], 9999.0);
         assert_eq!(
-            should_update_path(Some(&entry), 3, 100, &different_blob, false, 1000.0),
+            should_update_path(Some(&entry), 3, 100, &different_blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -231,7 +236,7 @@ mod tests {
         let entry = make_path_entry(2, &[old_blob], 500.0); // expires at 500
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 50, &new_blob, false, 600.0), // now > expires
+            should_update_path(Some(&entry), 5, 50, &new_blob, false, 600.0, false), // now > expires
             PathDecision::Add
         );
     }
@@ -243,7 +248,7 @@ mod tests {
         let entry = make_path_entry(2, &[old_blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 100, &new_blob, false, 1000.0),
+            should_update_path(Some(&entry), 5, 100, &new_blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -255,7 +260,7 @@ mod tests {
         let entry = make_path_entry(2, &[old_blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 200, &new_blob, false, 1000.0),
+            should_update_path(Some(&entry), 5, 200, &new_blob, false, 1000.0, false),
             PathDecision::Add
         );
     }
@@ -270,7 +275,7 @@ mod tests {
         let entry = make_path_entry(2, &[old_blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 100, &different_blob, true, 1000.0),
+            should_update_path(Some(&entry), 5, 100, &different_blob, true, 1000.0, false),
             PathDecision::Add
         );
     }
@@ -285,7 +290,7 @@ mod tests {
         let entry = make_path_entry(2, &[old_blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 100, &different_blob, false, 1000.0),
+            should_update_path(Some(&entry), 5, 100, &different_blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -296,7 +301,7 @@ mod tests {
         let entry = make_path_entry(2, &[blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 5, 200, &blob, false, 1000.0),
+            should_update_path(Some(&entry), 5, 200, &blob, false, 1000.0, false),
             PathDecision::Reject
         );
     }
@@ -308,8 +313,42 @@ mod tests {
         let entry = make_path_entry(3, &[old_blob], 9999.0);
 
         assert_eq!(
-            should_update_path(Some(&entry), 3, 200, &new_blob, false, 1000.0),
+            should_update_path(Some(&entry), 3, 200, &new_blob, false, 1000.0, false),
             PathDecision::Add
+        );
+    }
+
+    // --- prefer_shorter_path tests ---
+
+    #[test]
+    fn test_prefer_shorter_path_strictly_fewer_hops_duplicate_blob_add() {
+        let blob = make_blob(100);
+        let entry = make_path_entry(5, &[blob], 9999.0);
+        assert_eq!(
+            should_update_path(Some(&entry), 3, 100, &blob, false, 1000.0, true),
+            PathDecision::Add
+        );
+    }
+
+    #[test]
+    fn test_prefer_shorter_path_equal_hops_duplicate_blob_reject() {
+        // Equal hops with same blob: no benefit, still rejected
+        let blob = make_blob(100);
+        let entry = make_path_entry(3, &[blob], 9999.0);
+        assert_eq!(
+            should_update_path(Some(&entry), 3, 100, &blob, false, 1000.0, true),
+            PathDecision::Reject
+        );
+    }
+
+    #[test]
+    fn test_prefer_shorter_path_more_hops_duplicate_blob_reject() {
+        // More hops: prefer_shorter_path does not help
+        let blob = make_blob(100);
+        let entry = make_path_entry(2, &[blob], 9999.0);
+        assert_eq!(
+            should_update_path(Some(&entry), 5, 100, &blob, false, 1000.0, true),
+            PathDecision::Reject
         );
     }
 }

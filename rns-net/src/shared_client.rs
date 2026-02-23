@@ -60,6 +60,7 @@ impl RnsNode {
         let transport_config = TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            prefer_shorter_path: false,
         };
 
         let (tx, rx) = event::channel();

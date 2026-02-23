@@ -174,6 +174,7 @@ fn main() {
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            prefer_shorter_path: false,
         },
         Box::new(TransportCallbacks),
     )
@@ -231,6 +232,7 @@ fn main() {
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            prefer_shorter_path: false,
         },
         Box::new(PeerCallbacks {
             name: "alice",
@@ -285,6 +287,7 @@ fn main() {
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            prefer_shorter_path: false,
         },
         Box::new(PeerCallbacks {
             name: "bob",

@@ -69,6 +69,7 @@ impl TestHarness {
             } else {
                 None
             },
+            prefer_shorter_path: false,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -81,6 +82,7 @@ impl TestHarness {
         let config = TransportConfig {
             transport_enabled: true,
             identity_hash: Some(identity_hash),
+            prefer_shorter_path: false,
         };
         TestHarness {
             engine: TransportEngine::new(config),

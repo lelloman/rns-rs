@@ -165,6 +165,10 @@ pub struct NodeConfig {
     pub discovery_required_value: Option<u8>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
     pub respond_to_probes: bool,
+    /// Accept an announce with strictly fewer hops even when the random_blob
+    /// is a duplicate of the existing path entry.  Default `false` preserves
+    /// Python-compatible anti-replay behaviour.
+    pub prefer_shorter_path: bool,
 }
 
 /// Interface configuration variant with its mode.
@@ -827,6 +831,7 @@ impl RnsNode {
             discover_interfaces: rns_config.reticulum.discover_interfaces,
             discovery_required_value: rns_config.reticulum.required_discovery_value,
             respond_to_probes: rns_config.reticulum.respond_to_probes,
+            prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
         };
 
         Self::start(node_config, callbacks)
@@ -841,6 +846,7 @@ impl RnsNode {
         let transport_config = TransportConfig {
             transport_enabled: config.transport_enabled,
             identity_hash: Some(*identity.hash()),
+            prefer_shorter_path: config.prefer_shorter_path,
         };
 
         let (tx, rx) = event::channel();
@@ -2174,6 +2180,7 @@ mod tests {
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2203,6 +2210,7 @@ mod tests {
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2232,6 +2240,7 @@ mod tests {
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         )
@@ -2668,6 +2677,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2706,6 +2716,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2739,6 +2750,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2769,6 +2781,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2806,6 +2819,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2844,6 +2858,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2879,6 +2894,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2925,6 +2941,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2964,6 +2981,7 @@ enable_transport = False
                 discover_interfaces: false,
                 discovery_required_value: None,
             respond_to_probes: false,
+                prefer_shorter_path: false,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

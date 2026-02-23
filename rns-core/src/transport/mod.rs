@@ -659,6 +659,11 @@ impl TransportEngine {
 
         // Skip local destinations
         if self.local_destinations.contains_key(&packet.destination_hash) {
+            log::info!(
+                "ANNOUNCE_DBG: skipping local destination {:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+            );
             return;
         }
 
@@ -737,9 +742,15 @@ impl TransportEngine {
             &random_blob,
             is_unresponsive,
             now,
+            self.config.prefer_shorter_path,
         );
 
         if decision == PathDecision::Reject {
+            log::info!(
+                "ANNOUNCE_DBG: path decision REJECT for dest={:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+            );
             return;
         }
 
@@ -1558,8 +1569,10 @@ mod tests {
             } else {
                 None
             },
+            prefer_shorter_path: false,
         }
     }
+
 
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {

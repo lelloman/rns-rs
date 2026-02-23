@@ -154,6 +154,7 @@ except (KeyboardInterrupt, SystemExit):
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            prefer_shorter_path: false,
         },
         Box::new(TestCallbacks { announce_tx }),
     )
