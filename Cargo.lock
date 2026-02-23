@@ -1482,6 +1482,7 @@ dependencies = [
 name = "rns-core"
 version = "0.1.2"
 dependencies = [
+ "log",
  "rns-crypto",
  "serde_json",
 ]

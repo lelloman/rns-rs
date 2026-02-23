@@ -1,4 +1,4 @@
-FROM rust:1.82-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY rns-crypto rns-crypto
@@ -6,7 +6,8 @@ COPY rns-core rns-core
 COPY rns-net rns-net
 COPY rns-cli rns-cli
 COPY rns-ctl rns-ctl
-RUN cargo build --release --bin rns-ctl
+COPY rns-hooks rns-hooks
+RUN cargo build --release --bin rns-ctl --features rns-hooks
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl iproute2 iptables && rm -rf /var/lib/apt/lists/*
@@ -16,4 +17,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=2s --timeout=2s --retries=15 \
   CMD curl -sf http://localhost:8080/health || exit 1
 # Copy config from read-only mount to writable /data, then run from there
-CMD ["sh", "-c", "cp /etc/rns/config /data/config && exec rns-ctl --config /data --disable-auth --host 0.0.0.0 --port 8080"]
+CMD ["sh", "-c", "cp /etc/rns/config /data/config && exec rns-ctl http --config /data --disable-auth --host 0.0.0.0 --port 8080"]

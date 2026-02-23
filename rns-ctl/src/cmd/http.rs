@@ -28,7 +28,9 @@ pub fn run(args: Args) {
         1 => "debug",
         _ => "trace",
     };
-    std::env::set_var("RUST_LOG", format!("rns_ctl={},rns_net={}", log_level, log_level));
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", format!("rns_ctl={},rns_net={},rns_hooks={}", log_level, log_level, log_level));
+    }
     env_logger::init();
 
     let mut cfg = config::from_args_and_env(&args);
