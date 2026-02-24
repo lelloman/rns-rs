@@ -25,22 +25,7 @@ use super::probe;
 use super::puncher::{self, PunchHandle};
 use super::udp_direct;
 
-/// Policy for handling incoming direct-connect proposals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HolePunchPolicy {
-    /// Reject all proposals.
-    Reject,
-    /// Accept all proposals automatically.
-    AcceptAll,
-    /// Ask the application callback.
-    AskApp,
-}
-
-impl Default for HolePunchPolicy {
-    fn default() -> Self {
-        HolePunchPolicy::AcceptAll
-    }
-}
+pub use crate::common::event::HolePunchPolicy;
 
 /// A single hole-punch session's networking state.
 struct HolePunchSession {

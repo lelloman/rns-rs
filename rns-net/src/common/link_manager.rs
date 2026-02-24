@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::compressor::Bzip2Compressor;
+use super::compressor::Bzip2Compressor;
 use rns_core::channel::Channel;
 use rns_core::constants;
 use rns_core::link::types::{LinkId, LinkState, TeardownReason};
@@ -18,7 +18,7 @@ use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::Rng;
 
-use crate::time;
+use super::time;
 
 /// Resource acceptance strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

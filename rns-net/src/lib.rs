@@ -4,15 +4,16 @@
 //! Reads standard Python RNS config files, opens TCP server/client, UDP, and
 //! Local interfaces, persists identity and known destinations.
 
+pub mod common;
 pub mod hdlc;
 pub mod kiss;
 pub mod rnode_kiss;
 pub mod event;
-pub mod time;
+pub use common::time;
 pub mod interface;
 pub mod driver;
 pub mod node;
-pub mod config;
+pub use common::config;
 pub mod storage;
 pub mod ifac;
 pub mod serial;
@@ -20,11 +21,11 @@ pub mod md5;
 pub mod pickle;
 pub mod rpc;
 pub mod announce_cache;
-pub mod compressor;
-pub mod link_manager;
+pub use common::compressor;
+pub use common::link_manager;
 pub mod management;
 pub mod shared_client;
-pub mod destination;
+pub use common::destination;
 pub mod holepunch;
 pub mod discovery;
 
