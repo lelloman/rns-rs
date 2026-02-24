@@ -1887,7 +1887,15 @@ impl RnsNode {
         );
 
         let mut random_hash = [0u8; 10];
-        OsRng.fill_bytes(&mut random_hash);
+        OsRng.fill_bytes(&mut random_hash[..5]);
+        // Bytes [5:10] must be the emission timestamp (seconds since epoch,
+        // big-endian, truncated to 5 bytes) so that path table dedup can
+        // compare announce freshness.  Matches Python: int(time.time()).to_bytes(5, "big")
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
         let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
             identity,
