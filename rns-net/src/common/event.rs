@@ -148,6 +148,8 @@ pub enum Event<W: Send> {
         session_id: [u8; 16],
         observed_addr: std::net::SocketAddr,
         socket: std::net::UdpSocket,
+        /// The probe server that responded successfully.
+        probe_server: std::net::SocketAddr,
     },
     /// (Internal) Probe failed.
     HolePunchProbeFailed {
@@ -537,11 +539,12 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::SetDirectConnectPolicy { .. } => {
                 write!(f, "SetDirectConnectPolicy")
             }
-            Event::HolePunchProbeResult { link_id, session_id, observed_addr, .. } => {
+            Event::HolePunchProbeResult { link_id, session_id, observed_addr, probe_server, .. } => {
                 f.debug_struct("HolePunchProbeResult")
                     .field("link_id", link_id)
                     .field("session_id", session_id)
                     .field("observed_addr", observed_addr)
+                    .field("probe_server", probe_server)
                     .finish()
             }
             Event::HolePunchProbeFailed { link_id, session_id } => {

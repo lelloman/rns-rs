@@ -45,6 +45,8 @@ pub struct ReticulumSection {
     pub publish_blackhole: bool,
     pub probe_port: Option<u16>,
     pub probe_addr: Option<String>,
+    /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
+    pub probe_protocol: Option<String>,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Enable interface discovery (advertise discoverable interfaces and
@@ -77,6 +79,7 @@ impl Default for ReticulumSection {
             publish_blackhole: false,
             probe_port: None,
             probe_addr: None,
+            probe_protocol: None,
             device: None,
             discover_interfaces: false,
             required_discovery_value: None,
@@ -444,6 +447,9 @@ fn build_reticulum_section(
     }
     if let Some(v) = kvs.get("probe_addr") {
         section.probe_addr = Some(v.clone());
+    }
+    if let Some(v) = kvs.get("probe_protocol") {
+        section.probe_protocol = Some(v.clone());
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
@@ -957,5 +963,28 @@ enable_transport = True
         assert_eq!(iface.params.get("reachable_on").map(|s| s.as_str()), Some("87.106.8.245"));
         assert_eq!(iface.params.get("listen_ip").map(|s| s.as_str()), Some("0.0.0.0"));
         assert_eq!(iface.params.get("listen_port").map(|s| s.as_str()), Some("4242"));
+    }
+
+    #[test]
+    fn parse_probe_protocol() {
+        let input = r#"
+[reticulum]
+probe_addr = 1.2.3.4:19302
+probe_protocol = stun
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.reticulum.probe_addr.as_deref(), Some("1.2.3.4:19302"));
+        assert_eq!(config.reticulum.probe_protocol.as_deref(), Some("stun"));
+    }
+
+    #[test]
+    fn parse_probe_protocol_defaults_to_none() {
+        let input = r#"
+[reticulum]
+probe_addr = 1.2.3.4:4343
+"#;
+        let config = parse(input).unwrap();
+        assert_eq!(config.reticulum.probe_addr.as_deref(), Some("1.2.3.4:4343"));
+        assert!(config.reticulum.probe_protocol.is_none());
     }
 }

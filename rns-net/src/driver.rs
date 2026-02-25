@@ -324,7 +324,7 @@ impl Driver {
             sent_packets: HashMap::new(),
             completed_proofs: HashMap::new(),
             local_destinations,
-            holepunch_manager: HolePunchManager::new(None, None),
+            holepunch_manager: HolePunchManager::new(vec![], rns_core::holepunch::ProbeProtocol::Rnsp, None),
             event_tx: tx,
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces")
@@ -342,9 +342,9 @@ impl Driver {
         }
     }
 
-    /// Set the probe address and optional device for hole punching.
-    pub fn set_probe_config(&mut self, addr: Option<std::net::SocketAddr>, device: Option<String>) {
-        self.holepunch_manager = HolePunchManager::new(addr, device);
+    /// Set the probe addresses, protocol, and optional device for hole punching.
+    pub fn set_probe_config(&mut self, addrs: Vec<std::net::SocketAddr>, protocol: rns_core::holepunch::ProbeProtocol, device: Option<String>) {
+        self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
     }
 
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
@@ -765,9 +765,9 @@ impl Driver {
                 Event::SetDirectConnectPolicy { policy } => {
                     self.holepunch_manager.set_policy(policy);
                 }
-                Event::HolePunchProbeResult { link_id, session_id, observed_addr, socket } => {
+                Event::HolePunchProbeResult { link_id, session_id, observed_addr, socket, probe_server } => {
                     let hp_actions = self.holepunch_manager.handle_probe_result(
-                        link_id, session_id, observed_addr, socket,
+                        link_id, session_id, observed_addr, socket, probe_server,
                     );
                     self.dispatch_holepunch_actions(hp_actions);
                 }

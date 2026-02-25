@@ -2,7 +2,7 @@ pub mod types;
 pub mod engine;
 
 pub use types::{
-    HolePunchAction, HolePunchState, Endpoint, HolePunchError,
+    HolePunchAction, HolePunchState, Endpoint, HolePunchError, ProbeProtocol,
     UPGRADE_REQUEST, UPGRADE_ACCEPT, UPGRADE_REJECT, UPGRADE_READY, UPGRADE_COMPLETE,
     REJECT_POLICY, REJECT_BUSY, REJECT_UNSUPPORTED,
 };

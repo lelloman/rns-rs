@@ -13,7 +13,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 
 use rns_core::holepunch::{
-    HolePunchAction, HolePunchEngine, HolePunchState, Endpoint,
+    HolePunchAction, HolePunchEngine, HolePunchState, Endpoint, ProbeProtocol,
     UPGRADE_REQUEST, REJECT_POLICY,
 };
 use rns_core::holepunch::types::is_holepunch_msgtype;
@@ -43,8 +43,10 @@ pub struct HolePunchManager {
     sessions: HashMap<[u8; 16], HolePunchSession>,  // session_id -> session
     link_to_session: HashMap<[u8; 16], [u8; 16]>,   // link_id -> session_id
     policy: HolePunchPolicy,
-    /// Backbone probe service address (if configured).
-    probe_addr: Option<SocketAddr>,
+    /// Configured probe servers (tried sequentially with failover).
+    probe_addrs: Vec<SocketAddr>,
+    /// Protocol to use for endpoint discovery.
+    probe_protocol: ProbeProtocol,
     /// Linux network interface to bind probe/punch sockets to.
     device: Option<String>,
     /// Next available interface ID counter for direct interfaces.
@@ -78,12 +80,13 @@ pub enum HolePunchManagerAction {
 }
 
 impl HolePunchManager {
-    pub fn new(probe_addr: Option<SocketAddr>, device: Option<String>) -> Self {
+    pub fn new(probe_addrs: Vec<SocketAddr>, probe_protocol: ProbeProtocol, device: Option<String>) -> Self {
         HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
             policy: HolePunchPolicy::default(),
-            probe_addr,
+            probe_addrs,
+            probe_protocol,
             device,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
         }
@@ -128,7 +131,7 @@ impl HolePunchManager {
             self.sessions.remove(&old_session_id);
         }
 
-        let probe_endpoint = self.probe_addr.map(|addr| Endpoint {
+        let probe_endpoint = self.probe_addrs.first().map(|addr| Endpoint {
             addr: match addr {
                 SocketAddr::V4(v4) => v4.ip().octets().to_vec(),
                 SocketAddr::V6(v6) => v6.ip().octets().to_vec(),
@@ -136,7 +139,7 @@ impl HolePunchManager {
             port: addr.port(),
         });
 
-        let mut engine = HolePunchEngine::new(link_id, probe_endpoint);
+        let mut engine = HolePunchEngine::new(link_id, probe_endpoint, self.probe_protocol);
         let actions = match engine.propose(derived_key, now, rng) {
             Ok(a) => a,
             Err(e) => {
@@ -202,7 +205,8 @@ impl HolePunchManager {
             }
 
             // Create engine for responder (no probe_addr needed — facilitator comes from request)
-            let mut engine = HolePunchEngine::new(link_id, None);
+            // Protocol will be set from the decoded UPGRADE_REQUEST payload.
+            let mut engine = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
             let now = time::now();
             let actions = match engine.handle_signal(msgtype, &payload, derived_key, now) {
                 Ok(a) => a,
@@ -452,28 +456,45 @@ impl HolePunchManager {
         tx: &EventSender,
     ) {
         for action in actions {
-            if let HolePunchAction::DiscoverEndpoints { probe_addr } = action {
+            if let HolePunchAction::DiscoverEndpoints { probe_addr, protocol } = action {
                 let session_id = match self.link_to_session.get(&link_id) {
                     Some(s) => *s,
                     None => continue,
                 };
 
-                let probe_socket_addr = match endpoint_to_socket_addr(probe_addr) {
-                    Some(a) => a,
-                    None => {
-                        log::warn!("Invalid probe endpoint: {:?}", probe_addr);
-                        continue;
+                let session = match self.sessions.get(&session_id) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                // Initiator: try all configured servers with failover.
+                // Responder: use only the facilitator from UPGRADE_REQUEST.
+                let servers: Vec<SocketAddr> = if session.engine.is_initiator() {
+                    self.probe_addrs.clone()
+                } else {
+                    match endpoint_to_socket_addr(probe_addr) {
+                        Some(a) => vec![a],
+                        None => {
+                            log::warn!("Invalid probe endpoint: {:?}", probe_addr);
+                            continue;
+                        }
                     }
                 };
+
+                if servers.is_empty() {
+                    log::warn!("No probe servers available for session {:02x?}", &session_id[..4]);
+                    continue;
+                }
 
                 let tx_clone = tx.clone();
                 let session_id_copy = session_id;
                 let device_clone = self.device.clone();
+                let protocol_copy = *protocol;
 
                 if let Err(e) = thread::Builder::new()
                     .name("probe-worker".into())
                     .spawn(move || {
-                        run_probe_worker(probe_socket_addr, session_id_copy, link_id, tx_clone, device_clone);
+                        run_probe_worker(servers, protocol_copy, session_id_copy, link_id, tx_clone, device_clone);
                     })
                 {
                     log::warn!("Failed to spawn probe worker: {}", e);
@@ -559,6 +580,7 @@ impl HolePunchManager {
         session_id: [u8; 16],
         observed_addr: SocketAddr,
         socket: UdpSocket,
+        probe_server: SocketAddr,
     ) -> Vec<HolePunchManagerAction> {
         let session = match self.sessions.get_mut(&session_id) {
             Some(s) => s,
@@ -567,6 +589,29 @@ impl HolePunchManager {
 
         // Store the socket for reuse during punching (same NAT mapping)
         session.socket = Some(socket);
+
+        // If a different server succeeded than the first configured one,
+        // update the engine's facilitator so UPGRADE_REQUEST carries the correct address.
+        if session.engine.is_initiator() {
+            let first = self.probe_addrs.first().copied();
+            if first.map_or(true, |f| f != probe_server) {
+                let facilitator_ep = Endpoint {
+                    addr: match probe_server {
+                        SocketAddr::V4(v4) => v4.ip().octets().to_vec(),
+                        SocketAddr::V6(v6) => v6.ip().octets().to_vec(),
+                    },
+                    port: probe_server.port(),
+                };
+                session.engine.set_facilitator(facilitator_ep);
+            }
+        }
+
+        // Bump-to-top: move the successful server to index 0
+        if let Some(idx) = self.probe_addrs.iter().position(|a| *a == probe_server) {
+            if idx > 0 {
+                self.probe_addrs[..=idx].rotate_right(1);
+            }
+        }
 
         let public_endpoint = Endpoint {
             addr: match observed_addr {
@@ -621,27 +666,29 @@ impl HolePunchManager {
 }
 
 fn run_probe_worker(
-    probe_addr: SocketAddr,
+    servers: Vec<SocketAddr>,
+    protocol: ProbeProtocol,
     session_id: [u8; 16],
     link_id: [u8; 16],
     tx: EventSender,
     device: Option<String>,
 ) {
-    match probe::probe_endpoint(probe_addr, None, std::time::Duration::from_secs(3), device.as_deref()) {
-        Ok((observed, socket)) => {
+    match probe::probe_endpoint_failover(&servers, protocol, std::time::Duration::from_secs(3), device.as_deref()) {
+        Ok((observed, socket, probe_server)) => {
             log::info!(
-                "Probe discovered endpoint: {} for session {:02x?}",
-                observed, &session_id[..4]
+                "Probe discovered endpoint: {} via server {} for session {:02x?}",
+                observed, probe_server, &session_id[..4]
             );
             let _ = tx.send(Event::HolePunchProbeResult {
                 link_id,
                 session_id,
                 observed_addr: observed,
                 socket,
+                probe_server,
             });
         }
         Err(e) => {
-            log::warn!("Probe failed for session {:02x?}: {}", &session_id[..4], e);
+            log::warn!("Probe failed for session {:02x?} (tried {} servers): {}", &session_id[..4], servers.len(), e);
             let _ = tx.send(Event::HolePunchProbeFailed {
                 link_id,
                 session_id,
@@ -739,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_propose_creates_session_in_discovering() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0x11; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -754,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_propose_rate_limited() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0x22; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -768,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_reject_policy_sends_reject() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         mgr.set_policy(HolePunchPolicy::Reject);
 
         let link_id = [0x33; 16];
@@ -776,7 +823,7 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Build a proper UPGRADE_REQUEST payload
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }));
+        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
         proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
         let discover_actions = proposer.endpoints_discovered(
             Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
@@ -798,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_accept_policy_creates_session() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         mgr.set_policy(HolePunchPolicy::AcceptAll);
 
         let link_id = [0x44; 16];
@@ -806,7 +853,7 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Build UPGRADE_REQUEST
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }));
+        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
         proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
         let discover_actions = proposer.endpoints_discovered(
             Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
@@ -829,7 +876,7 @@ mod tests {
 
     #[test]
     fn test_non_holepunch_message_not_handled() {
-        let mut mgr = HolePunchManager::new(None, None);
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         let (tx, _rx) = make_tx();
 
         let (handled, actions) = mgr.handle_signal(
@@ -842,7 +889,7 @@ mod tests {
 
     #[test]
     fn test_link_closed_cleans_up() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0x66; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -857,7 +904,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_failed_with_session() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0x77; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -873,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_failed_without_session() {
-        let mut mgr = HolePunchManager::new(None, None);
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
 
         let actions = mgr.handle_probe_failed([0x88; 16], [0x99; 16]);
         assert!(actions.is_empty());
@@ -881,7 +928,7 @@ mod tests {
 
     #[test]
     fn test_handle_probe_result_initiator_sends_request() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0xAA; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
@@ -893,7 +940,7 @@ mod tests {
         // Probe result arrives — initiator should send UPGRADE_REQUEST
         let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let observed: SocketAddr = "1.2.3.4:41000".parse().unwrap();
-        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket);
+        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket, make_probe_addr());
 
         // Should emit UPGRADE_REQUEST (initiator discovered endpoint -> sends request)
         assert!(actions.iter().any(|a| matches!(a,
@@ -904,13 +951,13 @@ mod tests {
 
     #[test]
     fn test_handle_probe_result_responder_sends_ready() {
-        let mut mgr = HolePunchManager::new(Some(make_probe_addr()), None);
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
         let link_id = [0xBB; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();
 
         // Build UPGRADE_REQUEST from an initiator
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }));
+        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
         proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
         let discover_actions = proposer.endpoints_discovered(
             Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
@@ -927,7 +974,7 @@ mod tests {
         // Responder's probe result arrives — should send UPGRADE_READY
         let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let observed: SocketAddr = "5.6.7.8:52000".parse().unwrap();
-        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket);
+        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket, make_probe_addr());
 
         assert!(actions.iter().any(|a| matches!(a,
             HolePunchManagerAction::SendChannelMessage { msgtype, .. }
@@ -957,13 +1004,13 @@ mod tests {
 
     #[test]
     fn test_policy_default_is_accept_all() {
-        let mgr = HolePunchManager::new(None, None);
+        let mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         assert_eq!(mgr.policy(), HolePunchPolicy::AcceptAll);
     }
 
     #[test]
     fn test_set_policy() {
-        let mut mgr = HolePunchManager::new(None, None);
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         mgr.set_policy(HolePunchPolicy::Reject);
         assert_eq!(mgr.policy(), HolePunchPolicy::Reject);
     }
@@ -978,7 +1025,7 @@ mod tests {
 
     #[test]
     fn test_tick_empty_is_noop() {
-        let mut mgr = HolePunchManager::new(None, None);
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         let (tx, _rx) = make_tx();
         let actions = mgr.tick(&tx);
         assert!(actions.is_empty());
@@ -986,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_propose_without_probe_addr() {
-        let mut mgr = HolePunchManager::new(None, None); // No probe addr
+        let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None); // No probe addr
         let link_id = [0xCC; 16];
         let mut rng = make_rng(0x42);
         let (tx, _rx) = make_tx();

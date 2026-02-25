@@ -42,6 +42,16 @@ pub const PUNCH_TIMEOUT: f64 = 10.0;
 /// Minimum interval between hole-punch proposals on the same link.
 pub const PROPOSAL_COOLDOWN: f64 = 60.0;
 
+/// Protocol used for endpoint discovery (probing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ProbeProtocol {
+    /// Custom RNSP probe protocol (requires own facilitator).
+    Rnsp = 0,
+    /// Standard STUN (RFC 5389) — works with any public STUN server.
+    Stun = 1,
+}
+
 /// Hole-punch engine states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HolePunchState {
@@ -81,6 +91,7 @@ pub enum HolePunchAction {
     /// Discover our public endpoint by probing the given address.
     DiscoverEndpoints {
         probe_addr: Endpoint,
+        protocol: ProbeProtocol,
     },
     /// Start UDP hole punching to the given peer endpoint.
     StartUdpPunch {

@@ -153,8 +153,10 @@ pub struct NodeConfig {
     pub management: crate::management::ManagementConfig,
     /// Port to run the STUN probe server on (for facilitator nodes).
     pub probe_port: Option<u16>,
-    /// Address of the STUN probe server (for client nodes behind NAT).
-    pub probe_addr: Option<std::net::SocketAddr>,
+    /// Addresses of STUN/RNSP probe servers (tried sequentially with failover).
+    pub probe_addrs: Vec<std::net::SocketAddr>,
+    /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
+    pub probe_protocol: rns_core::holepunch::ProbeProtocol,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Hook configurations loaded from the config file.
@@ -805,13 +807,29 @@ impl RnsNode {
             }
         }
 
-        // Parse probe_addr string to SocketAddr
-        let probe_addr = rns_config.reticulum.probe_addr.as_ref().and_then(|s| {
-            s.parse::<std::net::SocketAddr>().map_err(|e| {
-                log::warn!("Invalid probe_addr '{}': {}", s, e);
-                e
-            }).ok()
-        });
+        // Parse probe_addr (comma-separated list of SocketAddr)
+        let probe_addrs: Vec<std::net::SocketAddr> = rns_config.reticulum.probe_addr.as_ref()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|entry| {
+                        let trimmed = entry.trim();
+                        if trimmed.is_empty() {
+                            return None;
+                        }
+                        trimmed.parse::<std::net::SocketAddr>().map_err(|e| {
+                            log::warn!("Invalid probe_addr entry '{}': {}", trimmed, e);
+                            e
+                        }).ok()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Parse probe_protocol (default: rnsp)
+        let probe_protocol = match rns_config.reticulum.probe_protocol.as_deref().map(|s| s.to_lowercase()) {
+            Some(ref s) if s == "stun" => rns_core::holepunch::ProbeProtocol::Stun,
+            _ => rns_core::holepunch::ProbeProtocol::Rnsp,
+        };
 
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
@@ -828,7 +846,8 @@ impl RnsNode {
                 publish_blackhole: rns_config.reticulum.publish_blackhole,
             },
             probe_port: rns_config.reticulum.probe_port,
-            probe_addr,
+            probe_addrs,
+            probe_protocol,
             device: rns_config.reticulum.device.clone(),
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
@@ -864,9 +883,9 @@ impl RnsNode {
             driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
         }
 
-        // Configure probe address and device for hole punching
-        if config.probe_addr.is_some() || config.device.is_some() {
-            driver.set_probe_config(config.probe_addr, config.device.clone());
+        // Configure probe addresses and device for hole punching
+        if !config.probe_addrs.is_empty() || config.device.is_some() {
+            driver.set_probe_config(config.probe_addrs.clone(), config.probe_protocol, config.device.clone());
         }
 
         // Start probe server if configured
@@ -2187,7 +2206,8 @@ mod tests {
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2218,7 +2238,8 @@ mod tests {
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2249,7 +2270,8 @@ mod tests {
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2687,7 +2709,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2727,7 +2750,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2762,7 +2786,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2794,7 +2819,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2833,7 +2859,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2873,7 +2900,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2910,7 +2938,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2958,7 +2987,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -2999,7 +3029,8 @@ enable_transport = False
                 cache_dir: None,
                 management: Default::default(),
                 probe_port: None,
-                probe_addr: None,
+                probe_addrs: vec![],
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,

@@ -61,6 +61,9 @@ pub struct HolePunchEngine {
     /// Probe service address for endpoint discovery (configured on this node).
     probe_addr: Option<Endpoint>,
 
+    /// Protocol to use for endpoint discovery.
+    probe_protocol: ProbeProtocol,
+
     /// Timestamp of state entry (for timeout tracking).
     state_entered_at: f64,
 }
@@ -70,6 +73,7 @@ impl HolePunchEngine {
     pub fn new(
         link_id: [u8; 16],
         probe_addr: Option<Endpoint>,
+        probe_protocol: ProbeProtocol,
     ) -> Self {
         HolePunchEngine {
             link_id,
@@ -81,6 +85,7 @@ impl HolePunchEngine {
             facilitator_addr: None,
             punch_token: [0u8; 32],
             probe_addr,
+            probe_protocol,
             state_entered_at: 0.0,
         }
     }
@@ -99,6 +104,15 @@ impl HolePunchEngine {
 
     pub fn punch_token(&self) -> &[u8; 32] {
         &self.punch_token
+    }
+
+    /// Override the facilitator address.
+    ///
+    /// Used when the orchestrator discovers that a different probe server
+    /// succeeded (failover). Must be called before `endpoints_discovered()`
+    /// so the UPGRADE_REQUEST carries the correct facilitator.
+    pub fn set_facilitator(&mut self, addr: Endpoint) {
+        self.facilitator_addr = Some(addr);
     }
 
     /// Peer's discovered public endpoint.
@@ -138,7 +152,7 @@ impl HolePunchEngine {
         self.state = HolePunchState::Discovering;
         self.state_entered_at = now;
 
-        Ok(alloc::vec![HolePunchAction::DiscoverEndpoints { probe_addr }])
+        Ok(alloc::vec![HolePunchAction::DiscoverEndpoints { probe_addr, protocol: self.probe_protocol }])
     }
 
     /// Called when endpoint discovery completes.
@@ -165,6 +179,7 @@ impl HolePunchEngine {
                 &self.session_id,
                 &facilitator,
                 &public_endpoint,
+                self.probe_protocol,
             );
 
             self.state = HolePunchState::Proposing;
@@ -311,7 +326,7 @@ impl HolePunchEngine {
         request_payload: &[u8],
         reason: u8,
     ) -> Result<HolePunchAction, HolePunchError> {
-        let (session_id, _, _) = decode_upgrade_request(request_payload)?;
+        let (session_id, _, _, _) = decode_upgrade_request(request_payload)?;
         let payload = encode_upgrade_reject(&session_id, reason);
         Ok(HolePunchAction::SendSignal {
             link_id,
@@ -329,6 +344,7 @@ impl HolePunchEngine {
         self.peer_public_endpoint = None;
         self.facilitator_addr = None;
         self.punch_token = [0u8; 32];
+        self.probe_protocol = ProbeProtocol::Rnsp;
         self.state_entered_at = 0.0;
     }
 
@@ -346,7 +362,7 @@ impl HolePunchEngine {
     ) -> Result<Vec<HolePunchAction>, HolePunchError> {
         if self.state != HolePunchState::Idle {
             // Already busy — reject
-            let (session_id, _, _) = decode_upgrade_request(payload)?;
+            let (session_id, _, _, _) = decode_upgrade_request(payload)?;
             let reject_payload = encode_upgrade_reject(&session_id, REJECT_BUSY);
             return Ok(alloc::vec![HolePunchAction::SendSignal {
                 link_id: self.link_id,
@@ -356,10 +372,11 @@ impl HolePunchEngine {
         }
 
         let derived_key = derived_key.ok_or(HolePunchError::NoDerivedKey)?;
-        let (session_id, facilitator, initiator_public) = decode_upgrade_request(payload)?;
+        let (session_id, facilitator, initiator_public, protocol) = decode_upgrade_request(payload)?;
 
         self.session_id = session_id;
         self.is_initiator = false;
+        self.probe_protocol = protocol;
         self.punch_token = derive_punch_token(derived_key, &session_id)?;
 
         // Store A's public address (we'll punch this later)
@@ -380,7 +397,7 @@ impl HolePunchEngine {
                 msgtype: UPGRADE_ACCEPT,
                 payload: accept_payload,
             },
-            HolePunchAction::DiscoverEndpoints { probe_addr: facilitator },
+            HolePunchAction::DiscoverEndpoints { probe_addr: facilitator, protocol },
         ])
     }
 
@@ -496,16 +513,22 @@ fn encode_upgrade_request(
     session_id: &[u8; 16],
     facilitator: &Endpoint,
     initiator_public: &Endpoint,
+    protocol: ProbeProtocol,
 ) -> Vec<u8> {
-    let val = Value::Map(alloc::vec![
+    let mut fields = alloc::vec![
         (Value::Str(alloc::string::String::from("s")), Value::Bin(session_id.to_vec())),
         (Value::Str(alloc::string::String::from("f")), encode_endpoint(facilitator)),
         (Value::Str(alloc::string::String::from("a")), encode_endpoint(initiator_public)),
-    ]);
+    ];
+    // Only include "p" when not RNSP (backward compat: old nodes don't send it)
+    if protocol != ProbeProtocol::Rnsp {
+        fields.push((Value::Str(alloc::string::String::from("p")), Value::UInt(protocol as u64)));
+    }
+    let val = Value::Map(fields);
     msgpack::pack(&val)
 }
 
-fn decode_upgrade_request(data: &[u8]) -> Result<([u8; 16], Endpoint, Endpoint), HolePunchError> {
+fn decode_upgrade_request(data: &[u8]) -> Result<([u8; 16], Endpoint, Endpoint, ProbeProtocol), HolePunchError> {
     let (val, _) = msgpack::unpack(data).map_err(|_| HolePunchError::InvalidPayload)?;
     let session_id = extract_session_id(&val)?;
     let facilitator = val
@@ -516,7 +539,16 @@ fn decode_upgrade_request(data: &[u8]) -> Result<([u8; 16], Endpoint, Endpoint),
         .map_get("a")
         .and_then(decode_endpoint)
         .ok_or(HolePunchError::InvalidPayload)?;
-    Ok((session_id, facilitator, initiator_public))
+    // Fallback to Rnsp when "p" is absent (old nodes don't send it)
+    let protocol = val
+        .map_get("p")
+        .and_then(|v| v.as_uint())
+        .map(|p| match p {
+            1 => ProbeProtocol::Stun,
+            _ => ProbeProtocol::Rnsp,
+        })
+        .unwrap_or(ProbeProtocol::Rnsp);
+    Ok((session_id, facilitator, initiator_public, protocol))
 }
 
 fn encode_upgrade_accept(session_id: &[u8; 16]) -> Vec<u8> {
@@ -650,7 +682,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         let actions = initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
 
         // Should transition to Discovering, not Proposing
@@ -665,7 +697,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
 
         // Initiator discovers its public endpoint
@@ -680,7 +712,7 @@ mod tests {
             HolePunchAction::SendSignal { msgtype, payload, .. } => {
                 assert_eq!(*msgtype, UPGRADE_REQUEST);
                 // Verify payload contains facilitator and initiator_public
-                let (sid, facilitator, init_pub) = decode_upgrade_request(payload).unwrap();
+                let (sid, facilitator, init_pub, _proto) = decode_upgrade_request(payload).unwrap();
                 assert_eq!(sid, *initiator.session_id());
                 assert_eq!(facilitator, test_probe_addr());
                 assert_eq!(init_pub, test_public_addr_a());
@@ -696,7 +728,7 @@ mod tests {
         let mut rng = make_rng(0x42);
 
         // Phase 1: Initiator discovers its endpoint
-        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
         let actions = initiator
             .endpoints_discovered(test_public_addr_a(), 101.0)
@@ -708,7 +740,7 @@ mod tests {
         };
 
         // Phase 2: Responder receives UPGRADE_REQUEST
-        let mut responder = HolePunchEngine::new(link_id, None); // no probe_addr needed, uses facilitator from request
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp); // no probe_addr needed, uses facilitator from request
         let actions = responder
             .handle_signal(UPGRADE_REQUEST, &request_payload, Some(&derived_key), 102.0)
             .unwrap();
@@ -726,7 +758,7 @@ mod tests {
 
         // B discovers using facilitator from request
         match &actions[1] {
-            HolePunchAction::DiscoverEndpoints { probe_addr } => {
+            HolePunchAction::DiscoverEndpoints { probe_addr, .. } => {
                 assert_eq!(*probe_addr, test_probe_addr()); // facilitator from request
             }
             _ => panic!("Expected DiscoverEndpoints"),
@@ -780,7 +812,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         engine.state = HolePunchState::Punching;
 
@@ -796,7 +828,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         engine.state = HolePunchState::Punching;
 
@@ -813,7 +845,7 @@ mod tests {
         let mut rng = make_rng(0x42);
 
         // Create a request payload
-        let mut proposer = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut proposer = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         proposer.propose(&derived_key, 100.0, &mut rng).unwrap();
         let actions = proposer.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
         let request_payload = match &actions[0] {
@@ -822,7 +854,7 @@ mod tests {
         };
 
         // Responder is already busy (set to Discovering manually)
-        let mut responder = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut responder = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         responder.state = HolePunchState::Discovering;
 
         let actions = responder
@@ -845,7 +877,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
         initiator.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
         assert_eq!(initiator.state(), HolePunchState::Proposing);
@@ -868,7 +900,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         assert_eq!(engine.state(), HolePunchState::Discovering);
 
@@ -888,7 +920,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         engine.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
         assert_eq!(engine.state(), HolePunchState::Proposing);
@@ -905,7 +937,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 200.0, &mut rng).unwrap();
         engine.endpoints_discovered(test_public_addr_a(), 201.0).unwrap();
         engine.state = HolePunchState::WaitingReady;
@@ -923,7 +955,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         engine.state = HolePunchState::Punching;
         engine.state_entered_at = 200.0;
@@ -941,14 +973,15 @@ mod tests {
     fn test_message_serialization_roundtrip() {
         let session_id = [0xAB; 16];
 
-        // UPGRADE_REQUEST
+        // UPGRADE_REQUEST (RNSP)
         let facilitator = test_probe_addr();
         let init_pub = test_public_addr_a();
-        let data = encode_upgrade_request(&session_id, &facilitator, &init_pub);
-        let (sid, f, a) = decode_upgrade_request(&data).unwrap();
+        let data = encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Rnsp);
+        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
         assert_eq!(sid, session_id);
         assert_eq!(f, facilitator);
         assert_eq!(a, init_pub);
+        assert_eq!(proto, ProbeProtocol::Rnsp);
 
         // UPGRADE_ACCEPT
         let data = encode_upgrade_accept(&session_id);
@@ -995,7 +1028,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut engine = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         engine.propose(&derived_key, 100.0, &mut rng).unwrap();
         assert_eq!(engine.state(), HolePunchState::Discovering);
 
@@ -1010,7 +1043,7 @@ mod tests {
         let derived_key = test_derived_key();
         let mut rng = make_rng(0x42);
 
-        let mut proposer = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut proposer = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         proposer.propose(&derived_key, 100.0, &mut rng).unwrap();
         let actions = proposer.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
         let request_payload = match &actions[0] {
@@ -1035,7 +1068,7 @@ mod tests {
         let mut rng = make_rng(0x42);
 
         // Build a request
-        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()));
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Rnsp);
         initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
         let actions = initiator.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
         let request_payload = match &actions[0] {
@@ -1044,7 +1077,7 @@ mod tests {
         };
 
         // Responder has NO probe_addr configured
-        let mut responder = HolePunchEngine::new(link_id, None);
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
         let actions = responder
             .handle_signal(UPGRADE_REQUEST, &request_payload, Some(&derived_key), 102.0)
             .unwrap();
@@ -1054,5 +1087,96 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], HolePunchAction::SendSignal { msgtype, .. } if *msgtype == UPGRADE_ACCEPT));
         assert!(matches!(&actions[1], HolePunchAction::DiscoverEndpoints { .. }));
+    }
+
+    #[test]
+    fn test_stun_protocol_in_upgrade_request_roundtrip() {
+        let session_id = [0xAB; 16];
+        let facilitator = test_probe_addr();
+        let init_pub = test_public_addr_a();
+
+        // Encode with STUN protocol
+        let data = encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Stun);
+        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        assert_eq!(sid, session_id);
+        assert_eq!(f, facilitator);
+        assert_eq!(a, init_pub);
+        assert_eq!(proto, ProbeProtocol::Stun);
+    }
+
+    #[test]
+    fn test_rnsp_protocol_omits_p_field() {
+        let session_id = [0xAB; 16];
+        let facilitator = test_probe_addr();
+        let init_pub = test_public_addr_a();
+
+        // Encode with RNSP (default) — should NOT include "p" field
+        let data = encode_upgrade_request(&session_id, &facilitator, &init_pub, ProbeProtocol::Rnsp);
+        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        assert_eq!(sid, session_id);
+        assert_eq!(f, facilitator);
+        assert_eq!(a, init_pub);
+        assert_eq!(proto, ProbeProtocol::Rnsp);
+    }
+
+    #[test]
+    fn test_backward_compat_decode_without_p_field() {
+        // Simulate old node payload that has no "p" field
+        let session_id = [0xAB; 16];
+        let facilitator = test_probe_addr();
+        let init_pub = test_public_addr_a();
+
+        // Manually encode without "p" field (old format)
+        let val = Value::Map(alloc::vec![
+            (Value::Str(alloc::string::String::from("s")), Value::Bin(session_id.to_vec())),
+            (Value::Str(alloc::string::String::from("f")), encode_endpoint(&facilitator)),
+            (Value::Str(alloc::string::String::from("a")), encode_endpoint(&init_pub)),
+        ]);
+        let data = msgpack::pack(&val);
+
+        let (sid, f, a, proto) = decode_upgrade_request(&data).unwrap();
+        assert_eq!(sid, session_id);
+        assert_eq!(f, facilitator);
+        assert_eq!(a, init_pub);
+        assert_eq!(proto, ProbeProtocol::Rnsp); // Default fallback
+    }
+
+    #[test]
+    fn test_stun_initiator_responder_gets_stun_protocol() {
+        let link_id = [0xEE; 16];
+        let derived_key = test_derived_key();
+        let mut rng = make_rng(0x42);
+
+        // Initiator uses STUN
+        let mut initiator = HolePunchEngine::new(link_id, Some(test_probe_addr()), ProbeProtocol::Stun);
+        let actions = initiator.propose(&derived_key, 100.0, &mut rng).unwrap();
+
+        // DiscoverEndpoints should carry Stun protocol
+        match &actions[0] {
+            HolePunchAction::DiscoverEndpoints { protocol, .. } => {
+                assert_eq!(*protocol, ProbeProtocol::Stun);
+            }
+            _ => panic!("Expected DiscoverEndpoints"),
+        }
+
+        let actions = initiator.endpoints_discovered(test_public_addr_a(), 101.0).unwrap();
+        let request_payload = match &actions[0] {
+            HolePunchAction::SendSignal { payload, .. } => payload.clone(),
+            _ => panic!(),
+        };
+
+        // Responder decodes and gets Stun protocol
+        let mut responder = HolePunchEngine::new(link_id, None, ProbeProtocol::Rnsp);
+        let actions = responder
+            .handle_signal(UPGRADE_REQUEST, &request_payload, Some(&derived_key), 102.0)
+            .unwrap();
+
+        // Responder's DiscoverEndpoints should carry Stun protocol (from request)
+        match &actions[1] {
+            HolePunchAction::DiscoverEndpoints { protocol, .. } => {
+                assert_eq!(*protocol, ProbeProtocol::Stun);
+            }
+            _ => panic!("Expected DiscoverEndpoints"),
+        }
     }
 }
