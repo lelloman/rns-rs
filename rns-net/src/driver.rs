@@ -1154,6 +1154,7 @@ impl Driver {
                         app_data,
                         hops,
                         received_at,
+                        receiving_interface: rns_core::transport::types::InterfaceId(0),
                     },
                 );
                 QueryResponse::InjectIdentity(true)
@@ -1670,9 +1671,6 @@ impl Driver {
                             }
                         }
                     }
-                    // Suppress unused variable warning when feature is off
-                    #[cfg(not(feature = "rns-hooks"))]
-                    let _ = receiving_interface;
 
                     // Check if this is a discovery announce (matched by name_hash
                     // since discovery is a SINGLE destination — its dest hash varies
@@ -1717,6 +1715,7 @@ impl Driver {
                         app_data: app_data.clone(),
                         hops,
                         received_at: time::now(),
+                        receiving_interface,
                     };
                     self.known_destinations.insert(destination_hash, announced.clone());
                     log::info!(
@@ -4462,6 +4461,7 @@ mod tests {
             app_data: None,
             hops: 0,
             received_at: time::now(),
+            receiving_interface: InterfaceId(0),
         });
 
         // Sign a packet hash with the identity
@@ -4542,6 +4542,7 @@ mod tests {
             app_data: None,
             hops: 0,
             received_at: time::now(),
+            receiving_interface: InterfaceId(0),
         });
 
         // Track a sent packet
@@ -5164,6 +5165,210 @@ mod tests {
         let mut raw = vec![0x40, 0x00];
         raw.extend_from_slice(&[0xAA; 16]); // transport_id only, no dest
         assert_eq!(super::extract_dest_hash(&raw), [0u8; 16]);
+    }
+
+    #[test]
+    fn announce_stores_receiving_interface_in_known_destinations() {
+        // When an announce arrives on interface 1, the AnnouncedIdentity
+        // stored in known_destinations must have receiving_interface == InterfaceId(1).
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // The identity should be cached with the correct receiving interface
+        assert_eq!(driver.known_destinations.len(), 1);
+        let (_, announced) = driver.known_destinations.iter().next().unwrap();
+        assert_eq!(announced.receiving_interface, InterfaceId(1),
+            "receiving_interface should match the interface the announce arrived on");
+    }
+
+    #[test]
+    fn announce_on_different_interfaces_stores_correct_id() {
+        // Announces arriving on interface 2 should store InterfaceId(2).
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        // Register two interfaces
+        for id in [1, 2] {
+            driver.engine.register_interface(make_interface_info(id));
+            let (writer, _) = MockWriter::new();
+            driver.interfaces.insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+        }
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+
+        // Send on interface 2
+        tx.send(Event::Frame { interface_id: InterfaceId(2), data: announce_raw }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert_eq!(driver.known_destinations.len(), 1);
+        let (_, announced) = driver.known_destinations.iter().next().unwrap();
+        assert_eq!(announced.receiving_interface, InterfaceId(2));
+    }
+
+    #[test]
+    fn inject_identity_stores_sentinel_interface() {
+        // InjectIdentity (used for persistence restore) should store InterfaceId(0)
+        // because the identity wasn't received from a real interface.
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        let identity = Identity::new(&mut OsRng);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *identity.hash(),
+            public_key: identity.get_public_key().unwrap(),
+            app_data: Some(b"restored".to_vec()),
+            hops: 2,
+            received_at: 99.0,
+        }, resp_tx)).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        match resp_rx.recv().unwrap() {
+            QueryResponse::InjectIdentity(true) => {}
+            other => panic!("expected InjectIdentity(true), got {:?}", other),
+        }
+
+        let announced = driver.known_destinations.get(&dest_hash).expect("identity should be cached");
+        assert_eq!(announced.receiving_interface, InterfaceId(0),
+            "injected identity should have sentinel InterfaceId(0)");
+        assert_eq!(announced.dest_hash.0, dest_hash);
+        assert_eq!(announced.identity_hash.0, *identity.hash());
+        assert_eq!(announced.public_key, identity.get_public_key().unwrap());
+        assert_eq!(announced.app_data, Some(b"restored".to_vec()));
+        assert_eq!(announced.hops, 2);
+        assert_eq!(announced.received_at, 99.0);
+    }
+
+    #[test]
+    fn inject_identity_overwrites_previous_entry() {
+        // A second InjectIdentity for the same dest_hash should overwrite the first.
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        let identity = Identity::new(&mut OsRng);
+        let dest_hash = rns_core::destination::destination_hash(
+            "test", &["app"], Some(identity.hash()),
+        );
+
+        // First injection
+        let (resp_tx1, resp_rx1) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *identity.hash(),
+            public_key: identity.get_public_key().unwrap(),
+            app_data: Some(b"first".to_vec()),
+            hops: 1,
+            received_at: 10.0,
+        }, resp_tx1)).unwrap();
+
+        // Second injection with different app_data
+        let (resp_tx2, resp_rx2) = mpsc::channel();
+        tx.send(Event::Query(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *identity.hash(),
+            public_key: identity.get_public_key().unwrap(),
+            app_data: Some(b"second".to_vec()),
+            hops: 3,
+            received_at: 20.0,
+        }, resp_tx2)).unwrap();
+
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(matches!(resp_rx1.recv().unwrap(), QueryResponse::InjectIdentity(true)));
+        assert!(matches!(resp_rx2.recv().unwrap(), QueryResponse::InjectIdentity(true)));
+
+        // Should have the second injection's data
+        let announced = driver.known_destinations.get(&dest_hash).unwrap();
+        assert_eq!(announced.app_data, Some(b"second".to_vec()));
+        assert_eq!(announced.hops, 3);
+        assert_eq!(announced.received_at, 20.0);
+    }
+
+    #[test]
+    fn re_announce_updates_receiving_interface() {
+        // If we get two announces for the same dest from different interfaces,
+        // the latest should win (known_destinations is a HashMap keyed by dest_hash).
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        for id in [1, 2] {
+            driver.engine.register_interface(make_interface_info(id));
+            let (writer, _) = MockWriter::new();
+            driver.interfaces.insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+        }
+
+        let identity = Identity::new(&mut OsRng);
+        let announce_raw = build_announce_packet(&identity);
+
+        // Same announce on interface 1, then interface 2
+        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw.clone() }).unwrap();
+        // The second announce of the same identity will be dropped by the transport
+        // engine's deduplication (same random_hash). Build a second identity instead
+        // to verify the field is correctly set per-announce.
+        let identity2 = Identity::new(&mut OsRng);
+        let announce_raw2 = build_announce_packet(&identity2);
+        tx.send(Event::Frame { interface_id: InterfaceId(2), data: announce_raw2 }).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        // Both should be cached with their respective interface IDs
+        assert_eq!(driver.known_destinations.len(), 2);
+        for (_, announced) in &driver.known_destinations {
+            // We can't predict ordering, but each should have a valid non-zero interface
+            assert!(announced.receiving_interface == InterfaceId(1) || announced.receiving_interface == InterfaceId(2));
+        }
+        // Verify we actually got both interfaces represented
+        let ifaces: Vec<_> = driver.known_destinations.values().map(|a| a.receiving_interface).collect();
+        assert!(ifaces.contains(&InterfaceId(1)));
+        assert!(ifaces.contains(&InterfaceId(2)));
     }
 
     #[test]

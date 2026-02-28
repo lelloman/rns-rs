@@ -2960,6 +2960,7 @@ enable_transport = False
             app_data: None,
             hops: 1,
             received_at: 0.0,
+            receiving_interface: rns_core::transport::types::InterfaceId(0),
         };
         let dest = crate::destination::Destination::single_out("test", &["echo"], &recalled);
 

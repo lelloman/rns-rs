@@ -4,6 +4,7 @@
 //! `AnnouncedIdentity` captures the result of a received announce.
 
 use rns_core::destination::destination_hash;
+use rns_core::transport::types::InterfaceId;
 use rns_core::types::{DestHash, DestinationType, Direction, IdentityHash, ProofStrategy};
 use rns_crypto::token::Token;
 use rns_crypto::OsRng;
@@ -190,6 +191,8 @@ pub struct AnnouncedIdentity {
     pub hops: u8,
     /// Timestamp when this announce was received.
     pub received_at: f64,
+    /// The interface on which this announce was received.
+    pub receiving_interface: InterfaceId,
 }
 
 #[cfg(test)]
@@ -208,6 +211,7 @@ mod tests {
             app_data: Some(b"test_data".to_vec()),
             hops: 3,
             received_at: 1234567890.0,
+            receiving_interface: InterfaceId(0),
         }
     }
 
@@ -280,6 +284,39 @@ mod tests {
         assert_eq!(ai.app_data, Some(b"test_data".to_vec()));
         assert_eq!(ai.hops, 3);
         assert_eq!(ai.received_at, 1234567890.0);
+        assert_eq!(ai.receiving_interface, InterfaceId(0));
+    }
+
+    #[test]
+    fn announced_identity_receiving_interface_nonzero() {
+        let ai = AnnouncedIdentity {
+            receiving_interface: InterfaceId(42),
+            ..test_announced()
+        };
+        assert_eq!(ai.receiving_interface, InterfaceId(42));
+    }
+
+    #[test]
+    fn announced_identity_clone_preserves_receiving_interface() {
+        let ai = AnnouncedIdentity {
+            receiving_interface: InterfaceId(7),
+            ..test_announced()
+        };
+        let cloned = ai.clone();
+        assert_eq!(cloned.receiving_interface, ai.receiving_interface);
+    }
+
+    #[test]
+    fn single_out_from_recalled_with_interface() {
+        let recalled = AnnouncedIdentity {
+            receiving_interface: InterfaceId(5),
+            ..test_announced()
+        };
+        // Destination::single_out should work regardless of receiving_interface value
+        let dest = Destination::single_out("echo", &["app"], &recalled);
+        assert_eq!(dest.dest_type, DestinationType::Single);
+        assert_eq!(dest.direction, Direction::Out);
+        assert_eq!(dest.public_key, Some([0xBB; 64]));
     }
 
     #[test]
