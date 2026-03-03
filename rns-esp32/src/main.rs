@@ -2,6 +2,7 @@
 //!
 //! Initializes hardware, generates/loads identity, starts SX1262 LoRa
 //! interface, OLED display, and runs the Reticulum transport engine event loop.
+//! Supports dual mode: standalone Reticulum node + RNode USB bridge.
 
 mod button;
 mod config;
@@ -9,15 +10,19 @@ mod display;
 mod driver;
 mod ifac;
 mod lora;
+mod rnode;
 mod rng;
 mod util;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use esp_idf_hal::gpio::{AnyIOPin, PinDriver};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::spi::{SpiDriver, SpiDriverConfig};
+use esp_idf_hal::uart::{self, UartDriver};
 use esp_idf_hal::units::Hertz;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
@@ -92,35 +97,50 @@ fn main() {
     let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14)).expect("DIO1 pin");
 
     // Initialize LoRa radio
-    let (radio, writer) = lora::init(spi_driver, cs, rst, busy, dio1)
+    let (radio, mut writer) = lora::init(spi_driver, cs, rst, busy, dio1)
         .expect("LoRa radio init");
 
-    // Create event channel
-    let (tx, rx) = mpsc::channel();
+    // Pause flag for LoRa reader and writer (set during RNode bridge mode)
+    let reader_paused = Arc::new(AtomicBool::new(false));
+    writer.set_pause_flag(reader_paused.clone());
 
-    // Configure transport engine
-    let transport_config = TransportConfig {
-        transport_enabled: true,
-        identity_hash: Some(identity_hash),
-        prefer_shorter_path: false,
-        max_paths_per_destination: 2,
-    };
+    // Initialize UART0 for RNode serial protocol (USB-UART bridge on Heltec V3)
+    let uart_config = uart::config::Config::default().baudrate(Hertz(115200));
+    let uart = UartDriver::new(
+        peripherals.uart0,
+        peripherals.pins.gpio43, // TX (U0TXD on ESP32-S3)
+        peripherals.pins.gpio44, // RX (U0RXD on ESP32-S3)
+        Option::<AnyIOPin>::None,
+        Option::<AnyIOPin>::None,
+        &uart_config,
+    )
+    .expect("UART0 init");
+
+    // Spawn serial monitor thread: watches UART for RNode DETECT handshake
+    let monitor_radio = radio.clone();
+    let monitor_paused = reader_paused.clone();
+    let monitor_stats = display_stats.clone();
+    std::thread::Builder::new()
+        .name("serial".into())
+        .stack_size(8192)
+        .spawn(move || {
+            serial_monitor_loop(uart, monitor_radio, monitor_paused, monitor_stats);
+        })
+        .expect("failed to spawn serial monitor thread");
+
+    // Create event channel for standalone mode
+    let (tx, rx) = mpsc::channel();
 
     let interface_id = InterfaceId(1);
 
-    // Build driver and register interface
-    let mut driver_inst = driver::Driver::new(transport_config, rx);
-    driver_inst.set_stats(display_stats);
-    driver_inst.set_identity(identity);
-    driver_inst.add_interface(interface_id, writer, None);
-
-    // Spawn LoRa reader thread
+    // Spawn LoRa reader thread (runs for the lifetime of the program)
     let reader_tx = tx.clone();
+    let reader_pause_flag = reader_paused.clone();
     std::thread::Builder::new()
         .name("lora_rx".into())
         .stack_size(4096)
         .spawn(move || {
-            lora::reader_loop(radio, reader_tx, interface_id);
+            lora::reader_loop(radio, reader_tx, interface_id, reader_pause_flag);
         })
         .expect("failed to spawn LoRa reader thread");
 
@@ -138,10 +158,68 @@ fn main() {
         })
         .expect("failed to spawn button thread");
 
+    // Configure transport engine
+    let transport_config = TransportConfig {
+        transport_enabled: true,
+        identity_hash: Some(identity_hash),
+        prefer_shorter_path: false,
+        max_paths_per_destination: 2,
+    };
+
+    // Build driver and register interface
+    let mut driver_inst = driver::Driver::new(transport_config, rx);
+    driver_inst.set_stats(display_stats.clone());
+    driver_inst.set_identity(identity);
+    driver_inst.add_interface(interface_id, writer, None);
+
     log::info!("Reticulum transport node running");
 
     // Run the driver event loop (blocks)
+    // The serial monitor thread handles bridge mode independently —
+    // it pauses the lora reader and runs the bridge directly.
     driver_inst.run();
+}
+
+/// Serial monitor loop: watches UART for RNode DETECT handshake,
+/// then enters bridge mode. Runs in a dedicated thread.
+fn serial_monitor_loop(
+    uart: UartDriver<'static>,
+    radio: lora::SharedRadio,
+    paused: Arc<AtomicBool>,
+    stats: display::SharedStats,
+) {
+    loop {
+        // Monitor mode: use proper KISS decoder to watch for DETECT.
+        // wait_for_detect handles split reads and responds to the
+        // DETECT + FW_VERSION + PLATFORM + MCU batch before returning.
+        if rnode::wait_for_detect(&uart) {
+            log::info!("RNode DETECT handled, entering bridge mode");
+
+            // Pause the LoRa reader and writer (standalone driver won't TX)
+            paused.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(50));
+
+            // Update display
+            if let Ok(mut s) = stats.lock() {
+                s.set_status("RNode Bridge");
+            }
+
+            // Run bridge mode (blocks until idle timeout)
+            let mut bridge = rnode::RNodeBridge::new(radio.clone(), &uart);
+            let _exit = bridge.run();
+
+            // Restore radio to default standalone config
+            rnode::restore_default_radio_config(&radio);
+
+            // Resume standalone mode
+            log::info!("RNode bridge exited, resuming standalone");
+            paused.store(false, Ordering::SeqCst);
+
+            if let Ok(mut s) = stats.lock() {
+                s.set_status("Standalone");
+            }
+        }
+    }
 }
 
 /// Load identity from NVS, or generate a new one and persist it.

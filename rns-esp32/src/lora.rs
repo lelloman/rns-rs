@@ -4,6 +4,7 @@
 //! switches to TX, sends, then returns to RX. Each LoRa packet = one
 //! Reticulum frame (no HDLC/KISS framing).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -204,7 +205,7 @@ impl Radio {
     }
 
     /// Enter continuous RX mode with proper packet params.
-    fn set_rx_continuous(&mut self) {
+    pub fn set_rx_continuous(&mut self) {
         self.set_rx_packet_params();
         // timeout = 0xFFFFFF means continuous
         self.cmd(OPCODE_SET_RX, &[0xFF, 0xFF, 0xFF]);
@@ -222,7 +223,7 @@ impl Radio {
     }
 
     /// Transmit a frame. Sets packet params, writes buffer, triggers TX, waits for TxDone.
-    fn transmit(&mut self, data: &[u8]) -> std::io::Result<()> {
+    pub fn transmit(&mut self, data: &[u8]) -> std::io::Result<()> {
         if data.len() > config::LORA_MTU as usize {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -274,8 +275,70 @@ impl Radio {
         Ok(())
     }
 
+    /// Reconfigure the radio with new parameters from the PC (RNode bridge mode).
+    /// Puts the radio in standby, applies new modulation/frequency/power settings,
+    /// then enters continuous RX.
+    pub fn reconfigure(
+        &mut self,
+        frequency: u32,
+        bandwidth: u32,
+        spreading_factor: u8,
+        coding_rate: u8,
+        tx_power: i8,
+    ) {
+        self.set_standby();
+
+        // Set RF frequency
+        let frf = ((frequency as u64) << 25) / 32_000_000;
+        self.cmd(OPCODE_SET_RF_FREQUENCY, &[
+            (frf >> 24) as u8,
+            (frf >> 16) as u8,
+            (frf >> 8) as u8,
+            frf as u8,
+        ]);
+
+        // PA config for SX1262
+        self.cmd(OPCODE_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01]);
+
+        // TX params
+        self.cmd(OPCODE_SET_TX_PARAMS, &[tx_power as u8, 0x04]);
+
+        // Modulation params: SF, BW, CR, LowDataRateOptimize
+        let bw_param = match bandwidth {
+            7_800 => 0x00,
+            10_400 => 0x08,
+            15_600 => 0x01,
+            20_800 => 0x09,
+            31_250 => 0x02,
+            41_700 => 0x0A,
+            62_500 => 0x03,
+            125_000 => 0x04,
+            250_000 => 0x05,
+            500_000 => 0x06,
+            _ => 0x04,
+        };
+        let ldro = if spreading_factor >= 11 && bandwidth <= 125_000 {
+            0x01
+        } else {
+            0x00
+        };
+        self.cmd(OPCODE_SET_MODULATION_PARAMS, &[
+            spreading_factor,
+            bw_param,
+            coding_rate - 4,
+            ldro,
+        ]);
+
+        self.set_rx_continuous();
+
+        log::info!(
+            "Radio reconfigured: freq={}Hz, SF={}, BW={}Hz, CR=4/{}, TX={}dBm",
+            frequency, spreading_factor, bandwidth, coding_rate, tx_power
+        );
+    }
+
     /// Try to receive a frame. Returns Some(data) if RxDone, None otherwise.
-    fn try_receive(&mut self) -> Option<Vec<u8>> {
+    pub fn try_receive(&mut self) -> Option<Vec<u8>> {
         let irq = self.get_irq_status();
 
         if irq & IRQ_RX_DONE != 0 {
@@ -316,13 +379,28 @@ impl Radio {
 /// Shared radio handle.
 pub type SharedRadio = Arc<Mutex<Radio>>;
 
+/// Shared pause flag: when true, the radio is owned by the RNode bridge.
+pub type PauseFlag = Arc<AtomicBool>;
+
 /// Writer end: sends frames over LoRa.
 pub struct LoRaWriter {
     radio: SharedRadio,
+    paused: Option<PauseFlag>,
 }
 
 impl LoRaWriter {
+    /// Set the pause flag. When paused, send_frame silently drops frames
+    /// to avoid interfering with the RNode bridge.
+    pub fn set_pause_flag(&mut self, flag: PauseFlag) {
+        self.paused = Some(flag);
+    }
+
     pub fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+        if let Some(ref paused) = self.paused {
+            if paused.load(Ordering::SeqCst) {
+                return Ok(()); // Bridge owns the radio, silently drop
+            }
+        }
         let mut radio = self.radio.lock().unwrap();
         let result = radio.transmit(data);
         // Return to RX after transmitting
@@ -365,20 +443,27 @@ pub fn init(
         config::LORA_BANDWIDTH, config::LORA_TX_POWER);
 
     let shared = Arc::new(Mutex::new(radio));
-    let writer = LoRaWriter { radio: shared.clone() };
+    let writer = LoRaWriter { radio: shared.clone(), paused: None };
 
     Ok((shared, writer))
 }
 
 /// Reader loop: polls for received frames and sends them to the event channel.
-/// Run this in a dedicated thread.
+/// Run this in a dedicated thread. When `paused` is true, skips radio polling
+/// (used during RNode bridge mode when the bridge owns radio access).
 pub fn reader_loop(
     radio: SharedRadio,
     tx: std::sync::mpsc::Sender<crate::driver::Event>,
     interface_id: rns_core::transport::types::InterfaceId,
+    paused: Arc<AtomicBool>,
 ) {
     log::info!("LoRa reader loop started");
     loop {
+        if paused.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+
         let frame = {
             let mut r = radio.lock().unwrap();
             r.try_receive()
