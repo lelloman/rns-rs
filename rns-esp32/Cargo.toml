@@ -1,0 +1,33 @@
+[package]
+name = "rns-esp32"
+version = "0.1.0"
+edition = "2021"
+description = "Reticulum LoRa transport node firmware for Heltec WiFi LoRa 32 V3"
+
+[dependencies]
+rns-core = { path = "../rns-core", default-features = false, features = ["std"] }
+rns-crypto = { path = "../rns-crypto", default-features = false, features = ["std", "espidf"] }
+
+esp-idf-sys = "0.36"
+esp-idf-svc = "0.51"
+esp-idf-hal = "0.45"
+
+log = "0.4"
+ssd1306 = "0.9"
+embedded-graphics = "0.8"
+
+[build-dependencies]
+embuild = { version = "0.32", features = ["espidf"] }
+
+# Crypto is unusably slow without optimization
+[profile.dev.package.rns-crypto]
+opt-level = 2
+
+[profile.dev.package.curve25519-dalek]
+opt-level = 2
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 2
+
+[profile.dev.package.sha2]
+opt-level = 2

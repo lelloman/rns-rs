@@ -1,0 +1,22 @@
+# Rust needs a larger main task stack
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Custom partition table with larger app partition (4MB - 64KB)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/home/lelloman/lelloprojects/rns-rs/rns-esp32/partitions.csv"
+
+# Enable SPI
+CONFIG_SPI_MASTER_IN_IRAM=y
+
+# NVS for identity persistence
+CONFIG_NVS_ENCRYPTION=n
+
+# Logging
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# Flash size (Heltec V3 has 8MB)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Disable task watchdog — crypto operations are slow
+CONFIG_ESP_TASK_WDT=n

@@ -50,6 +50,13 @@ pub struct OsRng;
 #[cfg(feature = "std")]
 impl Rng for OsRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
+        // ESP-IDF: use hardware RNG via esp_fill_random
+        #[cfg(target_os = "espidf")]
+        {
+            unsafe {
+                esp_idf_sys::esp_fill_random(dest.as_mut_ptr() as *mut core::ffi::c_void, dest.len());
+            }
+        }
         // Use getrandom(2) syscall directly on Linux
         #[cfg(target_os = "linux")]
         {
@@ -58,7 +65,7 @@ impl Rng for OsRng {
             };
             assert!(ret == dest.len() as isize, "getrandom failed");
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "espidf")))]
         {
             // Fallback: read from /dev/urandom
             use std::io::Read;
