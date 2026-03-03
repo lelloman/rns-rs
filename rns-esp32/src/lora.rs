@@ -38,6 +38,7 @@ const OPCODE_SET_REGULATOR_MODE: u8 = 0x96;
 // IRQ masks
 const IRQ_TX_DONE: u16 = 0x0001;
 const IRQ_RX_DONE: u16 = 0x0002;
+const IRQ_CRC_ERR: u16 = 0x0040;
 const IRQ_TIMEOUT: u16 = 0x0200;
 
 // Standby modes
@@ -179,8 +180,8 @@ impl Radio {
         // Buffer base addresses: TX=0, RX=128
         self.cmd(OPCODE_SET_BUFFER_BASE_ADDRESS, &[0x00, 0x80]);
 
-        // DIO1 IRQ: map TxDone + RxDone + Timeout to DIO1
-        let irq_mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_TIMEOUT;
+        // DIO1 IRQ: map TxDone + RxDone + CrcErr + Timeout to DIO1
+        let irq_mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
         self.cmd(OPCODE_SET_DIO_IRQ_PARAMS, &[
             (irq_mask >> 8) as u8, irq_mask as u8,   // IRQ mask
             (irq_mask >> 8) as u8, irq_mask as u8,   // DIO1 mask
@@ -189,8 +190,22 @@ impl Radio {
         ]);
     }
 
-    /// Enter continuous RX mode.
+    /// Set packet params for RX mode (max payload length, explicit header, CRC).
+    fn set_rx_packet_params(&mut self) {
+        let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
+        self.cmd(OPCODE_SET_PACKET_PARAMS, &[
+            (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
+            config::LORA_PREAMBLE_LENGTH as u8,
+            0x00, // explicit header
+            config::LORA_MTU as u8, // max payload length for RX
+            crc,
+            0x00, // standard IQ
+        ]);
+    }
+
+    /// Enter continuous RX mode with proper packet params.
     fn set_rx_continuous(&mut self) {
+        self.set_rx_packet_params();
         // timeout = 0xFFFFFF means continuous
         self.cmd(OPCODE_SET_RX, &[0xFF, 0xFF, 0xFF]);
     }
@@ -266,12 +281,19 @@ impl Radio {
         if irq & IRQ_RX_DONE != 0 {
             self.clear_irq(IRQ_RX_DONE);
 
+            if irq & IRQ_CRC_ERR != 0 {
+                self.clear_irq(IRQ_CRC_ERR);
+                log::warn!("LoRa RX CRC error, dropping");
+                return None;
+            }
+
             // Get RX buffer status: [payloadLen, rxStartBufferPointer]
             let status = self.cmd_read(OPCODE_GET_RX_BUFFER_STATUS, &[], 2);
             let len = status[0] as usize;
             let offset = status[1];
 
             if len == 0 || len > config::LORA_MTU as usize {
+                log::warn!("LoRa RX invalid len={}", len);
                 return None;
             }
 
@@ -279,6 +301,10 @@ impl Radio {
             let data = self.cmd_read(OPCODE_READ_BUFFER, &[offset], len);
             Some(data)
         } else {
+            if irq & IRQ_CRC_ERR != 0 {
+                self.clear_irq(IRQ_CRC_ERR);
+                log::warn!("LoRa CRC error (no RxDone)");
+            }
             if irq & IRQ_TIMEOUT != 0 {
                 self.clear_irq(IRQ_TIMEOUT);
             }
