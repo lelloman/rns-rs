@@ -7,7 +7,7 @@ use std::env;
 use std::sync::mpsc;
 
 use rns_net::{
-    Callbacks, InterfaceConfig, InterfaceId, InterfaceVariant, NodeConfig, RNodeConfig,
+    Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RNodeConfig,
     RNodeSubConfig, RnsNode, MODE_FULL,
 };
 
@@ -64,10 +64,12 @@ fn main() {
             transport_enabled: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::RNode(RNodeConfig {
+                type_name: "RNodeInterface".to_string(),
+                config_data: Box::new(RNodeConfig {
                     name: format!("RNode {}", port),
                     port: port.clone(),
                     speed: 115200,
+                    base_interface_id: InterfaceId(1),
                     subinterfaces: vec![RNodeSubConfig {
                         name: "LoRa".into(),
                         frequency,
@@ -81,7 +83,6 @@ fn main() {
                     }],
                     id_interval: None,
                     id_callsign: None,
-                    base_interface_id: InterfaceId(1),
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -103,6 +104,7 @@ fn main() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            registry: None,
         },
         Box::new(LoggingCallbacks),
     )

@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "rns-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "env_logger 0.10.2",
  "libc",
@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "env_logger 0.11.8",
  "libc",
@@ -1953,7 +1953,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rns-net"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bzip2",
  "ctrlc",

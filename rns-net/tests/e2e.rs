@@ -17,7 +17,7 @@ use rns_crypto::{OsRng, Rng};
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, InterfaceVariant, NodeConfig, PacketHash, ProofStrategy, QueryRequest,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, QueryRequest,
     QueryResponse, RnsNode, TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
 };
 
@@ -493,7 +493,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Transport TCP".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -519,6 +520,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -538,7 +540,8 @@ fn start_client_node(
                 &identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
                     target_host: "127.0.0.1".into(),
                     target_port: port,
@@ -565,6 +568,7 @@ fn start_client_node(
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         callbacks,
     )
@@ -766,7 +770,8 @@ fn test_direct_link_no_transport() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&bob_id.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -792,6 +797,7 @@ fn test_direct_link_no_transport() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1184,7 +1190,8 @@ fn test_plain_message_delivery() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -1210,6 +1217,7 @@ fn test_plain_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1259,7 +1267,8 @@ fn test_group_message_delivery() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -1285,6 +1294,7 @@ fn test_group_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1331,7 +1341,8 @@ fn test_group_wrong_key_fails() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -1357,6 +1368,7 @@ fn test_group_wrong_key_fails() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2137,7 +2149,8 @@ fn test_udp_announce_and_message() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&alice_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::Udp(UdpConfig {
+                type_name: "UDPInterface".to_string(),
+                config_data: Box::new(UdpConfig {
                     name: "Alice UDP".into(),
                     listen_ip: Some("127.0.0.1".into()),
                     listen_port: Some(port_a),
@@ -2165,6 +2178,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2177,7 +2191,8 @@ fn test_udp_announce_and_message() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::Udp(UdpConfig {
+                type_name: "UDPInterface".to_string(),
+                config_data: Box::new(UdpConfig {
                     name: "Bob UDP".into(),
                     listen_ip: Some("127.0.0.1".into()),
                     listen_port: Some(port_b),
@@ -2205,6 +2220,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2303,7 +2319,8 @@ fn discovery_announce_received_by_client() {
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Discoverable TCP".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -2339,6 +2356,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2360,7 +2378,8 @@ fn discovery_announce_received_by_client() {
                 &client_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
                     target_host: "127.0.0.1".into(),
                     target_port: port,
@@ -2387,6 +2406,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2453,7 +2473,8 @@ fn discovery_announce_through_relay() {
                 &transport_identity.get_private_key().unwrap(),
             )),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Discoverable TCP".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port_a,
@@ -2489,6 +2510,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2504,7 +2526,8 @@ fn discovery_announce_through_relay() {
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![
                 InterfaceConfig {
-                    variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                    type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                         name: "Relay Upstream".into(),
                         target_host: "127.0.0.1".into(),
                         target_port: port_a,
@@ -2516,7 +2539,8 @@ fn discovery_announce_through_relay() {
                     discovery: None,
                 },
                 InterfaceConfig {
-                    variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                    type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                         name: "Relay Downstream".into(),
                         listen_ip: "127.0.0.1".into(),
                         listen_port: port_b,
@@ -2543,6 +2567,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2562,7 +2587,8 @@ fn discovery_announce_through_relay() {
             transport_enabled: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
                     target_host: "127.0.0.1".into(),
                     target_port: port_b,
@@ -2589,6 +2615,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        registry: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )

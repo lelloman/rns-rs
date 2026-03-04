@@ -465,3 +465,68 @@ fn peer_reader_loop(
         }
     }
 }
+
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `I2PInterface`.
+pub struct I2pFactory;
+
+impl InterfaceFactory for I2pFactory {
+    fn type_name(&self) -> &str { "I2PInterface" }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let sam_host = params.get("sam_host")
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1".into());
+
+        let sam_port = params.get("sam_port")
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(7656);
+
+        let connectable = params.get("connectable")
+            .and_then(|v| crate::config::parse_bool_pub(v))
+            .unwrap_or(false);
+
+        let peers = params.get("peers")
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+
+        let storage_dir = params.get("storage_dir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp/rns-i2p"));
+
+        Ok(Box::new(I2pConfig {
+            name: name.to_string(),
+            interface_id: id,
+            sam_host,
+            sam_port,
+            connectable,
+            peers,
+            storage_dir,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let cfg = *config.into_any().downcast::<I2pConfig>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+        Ok(StartResult::Listener)
+    }
+}

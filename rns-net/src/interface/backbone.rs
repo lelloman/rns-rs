@@ -23,7 +23,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
 
 /// HW_MTU: 1 MB (matches Python BackboneInterface.HW_MTU)
 #[allow(dead_code)]
@@ -574,6 +574,116 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
             }
             Err(e) => {
                 log::warn!("[{}] reconnect failed: {}", config.name, e);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/// Internal enum used by [`BackboneInterfaceFactory`] to carry either a
+/// server or client config through the opaque `InterfaceConfigData` channel.
+enum BackboneMode {
+    Server(BackboneConfig),
+    Client(BackboneClientConfig),
+}
+
+/// Factory for `BackboneInterface`.
+///
+/// If the config params contain `"remote"` or `"target_host"` the interface
+/// is started in client mode; otherwise it is started as a TCP listener
+/// (server mode).
+pub struct BackboneInterfaceFactory;
+
+impl InterfaceFactory for BackboneInterfaceFactory {
+    fn type_name(&self) -> &str { "BackboneInterface" }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        if let Some(target_host) = params.get("remote").or_else(|| params.get("target_host")) {
+            // Client mode
+            let target_host = target_host.clone();
+            let target_port = params.get("target_port")
+                .or_else(|| params.get("port"))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4242);
+            let transport_identity = params.get("transport_identity").cloned();
+            Ok(Box::new(BackboneMode::Client(BackboneClientConfig {
+                name: name.to_string(),
+                target_host,
+                target_port,
+                interface_id: id,
+                transport_identity,
+                ..BackboneClientConfig::default()
+            })))
+        } else {
+            // Server mode
+            let listen_ip = params.get("listen_ip")
+                .or_else(|| params.get("device"))
+                .cloned()
+                .unwrap_or_else(|| "0.0.0.0".into());
+            let listen_port = params.get("listen_port")
+                .or_else(|| params.get("port"))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4242);
+            Ok(Box::new(BackboneMode::Server(BackboneConfig {
+                name: name.to_string(),
+                listen_ip,
+                listen_port,
+                interface_id: id,
+            })))
+        }
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let mode = *config.into_any()
+            .downcast::<BackboneMode>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type for BackboneInterface"))?;
+
+        match mode {
+            BackboneMode::Client(cfg) => {
+                let id = cfg.interface_id;
+                let name = cfg.name.clone();
+                let info = InterfaceInfo {
+                    id,
+                    name,
+                    mode: ctx.mode,
+                    out_capable: true,
+                    in_capable: true,
+                    bitrate: Some(1_000_000_000),
+                    announce_rate_target: None,
+                    announce_rate_grace: 0,
+                    announce_rate_penalty: 0.0,
+                    announce_cap: constants::ANNOUNCE_CAP,
+                    is_local_client: false,
+                    wants_tunnel: false,
+                    tunnel_id: None,
+                    mtu: 65535,
+                    ingress_control: true,
+                    ia_freq: 0.0,
+                    started: crate::time::now(),
+                };
+                let writer = start_client(cfg, ctx.tx)?;
+                Ok(StartResult::Simple {
+                    id,
+                    info,
+                    writer,
+                    interface_type_name: "BackboneInterface".to_string(),
+                })
+            }
+            BackboneMode::Server(cfg) => {
+                start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+                Ok(StartResult::Listener)
             }
         }
     }

@@ -474,6 +474,147 @@ fn process_flow_queue(
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use rns_core::transport::types::InterfaceInfo;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult, SubInterface};
+
+/// Factory for `RNodeInterface`.
+pub struct RNodeFactory;
+
+impl InterfaceFactory for RNodeFactory {
+    fn type_name(&self) -> &str { "RNodeInterface" }
+
+    fn default_ifac_size(&self) -> usize { 8 }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let port = params.get("port")
+            .cloned()
+            .ok_or_else(|| "RNodeInterface requires 'port'".to_string())?;
+
+        let speed = params.get("speed")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(115200u32);
+
+        let frequency = params.get("frequency")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(868_000_000u32);
+
+        let bandwidth = params.get("bandwidth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(125_000u32);
+
+        let txpower = params.get("txpower")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(7i8);
+
+        let spreading_factor = params.get("spreadingfactor")
+            .or_else(|| params.get("spreading_factor"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8u8);
+
+        let coding_rate = params.get("codingrate")
+            .or_else(|| params.get("coding_rate"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5u8);
+
+        let flow_control = params.get("flow_control")
+            .and_then(|v| crate::config::parse_bool_pub(v))
+            .unwrap_or(false);
+
+        let st_alock = params.get("st_alock")
+            .and_then(|v| v.parse().ok());
+
+        let lt_alock = params.get("lt_alock")
+            .and_then(|v| v.parse().ok());
+
+        let id_interval = params.get("id_interval")
+            .and_then(|v| v.parse().ok());
+
+        let id_callsign = params.get("id_callsign")
+            .map(|v| v.as_bytes().to_vec());
+
+        let sub = RNodeSubConfig {
+            name: name.to_string(),
+            frequency,
+            bandwidth,
+            txpower,
+            spreading_factor,
+            coding_rate,
+            flow_control,
+            st_alock,
+            lt_alock,
+        };
+
+        Ok(Box::new(RNodeConfig {
+            name: name.to_string(),
+            port,
+            speed,
+            subinterfaces: vec![sub],
+            id_interval,
+            id_callsign,
+            base_interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> std::io::Result<StartResult> {
+        let rnode_config = *config.into_any().downcast::<RNodeConfig>()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let name = rnode_config.name.clone();
+
+        let pairs = start(rnode_config, ctx.tx)?;
+
+        let mut subs = Vec::with_capacity(pairs.len());
+        for (index, (sub_id, writer)) in pairs.into_iter().enumerate() {
+            let sub_name = if index == 0 {
+                name.clone()
+            } else {
+                format!("{}/{}", name, index)
+            };
+
+            let info = InterfaceInfo {
+                id: sub_id,
+                name: sub_name,
+                mode: ctx.mode,
+                out_capable: true,
+                in_capable: true,
+                bitrate: None,
+                announce_rate_target: None,
+                announce_rate_grace: 0,
+                announce_rate_penalty: 0.0,
+                announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                is_local_client: false,
+                wants_tunnel: false,
+                tunnel_id: None,
+                mtu: rns_core::constants::MTU as u32,
+                ingress_control: false,
+                ia_freq: 0.0,
+                started: crate::time::now(),
+            };
+
+            subs.push(SubInterface {
+                id: sub_id,
+                info,
+                writer,
+                interface_type_name: "RNodeInterface".to_string(),
+            });
+        }
+
+        Ok(StartResult::Multi(subs))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

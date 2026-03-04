@@ -6,7 +6,7 @@
 use std::env;
 use std::sync::mpsc;
 
-use rns_net::{Callbacks, InterfaceConfig, InterfaceId, InterfaceVariant, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
+use rns_net::{Callbacks, InterfaceConfig, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
 
 struct LoggingCallbacks;
 
@@ -48,11 +48,11 @@ fn main() {
             transport_enabled: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                     name: format!("TCP {}:{}", host, port),
                     target_host: host,
                     target_port: port,
-                    interface_id: InterfaceId(1),
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
@@ -75,6 +75,7 @@ fn main() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            registry: None,
         },
         Box::new(LoggingCallbacks),
     )

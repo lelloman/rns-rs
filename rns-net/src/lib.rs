@@ -24,6 +24,7 @@ pub mod announce_cache;
 pub use common::compressor;
 pub use common::link_manager;
 pub mod management;
+#[cfg(feature = "iface-local")]
 pub mod shared_client;
 pub use common::destination;
 pub mod holepunch;
@@ -36,17 +37,34 @@ pub use event::{
     PathTableEntry, RateTableEntry, NextHopResponse, BlackholeInfo,
     LocalDestinationEntry, LinkInfoEntry, ResourceInfoEntry,
 };
-pub use node::{IfacConfig, InterfaceConfig, InterfaceVariant, NodeConfig, RnsNode, SendError};
-pub use interface::tcp::TcpClientConfig;
-pub use interface::tcp_server::TcpServerConfig;
-pub use interface::udp::UdpConfig;
-pub use interface::local::{LocalServerConfig, LocalClientConfig};
-pub use interface::serial_iface::SerialIfaceConfig;
-pub use interface::kiss_iface::KissIfaceConfig;
-pub use interface::pipe::PipeConfig;
-pub use interface::rnode::{RNodeConfig, RNodeSubConfig};
-pub use interface::backbone::BackboneConfig;
-pub use interface::auto::AutoConfig;
+pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
+pub use interface::{
+    InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
+};
+pub use interface::registry::InterfaceRegistry;
+#[cfg(feature = "iface-tcp")]
+pub use interface::tcp::{TcpClientFactory, TcpClientConfig};
+#[cfg(feature = "iface-tcp")]
+pub use interface::tcp_server::{TcpServerFactory, TcpServerConfig};
+#[cfg(feature = "iface-udp")]
+pub use interface::udp::{UdpFactory, UdpConfig};
+#[cfg(feature = "iface-serial")]
+pub use interface::serial_iface::{SerialFactory, SerialIfaceConfig};
+#[cfg(feature = "iface-kiss")]
+pub use interface::kiss_iface::{KissFactory, KissIfaceConfig};
+#[cfg(feature = "iface-pipe")]
+pub use interface::pipe::{PipeFactory, PipeConfig};
+#[cfg(feature = "iface-local")]
+pub use interface::local::{LocalServerFactory, LocalClientFactory, LocalServerConfig, LocalClientConfig};
+#[cfg(feature = "iface-backbone")]
+pub use interface::backbone::{BackboneInterfaceFactory, BackboneConfig, BackboneClientConfig};
+#[cfg(feature = "iface-auto")]
+pub use interface::auto::{AutoFactory, AutoConfig};
+#[cfg(feature = "iface-i2p")]
+pub use interface::i2p::{I2pFactory, I2pConfig};
+#[cfg(feature = "iface-rnode")]
+pub use interface::rnode::{RNodeFactory, RNodeConfig, RNodeSubConfig};
+#[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;
 pub use config::RnsConfig;
 pub use ifac::IfacState;

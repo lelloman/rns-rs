@@ -392,6 +392,82 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use rns_core::transport::types::InterfaceInfo;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `TCPClientInterface`.
+pub struct TcpClientFactory;
+
+impl InterfaceFactory for TcpClientFactory {
+    fn type_name(&self) -> &str { "TCPClientInterface" }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let target_host = params.get("target_host")
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1".into());
+        let target_port = params.get("target_port")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4242);
+
+        Ok(Box::new(TcpClientConfig {
+            name: name.to_string(),
+            target_host,
+            target_port,
+            interface_id: id,
+            device: params.get("device").cloned(),
+            ..TcpClientConfig::default()
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let tcp_config = *config.into_any().downcast::<TcpClientConfig>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = tcp_config.interface_id;
+        let name = tcp_config.name.clone();
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: ctx.mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: 65535,
+            ingress_control: true,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let writer = start(tcp_config, ctx.tx)?;
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "TCPClientInterface".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use rns_core::transport::types::{InterfaceInfo, TransportConfig};
+use rns_core::transport::types::TransportConfig;
 use rns_crypto::identity::Identity;
 use rns_crypto::{OsRng, Rng};
 
@@ -17,20 +17,10 @@ use crate::config;
 use crate::driver::{Callbacks, Driver};
 use crate::event::{self, Event, EventSender};
 use crate::ifac;
-use crate::interface::tcp::TcpClientConfig;
-use crate::interface::tcp_server::TcpServerConfig;
-use crate::interface::udp::UdpConfig;
-use crate::interface::local::{LocalServerConfig, LocalClientConfig};
-use crate::interface::serial_iface::SerialIfaceConfig;
-use crate::interface::kiss_iface::KissIfaceConfig;
-use crate::interface::pipe::PipeConfig;
-use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
-use crate::interface::backbone::{BackboneConfig, BackboneClientConfig};
-use crate::interface::auto::AutoConfig;
-use crate::interface::i2p::I2pConfig;
+#[cfg(feature = "iface-local")]
+use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::time;
-use crate::serial::Parity;
 use crate::storage;
 
 /// Parse an interface mode string to the corresponding constant.
@@ -44,15 +34,6 @@ fn parse_interface_mode(mode: &str) -> u8 {
         "boundary" => rns_core::constants::MODE_BOUNDARY,
         "gateway" | "gw" => rns_core::constants::MODE_GATEWAY,
         _ => rns_core::constants::MODE_FULL,
-    }
-}
-
-/// Parse a parity string from config. Matches Python's serial.PARITY_*.
-fn parse_parity(s: &str) -> Parity {
-    match s.to_lowercase().as_str() {
-        "e" | "even" => Parity::Even,
-        "o" | "odd" => Parity::Odd,
-        _ => Parity::None,
     }
 }
 
@@ -138,6 +119,7 @@ fn extract_discovery_config(
 pub struct NodeConfig {
     pub transport_enabled: bool,
     pub identity: Option<Identity>,
+    /// Interface configurations (parsed via registry factories).
     pub interfaces: Vec<InterfaceConfig>,
     /// Enable shared instance server for local clients (rns-ctl, etc.)
     pub share_instance: bool,
@@ -174,17 +156,8 @@ pub struct NodeConfig {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
-}
-
-/// Interface configuration variant with its mode.
-pub struct InterfaceConfig {
-    pub variant: InterfaceVariant,
-    /// Interface mode (MODE_FULL, MODE_ACCESS_POINT, etc.)
-    pub mode: u8,
-    /// IFAC (Interface Access Code) configuration, if enabled.
-    pub ifac: Option<IfacConfig>,
-    /// Discovery configuration, if this interface is discoverable.
-    pub discovery: Option<crate::discovery::DiscoveryConfig>,
+    /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
+    pub registry: Option<crate::interface::registry::InterfaceRegistry>,
 }
 
 /// IFAC configuration for an interface.
@@ -194,21 +167,13 @@ pub struct IfacConfig {
     pub size: usize,
 }
 
-/// The specific interface type and its parameters.
-pub enum InterfaceVariant {
-    TcpClient(TcpClientConfig),
-    TcpServer(TcpServerConfig),
-    Udp(UdpConfig),
-    LocalServer(LocalServerConfig),
-    LocalClient(LocalClientConfig),
-    Serial(SerialIfaceConfig),
-    Kiss(KissIfaceConfig),
-    Pipe(PipeConfig),
-    RNode(RNodeConfig),
-    Backbone(BackboneConfig),
-    BackboneClient(BackboneClientConfig),
-    Auto(AutoConfig),
-    I2p(I2pConfig),
+/// Interface configuration, parsed via an [`InterfaceFactory`] from the registry.
+pub struct InterfaceConfig {
+    pub type_name: String,
+    pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
+    pub mode: u8,
+    pub ifac: Option<IfacConfig>,
+    pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
 
 use crate::event::{QueryRequest, QueryResponse};
@@ -272,7 +237,8 @@ impl RnsNode {
             storage::load_or_create_identity(&paths.identities)?
         };
 
-        // Build interface configs from parsed config
+        // Build interface configs from parsed config using registry
+        let registry = crate::interface::registry::InterfaceRegistry::with_builtins();
         let mut interface_configs = Vec::new();
         let mut next_id_val = 1u64;
 
@@ -284,10 +250,21 @@ impl RnsNode {
             let iface_id = rns_core::transport::types::InterfaceId(next_id_val);
             next_id_val += 1;
 
+            let factory = match registry.get(&iface.interface_type) {
+                Some(f) => f,
+                None => {
+                    log::warn!(
+                        "Unsupported interface type '{}' for '{}'",
+                        iface.interface_type,
+                        iface.name,
+                    );
+                    continue;
+                }
+            };
+
             let mut iface_mode = parse_interface_mode(&iface.mode);
 
             // Auto-configure mode when discovery is enabled (Python Reticulum.py).
-            // AutoInterface inherently uses discovery; RNodeInterface may have discoverable=true.
             let has_discovery = match iface.interface_type.as_str() {
                 "AutoInterface" => true,
                 "RNodeInterface" => iface.params.get("discoverable")
@@ -316,470 +293,39 @@ impl RnsNode {
                 iface_mode = new_mode;
             }
 
-            // Default IFAC size depends on interface type:
-            // 8 bytes for Serial/KISS/RNode, 16 for TCP/UDP/Auto/Local
-            let default_ifac_size = match iface.interface_type.as_str() {
-                "SerialInterface" | "KISSInterface" | "RNodeInterface" => 8,
-                _ => 16,
-            };
+            let default_ifac_size = factory.default_ifac_size();
             let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
             let discovery_config = extract_discovery_config(
                 &iface.name, &iface.interface_type, &iface.params,
             );
 
-            match iface.interface_type.as_str() {
-                "TCPClientInterface" => {
-                    let target_host = iface
-                        .params
-                        .get("target_host")
-                        .cloned()
-                        .unwrap_or_else(|| "127.0.0.1".into());
-                    let target_port = iface
-                        .params
-                        .get("target_port")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(4242);
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::TcpClient(TcpClientConfig {
-                            name: iface.name.clone(),
-                            target_host,
-                            target_port,
-                            interface_id: iface_id,
-                            device: rns_config.reticulum.device.clone(),
-                            ..TcpClientConfig::default()
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "TCPServerInterface" => {
-                    let listen_ip = iface
-                        .params
-                        .get("listen_ip")
-                        .cloned()
-                        .unwrap_or_else(|| "0.0.0.0".into());
-                    let listen_port = iface
-                        .params
-                        .get("listen_port")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(4242);
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::TcpServer(TcpServerConfig {
-                            name: iface.name.clone(),
-                            listen_ip,
-                            listen_port,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "UDPInterface" => {
-                    let listen_ip = iface.params.get("listen_ip").cloned();
-                    let listen_port = iface
-                        .params
-                        .get("listen_port")
-                        .and_then(|v| v.parse().ok());
-                    let forward_ip = iface.params.get("forward_ip").cloned();
-                    let forward_port = iface
-                        .params
-                        .get("forward_port")
-                        .and_then(|v| v.parse().ok());
-
-                    // Handle 'port' shorthand (sets both listen_port and forward_port)
-                    let port = iface.params.get("port").and_then(|v| v.parse::<u16>().ok());
-                    let listen_port = listen_port.or(port);
-                    let forward_port = forward_port.or(port);
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Udp(UdpConfig {
-                            name: iface.name.clone(),
-                            listen_ip,
-                            listen_port,
-                            forward_ip,
-                            forward_port,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "SerialInterface" => {
-                    let port = match iface.params.get("port") {
-                        Some(p) => p.clone(),
-                        None => {
-                            log::warn!("No port specified for SerialInterface '{}'", iface.name);
-                            continue;
-                        }
-                    };
-                    let speed = iface.params.get("speed")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(9600);
-                    let databits = iface.params.get("databits")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(8);
-                    let parity = iface.params.get("parity")
-                        .map(|v| parse_parity(v))
-                        .unwrap_or(Parity::None);
-                    let stopbits = iface.params.get("stopbits")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(1);
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Serial(SerialIfaceConfig {
-                            name: iface.name.clone(),
-                            port,
-                            speed,
-                            data_bits: databits,
-                            parity,
-                            stop_bits: stopbits,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "KISSInterface" => {
-                    let port = match iface.params.get("port") {
-                        Some(p) => p.clone(),
-                        None => {
-                            log::warn!("No port specified for KISSInterface '{}'", iface.name);
-                            continue;
-                        }
-                    };
-                    let speed = iface.params.get("speed")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(9600);
-                    let databits = iface.params.get("databits")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(8);
-                    let parity = iface.params.get("parity")
-                        .map(|v| parse_parity(v))
-                        .unwrap_or(Parity::None);
-                    let stopbits = iface.params.get("stopbits")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(1);
-                    let preamble = iface.params.get("preamble")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(350);
-                    let txtail = iface.params.get("txtail")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(20);
-                    let persistence = iface.params.get("persistence")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(64);
-                    let slottime = iface.params.get("slottime")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(20);
-                    let flow_control = iface.params.get("flow_control")
-                        .and_then(|v| config::parse_bool_pub(v))
-                        .unwrap_or(false);
-                    let beacon_interval = iface.params.get("id_interval")
-                        .and_then(|v| v.parse().ok());
-                    let beacon_data = iface.params.get("id_callsign")
-                        .map(|v| v.as_bytes().to_vec());
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Kiss(KissIfaceConfig {
-                            name: iface.name.clone(),
-                            port,
-                            speed,
-                            data_bits: databits,
-                            parity,
-                            stop_bits: stopbits,
-                            preamble,
-                            txtail,
-                            persistence,
-                            slottime,
-                            flow_control,
-                            beacon_interval,
-                            beacon_data,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "RNodeInterface" => {
-                    let port = match iface.params.get("port") {
-                        Some(p) => p.clone(),
-                        None => {
-                            log::warn!("No port specified for RNodeInterface '{}'", iface.name);
-                            continue;
-                        }
-                    };
-                    let speed = iface.params.get("speed")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(115200);
-                    let frequency = iface.params.get("frequency")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(868_000_000);
-                    let bandwidth = iface.params.get("bandwidth")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(125_000);
-                    let txpower = iface.params.get("txpower")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(7);
-                    let spreading_factor = iface.params.get("spreadingfactor")
-                        .or_else(|| iface.params.get("spreading_factor"))
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(8);
-                    let coding_rate = iface.params.get("codingrate")
-                        .or_else(|| iface.params.get("coding_rate"))
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(5);
-                    let flow_control = iface.params.get("flow_control")
-                        .and_then(|v| config::parse_bool_pub(v))
-                        .unwrap_or(false);
-                    let st_alock = iface.params.get("st_alock")
-                        .and_then(|v| v.parse().ok());
-                    let lt_alock = iface.params.get("lt_alock")
-                        .and_then(|v| v.parse().ok());
-                    let id_interval = iface.params.get("id_interval")
-                        .and_then(|v| v.parse().ok());
-                    let id_callsign = iface.params.get("id_callsign")
-                        .map(|v| v.as_bytes().to_vec());
-
-                    let sub = RNodeSubConfig {
-                        name: iface.name.clone(),
-                        frequency,
-                        bandwidth,
-                        txpower,
-                        spreading_factor,
-                        coding_rate,
-                        flow_control,
-                        st_alock,
-                        lt_alock,
-                    };
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::RNode(RNodeConfig {
-                            name: iface.name.clone(),
-                            port,
-                            speed,
-                            subinterfaces: vec![sub],
-                            id_interval,
-                            id_callsign,
-                            base_interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "PipeInterface" => {
-                    let command = match iface.params.get("command") {
-                        Some(c) => c.clone(),
-                        None => {
-                            log::warn!("No command specified for PipeInterface '{}'", iface.name);
-                            continue;
-                        }
-                    };
-                    let respawn_delay = iface.params.get("respawn_delay")
-                        .and_then(|v| v.parse::<u64>().ok())
-                        .map(Duration::from_millis)
-                        .unwrap_or(Duration::from_secs(5));
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Pipe(PipeConfig {
-                            name: iface.name.clone(),
-                            command,
-                            respawn_delay,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "BackboneInterface" => {
-                    if let Some(target_host) = iface.params.get("remote")
-                        .or_else(|| iface.params.get("target_host"))
-                    {
-                        // Client mode
-                        let target_host = target_host.clone();
-                        let target_port = iface.params.get("target_port")
-                            .or_else(|| iface.params.get("port"))
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(4242);
-                        let transport_identity = iface.params.get("transport_identity").cloned();
-
-                        interface_configs.push(InterfaceConfig {
-                            variant: InterfaceVariant::BackboneClient(BackboneClientConfig {
-                                name: iface.name.clone(),
-                                target_host,
-                                target_port,
-                                interface_id: iface_id,
-                                transport_identity,
-                                ..BackboneClientConfig::default()
-                            }),
-                            mode: iface_mode,
-                            ifac: ifac_config,
-                            discovery: discovery_config.clone(),
-                        });
-                    } else {
-                        // Server mode
-                        let listen_ip = iface.params.get("listen_ip")
-                            .or_else(|| iface.params.get("device"))
-                            .cloned()
-                            .unwrap_or_else(|| "0.0.0.0".into());
-                        let listen_port = iface.params.get("listen_port")
-                            .or_else(|| iface.params.get("port"))
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(4242);
-
-                        interface_configs.push(InterfaceConfig {
-                            variant: InterfaceVariant::Backbone(BackboneConfig {
-                                name: iface.name.clone(),
-                                listen_ip,
-                                listen_port,
-                                interface_id: iface_id,
-                            }),
-                            mode: iface_mode,
-                            ifac: ifac_config,
-                            discovery: discovery_config.clone(),
-                        });
-                    }
-                }
-                "AutoInterface" => {
-                    let group_id = iface
-                        .params
-                        .get("group_id")
-                        .map(|s| s.as_bytes().to_vec())
-                        .unwrap_or_else(|| crate::interface::auto::DEFAULT_GROUP_ID.to_vec());
-
-                    let discovery_scope = iface
-                        .params
-                        .get("discovery_scope")
-                        .map(|s| match s.to_lowercase().as_str() {
-                            "link" => crate::interface::auto::SCOPE_LINK.to_string(),
-                            "admin" => crate::interface::auto::SCOPE_ADMIN.to_string(),
-                            "site" => crate::interface::auto::SCOPE_SITE.to_string(),
-                            "organisation" | "organization" => crate::interface::auto::SCOPE_ORGANISATION.to_string(),
-                            "global" => crate::interface::auto::SCOPE_GLOBAL.to_string(),
-                            other => other.to_string(),
-                        })
-                        .unwrap_or_else(|| crate::interface::auto::SCOPE_LINK.to_string());
-
-                    let discovery_port = iface
-                        .params
-                        .get("discovery_port")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(crate::interface::auto::DEFAULT_DISCOVERY_PORT);
-
-                    let data_port = iface
-                        .params
-                        .get("data_port")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(crate::interface::auto::DEFAULT_DATA_PORT);
-
-                    let multicast_address_type = iface
-                        .params
-                        .get("multicast_address_type")
-                        .map(|s| match s.to_lowercase().as_str() {
-                            "permanent" => crate::interface::auto::MULTICAST_PERMANENT_ADDRESS_TYPE.to_string(),
-                            "temporary" => crate::interface::auto::MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string(),
-                            other => other.to_string(),
-                        })
-                        .unwrap_or_else(|| crate::interface::auto::MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string());
-
-                    let configured_bitrate = iface
-                        .params
-                        .get("configured_bitrate")
-                        .or_else(|| iface.params.get("bitrate"))
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(crate::interface::auto::BITRATE_GUESS);
-
-                    // Parse device lists (comma-separated)
-                    let allowed_interfaces = iface
-                        .params
-                        .get("devices")
-                        .or_else(|| iface.params.get("allowed_interfaces"))
-                        .map(|s| s.split(',').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect())
-                        .unwrap_or_default();
-
-                    let ignored_interfaces = iface
-                        .params
-                        .get("ignored_devices")
-                        .or_else(|| iface.params.get("ignored_interfaces"))
-                        .map(|s| s.split(',').map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).collect())
-                        .unwrap_or_default();
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::Auto(AutoConfig {
-                            name: iface.name.clone(),
-                            group_id,
-                            discovery_scope,
-                            discovery_port,
-                            data_port,
-                            multicast_address_type,
-                            allowed_interfaces,
-                            ignored_interfaces,
-                            configured_bitrate,
-                            interface_id: iface_id,
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                "I2PInterface" => {
-                    let sam_host = iface
-                        .params
-                        .get("sam_host")
-                        .cloned()
-                        .unwrap_or_else(|| "127.0.0.1".into());
-                    let sam_port = iface
-                        .params
-                        .get("sam_port")
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(7656);
-                    let connectable = iface
-                        .params
-                        .get("connectable")
-                        .and_then(|v| config::parse_bool_pub(v))
-                        .unwrap_or(false);
-                    let peers: Vec<String> = iface
-                        .params
-                        .get("peers")
-                        .map(|s| {
-                            s.split(',')
-                                .map(|p| p.trim().to_string())
-                                .filter(|p| !p.is_empty())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    interface_configs.push(InterfaceConfig {
-                        variant: InterfaceVariant::I2p(I2pConfig {
-                            name: iface.name.clone(),
-                            interface_id: iface_id,
-                            sam_host,
-                            sam_port,
-                            peers,
-                            connectable,
-                            storage_dir: paths.storage.clone(),
-                        }),
-                        mode: iface_mode,
-                        ifac: ifac_config,
-                        discovery: discovery_config.clone(),
-                    });
-                }
-                _ => {
-                    log::warn!(
-                        "Unsupported interface type '{}' for '{}'",
-                        iface.interface_type,
-                        iface.name
-                    );
+            // Inject storage_dir for I2P (and any future factories that need it)
+            let mut params = iface.params.clone();
+            if !params.contains_key("storage_dir") {
+                params.insert("storage_dir".to_string(), paths.storage.to_string_lossy().to_string());
+            }
+            // Inject device for TCP client
+            if let Some(ref device) = rns_config.reticulum.device {
+                if !params.contains_key("device") {
+                    params.insert("device".to_string(), device.clone());
                 }
             }
+
+            let config_data = match factory.parse_config(&iface.name, iface_id, &params) {
+                Ok(data) => data,
+                Err(e) => {
+                    log::warn!("Failed to parse config for '{}': {}", iface.name, e);
+                    continue;
+                }
+            };
+
+            interface_configs.push(InterfaceConfig {
+                type_name: iface.interface_type.clone(),
+                config_data,
+                mode: iface_mode,
+                ifac: ifac_config,
+                discovery: discovery_config,
+            });
         }
 
         // Parse management config
@@ -834,7 +380,6 @@ impl RnsNode {
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             identity: Some(identity),
-            interfaces: interface_configs,
             share_instance: rns_config.reticulum.share_instance,
             instance_name: rns_config.reticulum.instance_name.clone(),
             shared_instance_port: rns_config.reticulum.shared_instance_port,
@@ -855,6 +400,8 @@ impl RnsNode {
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
+            interfaces: interface_configs,
+                registry: None,
         };
 
         Self::start(node_config, callbacks)
@@ -976,23 +523,29 @@ impl RnsNode {
         // Collect discoverable interface configs for the announcer
         let mut discoverable_interfaces = Vec::new();
 
-        // Start each interface
+        // --- Registry-based startup for interfaces ---
+        let registry = config.registry.unwrap_or_else(
+            crate::interface::registry::InterfaceRegistry::with_builtins,
+        );
         for iface_config in config.interfaces {
-            let iface_mode = iface_config.mode;
-            let ifac_cfg = iface_config.ifac;
+            let factory = match registry.get(&iface_config.type_name) {
+                Some(f) => f,
+                None => {
+                    log::warn!("No factory registered for interface type '{}'", iface_config.type_name);
+                    continue;
+                }
+            };
 
-            // Collect discovery config before consuming ifac_cfg
             if let Some(ref disc) = iface_config.discovery {
                 discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
                     config: disc.clone(),
                     transport_enabled: config.transport_enabled,
-                    ifac_netname: ifac_cfg.as_ref().and_then(|ic| ic.netname.clone()),
-                    ifac_netkey: ifac_cfg.as_ref().and_then(|ic| ic.netkey.clone()),
+                    ifac_netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
+                    ifac_netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
                 });
             }
 
-            // Derive IFAC state if configured
-            let mut ifac_state = ifac_cfg.as_ref().and_then(|ic| {
+            let mut ifac_state = iface_config.ifac.as_ref().and_then(|ic| {
                 if ic.netname.is_some() || ic.netkey.is_some() {
                     Some(ifac::derive_ifac(
                         ic.netname.as_deref(),
@@ -1004,33 +557,16 @@ impl RnsNode {
                 }
             });
 
-            match iface_config.variant {
-                InterfaceVariant::TcpClient(tcp_config) => {
-                    let id = tcp_config.interface_id;
-                    let name = tcp_config.name.clone();
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: None,
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: 65535,
-                        ingress_control: true,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
+            let ctx = crate::interface::StartContext {
+                tx: tx.clone(),
+                next_dynamic_id: next_dynamic_id.clone(),
+                mode: iface_config.mode,
+            };
 
-                    let writer =
-                        crate::interface::tcp::start(tcp_config, tx.clone())?;
+            let result = factory.start(iface_config.config_data, ctx)?;
 
+            match result {
+                crate::interface::StartResult::Simple { id, info, writer, interface_type_name } => {
                     driver.engine.register_interface(info.clone());
                     driver.interfaces.insert(
                         id,
@@ -1045,289 +581,18 @@ impl RnsNode {
                                 started: time::now(),
                                 ..Default::default()
                             },
-                            interface_type: "TCPClientInterface".to_string(),
+                            interface_type: interface_type_name,
                         },
                     );
                 }
-                InterfaceVariant::TcpServer(server_config) => {
-                    crate::interface::tcp_server::start(
-                        server_config,
-                        tx.clone(),
-                        next_dynamic_id.clone(),
-                    )?;
-                    // Server itself doesn't register as an interface;
-                    // per-client interfaces are registered dynamically via InterfaceUp
+                crate::interface::StartResult::Listener => {
+                    // Listener-type interface (TcpServer, Auto, I2P, etc.)
+                    // registers dynamic interfaces via InterfaceUp events.
                 }
-                InterfaceVariant::Udp(udp_config) => {
-                    let id = udp_config.interface_id;
-                    let name = udp_config.name.clone();
-                    let out_capable = udp_config.forward_ip.is_some();
-                    let in_capable = udp_config.listen_ip.is_some();
-
-                    let writer = crate::interface::udp::start(udp_config, tx.clone())?;
-
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable,
-                        in_capable,
-                        bitrate: Some(10_000_000), // 10 Mbps guess (matches Python)
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: 1400,
-                        ingress_control: true,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    driver.engine.register_interface(info.clone());
-
-                    if let Some(w) = writer {
-                        driver.interfaces.insert(
-                            id,
-                            InterfaceEntry {
-                                id,
-                                info,
-                                writer: w,
-                                online: in_capable || out_capable,
-                                dynamic: false,
-                                ifac: ifac_state,
-                                stats: InterfaceStats {
-                                    started: time::now(),
-                                    ..Default::default()
-                                },
-                                interface_type: "UDPInterface".to_string(),
-                            },
-                        );
-                    }
-                }
-                InterfaceVariant::LocalServer(local_config) => {
-                    crate::interface::local::start_server(
-                        local_config,
-                        tx.clone(),
-                        next_dynamic_id.clone(),
-                    )?;
-                }
-                InterfaceVariant::LocalClient(local_config) => {
-                    let id = local_config.interface_id;
-                    let name = local_config.name.clone();
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: Some(1_000_000_000),
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: 65535,
-                        ingress_control: false,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    let writer =
-                        crate::interface::local::start_client(local_config, tx.clone())?;
-
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
-                        id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: "LocalInterface".to_string(),
-                        },
-                    );
-                }
-                InterfaceVariant::Serial(serial_config) => {
-                    let id = serial_config.interface_id;
-                    let name = serial_config.name.clone();
-                    let bitrate = serial_config.speed;
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: Some(bitrate as u64),
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: rns_core::constants::MTU as u32,
-                        ingress_control: false,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    let writer =
-                        crate::interface::serial_iface::start(serial_config, tx.clone())?;
-
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
-                        id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: "SerialInterface".to_string(),
-                        },
-                    );
-                }
-                InterfaceVariant::Kiss(kiss_config) => {
-                    let id = kiss_config.interface_id;
-                    let name = kiss_config.name.clone();
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: Some(1200), // BITRATE_GUESS from Python
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: rns_core::constants::MTU as u32,
-                        ingress_control: false,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    let writer =
-                        crate::interface::kiss_iface::start(kiss_config, tx.clone())?;
-
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
-                        id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: "KISSInterface".to_string(),
-                        },
-                    );
-                }
-                InterfaceVariant::Pipe(pipe_config) => {
-                    let id = pipe_config.interface_id;
-                    let name = pipe_config.name.clone();
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: Some(1_000_000), // 1 Mbps guess
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: rns_core::constants::MTU as u32,
-                        ingress_control: false,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    let writer =
-                        crate::interface::pipe::start(pipe_config, tx.clone())?;
-
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
-                        id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: "PipeInterface".to_string(),
-                        },
-                    );
-                }
-                InterfaceVariant::RNode(rnode_config) => {
-                    let name = rnode_config.name.clone();
-                    let sub_writers =
-                        crate::interface::rnode::start(rnode_config, tx.clone())?;
-
-                    // For multi-subinterface RNodes, we need an IfacState per sub.
-                    // Re-derive from the original config for each beyond the first.
+                crate::interface::StartResult::Multi(subs) => {
+                    let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
-                    let mut sub_index = 0u32;
-                    for (sub_id, writer) in sub_writers {
-                        let sub_name = if sub_index == 0 {
-                            name.clone()
-                        } else {
-                            format!("{}/{}", name, sub_index)
-                        };
-                        sub_index += 1;
-
-                        let info = InterfaceInfo {
-                            id: sub_id,
-                            name: sub_name,
-                            mode: iface_mode,
-                            out_capable: true,
-                            in_capable: true,
-                            bitrate: None, // LoRa bitrate depends on SF/BW, set dynamically
-                            announce_rate_target: None,
-                            announce_rate_grace: 0,
-                            announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: rns_core::constants::MTU as u32,
-                        ingress_control: false,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                        };
-
+                    for sub in subs {
                         let sub_ifac = if first {
                             first = false;
                             ifac_state.take()
@@ -1341,13 +606,13 @@ impl RnsNode {
                             None
                         };
 
-                        driver.engine.register_interface(info.clone());
+                        driver.engine.register_interface(sub.info.clone());
                         driver.interfaces.insert(
-                            sub_id,
+                            sub.id,
                             InterfaceEntry {
-                                id: sub_id,
-                                info,
-                                writer,
+                                id: sub.id,
+                                info: sub.info,
+                                writer: sub.writer,
                                 online: false,
                                 dynamic: false,
                                 ifac: sub_ifac,
@@ -1355,82 +620,10 @@ impl RnsNode {
                                     started: time::now(),
                                     ..Default::default()
                                 },
-                                interface_type: "RNodeInterface".to_string(),
+                                interface_type: sub.interface_type_name,
                             },
                         );
                     }
-
-                }
-                InterfaceVariant::Backbone(backbone_config) => {
-                    crate::interface::backbone::start(
-                        backbone_config,
-                        tx.clone(),
-                        next_dynamic_id.clone(),
-                    )?;
-                    // Like TcpServer/LocalServer, backbone itself doesn't register
-                    // as an interface; per-client interfaces are registered via InterfaceUp
-                }
-                InterfaceVariant::BackboneClient(config) => {
-                    let id = config.interface_id;
-                    let name = config.name.clone();
-                    let info = InterfaceInfo {
-                        id,
-                        name,
-                        mode: iface_mode,
-                        out_capable: true,
-                        in_capable: true,
-                        bitrate: Some(1_000_000_000),
-                        announce_rate_target: None,
-                        announce_rate_grace: 0,
-                        announce_rate_penalty: 0.0,
-                        announce_cap: rns_core::constants::ANNOUNCE_CAP,
-                        is_local_client: false,
-                        wants_tunnel: false,
-                        tunnel_id: None,
-                        mtu: 65535,
-                        ingress_control: true,
-                        ia_freq: 0.0,
-                        started: time::now(),
-                    };
-
-                    let writer =
-                        crate::interface::backbone::start_client(config, tx.clone())?;
-
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
-                        id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: "BackboneInterface".to_string(),
-                        },
-                    );
-                }
-                InterfaceVariant::Auto(auto_config) => {
-                    crate::interface::auto::start(
-                        auto_config,
-                        tx.clone(),
-                        next_dynamic_id.clone(),
-                    )?;
-                    // Like TcpServer, AutoInterface doesn't register itself;
-                    // per-peer interfaces are registered dynamically via InterfaceUp
-                }
-                InterfaceVariant::I2p(i2p_config) => {
-                    crate::interface::i2p::start(
-                        i2p_config,
-                        tx.clone(),
-                        next_dynamic_id.clone(),
-                    )?;
-                    // Like TcpServer, I2P doesn't register itself;
-                    // per-peer interfaces are registered dynamically via InterfaceUp
                 }
             }
         }
@@ -1602,6 +795,7 @@ impl RnsNode {
             })?;
 
         // Start LocalServer for shared instance clients if share_instance is enabled
+        #[cfg(feature = "iface-local")]
         if config.share_instance {
             let local_server_config = LocalServerConfig {
                 instance_name: config.instance_name.clone(),
@@ -2212,9 +1406,10 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2244,9 +1439,10 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2276,9 +1472,10 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2527,17 +1724,6 @@ enable_transport = False
     }
 
     #[test]
-    fn test_parse_parity() {
-        assert_eq!(parse_parity("E"), Parity::Even);
-        assert_eq!(parse_parity("even"), Parity::Even);
-        assert_eq!(parse_parity("O"), Parity::Odd);
-        assert_eq!(parse_parity("odd"), Parity::Odd);
-        assert_eq!(parse_parity("N"), Parity::None);
-        assert_eq!(parse_parity("none"), Parity::None);
-        assert_eq!(parse_parity("unknown"), Parity::None);
-    }
-
-    #[test]
     fn to_node_config_rnode() {
         // Verify from_config parses RNodeInterface correctly.
         // The serial port won't exist, so start() will fail at open time.
@@ -2715,9 +1901,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2756,9 +1943,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2792,9 +1980,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2825,9 +2014,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2865,9 +2055,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2906,9 +2097,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2944,9 +2136,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -2994,9 +2187,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();
@@ -3036,9 +2230,10 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 discovery_required_value: None,
-            respond_to_probes: false,
+                respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                registry: None,
             },
             Box::new(NoopCallbacks),
         ).unwrap();

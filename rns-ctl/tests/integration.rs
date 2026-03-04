@@ -13,7 +13,7 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
 use rns_net::{
-    InterfaceConfig, InterfaceId, InterfaceVariant, NodeConfig, RnsNode,
+    InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
     TcpClientConfig, TcpServerConfig, MODE_FULL,
 };
 
@@ -598,7 +598,8 @@ fn start_test_pair() -> TestPair {
     };
 
     let ifaces_a = vec![InterfaceConfig {
-        variant: InterfaceVariant::TcpServer(TcpServerConfig {
+        type_name: "TCPServerInterface".to_string(),
+        config_data: Box::new(TcpServerConfig {
             name: "Test TCP Server".into(),
             listen_ip: "127.0.0.1".into(),
             listen_port: tcp_port,
@@ -624,7 +625,8 @@ fn start_test_pair() -> TestPair {
     };
 
     let ifaces_b = vec![InterfaceConfig {
-        variant: InterfaceVariant::TcpClient(TcpClientConfig {
+        type_name: "TCPClientInterface".to_string(),
+        config_data: Box::new(TcpClientConfig {
             name: "Test TCP Client".into(),
             target_host: "127.0.0.1".into(),
             target_port: tcp_port,

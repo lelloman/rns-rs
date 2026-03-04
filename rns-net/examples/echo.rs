@@ -14,7 +14,7 @@ use rns_crypto::OsRng;
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, InterfaceVariant, NodeConfig, PacketHash, ProofStrategy, RnsNode,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode,
     TcpClientConfig, TcpServerConfig, MODE_FULL,
 };
 
@@ -119,7 +119,8 @@ fn main() {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(&server_identity.get_private_key().unwrap())),
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpServer(TcpServerConfig {
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
                     name: "Echo Server TCP".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
@@ -145,6 +146,7 @@ fn main() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            registry: None,
         },
         Box::new(ServerCallbacks { delivery_tx }),
     )
@@ -166,11 +168,11 @@ fn main() {
             transport_enabled: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
-                variant: InterfaceVariant::TcpClient(TcpClientConfig {
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
                     name: "Echo Client TCP".into(),
                     target_host: "127.0.0.1".into(),
                     target_port: port,
-                    interface_id: InterfaceId(1),
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
@@ -193,6 +195,7 @@ fn main() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            registry: None,
         },
         Box::new(ClientCallbacks {
             announce_tx,

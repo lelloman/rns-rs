@@ -405,6 +405,118 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
     Ok(Box::new(LocalWriter { stream: writer_stream }))
 }
 
+// --- Factory implementations ---
+
+use std::collections::HashMap;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `LocalServerInterface`.
+pub struct LocalServerFactory;
+
+impl InterfaceFactory for LocalServerFactory {
+    fn type_name(&self) -> &str { "LocalServerInterface" }
+
+    fn parse_config(
+        &self,
+        _name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let instance_name = params.get("instance_name")
+            .cloned()
+            .unwrap_or_else(|| "default".into());
+        let port = params.get("port")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(37428);
+
+        Ok(Box::new(LocalServerConfig {
+            instance_name,
+            port,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> std::io::Result<StartResult> {
+        let server_config = *config.into_any().downcast::<LocalServerConfig>()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        start_server(server_config, ctx.tx, ctx.next_dynamic_id)?;
+        Ok(StartResult::Listener)
+    }
+}
+
+/// Factory for `LocalClientInterface`.
+pub struct LocalClientFactory;
+
+impl InterfaceFactory for LocalClientFactory {
+    fn type_name(&self) -> &str { "LocalClientInterface" }
+
+    fn parse_config(
+        &self,
+        _name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let instance_name = params.get("instance_name")
+            .cloned()
+            .unwrap_or_else(|| "default".into());
+        let port = params.get("port")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(37428);
+
+        Ok(Box::new(LocalClientConfig {
+            instance_name,
+            port,
+            interface_id: id,
+            ..LocalClientConfig::default()
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> std::io::Result<StartResult> {
+        let client_config = *config.into_any().downcast::<LocalClientConfig>()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = client_config.interface_id;
+        let name = client_config.name.clone();
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: ctx.mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(1_000_000_000),
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: 65535,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let writer = start_client(client_config, ctx.tx)?;
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "LocalInterface".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

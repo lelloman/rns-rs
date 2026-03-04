@@ -1,20 +1,37 @@
 //! Network interface abstractions.
 
+#[cfg(feature = "iface-tcp")]
 pub mod tcp;
+#[cfg(feature = "iface-tcp")]
 pub mod tcp_server;
+#[cfg(feature = "iface-udp")]
 pub mod udp;
+#[cfg(feature = "iface-local")]
 pub mod local;
+#[cfg(feature = "iface-serial")]
 pub mod serial_iface;
+#[cfg(feature = "iface-kiss")]
 pub mod kiss_iface;
+#[cfg(feature = "iface-pipe")]
 pub mod pipe;
+#[cfg(feature = "iface-rnode")]
 pub mod rnode;
+#[cfg(feature = "iface-backbone")]
 pub mod backbone;
+#[cfg(feature = "iface-auto")]
 pub mod auto;
+#[cfg(feature = "iface-i2p")]
 pub mod i2p;
+pub mod registry;
 
+use std::any::Any;
+use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
+use crate::event::EventSender;
 use crate::ifac::IfacState;
 
 /// Bind a socket to a specific network interface using `SO_BINDTODEVICE`.
@@ -70,6 +87,71 @@ pub struct InterfaceEntry {
     pub stats: InterfaceStats,
     /// Human-readable interface type string (e.g. "TCPClientInterface").
     pub interface_type: String,
+}
+
+/// Result of starting an interface via a factory.
+pub enum StartResult {
+    /// One writer, registered immediately (TcpClient, Udp, Serial, etc.)
+    Simple {
+        id: InterfaceId,
+        info: InterfaceInfo,
+        writer: Box<dyn Writer>,
+        interface_type_name: String,
+    },
+    /// Spawns a listener; dynamic interfaces arrive via Event::InterfaceUp (TcpServer, Auto, I2P, etc.)
+    Listener,
+    /// Multiple subinterfaces from one config (RNode).
+    Multi(Vec<SubInterface>),
+}
+
+/// A single subinterface returned from a multi-interface factory.
+pub struct SubInterface {
+    pub id: InterfaceId,
+    pub info: InterfaceInfo,
+    pub writer: Box<dyn Writer>,
+    pub interface_type_name: String,
+}
+
+/// Context passed to [`InterfaceFactory::start()`].
+pub struct StartContext {
+    pub tx: EventSender,
+    pub next_dynamic_id: Arc<AtomicU64>,
+    pub mode: u8,
+}
+
+/// Opaque interface config data. Each factory downcasts to its concrete type.
+pub trait InterfaceConfigData: Send + Any {
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+}
+
+impl<T: Send + 'static> InterfaceConfigData for T {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+/// Factory that can parse config and start an interface type.
+pub trait InterfaceFactory: Send + Sync {
+    /// Config-file type name, e.g. "TCPClientInterface".
+    fn type_name(&self) -> &str;
+
+    /// Default IFAC size (bytes). 8 for serial/kiss/rnode, 16 for others.
+    fn default_ifac_size(&self) -> usize { 16 }
+
+    /// Parse from key-value params (config file or external).
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String>;
+
+    /// Start the interface from parsed config.
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult>;
 }
 
 impl InterfaceStatusView for InterfaceEntry {

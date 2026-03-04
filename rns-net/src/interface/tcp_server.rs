@@ -196,6 +196,50 @@ fn client_reader_loop(
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `TCPServerInterface`.
+pub struct TcpServerFactory;
+
+impl InterfaceFactory for TcpServerFactory {
+    fn type_name(&self) -> &str { "TCPServerInterface" }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let listen_ip = params.get("listen_ip")
+            .cloned()
+            .unwrap_or_else(|| "0.0.0.0".into());
+        let listen_port = params.get("listen_port")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4242);
+
+        Ok(Box::new(TcpServerConfig {
+            name: name.to_string(),
+            listen_ip,
+            listen_port,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let cfg = *config.into_any().downcast::<TcpServerConfig>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+        Ok(StartResult::Listener)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

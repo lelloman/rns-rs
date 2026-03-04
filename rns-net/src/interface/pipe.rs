@@ -4,16 +4,18 @@
 //! via piped stdin/stdout using HDLC framing for packet boundaries.
 //! Auto-respawns subprocess on failure.
 
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use rns_core::transport::types::InterfaceId;
+use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::Writer;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
 
 /// Configuration for a pipe interface.
 #[derive(Debug, Clone)]
@@ -194,6 +196,85 @@ fn respawn(
                 log::warn!("[{}] respawn failed: {}", config.name, e);
             }
         }
+    }
+}
+
+/// Factory for [`PipeInterface`] instances.
+pub struct PipeFactory;
+
+impl InterfaceFactory for PipeFactory {
+    fn type_name(&self) -> &str {
+        "PipeInterface"
+    }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let command = params
+            .get("command")
+            .ok_or_else(|| "PipeInterface requires 'command'".to_string())?
+            .clone();
+
+        let respawn_delay = match params.get("respawn_delay") {
+            Some(v) => {
+                let ms: u64 = v
+                    .parse()
+                    .map_err(|_| format!("invalid respawn_delay: {}", v))?;
+                Duration::from_millis(ms)
+            }
+            None => Duration::from_secs(5),
+        };
+
+        Ok(Box::new(PipeConfig {
+            name: name.to_string(),
+            command,
+            respawn_delay,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let pipe_config = *config
+            .into_any()
+            .downcast::<PipeConfig>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = pipe_config.interface_id;
+        let info = InterfaceInfo {
+            id,
+            name: pipe_config.name.clone(),
+            mode: ctx.mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(1_000_000),
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let writer = start(pipe_config, ctx.tx)?;
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "PipeInterface".to_string(),
+        })
     }
 }
 

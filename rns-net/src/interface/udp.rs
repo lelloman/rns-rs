@@ -118,6 +118,115 @@ fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSe
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use rns_core::transport::types::InterfaceInfo;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// A no-op writer used when UDP is started in listen-only mode (no forward address).
+/// Preserves engine registration while signalling that outbound writes are not supported.
+struct NoopWriter;
+
+impl Writer for NoopWriter {
+    fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "listen-only UDP interface",
+        ))
+    }
+}
+
+/// Factory for `UDPInterface`.
+pub struct UdpFactory;
+
+impl InterfaceFactory for UdpFactory {
+    fn type_name(&self) -> &str { "UDPInterface" }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let listen_ip = params.get("listen_ip").cloned();
+
+        // 'port' is a shorthand that sets both listen_port and forward_port
+        let port_shorthand: Option<u16> = params
+            .get("port")
+            .and_then(|v| v.parse().ok());
+
+        let listen_port: Option<u16> = params
+            .get("listen_port")
+            .and_then(|v| v.parse().ok())
+            .or(port_shorthand);
+
+        let forward_ip = params.get("forward_ip").cloned();
+
+        let forward_port: Option<u16> = params
+            .get("forward_port")
+            .and_then(|v| v.parse().ok())
+            .or(port_shorthand);
+
+        Ok(Box::new(UdpConfig {
+            name: name.to_string(),
+            listen_ip,
+            listen_port,
+            forward_ip,
+            forward_port,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        let udp_config = *config.into_any().downcast::<UdpConfig>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = udp_config.interface_id;
+        let name = udp_config.name.clone();
+        let out_capable = udp_config.forward_ip.is_some();
+        let in_capable = udp_config.listen_ip.is_some();
+
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: ctx.mode,
+            out_capable,
+            in_capable,
+            bitrate: Some(10_000_000),
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: 1400,
+            ingress_control: true,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let maybe_writer = start(udp_config, ctx.tx)?;
+
+        let writer: Box<dyn Writer> = match maybe_writer {
+            Some(w) => w,
+            None => Box::new(NoopWriter),
+        };
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "UDPInterface".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -329,6 +329,138 @@ fn reconnect(
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use rns_core::transport::types::InterfaceInfo;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `KISSInterface`.
+pub struct KissFactory;
+
+impl InterfaceFactory for KissFactory {
+    fn type_name(&self) -> &str { "KISSInterface" }
+
+    fn default_ifac_size(&self) -> usize { 8 }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let port = params.get("port")
+            .cloned()
+            .ok_or_else(|| "KISSInterface requires 'port'".to_string())?;
+
+        let speed = params.get("speed")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(9600u32);
+
+        let data_bits = params.get("databits")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8u8);
+
+        let parity = params.get("parity")
+            .map(|v| match v.to_lowercase().as_str() {
+                "e" | "even" => crate::serial::Parity::Even,
+                "o" | "odd" => crate::serial::Parity::Odd,
+                _ => crate::serial::Parity::None,
+            })
+            .unwrap_or(crate::serial::Parity::None);
+
+        let stop_bits = params.get("stopbits")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1u8);
+
+        let preamble = params.get("preamble")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(350u16);
+
+        let txtail = params.get("txtail")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20u16);
+
+        let persistence = params.get("persistence")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64u8);
+
+        let slottime = params.get("slottime")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20u16);
+
+        let flow_control = params.get("flow_control")
+            .and_then(|v| crate::config::parse_bool_pub(v))
+            .unwrap_or(false);
+
+        let beacon_interval = params.get("id_interval")
+            .or_else(|| params.get("beacon_interval"))
+            .and_then(|v| v.parse().ok());
+
+        let beacon_data = params.get("id_callsign")
+            .or_else(|| params.get("beacon_data"))
+            .map(|v| v.as_bytes().to_vec());
+
+        Ok(Box::new(KissIfaceConfig {
+            name: name.to_string(),
+            port,
+            speed,
+            data_bits,
+            parity,
+            stop_bits,
+            preamble,
+            txtail,
+            persistence,
+            slottime,
+            flow_control,
+            beacon_interval,
+            beacon_data,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> std::io::Result<StartResult> {
+        let kiss_config = *config.into_any().downcast::<KissIfaceConfig>()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = kiss_config.interface_id;
+        let name = kiss_config.name.clone();
+
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: ctx.mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(1200),
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let writer = start(kiss_config, ctx.tx)?;
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "KISSInterface".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

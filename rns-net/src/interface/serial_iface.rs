@@ -171,6 +171,104 @@ fn reconnect(
     }
 }
 
+// --- Factory implementation ---
+
+use std::collections::HashMap;
+use rns_core::transport::types::InterfaceInfo;
+use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+
+/// Factory for `SerialInterface`.
+pub struct SerialFactory;
+
+impl InterfaceFactory for SerialFactory {
+    fn type_name(&self) -> &str { "SerialInterface" }
+
+    fn default_ifac_size(&self) -> usize { 8 }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let port = params.get("port")
+            .cloned()
+            .ok_or_else(|| "SerialInterface requires 'port'".to_string())?;
+
+        let speed = params.get("speed")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(9600u32);
+
+        let data_bits = params.get("databits")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8u8);
+
+        let parity = params.get("parity")
+            .map(|v| match v.to_lowercase().as_str() {
+                "e" | "even" => crate::serial::Parity::Even,
+                "o" | "odd" => crate::serial::Parity::Odd,
+                _ => crate::serial::Parity::None,
+            })
+            .unwrap_or(crate::serial::Parity::None);
+
+        let stop_bits = params.get("stopbits")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1u8);
+
+        Ok(Box::new(SerialIfaceConfig {
+            name: name.to_string(),
+            port,
+            speed,
+            data_bits,
+            parity,
+            stop_bits,
+            interface_id: id,
+        }))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> std::io::Result<StartResult> {
+        let serial_config = *config.into_any().downcast::<SerialIfaceConfig>()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+
+        let id = serial_config.interface_id;
+        let name = serial_config.name.clone();
+        let bitrate = Some(serial_config.speed as u64);
+
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: ctx.mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
+            ingress_control: false,
+            ia_freq: 0.0,
+            started: crate::time::now(),
+        };
+
+        let writer = start(serial_config, ctx.tx)?;
+
+        Ok(StartResult::Simple {
+            id,
+            info,
+            writer,
+            interface_type_name: "SerialInterface".to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
