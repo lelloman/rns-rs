@@ -1,7 +1,7 @@
 //! SSD1306 OLED display driver for Heltec V3.
 //!
-//! Shows identity hash, TX/RX counters, and status on the 128x64 OLED.
-//! Supports multiple pages cycled by long-pressing the PRG button.
+//! Mode-aware display with separate page sets for standalone and bridge modes.
+//! Pages are cycled by short-pressing the PRG button (includes an "off" page).
 
 use std::sync::{Arc, Mutex};
 
@@ -27,9 +27,14 @@ type Display = Ssd1306<
     BufferedGraphicsMode<DisplaySize128x64>,
 >;
 
-/// Pages 0..NUM_PAGES-1 are content pages; page NUM_PAGES-1 is "display off".
-const NUM_PAGES: u8 = 4;
-const PAGE_OFF: u8 = 3;
+const STANDALONE_NUM_PAGES: u8 = 4; // stats, radio, identity, off
+const BRIDGE_NUM_PAGES: u8 = 3; // bridge status, bridge radio, off
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Mode {
+    Standalone,
+    Bridge,
+}
 
 /// Shared display stats updated by the driver.
 pub struct DisplayStats {
@@ -38,6 +43,15 @@ pub struct DisplayStats {
     pub rx_bytes: u32,
     pub announces: u32,
     pub page: u8,
+    pub mode: Mode,
+    // Bridge-mode stats
+    pub bridge_tx_bytes: u32,
+    pub bridge_rx_bytes: u32,
+    pub bridge_freq: Option<u32>,
+    pub bridge_bw: Option<u32>,
+    pub bridge_sf: Option<u8>,
+    pub bridge_cr: Option<u8>,
+    pub bridge_power: Option<i8>,
     /// Temporary status message (shown for a few refresh cycles then cleared).
     status: Option<String>,
     status_ttl: u8,
@@ -51,13 +65,46 @@ impl DisplayStats {
             rx_bytes: 0,
             announces: 0,
             page: 0,
+            mode: Mode::Standalone,
+            bridge_tx_bytes: 0,
+            bridge_rx_bytes: 0,
+            bridge_freq: None,
+            bridge_bw: None,
+            bridge_sf: None,
+            bridge_cr: None,
+            bridge_power: None,
             status: None,
             status_ttl: 0,
         }
     }
 
+    fn num_pages(&self) -> u8 {
+        match self.mode {
+            Mode::Standalone => STANDALONE_NUM_PAGES,
+            Mode::Bridge => BRIDGE_NUM_PAGES,
+        }
+    }
+
     pub fn cycle_page(&mut self) {
-        self.page = (self.page + 1) % NUM_PAGES;
+        self.page = (self.page + 1) % self.num_pages();
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.page = 0;
+        if mode == Mode::Bridge {
+            self.bridge_tx_bytes = 0;
+            self.bridge_rx_bytes = 0;
+            self.bridge_freq = None;
+            self.bridge_bw = None;
+            self.bridge_sf = None;
+            self.bridge_cr = None;
+            self.bridge_power = None;
+        }
+    }
+
+    fn is_off_page(&self) -> bool {
+        self.page == self.num_pages() - 1
     }
 
     pub fn set_status(&mut self, msg: &str) {
@@ -179,7 +226,12 @@ fn render_radio_info(display: &mut Display, _stats: &DisplayStats) {
     let power = format!("TX Power: {} dBm", crate::config::LORA_TX_POWER);
     let _ = Text::new(&power, Point::new(0, 52), style).draw(display);
 
-    let _ = Text::new(&format!("[2/{}]", NUM_PAGES), Point::new(104, 62), style).draw(display);
+    let _ = Text::new(
+        &format!("[2/{}]", STANDALONE_NUM_PAGES),
+        Point::new(104, 62),
+        style,
+    )
+    .draw(display);
 }
 
 /// Render page 2: full identity hash.
@@ -201,12 +253,84 @@ fn render_identity(display: &mut Display, stats: &DisplayStats) {
         let _ = Text::new(line, Point::new(0, y), style).draw(display);
     }
 
-    let _ = Text::new(&format!("[3/{}]", NUM_PAGES), Point::new(104, 62), style).draw(display);
+    let _ = Text::new(
+        &format!("[3/{}]", STANDALONE_NUM_PAGES),
+        Point::new(104, 62),
+        style,
+    )
+    .draw(display);
+}
+
+/// Render page: bridge status.
+fn render_bridge_status(display: &mut Display, stats: &DisplayStats) {
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_6X10)
+        .text_color(BinaryColor::On)
+        .build();
+
+    let _ = Text::new("RNode Bridge", Point::new(0, 10), style).draw(display);
+
+    let counter_line = format!("TX:{}B RX:{}B", stats.bridge_tx_bytes, stats.bridge_rx_bytes);
+    let _ = Text::new(&counter_line, Point::new(0, 24), style).draw(display);
+
+    if let Some(ref msg) = stats.status {
+        let _ = Text::new(msg, Point::new(0, 40), style).draw(display);
+    }
+
+    let _ = Text::new(
+        &format!("[1/{}]", stats.num_pages()),
+        Point::new(104, 62),
+        style,
+    )
+    .draw(display);
+}
+
+/// Render page: bridge radio config (as received from host).
+fn render_bridge_radio(display: &mut Display, stats: &DisplayStats) {
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_6X10)
+        .text_color(BinaryColor::On)
+        .build();
+
+    let _ = Text::new("Bridge Radio", Point::new(0, 10), style).draw(display);
+
+    let freq = stats.bridge_freq.unwrap_or(crate::config::LORA_FREQUENCY);
+    let _ = Text::new(
+        &format!("Freq: {} MHz", freq / 1_000_000),
+        Point::new(0, 24),
+        style,
+    )
+    .draw(display);
+
+    let sf = stats.bridge_sf.unwrap_or(crate::config::LORA_SPREADING_FACTOR);
+    let bw = stats.bridge_bw.unwrap_or(crate::config::LORA_BANDWIDTH);
+    let cr = stats.bridge_cr.unwrap_or(crate::config::LORA_CODING_RATE);
+    let _ = Text::new(
+        &format!("SF:{} BW:{}k CR:4/{}", sf, bw / 1000, cr),
+        Point::new(0, 38),
+        style,
+    )
+    .draw(display);
+
+    let power = stats.bridge_power.unwrap_or(crate::config::LORA_TX_POWER);
+    let _ = Text::new(
+        &format!("TX Power: {} dBm", power),
+        Point::new(0, 52),
+        style,
+    )
+    .draw(display);
+
+    let _ = Text::new(
+        &format!("[2/{}]", stats.num_pages()),
+        Point::new(104, 62),
+        style,
+    )
+    .draw(display);
 }
 
 /// Render the current page. Returns whether the display should be on.
 fn render(display: &mut Display, stats: &DisplayStats) -> bool {
-    if stats.page == PAGE_OFF {
+    if stats.is_off_page() {
         display.clear_buffer();
         let _ = display.flush();
         return false;
@@ -214,11 +338,18 @@ fn render(display: &mut Display, stats: &DisplayStats) -> bool {
 
     display.clear_buffer();
 
-    match stats.page {
-        0 => render_stats(display, stats),
-        1 => render_radio_info(display, stats),
-        2 => render_identity(display, stats),
-        _ => render_stats(display, stats),
+    match stats.mode {
+        Mode::Standalone => match stats.page {
+            0 => render_stats(display, stats),
+            1 => render_radio_info(display, stats),
+            2 => render_identity(display, stats),
+            _ => render_stats(display, stats),
+        },
+        Mode::Bridge => match stats.page {
+            0 => render_bridge_status(display, stats),
+            1 => render_bridge_radio(display, stats),
+            _ => render_bridge_status(display, stats),
+        },
     }
 
     let _ = display.flush();

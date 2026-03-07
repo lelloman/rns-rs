@@ -119,11 +119,12 @@ fn main() {
     // Spawn button handler thread (always-on, GPIO0 = PRG button)
     let button_pin = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0)).expect("PRG button pin");
     let button_tx = tx.clone();
+    let button_stats = display_stats.clone();
     std::thread::Builder::new()
         .name("button".into())
         .stack_size(2048)
         .spawn(move || {
-            button::button_loop(button_pin, button_tx);
+            button::button_loop(button_pin, button_tx, button_stats);
         })
         .expect("failed to spawn button thread");
 
@@ -167,9 +168,9 @@ fn main() {
             shutdown.clone(),
         );
 
-        // Update display
+        // Update display mode
         if let Ok(mut s) = display_stats.lock() {
-            s.set_status("Standalone");
+            s.set_mode(display::Mode::Standalone);
         }
 
         // Run the driver event loop (blocks until bridge detected, shutdown, or disconnect)
@@ -184,15 +185,23 @@ fn main() {
             driver::DriverExit::BridgeRequested => {
                 log::info!("Entering RNode bridge mode");
                 if let Ok(mut s) = display_stats.lock() {
-                    s.set_status("RNode Bridge");
+                    s.set_mode(display::Mode::Bridge);
                 }
 
                 // Run bridge mode (blocks until idle timeout)
-                let mut bridge = rnode::RNodeBridge::new(radio.clone(), &uart);
+                let mut bridge = rnode::RNodeBridge::new(
+                    radio.clone(),
+                    &uart,
+                    Some(display_stats.clone()),
+                );
                 let _exit = bridge.run();
 
                 // Restore radio to default standalone config
                 rnode::restore_default_radio_config(&radio);
+
+                // Drain stale button events accumulated during bridge mode
+                driver_inst.drain_events();
+
                 log::info!("RNode bridge exited, resuming standalone");
             }
             driver::DriverExit::Shutdown | driver::DriverExit::Disconnected => {

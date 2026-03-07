@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use esp_idf_hal::gpio::{AnyIOPin, Input, PinDriver};
 
+use crate::display::SharedStats;
 use crate::driver::Event;
 
 const DEBOUNCE_MS: u64 = 50;
@@ -17,9 +18,13 @@ const LONG_PRESS_MS: u64 = 800;
 const DOUBLE_PRESS_WINDOW_MS: u64 = 400;
 
 /// Run the button polling loop. Blocks forever. Call from a dedicated thread.
+///
+/// Short press cycles the display page directly via shared stats.
+/// Long press and double press send events to the driver channel.
 pub fn button_loop(
     pin: PinDriver<'static, AnyIOPin, Input>,
     tx: mpsc::Sender<Event>,
+    stats: SharedStats,
 ) {
     let mut last_press: Option<Instant> = None;
     let mut press_start: Option<Instant> = None;
@@ -52,7 +57,7 @@ pub fn button_loop(
                         } else {
                             // Too slow for double, commit previous pending short
                             if pending_short {
-                                let _ = tx.send(Event::CycleDisplayPage);
+                                stats.lock().unwrap().cycle_page();
                             }
                             pending_short = true;
                             last_press = Some(Instant::now());
@@ -69,7 +74,7 @@ pub fn button_loop(
         if pending_short {
             if let Some(prev) = last_press {
                 if prev.elapsed() >= Duration::from_millis(DOUBLE_PRESS_WINDOW_MS) {
-                    let _ = tx.send(Event::CycleDisplayPage);
+                    stats.lock().unwrap().cycle_page();
                     pending_short = false;
                     last_press = None;
                 }

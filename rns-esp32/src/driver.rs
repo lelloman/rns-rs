@@ -39,8 +39,6 @@ pub enum Event {
     SendPing,
     /// Trigger a Reticulum announce (button: long press, node mode only).
     SendAnnounce,
-    /// Cycle display page (button: short press).
-    CycleDisplayPage,
     /// Shutdown the driver.
     Shutdown,
 }
@@ -137,6 +135,11 @@ impl Driver {
         log::info!("Interface {:?} registered", id);
     }
 
+    /// Drain any stale events from the channel (e.g. after returning from bridge mode).
+    pub fn drain_events(&self) {
+        while self.rx.try_recv().is_ok() {}
+    }
+
     /// Run the main event loop. Blocks until bridge detected, shutdown, or disconnect.
     pub fn run(&mut self, uart: &UartDriver<'_>) -> DriverExit {
         log::info!("Driver event loop started");
@@ -185,11 +188,6 @@ impl Driver {
                 }
                 Event::SendAnnounce => {
                     self.handle_send_announce();
-                }
-                Event::CycleDisplayPage => {
-                    if let Some(ref stats) = self.stats {
-                        stats.lock().unwrap().cycle_page();
-                    }
                 }
                 Event::Shutdown => {
                     log::info!("Driver shutdown requested");

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use esp_idf_hal::uart::UartDriver;
 
+use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 
 // KISS framing constants
@@ -142,6 +143,7 @@ fn kiss_encode(cmd: u8, data: &[u8]) -> Vec<u8> {
 pub struct RNodeBridge<'a, 'b> {
     radio: SharedRadio,
     uart: &'b UartDriver<'a>,
+    stats: Option<SharedStats>,
     pending_freq: Option<u32>,
     pending_bw: Option<u32>,
     pending_sf: Option<u8>,
@@ -150,10 +152,11 @@ pub struct RNodeBridge<'a, 'b> {
 }
 
 impl<'a, 'b> RNodeBridge<'a, 'b> {
-    pub fn new(radio: SharedRadio, uart: &'b UartDriver<'a>) -> Self {
+    pub fn new(radio: SharedRadio, uart: &'b UartDriver<'a>, stats: Option<SharedStats>) -> Self {
         Self {
             radio,
             uart,
+            stats,
             pending_freq: None,
             pending_bw: None,
             pending_sf: None,
@@ -197,6 +200,9 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
             if let Some(data) = received {
                 last_activity = Instant::now();
                 log::info!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
+                if let Some(ref stats) = self.stats {
+                    stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
+                }
                 let frame = kiss_encode(CMD_DATA, &data);
                 let _ = self.uart.write(&frame);
             }
@@ -287,6 +293,9 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
             CMD_DATA => {
                 if !frame.data.is_empty() {
                     log::info!("RNode: TX {} bytes over LoRa", frame.data.len());
+                    if let Some(ref stats) = self.stats {
+                        stats.lock().unwrap().bridge_tx_bytes += frame.data.len() as u32;
+                    }
                     let result = {
                         let mut radio = self.radio.lock().unwrap();
                         let r = radio.transmit(&frame.data);
@@ -321,6 +330,15 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
 
         let mut radio = self.radio.lock().unwrap();
         radio.reconfigure(freq, bw, sf, cr, power);
+
+        if let Some(ref stats) = self.stats {
+            let mut s = stats.lock().unwrap();
+            s.bridge_freq = Some(freq);
+            s.bridge_bw = Some(bw);
+            s.bridge_sf = Some(sf);
+            s.bridge_cr = Some(cr);
+            s.bridge_power = Some(power);
+        }
 
         log::info!("RNode: radio config applied");
     }
