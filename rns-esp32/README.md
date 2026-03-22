@@ -88,19 +88,30 @@ espflash write-bin 0x0 rns-esp32-vX.Y.Z-esp32s3.bin
 
 ```bash
 cd rns-esp32
-cargo build --release
+cargo build --features firmware --target xtensa-esp32s3-espidf --release
 ```
 
 ## Flashing
 
 ```bash
-cargo run --release
+cargo run --features firmware --target xtensa-esp32s3-espidf --release
 ```
 
 Or manually:
 ```bash
 espflash flash --monitor target/xtensa-esp32s3-espidf/release/rns-esp32
 ```
+
+## Host-Side Tests
+
+The crate now exposes host-testable protocol and state helpers, so the default test command no longer tries to flash hardware:
+
+```bash
+cd rns-esp32
+cargo test
+```
+
+Use the explicit Xtensa target plus `--features firmware` for firmware-only builds and on-device checks.
 
 ## Hardware-In-The-Loop Testing
 

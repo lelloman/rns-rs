@@ -29,6 +29,7 @@ use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
 use rns_core::transport::types::{InterfaceId, TransportConfig};
 use rns_crypto::identity::Identity;
+use rns_esp32::identity_store::{decode_identity_key, IDENTITY_KEY_LEN};
 
 use crate::util::hex;
 
@@ -193,7 +194,7 @@ fn main() {
         let _ = tick_handle.join();
 
         match exit {
-            driver::DriverExit::BridgeRequested => {
+            driver::DriverExit::BridgeRequested(pending_frames) => {
                 log::info!("Entering RNode USB bridge mode");
                 if let Ok(mut s) = display_stats.lock() {
                     s.set_mode(display::Mode::Bridge);
@@ -206,6 +207,7 @@ fn main() {
                     transport,
                     dio1,
                     Some(display_stats.clone()),
+                    pending_frames,
                 );
                 let (bridge_exit, bridge_dio1) = bridge.run();
                 dio1 = bridge_dio1;
@@ -223,6 +225,9 @@ fn main() {
                     rnode::BridgeExit::Leave => {
                         log::info!("RNode bridge: host sent LEAVE, resuming standalone");
                     }
+                    rnode::BridgeExit::TransportError => {
+                        log::warn!("RNode bridge: serial transport failed, resuming standalone");
+                    }
                 }
             }
             driver::DriverExit::BleRequested => {
@@ -235,8 +240,7 @@ fn main() {
                 ble::start_advertising(30);
 
                 // Wait up to 30s for a BLE connection
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_secs(30);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 let connected = loop {
                     if ble::is_connected() {
                         break true;
@@ -266,6 +270,7 @@ fn main() {
                     transport,
                     dio1,
                     Some(display_stats.clone()),
+                    Vec::new(),
                 );
                 let (bridge_exit, bridge_dio1) = bridge.run();
                 dio1 = bridge_dio1;
@@ -286,6 +291,9 @@ fn main() {
                     rnode::BridgeExit::Leave => {
                         log::info!("BLE bridge: host sent LEAVE, resuming standalone");
                     }
+                    rnode::BridgeExit::TransportError => {
+                        log::warn!("BLE bridge: transport failed, resuming standalone");
+                    }
                 }
             }
             driver::DriverExit::Disconnected => {
@@ -302,10 +310,23 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
         EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
 
     // Try to load existing private key
-    let mut key_buf = [0u8; 64];
-    if let Ok(Some(_)) = nvs.get_raw(NVS_KEY_IDENTITY, &mut key_buf) {
-        log::info!("Loaded identity from NVS");
-        return Identity::from_private_key(&key_buf);
+    let mut key_buf = [0u8; IDENTITY_KEY_LEN];
+    match nvs.get_raw(NVS_KEY_IDENTITY, &mut key_buf) {
+        Ok(raw) => match decode_identity_key(raw) {
+            Ok(Some(key)) => {
+                log::info!("Loaded identity from NVS");
+                return Identity::from_private_key(&key);
+            }
+            Ok(None) => {
+                log::info!("No identity found in NVS");
+            }
+            Err(err) => {
+                log::warn!("Stored identity in NVS is invalid: {:?}", err);
+            }
+        },
+        Err(err) => {
+            log::warn!("Failed to read identity from NVS, regenerating: {}", err);
+        }
     }
 
     // Generate new identity
@@ -317,10 +338,10 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     if let Some(prv) = identity.get_private_key() {
         let mut nvs_mut = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
             .expect("NVS open for write");
-        nvs_mut
-            .set_raw(NVS_KEY_IDENTITY, &prv)
-            .expect("NVS write identity");
-        log::info!("Identity saved to NVS");
+        match nvs_mut.set_raw(NVS_KEY_IDENTITY, &prv) {
+            Ok(_) => log::info!("Identity saved to NVS"),
+            Err(err) => log::warn!("Failed to persist regenerated identity: {}", err),
+        }
     }
 
     identity

@@ -4,31 +4,29 @@
 //! The phone writes to the RX characteristic and the device sends notifications
 //! on the TX characteristic.
 
-use std::collections::VecDeque;
 use std::ffi::CString;
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use esp_idf_sys::*;
+use rns_esp32::ble_buffer::BleRxBuffer;
 
 // Nordic UART Service UUIDs (128-bit, little-endian for NimBLE)
 // Service: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
 const NUS_SERVICE_UUID128: [u8; 16] = [
-    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40,
-    0x6E,
+    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E,
 ];
 
 // RX Characteristic: 6E400002-B5A3-F393-E0A9-E50E24DCCA9E (phone writes here)
 const NUS_RX_UUID128: [u8; 16] = [
-    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40,
-    0x6E,
+    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x02, 0x00, 0x40, 0x6E,
 ];
 
 // TX Characteristic: 6E400003-B5A3-F393-E0A9-E50E24DCCA9E (device notifies here)
 const NUS_TX_UUID128: [u8; 16] = [
-    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40,
-    0x6E,
+    0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40, 0x6E,
 ];
 
 /// Default MTU before negotiation (BLE 4.2 minimum).
@@ -41,7 +39,7 @@ const PREFERRED_MTU: u16 = 247;
 static BLE_STATE: BleState = BleState::new();
 
 struct BleState {
-    rx_buf: Mutex<VecDeque<u8>>,
+    rx_buf: LazyLock<Mutex<BleRxBuffer>>,
     connected: AtomicBool,
     mtu: AtomicU16,
     conn_handle: AtomicU16,
@@ -55,7 +53,7 @@ unsafe impl Sync for BleState {}
 impl BleState {
     const fn new() -> Self {
         Self {
-            rx_buf: Mutex::new(VecDeque::new()),
+            rx_buf: LazyLock::new(|| Mutex::new(BleRxBuffer::default())),
             connected: AtomicBool::new(false),
             mtu: AtomicU16::new(DEFAULT_MTU),
             conn_handle: AtomicU16::new(0xFFFF),
@@ -96,16 +94,17 @@ pub fn init(device_name: &str) {
         }
 
         // Configure NimBLE host
-        ble_hs_cfg.sync_cb = Some(on_sync);
-        ble_hs_cfg.reset_cb = Some(on_reset);
+        let cfg = core::ptr::addr_of_mut!(ble_hs_cfg);
+        (*cfg).sync_cb = Some(on_sync);
+        (*cfg).reset_cb = Some(on_reset);
 
         // Security: no pairing required (open access)
-        ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT as u8;
-        ble_hs_cfg.set_sm_bonding(0);
-        ble_hs_cfg.set_sm_mitm(0);
-        ble_hs_cfg.set_sm_sc(0);
-        ble_hs_cfg.sm_our_key_dist = 0;
-        ble_hs_cfg.sm_their_key_dist = 0;
+        (*cfg).sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT as u8;
+        (*cfg).set_sm_bonding(0);
+        (*cfg).set_sm_mitm(0);
+        (*cfg).set_sm_sc(0);
+        (*cfg).sm_our_key_dist = 0;
+        (*cfg).sm_their_key_dist = 0;
 
         // Start NimBLE host task
         nimble_port_freertos_init(Some(nimble_host_task));
@@ -203,40 +202,53 @@ fn effective_mtu() -> usize {
 
 /// Queue data for transmission to the connected peer via TX notifications.
 /// Data is chunked to fit the negotiated MTU.
-pub fn write(data: &[u8]) {
+pub fn write(data: &[u8]) -> io::Result<()> {
     if !is_connected() {
-        return;
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "BLE transport is not connected",
+        ));
     }
 
     let chunk_size = effective_mtu();
     let conn = BLE_STATE.conn_handle.load(Ordering::SeqCst);
     let val_handle = BLE_STATE.tx_val_handle.load(Ordering::SeqCst);
+    if val_handle == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "BLE TX characteristic is not ready",
+        ));
+    }
 
     for chunk in data.chunks(chunk_size) {
         unsafe {
             let om = ble_hs_mbuf_from_flat(chunk.as_ptr() as *const _, chunk.len() as u16);
             if om.is_null() {
                 ::log::warn!("BLE TX: mbuf alloc failed");
-                return;
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "BLE mbuf allocation failed",
+                ));
             }
 
             let rc = ble_gatts_notify_custom(conn, val_handle, om);
             if rc != 0 {
                 ::log::debug!("BLE TX: notify failed: {}", rc);
-                return;
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    format!("BLE notify failed: {rc}"),
+                ));
             }
         }
     }
+
+    Ok(())
 }
 
 /// Read available bytes from the RX buffer. Returns the number of bytes read.
 pub fn read(buf: &mut [u8]) -> usize {
     let mut rx = BLE_STATE.rx_buf.lock().unwrap();
-    let n = buf.len().min(rx.len());
-    for b in buf[..n].iter_mut() {
-        *b = rx.pop_front().unwrap();
-    }
-    n
+    rx.pop_into(buf)
 }
 
 /// Read with a timeout. Polls the RX buffer until data is available or timeout expires.
@@ -267,10 +279,7 @@ pub fn disconnect() {
 // --- NimBLE callbacks ---
 
 /// GAP event callback. Handles connect, disconnect, advertising complete.
-unsafe extern "C" fn gap_event_cb(
-    event: *mut ble_gap_event,
-    _arg: *mut core::ffi::c_void,
-) -> i32 {
+unsafe extern "C" fn gap_event_cb(event: *mut ble_gap_event, _arg: *mut core::ffi::c_void) -> i32 {
     let event = &*event;
     match event.type_ as u32 {
         BLE_GAP_EVENT_CONNECT => {
@@ -329,8 +338,11 @@ unsafe extern "C" fn on_sync() {
     // Use public address
     let _ = ble_hs_id_infer_auto(0, &mut 0u8 as *mut _);
     // TX_VAL_HANDLE is now populated by NimBLE (ble_gatts_start runs before sync)
-    BLE_STATE.tx_val_handle.store(TX_VAL_HANDLE, Ordering::SeqCst);
-    ::log::info!("BLE: host synced, tx_val_handle={}", TX_VAL_HANDLE);
+    let tx_val_handle = core::ptr::addr_of!(TX_VAL_HANDLE).read();
+    BLE_STATE
+        .tx_val_handle
+        .store(tx_val_handle, Ordering::SeqCst);
+    ::log::info!("BLE: host synced, tx_val_handle={}", tx_val_handle);
 }
 
 /// NimBLE host reset callback.
@@ -370,7 +382,10 @@ unsafe extern "C" fn gatt_rx_access_cb(
                 );
                 if rc == 0 {
                     let mut rx = BLE_STATE.rx_buf.lock().unwrap();
-                    rx.extend(&buf);
+                    if !rx.try_extend(&buf) {
+                        ::log::warn!("BLE RX: dropping write because RX buffer is full");
+                        return BLE_ATT_ERR_INSUFFICIENT_RES as i32;
+                    }
                 }
             }
         }
@@ -431,7 +446,7 @@ unsafe fn register_nus_gatt_service() {
 
     // RX characteristic: phone writes here (write without response)
     GATT_CHARS[0] = ble_gatt_chr_def {
-        uuid: &RX_UUID as *const _ as *const ble_uuid_t,
+        uuid: core::ptr::addr_of!(RX_UUID) as *const ble_uuid_t,
         access_cb: Some(gatt_rx_access_cb),
         arg: core::ptr::null_mut(),
         descriptors: core::ptr::null_mut(),
@@ -443,13 +458,13 @@ unsafe fn register_nus_gatt_service() {
 
     // TX characteristic: device notifies here
     GATT_CHARS[1] = ble_gatt_chr_def {
-        uuid: &TX_UUID as *const _ as *const ble_uuid_t,
+        uuid: core::ptr::addr_of!(TX_UUID) as *const ble_uuid_t,
         access_cb: Some(gatt_tx_access_cb),
         arg: core::ptr::null_mut(),
         descriptors: core::ptr::null_mut(),
         flags: (BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ) as u16,
         min_key_size: 0,
-        val_handle: &mut TX_VAL_HANDLE as *mut _,
+        val_handle: core::ptr::addr_of_mut!(TX_VAL_HANDLE),
         cpfd: core::ptr::null_mut(),
     };
 
@@ -459,21 +474,21 @@ unsafe fn register_nus_gatt_service() {
     // NUS service
     GATT_SVCS[0] = ble_gatt_svc_def {
         type_: BLE_GATT_SVC_TYPE_PRIMARY as u8,
-        uuid: &SVC_UUID as *const _ as *const ble_uuid_t,
+        uuid: core::ptr::addr_of!(SVC_UUID) as *const ble_uuid_t,
         includes: core::ptr::null_mut(),
-        characteristics: GATT_CHARS.as_ptr(),
+        characteristics: core::ptr::addr_of!(GATT_CHARS[0]),
     };
 
     // Terminator
     GATT_SVCS[1] = core::mem::zeroed();
 
-    let rc = ble_gatts_count_cfg(GATT_SVCS.as_ptr());
+    let rc = ble_gatts_count_cfg(core::ptr::addr_of!(GATT_SVCS[0]));
     if rc != 0 {
         ::log::error!("BLE: gatts_count_cfg failed: {}", rc);
         return;
     }
 
-    let rc = ble_gatts_add_svcs(GATT_SVCS.as_ptr());
+    let rc = ble_gatts_add_svcs(core::ptr::addr_of!(GATT_SVCS[0]));
     if rc != 0 {
         ::log::error!("BLE: gatts_add_svcs failed: {}", rc);
         return;

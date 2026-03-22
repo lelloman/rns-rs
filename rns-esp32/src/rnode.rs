@@ -4,6 +4,7 @@
 //! handshake, accepts radio configuration commands, and bridges data frames
 //! between a serial transport (USB UART or BLE NUS) and the SX1262 LoRa radio.
 
+use std::io;
 use std::time::{Duration, Instant};
 
 use core::num::NonZeroU32;
@@ -16,14 +17,20 @@ use esp_idf_hal::uart::UartDriver;
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
+use rns_esp32::protocol::{
+    kiss_encode, validate_radio_config, DetectBuffer, KissDecoder, KissFrame, RadioConfig,
+    CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY, CMD_FW_DETAIL, CMD_FW_VERSION,
+    CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM, CMD_RADIO_STATE, CMD_READY, CMD_SF,
+    CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ, DETECT_RESP, RADIO_STATE_ON,
+};
 
 /// Transport-agnostic serial interface for the RNode bridge.
 /// Implemented by both UART (USB) and BLE NUS transports.
 pub trait BridgeTransport {
     /// Read bytes with a timeout in milliseconds. Returns number of bytes read.
     fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize;
-    /// Write bytes. Returns number of bytes written.
-    fn write(&self, data: &[u8]) -> usize;
+    /// Write a frame in full.
+    fn write(&self, data: &[u8]) -> io::Result<()>;
 }
 
 /// UART transport — wraps the existing UartDriver for USB serial bridge.
@@ -45,10 +52,17 @@ impl<'a, 'b> BridgeTransport for UartTransport<'a, 'b> {
         }
     }
 
-    fn write(&self, data: &[u8]) -> usize {
+    fn write(&self, data: &[u8]) -> io::Result<()> {
         match self.uart.write(data) {
-            Ok(n) => n,
-            Err(_) => 0,
+            Ok(n) if n == data.len() => Ok(()),
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "UART short write while sending RNode frame",
+            )),
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                format!("UART write failed: {e}"),
+            )),
         }
     }
 }
@@ -67,49 +81,22 @@ impl BridgeTransport for BleTransport {
         crate::ble::read_timeout(buf, Duration::from_millis(timeout_ms as u64))
     }
 
-    fn write(&self, data: &[u8]) -> usize {
-        crate::ble::write(data);
-        data.len()
+    fn write(&self, data: &[u8]) -> io::Result<()> {
+        match crate::ble::write(data) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                crate::ble::disconnect();
+                Err(err)
+            }
+        }
     }
 }
-
-// KISS framing constants
-const FEND: u8 = 0xC0;
-const FESC: u8 = 0xDB;
-const TFEND: u8 = 0xDC;
-const TFESC: u8 = 0xDD;
-
-// RNode command bytes (subset matching rns-net/src/rnode_kiss.rs)
-const CMD_DATA: u8 = 0x00;
-const CMD_FREQUENCY: u8 = 0x01;
-const CMD_BANDWIDTH: u8 = 0x02;
-const CMD_TXPOWER: u8 = 0x03;
-const CMD_SF: u8 = 0x04;
-const CMD_CR: u8 = 0x05;
-const CMD_RADIO_STATE: u8 = 0x06;
-const CMD_DETECT: u8 = 0x08;
-const CMD_LEAVE: u8 = 0x0A;
-const CMD_ST_ALOCK: u8 = 0x0B;
-const CMD_LT_ALOCK: u8 = 0x0C;
-const CMD_READY: u8 = 0x0F;
-const CMD_PLATFORM: u8 = 0x48;
-const CMD_MCU: u8 = 0x49;
-const CMD_FW_VERSION: u8 = 0x50;
-const CMD_FW_DETAIL: u8 = 0x51;
-
-const DETECT_REQ: u8 = 0x73;
-const DETECT_RESP: u8 = 0x46;
-const RADIO_STATE_ON: u8 = 0x01;
 
 // Device identity
 const PLATFORM_ESP32: u8 = 0x80;
 const MCU_ESP32: u8 = 0x01;
 
 const DETECT_POLL_MS: u32 = 5;
-const FREQ_MIN_HZ: u32 = 137_000_000;
-const FREQ_MAX_HZ: u32 = 1_020_000_000;
-const TX_POWER_MIN_DBM: i8 = 0;
-const TX_POWER_MAX_DBM: i8 = 22;
 
 /// Idle timeout before reverting to standalone mode.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -118,105 +105,7 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum BridgeExit {
     IdleTimeout,
     Leave,
-}
-
-/// KISS frame decoded from serial input.
-struct KissFrame {
-    command: u8,
-    data: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RadioConfig {
-    frequency: u32,
-    bandwidth: u32,
-    spreading_factor: u8,
-    coding_rate: u8,
-    tx_power: i8,
-}
-
-/// Streaming KISS decoder for serial input.
-struct KissDecoder {
-    in_frame: bool,
-    escape: bool,
-    command: u8,
-    buffer: Vec<u8>,
-}
-
-impl KissDecoder {
-    fn new() -> Self {
-        Self {
-            in_frame: false,
-            escape: false,
-            command: 0xFF,
-            buffer: Vec::new(),
-        }
-    }
-
-    /// Feed bytes and return any complete frames.
-    fn feed(&mut self, bytes: &[u8]) -> Vec<KissFrame> {
-        let mut frames = Vec::new();
-
-        for &byte in bytes {
-            if byte == FEND {
-                if self.in_frame && self.command != 0xFF && !self.buffer.is_empty() {
-                    frames.push(KissFrame {
-                        command: self.command,
-                        data: core::mem::take(&mut self.buffer),
-                    });
-                } else if self.in_frame && self.command != 0xFF && self.command != CMD_DATA {
-                    // Command with no payload (e.g. radio state query)
-                    frames.push(KissFrame {
-                        command: self.command,
-                        data: Vec::new(),
-                    });
-                }
-                self.in_frame = true;
-                self.command = 0xFF;
-                self.buffer.clear();
-                self.escape = false;
-            } else if self.in_frame {
-                if self.command == 0xFF {
-                    self.command = byte;
-                } else if byte == FESC {
-                    self.escape = true;
-                } else if self.escape {
-                    match byte {
-                        TFEND => self.buffer.push(FEND),
-                        TFESC => self.buffer.push(FESC),
-                        _ => self.buffer.push(byte),
-                    }
-                    self.escape = false;
-                } else {
-                    self.buffer.push(byte);
-                }
-            }
-        }
-
-        frames
-    }
-}
-
-/// KISS-encode a command frame: FEND + cmd + escaped(data) + FEND.
-fn kiss_encode(cmd: u8, data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + 4);
-    out.push(FEND);
-    out.push(cmd);
-    for &b in data {
-        match b {
-            FESC => {
-                out.push(FESC);
-                out.push(TFESC);
-            }
-            FEND => {
-                out.push(FESC);
-                out.push(TFEND);
-            }
-            _ => out.push(b),
-        }
-    }
-    out.push(FEND);
-    out
+    TransportError,
 }
 
 /// RNode bridge: handles serial protocol and bridges data to/from LoRa.
@@ -226,6 +115,7 @@ pub struct RNodeBridge<T: BridgeTransport> {
     transport: T,
     dio1: PinDriver<'static, AnyIOPin, Input>,
     stats: Option<SharedStats>,
+    pending_frames: Vec<KissFrame>,
     pending_freq: Option<u32>,
     pending_bw: Option<u32>,
     pending_sf: Option<u8>,
@@ -239,12 +129,14 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         transport: T,
         dio1: PinDriver<'static, AnyIOPin, Input>,
         stats: Option<SharedStats>,
+        pending_frames: Vec<KissFrame>,
     ) -> Self {
         Self {
             radio,
             transport,
             dio1,
             stats,
+            pending_frames,
             pending_freq: None,
             pending_bw: None,
             pending_sf: None,
@@ -272,6 +164,21 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 .ok();
         }
 
+        for frame in core::mem::take(&mut self.pending_frames) {
+            match self.handle_frame(frame) {
+                Ok(true) => {
+                    let _ = self.dio1.unsubscribe();
+                    return (BridgeExit::Leave, self.dio1);
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    log::warn!("RNode bridge: pending frame handling failed: {}", err);
+                    let _ = self.dio1.unsubscribe();
+                    return (BridgeExit::TransportError, self.dio1);
+                }
+            }
+        }
+
         let exit = loop {
             // Check idle timeout
             if last_activity.elapsed() > IDLE_TIMEOUT {
@@ -284,9 +191,17 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 last_activity = Instant::now();
                 let frames = decoder.feed(&rx_buf[..n]);
                 for frame in frames {
-                    if self.handle_frame(frame) {
-                        let _ = self.dio1.unsubscribe();
-                        return (BridgeExit::Leave, self.dio1);
+                    match self.handle_frame(frame) {
+                        Ok(true) => {
+                            let _ = self.dio1.unsubscribe();
+                            return (BridgeExit::Leave, self.dio1);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            log::warn!("RNode bridge: serial transport failed: {}", err);
+                            let _ = self.dio1.unsubscribe();
+                            return (BridgeExit::TransportError, self.dio1);
+                        }
                     }
                 }
             } else {
@@ -305,7 +220,10 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
                 }
                 let frame = kiss_encode(CMD_DATA, &data);
-                self.transport.write(&frame);
+                if let Err(err) = self.transport.write(&frame) {
+                    log::warn!("RNode bridge: LoRa->serial forwarding failed: {}", err);
+                    break BridgeExit::TransportError;
+                }
             }
         };
 
@@ -314,38 +232,38 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     }
 
     /// Handle a decoded KISS frame from serial. Returns true if bridge should exit.
-    fn handle_frame(&mut self, frame: KissFrame) -> bool {
+    fn handle_frame(&mut self, frame: KissFrame) -> io::Result<bool> {
         match frame.command {
             CMD_DETECT => {
                 if frame.data.first() == Some(&DETECT_REQ) {
                     log::info!("RNode: DETECT handshake received");
                     let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                     log::info!("RNode: firmware {}", version::FULL_VERSION);
                 }
             }
             CMD_LEAVE => {
                 log::info!("RNode: LEAVE received, exiting bridge mode");
-                return true;
+                return Ok(true);
             }
             CMD_FW_VERSION => {
                 let resp = kiss_encode(
                     CMD_FW_VERSION,
                     &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
                 );
-                self.transport.write(&resp);
+                self.transport.write(&resp)?;
             }
             CMD_FW_DETAIL => {
                 let resp = kiss_encode(CMD_FW_DETAIL, version::FULL_VERSION.as_bytes());
-                self.transport.write(&resp);
+                self.transport.write(&resp)?;
             }
             CMD_PLATFORM => {
                 let resp = kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32]);
-                self.transport.write(&resp);
+                self.transport.write(&resp)?;
             }
             CMD_MCU => {
                 let resp = kiss_encode(CMD_MCU, &[MCU_ESP32]);
-                self.transport.write(&resp);
+                self.transport.write(&resp)?;
             }
             CMD_FREQUENCY => {
                 if frame.data.len() >= 4 {
@@ -356,7 +274,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::info!("RNode: set frequency {}Hz", freq);
                     self.pending_freq = Some(freq);
                     let resp = kiss_encode(CMD_FREQUENCY, &frame.data[..4]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_BANDWIDTH => {
@@ -368,7 +286,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::info!("RNode: set bandwidth {}Hz", bw);
                     self.pending_bw = Some(bw);
                     let resp = kiss_encode(CMD_BANDWIDTH, &frame.data[..4]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_TXPOWER => {
@@ -377,7 +295,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::info!("RNode: set TX power {}dBm", power);
                     self.pending_power = Some(power);
                     let resp = kiss_encode(CMD_TXPOWER, &[frame.data[0]]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_SF => {
@@ -385,7 +303,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::info!("RNode: set SF {}", frame.data[0]);
                     self.pending_sf = Some(frame.data[0]);
                     let resp = kiss_encode(CMD_SF, &[frame.data[0]]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_CR => {
@@ -393,7 +311,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     log::info!("RNode: set CR 4/{}", frame.data[0]);
                     self.pending_cr = Some(frame.data[0]);
                     let resp = kiss_encode(CMD_CR, &[frame.data[0]]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_ST_ALOCK => {
@@ -403,7 +321,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                         ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
                     );
                     let resp = kiss_encode(CMD_ST_ALOCK, &frame.data[..2]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_LT_ALOCK => {
@@ -413,16 +331,16 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                         ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
                     );
                     let resp = kiss_encode(CMD_LT_ALOCK, &frame.data[..2]);
-                    self.transport.write(&resp);
+                    self.transport.write(&resp)?;
                 }
             }
             CMD_RADIO_STATE => {
                 if frame.data.first() == Some(&RADIO_STATE_ON) {
                     if self.apply_radio_config() {
                         let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
-                        self.transport.write(&resp);
+                        self.transport.write(&resp)?;
                         let ready = kiss_encode(CMD_READY, &[0x01]);
-                        self.transport.write(&ready);
+                        self.transport.write(&ready)?;
                     }
                 }
             }
@@ -441,7 +359,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                     match result {
                         Ok(()) => {
                             let resp = kiss_encode(CMD_READY, &[0x01]);
-                            self.transport.write(&resp);
+                            self.transport.write(&resp)?;
                         }
                         Err(e) => {
                             log::error!("RNode: LoRa TX failed: {}", e);
@@ -453,7 +371,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 log::debug!("RNode: ignoring command 0x{:02X}", frame.command);
             }
         }
-        false
+        Ok(false)
     }
 
     /// Apply pending radio configuration to the SX1262.
@@ -499,133 +417,24 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     }
 }
 
-fn validate_radio_config(config: RadioConfig) -> Result<(), &'static str> {
-    if !(FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&config.frequency) {
-        return Err("frequency out of supported range");
-    }
-
-    match config.bandwidth {
-        7_800 | 10_400 | 15_600 | 20_800 | 31_250 | 41_700 | 62_500 | 125_000 | 250_000
-        | 500_000 => {}
-        _ => return Err("unsupported bandwidth"),
-    }
-
-    if !(5..=12).contains(&config.spreading_factor) {
-        return Err("spreading factor out of range");
-    }
-
-    if !(5..=8).contains(&config.coding_rate) {
-        return Err("coding rate out of range");
-    }
-
-    if !(TX_POWER_MIN_DBM..=TX_POWER_MAX_DBM).contains(&config.tx_power) {
-        return Err("TX power out of range");
-    }
-
-    Ok(())
+pub struct BridgeDetectState {
+    detector: DetectBuffer,
+    rx_buf: [u8; 256],
 }
 
-/// Check UART for RNode DETECT handshake with a short polling timeout.
-/// Called from the driver's idle path after `recv_timeout` expires.
-/// Returns `true` if DETECT was received and responded to.
-pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
-    let mut decoder = KissDecoder::new();
-    let mut rx_buf = [0u8; 256];
-
-    match uart.read(&mut rx_buf, DETECT_POLL_MS) {
-        Ok(n) if n > 0 => {
-            let frames = decoder.feed(&rx_buf[..n]);
-            let mut detected = false;
-
-            for frame in &frames {
-                if frame.command == CMD_DETECT && frame.data.first() == Some(&DETECT_REQ) {
-                    detected = true;
-                }
-            }
-
-            if detected {
-                for frame in frames {
-                    match frame.command {
-                        CMD_DETECT => {
-                            if frame.data.first() == Some(&DETECT_REQ) {
-                                log::info!("RNode: DETECT handshake received (quick), responding");
-                                let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
-                                let _ = uart.write(&resp);
-                            }
-                        }
-                        CMD_FW_VERSION => {
-                            let resp = kiss_encode(
-                                CMD_FW_VERSION,
-                                &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
-                            );
-                            let _ = uart.write(&resp);
-                        }
-                        CMD_FW_DETAIL => {
-                            let resp =
-                                kiss_encode(CMD_FW_DETAIL, version::FULL_VERSION.as_bytes());
-                            let _ = uart.write(&resp);
-                        }
-                        CMD_PLATFORM => {
-                            let resp = kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32]);
-                            let _ = uart.write(&resp);
-                        }
-                        CMD_MCU => {
-                            let resp = kiss_encode(CMD_MCU, &[MCU_ESP32]);
-                            let _ = uart.write(&resp);
-                        }
-                        _ => {}
-                    }
-                }
-                return true;
-            }
+impl BridgeDetectState {
+    pub fn new() -> Self {
+        Self {
+            detector: DetectBuffer::new(),
+            rx_buf: [0u8; 256],
         }
-        _ => {}
     }
 
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{validate_radio_config, RadioConfig};
-
-    #[test]
-    fn accepts_default_config() {
-        let cfg = RadioConfig {
-            frequency: crate::config::LORA_FREQUENCY,
-            bandwidth: crate::config::LORA_BANDWIDTH,
-            spreading_factor: crate::config::LORA_SPREADING_FACTOR,
-            coding_rate: crate::config::LORA_CODING_RATE,
-            tx_power: crate::config::LORA_TX_POWER,
-        };
-
-        assert!(validate_radio_config(cfg).is_ok());
-    }
-
-    #[test]
-    fn rejects_invalid_spreading_factor() {
-        let cfg = RadioConfig {
-            frequency: crate::config::LORA_FREQUENCY,
-            bandwidth: crate::config::LORA_BANDWIDTH,
-            spreading_factor: 13,
-            coding_rate: crate::config::LORA_CODING_RATE,
-            tx_power: crate::config::LORA_TX_POWER,
-        };
-
-        assert!(validate_radio_config(cfg).is_err());
-    }
-
-    #[test]
-    fn rejects_invalid_bandwidth() {
-        let cfg = RadioConfig {
-            frequency: crate::config::LORA_FREQUENCY,
-            bandwidth: 123_456,
-            spreading_factor: crate::config::LORA_SPREADING_FACTOR,
-            coding_rate: crate::config::LORA_CODING_RATE,
-            tx_power: crate::config::LORA_TX_POWER,
-        };
-
-        assert!(validate_radio_config(cfg).is_err());
+    pub fn poll(&mut self, uart: &UartDriver<'_>) -> Option<Vec<KissFrame>> {
+        match uart.read(&mut self.rx_buf, DETECT_POLL_MS) {
+            Ok(n) if n > 0 => self.detector.feed(&self.rx_buf[..n]),
+            _ => None,
+        }
     }
 }
 

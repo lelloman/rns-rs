@@ -22,6 +22,7 @@ use crate::ifac::{self, IfacState};
 use crate::lora::LoRaWriter;
 use crate::rng::EspRng;
 use crate::util::hex;
+use rns_esp32::protocol::KissFrame;
 
 /// Events processed by the driver loop.
 pub enum Event {
@@ -43,7 +44,7 @@ pub enum Event {
 /// Reason the driver event loop exited.
 pub enum DriverExit {
     /// UART detected an RNode DETECT handshake; switch to USB bridge mode.
-    BridgeRequested,
+    BridgeRequested(Vec<KissFrame>),
     /// Triple-press requested BLE bridge mode.
     BleRequested,
     /// Event channel disconnected.
@@ -132,13 +133,14 @@ impl Driver {
     /// Run the main event loop. Blocks until bridge detected, shutdown, or disconnect.
     pub fn run(&mut self, uart: &UartDriver<'_>) -> DriverExit {
         log::info!("Driver event loop started");
+        let mut detect_state = crate::rnode::BridgeDetectState::new();
 
         let exit = loop {
             let event = match self.rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(e) => e,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if crate::rnode::wait_for_detect_quick(uart) {
-                        break DriverExit::BridgeRequested;
+                    if let Some(frames) = detect_state.poll(uart) {
+                        break DriverExit::BridgeRequested(frames);
                     }
                     continue;
                 }
@@ -150,8 +152,8 @@ impl Driver {
 
             // Check UART for RNode DETECT handshake after each event.
             // This runs on every tick (~1s) so detection is responsive.
-            if crate::rnode::wait_for_detect_quick(uart) {
-                break DriverExit::BridgeRequested;
+            if let Some(frames) = detect_state.poll(uart) {
+                break DriverExit::BridgeRequested(frames);
             }
 
             match event {

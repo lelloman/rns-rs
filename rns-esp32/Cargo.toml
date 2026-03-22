@@ -4,17 +4,34 @@ version = "0.1.0"
 edition = "2021"
 description = "Reticulum LoRa transport node firmware for Heltec WiFi LoRa 32 V3"
 
+[features]
+default = []
+firmware = [
+    "dep:embedded-graphics",
+    "dep:esp-idf-hal",
+    "dep:esp-idf-svc",
+    "dep:esp-idf-sys",
+    "dep:ssd1306",
+    "rns-crypto/espidf",
+]
+
 [dependencies]
 rns-core = { path = "../rns-core", default-features = false, features = ["std"] }
-rns-crypto = { path = "../rns-crypto", default-features = false, features = ["std", "espidf"] }
+rns-crypto = { path = "../rns-crypto", default-features = false, features = ["std"] }
 
-esp-idf-sys = "0.36"
-esp-idf-svc = "0.51"
-esp-idf-hal = "0.45"
+esp-idf-sys = { version = "0.36", optional = true }
+esp-idf-svc = { version = "0.51", optional = true }
+esp-idf-hal = { version = "0.45", optional = true }
 
 log = "0.4"
-ssd1306 = "0.9"
-embedded-graphics = "0.8"
+ssd1306 = { version = "0.9", optional = true }
+embedded-graphics = { version = "0.8", optional = true }
+
+[[bin]]
+name = "rns-esp32"
+path = "src/main.rs"
+required-features = ["firmware"]
+test = false
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }

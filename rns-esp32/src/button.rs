@@ -84,11 +84,7 @@ pub fn button_loop(
 }
 
 /// Commit accumulated short presses as the appropriate gesture.
-fn commit_pending_presses(
-    count: u8,
-    tx: &mpsc::Sender<Event>,
-    stats: &SharedStats,
-) {
+fn commit_pending_presses(count: u8, tx: &mpsc::Sender<Event>, stats: &SharedStats) {
     match count {
         0 => {}
         1 => {

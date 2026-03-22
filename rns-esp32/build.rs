@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    embuild::espidf::sysenv::output();
+    if env::var_os("CARGO_FEATURE_FIRMWARE").is_some() {
+        embuild::espidf::sysenv::output();
+    }
 
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs");
