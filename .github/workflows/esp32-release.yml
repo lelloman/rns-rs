@@ -9,6 +9,9 @@ concurrency:
   group: esp32-release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     name: Build ESP32 Firmware
