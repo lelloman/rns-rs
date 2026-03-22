@@ -13,6 +13,7 @@ concurrency:
 jobs:
   cargo-test:
     name: Cargo Test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -36,6 +37,7 @@ jobs:
 
   docker-e2e:
     name: Docker E2E
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -48,6 +50,7 @@ jobs:
 
   clippy:
     name: Clippy
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
