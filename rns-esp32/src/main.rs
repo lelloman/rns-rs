@@ -137,6 +137,7 @@ fn main() {
         identity_hash: Some(identity_hash),
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
+        packet_hashlist_max_entries: 1024,
     };
 
     // Build driver and register interface (once, reused across mode switches)
