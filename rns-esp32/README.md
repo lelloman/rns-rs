@@ -17,11 +17,33 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
 - LoRa packet transport for Reticulum network
 - OLED display with multiple info pages (cycled via short-press PRG button)
 - Identity persistence via NVS (Non-Volatile Storage)
+- Signed control-plane support over LoRa for up to 3 build-time controller identities
+- Persistent BLE-open policy backed by NVS, with a compile-time default
 - IFAC cryptographic helpers are implemented, but runtime IFAC configuration is not wired up yet
 - Button gestures:
   - **Short press**: Cycle display page
   - **Double press**: Send ping broadcast
-  - **Long press (>800ms)**: Trigger Reticulum announce
+- **Long press (>800ms)**: Trigger Reticulum announce
+
+## Authenticated Control Plane
+
+The firmware can compile in up to 3 controller public keys and accept signed control packets over LoRa in standalone mode.
+
+- Request destination: `rns_esp32.control.<node_identity_hash>`
+- Reply destination: `rns_esp32.control.reply.<controller_identity_hash>`
+- Supported commands:
+  - `GetRadio`
+  - `SetRadio`
+  - `GetBlePolicy`
+  - `SetBlePolicy`
+
+`SetRadio` changes the active standalone radio config at runtime only. It does not persist across reboot.
+
+When a `SetRadio` command is accepted, the node immediately applies the new values to the SX1262 and updates the standalone OLED radio page to show the active runtime configuration. This makes it possible to remotely verify what the node is currently using from the device itself, even if the controller is running on another `rns-rs` platform.
+
+`SetBlePolicy` controls whether the existing BLE bridge mode is open to any nearby BLE client. That policy is persisted in NVS.
+
+The node now announces both its transport destination and its control destination when you trigger an announce.
 
 ## RNode Bridge Mode
 
@@ -91,6 +113,18 @@ cd rns-esp32
 cargo build --features firmware --target xtensa-esp32s3-espidf --release
 ```
 
+Optional build-time control config:
+
+```bash
+export RNS_ESP32_CONTROL_PUBKEYS="<128-hex-char-pubkey>[,<128-hex-char-pubkey>...]"
+export RNS_ESP32_BT_OPEN_DEFAULT=false
+cargo build --features firmware --target xtensa-esp32s3-espidf --release
+```
+
+- `RNS_ESP32_CONTROL_PUBKEYS` accepts 0-3 comma-separated 64-byte public keys in hex
+- `RNS_ESP32_BT_OPEN_DEFAULT` sets the compile-time default for the persisted BLE-open policy
+- if `RNS_ESP32_CONTROL_PUBKEYS` is unset, the signed LoRa control plane is not enabled
+
 ## Flashing
 
 ```bash
@@ -141,11 +175,15 @@ Edit `src/config.rs` to modify LoRa parameters:
 
 The board pinout and partition table are also part of the firmware configuration.
 
+Build-time environment variables control the authenticated LoRa control plane and the default BLE-open policy.
+
 ## Display Pages
 
 1. **Stats**: Identity hash (short), TX/RX byte counters, announce count
-2. **Radio Info**: Frequency, SF, bandwidth, coding rate, TX power
+2. **Radio Info**: Active frequency, SF, bandwidth, coding rate, TX power
 3. **Identity**: Full 32-byte identity hash
+
+In standalone mode, the radio page reflects the current active runtime radio configuration. In bridge mode, the bridge radio page reflects the bridge-specific radio settings while the bridge is active.
 
 ## Architecture
 

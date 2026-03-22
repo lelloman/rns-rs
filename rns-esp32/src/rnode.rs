@@ -438,15 +438,15 @@ impl BridgeDetectState {
     }
 }
 
-/// Restore the radio to default standalone configuration from config.rs.
-pub fn restore_default_radio_config(radio: &SharedRadio) {
+/// Restore the radio to a standalone configuration.
+pub fn restore_radio_config(radio: &SharedRadio, config: RadioConfig) {
     let mut r = radio.lock().unwrap();
     r.reconfigure(
-        crate::config::LORA_FREQUENCY,
-        crate::config::LORA_BANDWIDTH,
-        crate::config::LORA_SPREADING_FACTOR,
-        crate::config::LORA_CODING_RATE,
-        crate::config::LORA_TX_POWER,
+        config.frequency,
+        config.bandwidth,
+        config.spreading_factor,
+        config.coding_rate,
+        config.tx_power,
     );
-    log::info!("Radio restored to default config");
+    log::info!("Radio restored to standalone config");
 }

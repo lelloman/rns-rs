@@ -54,6 +54,11 @@ pub struct DisplayStats {
     pub bridge_sf: Option<u8>,
     pub bridge_cr: Option<u8>,
     pub bridge_power: Option<i8>,
+    pub active_freq: u32,
+    pub active_bw: u32,
+    pub active_sf: u8,
+    pub active_cr: u8,
+    pub active_power: i8,
     /// Temporary status message (shown for a few refresh cycles then cleared).
     status: Option<String>,
     status_ttl: u8,
@@ -75,6 +80,11 @@ impl DisplayStats {
             bridge_sf: None,
             bridge_cr: None,
             bridge_power: None,
+            active_freq: crate::config::LORA_FREQUENCY,
+            active_bw: crate::config::LORA_BANDWIDTH,
+            active_sf: crate::config::LORA_SPREADING_FACTOR,
+            active_cr: crate::config::LORA_CODING_RATE,
+            active_power: crate::config::LORA_TX_POWER,
             status: None,
             status_ttl: 0,
         }
@@ -207,7 +217,7 @@ fn render_stats(display: &mut Display, stats: &DisplayStats) {
 }
 
 /// Render page 1: radio info.
-fn render_radio_info(display: &mut Display, _stats: &DisplayStats) {
+fn render_radio_info(display: &mut Display, stats: &DisplayStats) {
     let style = MonoTextStyleBuilder::new()
         .font(&FONT_6X10)
         .text_color(BinaryColor::On)
@@ -215,18 +225,18 @@ fn render_radio_info(display: &mut Display, _stats: &DisplayStats) {
 
     let _ = Text::new("Radio Info", Point::new(0, 10), style).draw(display);
 
-    let freq = format!("Freq: {} MHz", crate::config::LORA_FREQUENCY / 1_000_000);
+    let freq = format!("Freq: {} MHz", stats.active_freq / 1_000_000);
     let _ = Text::new(&freq, Point::new(0, 24), style).draw(display);
 
     let params = format!(
         "SF:{} BW:{}k CR:4/{}",
-        crate::config::LORA_SPREADING_FACTOR,
-        crate::config::LORA_BANDWIDTH / 1000,
-        crate::config::LORA_CODING_RATE,
+        stats.active_sf,
+        stats.active_bw / 1000,
+        stats.active_cr,
     );
     let _ = Text::new(&params, Point::new(0, 38), style).draw(display);
 
-    let power = format!("TX Power: {} dBm", crate::config::LORA_TX_POWER);
+    let power = format!("TX Power: {} dBm", stats.active_power);
     let _ = Text::new(&power, Point::new(0, 52), style).draw(display);
 
     let _ = Text::new(

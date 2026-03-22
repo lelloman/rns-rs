@@ -10,8 +10,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use esp_idf_hal::uart::UartDriver;
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
 use rns_core::constants;
+use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::transport::types::{InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::identity::Identity;
@@ -22,7 +24,17 @@ use crate::ifac::{self, IfacState};
 use crate::lora::LoRaWriter;
 use crate::rng::EspRng;
 use crate::util::hex;
+use rns_esp32::control::{
+    authorize_request, compiled_controller_keys, control_destination, control_reply_destination,
+    encode_response, AuthorizedControlRequest, ControlAuthError, ControlBody, ControlCommand,
+    ControlResponseBody, ControlStatus, ReplayWindow,
+};
 use rns_esp32::protocol::KissFrame;
+use rns_esp32::protocol::RadioConfig;
+use rns_esp32::settings_store::DeviceSettings;
+
+const NVS_NAMESPACE: &str = "rns";
+const NVS_KEY_SETTINGS: &str = "settings";
 
 /// Events processed by the driver loop.
 pub enum Event {
@@ -67,6 +79,11 @@ pub struct Driver {
     rx: mpsc::Receiver<Event>,
     stats: Option<SharedStats>,
     identity: Option<Identity>,
+    control_dest_hash: Option<[u8; 16]>,
+    replay_window: ReplayWindow,
+    active_radio_config: RadioConfig,
+    device_settings: DeviceSettings,
+    settings_partition: Option<EspDefaultNvsPartition>,
 }
 
 impl Driver {
@@ -79,6 +96,17 @@ impl Driver {
             rx,
             stats: None,
             identity: None,
+            control_dest_hash: None,
+            replay_window: ReplayWindow::new(),
+            active_radio_config: RadioConfig {
+                frequency: crate::config::LORA_FREQUENCY,
+                bandwidth: crate::config::LORA_BANDWIDTH,
+                spreading_factor: crate::config::LORA_SPREADING_FACTOR,
+                coding_rate: crate::config::LORA_CODING_RATE,
+                tx_power: crate::config::LORA_TX_POWER,
+            },
+            device_settings: DeviceSettings::compile_default(),
+            settings_partition: None,
         }
     }
 
@@ -89,7 +117,27 @@ impl Driver {
 
     /// Set the node identity (needed for announces).
     pub fn set_identity(&mut self, identity: Identity) {
+        self.control_dest_hash = if compiled_controller_keys().is_empty() {
+            None
+        } else {
+            let dest = control_destination(identity.hash());
+            self.engine
+                .register_destination(dest, constants::DESTINATION_SINGLE);
+            Some(dest)
+        };
         self.identity = Some(identity);
+    }
+
+    pub fn set_settings_partition(&mut self, partition: EspDefaultNvsPartition) {
+        self.settings_partition = Some(partition);
+    }
+
+    pub fn set_device_settings(&mut self, settings: DeviceSettings) {
+        self.device_settings = settings;
+    }
+
+    pub fn active_radio_config(&self) -> RadioConfig {
+        self.active_radio_config
     }
 
     /// Register a LoRa interface with the transport engine.
@@ -174,6 +222,13 @@ impl Driver {
                     self.handle_send_announce();
                 }
                 Event::EnableBle => {
+                    if !self.device_settings.ble_open_control {
+                        log::info!("BLE bridge request ignored: BLE open control disabled");
+                        if let Some(ref stats) = self.stats {
+                            stats.lock().unwrap().set_status("BLE control off");
+                        }
+                        continue;
+                    }
                     log::info!("BLE bridge mode requested via button");
                     break DriverExit::BleRequested;
                 }
@@ -232,9 +287,13 @@ impl Driver {
                 }
                 TransportAction::DeliverLocal {
                     destination_hash,
+                    raw,
                     packet_hash,
                     ..
                 } => {
+                    if self.handle_local_delivery(destination_hash, &raw) {
+                        continue;
+                    }
                     log::info!(
                         "Local delivery: dest={} pkt={}",
                         hex(&destination_hash[..4]),
@@ -270,6 +329,195 @@ impl Driver {
                 _ => {}
             }
         }
+    }
+
+    fn handle_local_delivery(&mut self, destination_hash: [u8; 16], raw: &[u8]) -> bool {
+        if Some(destination_hash) != self.control_dest_hash {
+            return false;
+        }
+
+        let packet = match RawPacket::unpack(raw) {
+            Ok(packet) => packet,
+            Err(err) => {
+                log::warn!("Control packet unpack failed: {:?}", err);
+                return true;
+            }
+        };
+
+        if packet.flags.packet_type != constants::PACKET_TYPE_DATA
+            || packet.flags.destination_type != constants::DESTINATION_SINGLE
+            || packet.context != constants::CONTEXT_COMMAND
+        {
+            log::debug!("Ignoring non-control local packet for control destination");
+            return true;
+        }
+
+        match authorize_request(&packet.data, &destination_hash, &mut self.replay_window) {
+            Ok(request) => self.execute_control_request(request),
+            Err(ControlAuthError::Parse(err)) => {
+                log::warn!("Malformed control request: {:?}", err);
+            }
+            Err(ControlAuthError::UnauthorizedController) => {
+                log::warn!("Rejected control request from unauthorized controller");
+            }
+            Err(ControlAuthError::InvalidSignature) => {
+                log::warn!("Rejected control request with invalid signature");
+            }
+            Err(ControlAuthError::Replay) => {
+                log::warn!("Rejected replayed control request");
+            }
+        }
+
+        true
+    }
+
+    fn execute_control_request(&mut self, request: AuthorizedControlRequest) {
+        let controller_prefix = hex(&request.controller_identity_hash[..4]);
+        let command_body = request.body.clone();
+        let (status, body) = match command_body {
+            ControlBody::GetRadio => (
+                ControlStatus::Ok,
+                ControlResponseBody::Radio(self.active_radio_config),
+            ),
+            ControlBody::SetRadio(config) => {
+                self.active_radio_config = config;
+                if let Some(entry) = self.interfaces.first_mut() {
+                    entry.writer.apply_config(config);
+                }
+                if let Some(ref stats) = self.stats {
+                    let mut stats = stats.lock().unwrap();
+                    stats.active_freq = config.frequency;
+                    stats.active_bw = config.bandwidth;
+                    stats.active_sf = config.spreading_factor;
+                    stats.active_cr = config.coding_rate;
+                    stats.active_power = config.tx_power;
+                    stats.set_status("Radio cfg applied");
+                }
+                (
+                    ControlStatus::Ok,
+                    ControlResponseBody::Radio(self.active_radio_config),
+                )
+            }
+            ControlBody::GetBlePolicy => (
+                ControlStatus::Ok,
+                ControlResponseBody::BlePolicy {
+                    ble_open_control: self.device_settings.ble_open_control,
+                },
+            ),
+            ControlBody::SetBlePolicy { ble_open_control } => {
+                self.device_settings.ble_open_control = ble_open_control;
+                if let Some(ref stats) = self.stats {
+                    let mut stats = stats.lock().unwrap();
+                    stats.set_status(if ble_open_control {
+                        "BLE control on"
+                    } else {
+                        "BLE control off"
+                    });
+                }
+                let status = if self.persist_device_settings().is_ok() {
+                    ControlStatus::Ok
+                } else {
+                    ControlStatus::PersistFailed
+                };
+                (
+                    status,
+                    ControlResponseBody::BlePolicy {
+                        ble_open_control: self.device_settings.ble_open_control,
+                    },
+                )
+            }
+        };
+
+        if let ControlBody::SetRadio(config) = command_body {
+            log::info!(
+                "Applied signed radio config from controller {}: freq={} sf={} bw={} cr=4/{} tx={}dBm",
+                controller_prefix,
+                config.frequency,
+                config.spreading_factor,
+                config.bandwidth,
+                config.coding_rate,
+                config.tx_power
+            );
+        }
+
+        self.send_control_response(
+            request.controller_identity_hash,
+            request.command,
+            request.request_id,
+            status,
+            body,
+        );
+    }
+
+    fn send_control_response(
+        &mut self,
+        controller_identity_hash: [u8; 16],
+        command: ControlCommand,
+        request_id: [u8; 16],
+        status: ControlStatus,
+        body: ControlResponseBody,
+    ) {
+        let Some(identity) = self.identity.as_ref() else {
+            return;
+        };
+        let reply_dest = control_reply_destination(&controller_identity_hash);
+        if !self.engine.has_path(&reply_dest) {
+            log::debug!(
+                "No path to controller reply destination {}, skipping control response",
+                hex(&reply_dest[..4])
+            );
+            return;
+        }
+
+        let Some(data) = encode_response(
+            identity,
+            &controller_identity_hash,
+            command,
+            status,
+            request_id,
+            body,
+        ) else {
+            log::warn!("Failed to encode control response");
+            return;
+        };
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+
+        let packet = match RawPacket::pack(
+            flags,
+            0,
+            &reply_dest,
+            None,
+            constants::CONTEXT_COMMAND_STATUS,
+            &data,
+        ) {
+            Ok(packet) => packet,
+            Err(err) => {
+                log::warn!("Failed to pack control response: {:?}", err);
+                return;
+            }
+        };
+
+        let actions =
+            self.engine
+                .handle_outbound(&packet, constants::DESTINATION_SINGLE, None, now());
+        self.dispatch_all(actions);
+    }
+
+    fn persist_device_settings(&mut self) -> Result<(), String> {
+        let Some(partition) = self.settings_partition.clone() else {
+            return Err("missing NVS partition".into());
+        };
+        let mut nvs = EspNvs::<NvsDefault>::new(partition, NVS_NAMESPACE, true)
+            .map_err(|err| format!("NVS open: {err}"))?;
+        nvs.set_raw(NVS_KEY_SETTINGS, &self.device_settings.encode())
+            .map_err(|err| format!("NVS write: {err}"))
     }
 
     /// Send a ping broadcast: a small test packet over LoRa.
@@ -317,6 +565,17 @@ impl Driver {
 
     /// Build and broadcast a Reticulum announce for this node's identity.
     fn handle_send_announce(&mut self) {
+        log::info!("Button: sending announce");
+        self.send_announce_for_aspects(&["transport"]);
+        if self.control_dest_hash.is_some() {
+            self.send_announce_for_aspects(&["control"]);
+        }
+        if let Some(ref stats) = self.stats {
+            stats.lock().unwrap().set_status("Announce sent!");
+        }
+    }
+
+    fn send_announce_for_aspects(&mut self, aspects: &[&str]) {
         let identity = match &self.identity {
             Some(id) => id,
             None => {
@@ -324,19 +583,11 @@ impl Driver {
                 return;
             }
         };
-
-        log::info!("Button: sending announce");
-
         let identity_hash = *identity.hash();
-        let app_name = "rns_esp32";
-        let aspects: &[&str] = &["transport"];
-        let name_hash = rns_core::destination::name_hash(app_name, aspects);
+        let name_hash = rns_core::destination::name_hash("rns_esp32", aspects);
         let dest_hash =
-            rns_core::destination::destination_hash(app_name, aspects, Some(&identity_hash));
+            rns_core::destination::destination_hash("rns_esp32", aspects, Some(&identity_hash));
 
-        // Build random_hash with timestamp in bytes [5:10]
-        // ESP32 has no RTC/NTP, so use uptime — other Reticulum nodes may see
-        // these as "old" announces, but they will still be processed.
         let mut random_hash = [0u8; 10];
         self.rng.fill_bytes(&mut random_hash[..5]);
         let now_secs = std::time::SystemTime::now()
@@ -354,15 +605,14 @@ impl Driver {
             None,
         ) {
             Ok((announce_data, _)) => {
-                let flags = rns_core::packet::PacketFlags {
+                let flags = PacketFlags {
                     header_type: constants::HEADER_1,
                     context_flag: constants::FLAG_UNSET,
                     transport_type: constants::TRANSPORT_BROADCAST,
                     destination_type: constants::DESTINATION_SINGLE,
                     packet_type: constants::PACKET_TYPE_ANNOUNCE,
                 };
-
-                match rns_core::packet::RawPacket::pack(
+                match RawPacket::pack(
                     flags,
                     0,
                     &dest_hash,
@@ -378,15 +628,12 @@ impl Driver {
                             now(),
                         );
                         self.dispatch_all(actions);
-                        if let Some(ref stats) = self.stats {
-                            stats.lock().unwrap().set_status("Announce sent!");
-                        }
                         log::info!("Announce broadcast for dest={}", hex(&dest_hash[..4]));
                     }
-                    Err(e) => log::error!("Failed to pack announce: {:?}", e),
+                    Err(err) => log::error!("Failed to pack announce: {:?}", err),
                 }
             }
-            Err(e) => log::error!("Failed to build announce: {:?}", e),
+            Err(err) => log::error!("Failed to build announce: {:?}", err),
         }
     }
 

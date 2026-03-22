@@ -18,6 +18,7 @@ use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
 
 use crate::config;
+use rns_esp32::protocol::RadioConfig;
 
 // SX1262 opcodes
 const OPCODE_SET_STANDBY: u8 = 0x80;
@@ -424,6 +425,17 @@ impl LoRaWriter {
         // Return to RX after transmitting
         radio.set_rx_continuous();
         result
+    }
+
+    pub fn apply_config(&mut self, config: RadioConfig) {
+        let mut radio = self.radio.lock().unwrap();
+        radio.reconfigure(
+            config.frequency,
+            config.bandwidth,
+            config.spreading_factor,
+            config.coding_rate,
+            config.tx_power,
+        );
     }
 }
 

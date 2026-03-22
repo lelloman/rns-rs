@@ -29,12 +29,15 @@ use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
 use rns_core::transport::types::{InterfaceId, TransportConfig};
 use rns_crypto::identity::Identity;
+use rns_esp32::control::ble_open_control_default;
 use rns_esp32::identity_store::{decode_identity_key, IDENTITY_KEY_LEN};
+use rns_esp32::settings_store::{decode_settings, DeviceSettings};
 
 use crate::util::hex;
 
 const NVS_NAMESPACE: &str = "rns";
 const NVS_KEY_IDENTITY: &str = "id_prv";
+const NVS_KEY_SETTINGS: &str = "settings";
 
 fn main() {
     // Initialize ESP-IDF logging and system
@@ -54,6 +57,12 @@ fn main() {
     let identity_hash = *identity.hash();
     let identity_hex = hex(&identity_hash);
     log::info!("Identity: {}", identity_hex);
+    let settings = load_or_create_settings(&nvs_partition);
+    log::info!(
+        "BLE open control default={}, persisted={}",
+        ble_open_control_default(),
+        settings.ble_open_control
+    );
 
     // Initialize OLED display
     let oled_rst = PinDriver::output(AnyIOPin::from(peripherals.pins.gpio21)).expect("OLED RST");
@@ -145,6 +154,8 @@ fn main() {
     let mut driver_inst = driver::Driver::new(transport_config, rx);
     driver_inst.set_stats(display_stats.clone());
     driver_inst.set_identity(identity);
+    driver_inst.set_settings_partition(nvs_partition.clone());
+    driver_inst.set_device_settings(settings);
     driver_inst.add_interface(interface_id, writer, None);
 
     // Initialize BLE NUS (NimBLE host stack + GATT service). Does not start advertising.
@@ -213,7 +224,7 @@ fn main() {
                 dio1 = bridge_dio1;
 
                 // Restore radio to default standalone config
-                rnode::restore_default_radio_config(&radio);
+                rnode::restore_radio_config(&radio, driver_inst.active_radio_config());
 
                 // Drain stale button events accumulated during bridge mode
                 driver_inst.drain_events();
@@ -276,7 +287,7 @@ fn main() {
                 dio1 = bridge_dio1;
 
                 // Restore radio to default standalone config
-                rnode::restore_default_radio_config(&radio);
+                rnode::restore_radio_config(&radio, driver_inst.active_radio_config());
 
                 // Disconnect BLE if still connected
                 ble::disconnect();
@@ -345,4 +356,43 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     }
 
     identity
+}
+
+fn load_or_create_settings(nvs_partition: &EspDefaultNvsPartition) -> DeviceSettings {
+    let nvs =
+        EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
+    let mut raw = [0u8; 16];
+    match nvs.get_raw(NVS_KEY_SETTINGS, &mut raw) {
+        Ok(encoded) => match decode_settings(encoded) {
+            Ok(Some(settings)) => {
+                log::info!("Loaded device settings from NVS");
+                settings
+            }
+            Ok(None) => {
+                let defaults = DeviceSettings::compile_default();
+                persist_settings(nvs_partition, defaults);
+                defaults
+            }
+            Err(err) => {
+                log::warn!("Stored settings invalid, resetting to defaults: {:?}", err);
+                let defaults = DeviceSettings::compile_default();
+                persist_settings(nvs_partition, defaults);
+                defaults
+            }
+        },
+        Err(err) => {
+            log::warn!("Failed to read settings from NVS, using defaults: {}", err);
+            let defaults = DeviceSettings::compile_default();
+            persist_settings(nvs_partition, defaults);
+            defaults
+        }
+    }
+}
+
+fn persist_settings(nvs_partition: &EspDefaultNvsPartition, settings: DeviceSettings) {
+    let mut nvs = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
+        .expect("NVS open for write");
+    if let Err(err) = nvs.set_raw(NVS_KEY_SETTINGS, &settings.encode()) {
+        log::warn!("Failed to persist default device settings: {}", err);
+    }
 }
