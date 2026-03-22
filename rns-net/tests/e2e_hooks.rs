@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use rns_core::transport::types::InterfaceId;
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_core::transport::types::InterfaceId;
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig, NodeConfig,
@@ -219,6 +219,10 @@ fn start_transport_node(port: u16) -> RnsNode {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -267,6 +271,10 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,

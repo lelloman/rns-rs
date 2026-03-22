@@ -36,11 +36,11 @@ pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
 pub use driver::Callbacks;
 pub use event::{
-    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse,
-    LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
-    QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]
@@ -89,8 +89,8 @@ pub use storage::{KnownDestination, StoragePaths};
 pub use rns_core::constants::{
     MODE_ACCESS_POINT, MODE_BOUNDARY, MODE_FULL, MODE_GATEWAY, MODE_POINT_TO_POINT, MODE_ROAMING,
 };
-pub use rns_core::transport::types::InterfaceId;
 pub use rns_core::link::TeardownReason;
+pub use rns_core::transport::types::InterfaceId;
 pub use rns_core::types::{
     DestHash, DestinationType, Direction, IdentityHash, LinkId, PacketHash, ProofStrategy,
 };

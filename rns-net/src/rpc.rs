@@ -400,7 +400,8 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         .get("interface")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    let resp = send_query(event_tx, QueryRequest::BackbonePeerState { interface_name })?;
+                    let resp =
+                        send_query(event_tx, QueryRequest::BackbonePeerState { interface_name })?;
                     if let QueryResponse::BackbonePeerState(entries) = resp {
                         Ok(backbone_peer_state_to_pickle(&entries))
                     } else {
@@ -457,9 +458,9 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
         if clear_val == "backbone_peer_state" {
             let interface_name = required_string(request, "interface")?;
             let peer_ip = required_string(request, "ip")?;
-            let peer_ip = peer_ip.parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid peer IP")
-            })?;
+            let peer_ip = peer_ip
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid peer IP"))?;
             let resp = send_query(
                 event_tx,
                 QueryRequest::ClearBackbonePeerState {
@@ -699,9 +700,11 @@ fn handle_hook_rpc_request(
                     response_tx,
                 })
                 .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
-            let response = response_rx.recv_timeout(std::time::Duration::from_secs(5)).map_err(
-                |_| io::Error::new(io::ErrorKind::TimedOut, "hook enable/disable timed out"),
-            )?;
+            let response = response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "hook enable/disable timed out")
+                })?;
             Ok(hook_result_to_pickle(response))
         }
         "set_priority" => {
@@ -1253,13 +1256,15 @@ fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleVa
                     ),
                     (
                         PickleValue::String("blacklisted_remaining_secs".into()),
-                        entry.blacklisted_remaining_secs
+                        entry
+                            .blacklisted_remaining_secs
                             .map(PickleValue::Float)
                             .unwrap_or(PickleValue::None),
                     ),
                     (
                         PickleValue::String("blacklist_reason".into()),
-                        entry.blacklist_reason
+                        entry
+                            .blacklist_reason
                             .as_ref()
                             .map(|v: &String| PickleValue::String(v.clone()))
                             .unwrap_or(PickleValue::None),
@@ -1335,7 +1340,8 @@ fn runtime_config_entry_to_pickle(entry: &RuntimeConfigEntry) -> PickleValue {
         ),
         (
             PickleValue::String("description".into()),
-            entry.description
+            entry
+                .description
                 .as_ref()
                 .map(|v| PickleValue::String(v.clone()))
                 .unwrap_or(PickleValue::None),
@@ -2167,7 +2173,8 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         let driver = thread::spawn(move || {
-            if let Ok(Event::Query(QueryRequest::GetRuntimeConfig { key }, resp_tx)) = event_rx.recv()
+            if let Ok(Event::Query(QueryRequest::GetRuntimeConfig { key }, resp_tx)) =
+                event_rx.recv()
             {
                 assert_eq!(key, "global.tick_interval_ms");
                 let _ = resp_tx.send(QueryResponse::RuntimeConfigEntry(Some(

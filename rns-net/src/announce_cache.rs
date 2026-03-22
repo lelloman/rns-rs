@@ -95,7 +95,11 @@ impl AnnounceCache {
     /// `batch_limit`: maximum number of files to process per call (0 = unlimited).
     /// Returns `(removed_count, finished)` where `finished` is true if all files
     /// were processed (no more work to do).
-    pub fn clean(&self, active_hashes: &[[u8; 32]], batch_limit: usize) -> io::Result<(usize, bool)> {
+    pub fn clean(
+        &self,
+        active_hashes: &[[u8; 32]],
+        batch_limit: usize,
+    ) -> io::Result<(usize, bool)> {
         let mut entries = match fs::read_dir(&self.base_path) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, true)),

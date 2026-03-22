@@ -25,7 +25,11 @@ pub fn run(args: Args) {
     let json_output = args.has("j") || args.has("json");
     let value_only = args.has("value-only");
     let keys_only = args.has("keys-only");
-    let action = args.positional.first().map(|s| s.as_str()).unwrap_or_default();
+    let action = args
+        .positional
+        .first()
+        .map(|s| s.as_str())
+        .unwrap_or_default();
 
     let mut client = connect(args.config_path());
 
@@ -185,7 +189,10 @@ fn connect(config_path: Option<&str>) -> RpcClient {
     };
 
     let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-    let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rns_config.reticulum.instance_control_port);
+    let rpc_addr = RpcAddr::Tcp(
+        "127.0.0.1".into(),
+        rns_config.reticulum.instance_control_port,
+    );
     match RpcClient::connect(&rpc_addr, &auth_key) {
         Ok(client) => client,
         Err(e) => {
@@ -245,7 +252,8 @@ fn print_list(response: &PickleValue, keys_only: bool) {
         for entry in sorted_entries {
             println!(
                 "{}",
-                entry.get("key")
+                entry
+                    .get("key")
                     .and_then(|v| v.as_str())
                     .unwrap_or("<unknown>")
             );
@@ -308,7 +316,10 @@ fn handle_mutation_response(response: &PickleValue, json_output: bool, value_onl
 }
 
 fn print_list_entry(entry: &PickleValue) {
-    let key = entry.get("key").and_then(|v| v.as_str()).unwrap_or("<unknown>");
+    let key = entry
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
     let value = format_pickle_scalar(entry.get("value").unwrap_or(&PickleValue::None));
     let source = entry
         .get("source")
@@ -318,7 +329,10 @@ fn print_list_entry(entry: &PickleValue) {
         .get("apply_mode")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("{:<52} {:<16} {:<17} {:<20}", key, value, source, apply_mode);
+    println!(
+        "{:<52} {:<16} {:<17} {:<20}",
+        key, value, source, apply_mode
+    );
 }
 
 fn print_entry(entry: &PickleValue, value_only: bool) {
@@ -330,7 +344,10 @@ fn print_entry(entry: &PickleValue, value_only: bool) {
         return;
     }
 
-    let key = entry.get("key").and_then(|v| v.as_str()).unwrap_or("<unknown>");
+    let key = entry
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unknown>");
     let value = format_pickle_scalar(entry.get("value").unwrap_or(&PickleValue::None));
     let default = format_pickle_scalar(entry.get("default").unwrap_or(&PickleValue::None));
     let source = entry
@@ -448,6 +465,9 @@ mod tests {
 
     #[test]
     fn format_pickle_scalar_renders_strings_without_quotes() {
-        assert_eq!(format_pickle_scalar(&PickleValue::String("ask_app".into())), "ask_app");
+        assert_eq!(
+            format_pickle_scalar(&PickleValue::String("ask_app".into())),
+            "ask_app"
+        );
     }
 }

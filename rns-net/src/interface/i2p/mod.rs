@@ -322,7 +322,7 @@ fn outbound_peer_loop(
                 let writer_stream = match stream.try_clone() {
                     Ok(s) => s,
                     Err(e) => {
-                    log::warn!("[{}] failed to clone stream: {}", iface_name, e);
+                        log::warn!("[{}] failed to clone stream: {}", iface_name, e);
                         thread::sleep(runtime.lock().unwrap().reconnect_wait);
                         continue;
                     }

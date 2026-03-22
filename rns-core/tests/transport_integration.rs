@@ -70,7 +70,11 @@ impl TestHarness {
             },
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -85,7 +89,11 @@ impl TestHarness {
             identity_hash: Some(identity_hash),
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -100,7 +108,11 @@ impl TestHarness {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: max_paths,
-        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -1586,9 +1598,8 @@ fn test_issue4_shared_client_outbound_data_to_1hop_dest() {
         _ => None,
     });
 
-    let (interface, raw) = send_action.expect(
-        "shared client should emit a transport-injected outbound packet for 1-hop dest",
-    );
+    let (interface, raw) = send_action
+        .expect("shared client should emit a transport-injected outbound packet for 1-hop dest");
     assert_eq!(*interface, InterfaceId(1));
     let flags = PacketFlags::unpack(raw[0]);
     assert_eq!(flags.header_type, constants::HEADER_2);
@@ -1656,9 +1667,8 @@ fn test_issue4_shared_client_outbound_linkrequest_to_1hop_dest() {
         _ => None,
     });
 
-    let (interface, raw) = send_action.expect(
-        "shared client should emit a transport-injected linkrequest for 1-hop dest",
-    );
+    let (interface, raw) = send_action
+        .expect("shared client should emit a transport-injected linkrequest for 1-hop dest");
     assert_eq!(*interface, InterfaceId(1));
     let flags = PacketFlags::unpack(raw[0]);
     assert_eq!(flags.header_type, constants::HEADER_2);

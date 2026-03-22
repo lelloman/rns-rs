@@ -448,7 +448,11 @@ fn reconnect_local_client(config: &LocalClientConfig, tx: &EventSender) -> Local
     }
 }
 
-fn local_client_reader_loop(mut stream: LocalClientStream, config: LocalClientConfig, tx: EventSender) {
+fn local_client_reader_loop(
+    mut stream: LocalClientStream,
+    config: LocalClientConfig,
+    tx: EventSender,
+) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
@@ -860,7 +864,10 @@ mod tests {
 
         let _writer = start_client(client_config, client_tx).unwrap();
         let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, Event::InterfaceUp(InterfaceId(76), None, None)));
+        assert!(matches!(
+            event,
+            Event::InterfaceUp(InterfaceId(76), None, None)
+        ));
 
         let stream1 = accepted1_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         drop(stream1);

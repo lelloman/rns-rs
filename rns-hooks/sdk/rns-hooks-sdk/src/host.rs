@@ -54,9 +54,8 @@ pub fn is_blackholed(identity: &[u8; 16]) -> bool {
 /// Get interface name. Writes into the provided buffer, returns the number of
 /// bytes written, or `None` if the interface was not found.
 pub fn get_interface_name(id: u64, buf: &mut [u8]) -> Option<usize> {
-    let r = unsafe {
-        host_get_interface_name(id as i64, buf.as_mut_ptr() as i32, buf.len() as i32)
-    };
+    let r =
+        unsafe { host_get_interface_name(id as i64, buf.as_mut_ptr() as i32, buf.len() as i32) };
     if r < 0 {
         None
     } else {

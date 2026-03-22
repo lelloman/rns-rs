@@ -276,9 +276,7 @@ impl InterfaceFactory for TcpServerFactory {
             .get("listen_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
-        let max_connections = params
-            .get("max_connections")
-            .and_then(|v| v.parse().ok());
+        let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
         let mut config = TcpServerConfig {
             name: name.to_string(),
             listen_ip,
@@ -308,9 +306,7 @@ impl InterfaceFactory for TcpServerFactory {
     }
 }
 
-pub(crate) fn runtime_handle_from_config(
-    config: &TcpServerConfig,
-) -> TcpServerRuntimeConfigHandle {
+pub(crate) fn runtime_handle_from_config(config: &TcpServerConfig) -> TcpServerRuntimeConfigHandle {
     TcpServerRuntimeConfigHandle {
         interface_name: config.name.clone(),
         runtime: Arc::clone(&config.runtime),

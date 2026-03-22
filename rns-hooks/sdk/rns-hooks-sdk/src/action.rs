@@ -205,11 +205,7 @@ pub fn encode_tunnel_synthesize(
 
 /// Encode `TunnelEstablished`. Returns bytes written.
 /// Layout: tag(1) + tunnel_id(32) + interface(8) = 41
-pub fn encode_tunnel_established(
-    buf: &mut [u8],
-    tunnel_id: &[u8; 32],
-    interface: u64,
-) -> usize {
+pub fn encode_tunnel_established(buf: &mut [u8], tunnel_id: &[u8; 32], interface: u64) -> usize {
     buf[0] = TAG_TUNNEL_ESTABLISHED;
     buf[1..33].copy_from_slice(tunnel_id);
     write_u64(buf, 33, interface);

@@ -18,44 +18,46 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+};
+use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
+use crate::ifac;
+#[cfg(all(feature = "iface-auto", test))]
+use crate::interface::auto::AutoRuntime;
+#[cfg(feature = "iface-auto")]
+use crate::interface::auto::AutoRuntimeConfigHandle;
+#[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
+use crate::interface::backbone::{
+    BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime,
 };
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
     BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
 };
-#[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
-use crate::interface::backbone::{BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime};
-#[cfg(feature = "iface-auto")]
-use crate::interface::auto::AutoRuntimeConfigHandle;
-#[cfg(all(feature = "iface-auto", test))]
-use crate::interface::auto::AutoRuntime;
-#[cfg(feature = "iface-i2p")]
-use crate::interface::i2p::I2pRuntimeConfigHandle;
 #[cfg(all(feature = "iface-i2p", test))]
 use crate::interface::i2p::I2pRuntime;
-#[cfg(feature = "iface-pipe")]
-use crate::interface::pipe::PipeRuntimeConfigHandle;
+#[cfg(feature = "iface-i2p")]
+use crate::interface::i2p::I2pRuntimeConfigHandle;
 #[cfg(all(feature = "iface-pipe", test))]
 use crate::interface::pipe::PipeRuntime;
-#[cfg(feature = "iface-rnode")]
-use crate::interface::rnode::{validate_sub_config, RNodeRuntime, RNodeRuntimeConfigHandle};
+#[cfg(feature = "iface-pipe")]
+use crate::interface::pipe::PipeRuntimeConfigHandle;
 #[cfg(all(feature = "iface-rnode", test))]
 use crate::interface::rnode::RNodeSubConfig;
+#[cfg(feature = "iface-rnode")]
+use crate::interface::rnode::{validate_sub_config, RNodeRuntime, RNodeRuntimeConfigHandle};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::TcpClientRuntimeConfigHandle;
-#[cfg(feature = "iface-tcp")]
-use crate::interface::tcp_server::TcpServerRuntimeConfigHandle;
 #[cfg(all(feature = "iface-tcp", test))]
 use crate::interface::tcp_server::TcpServerRuntime;
-#[cfg(feature = "iface-udp")]
-use crate::interface::udp::UdpRuntimeConfigHandle;
+#[cfg(feature = "iface-tcp")]
+use crate::interface::tcp_server::TcpServerRuntimeConfigHandle;
 #[cfg(all(feature = "iface-udp", test))]
 use crate::interface::udp::UdpRuntime;
-use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
-use crate::ifac;
+#[cfg(feature = "iface-udp")]
+use crate::interface::udp::UdpRuntimeConfigHandle;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
@@ -450,7 +452,8 @@ pub struct Driver {
     #[cfg(feature = "iface-rnode")]
     pub(crate) rnode_runtime: HashMap<String, RNodeRuntimeConfigHandle>,
     /// Startup/default interface metadata for generic cross-cutting runtime config.
-    pub(crate) interface_runtime_defaults: HashMap<String, rns_core::transport::types::InterfaceInfo>,
+    pub(crate) interface_runtime_defaults:
+        HashMap<String, rns_core::transport::types::InterfaceInfo>,
     /// Current IFAC runtime config for static interfaces that support IFAC mutation.
     pub(crate) interface_ifac_runtime: HashMap<String, IfacRuntimeConfig>,
     /// Startup/default IFAC runtime config for static interfaces.
@@ -534,8 +537,7 @@ impl Driver {
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             known_destinations_cleanup_interval_ticks:
                 DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS,
-            announce_cache_cleanup_interval_ticks:
-                DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS,
+            announce_cache_cleanup_interval_ticks: DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS,
             announce_cache_cleanup_batch_size: DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE,
             discovery_cleanup_interval_ticks: DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS,
             management_announce_interval_secs: DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS,
@@ -872,19 +874,13 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    pub(crate) fn register_backbone_runtime(
-        &mut self,
-        handle: BackboneRuntimeConfigHandle,
-    ) {
+    pub(crate) fn register_backbone_runtime(&mut self, handle: BackboneRuntimeConfigHandle) {
         self.backbone_runtime
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-backbone")]
-    pub(crate) fn register_backbone_peer_state(
-        &mut self,
-        handle: BackbonePeerStateHandle,
-    ) {
+    pub(crate) fn register_backbone_peer_state(&mut self, handle: BackbonePeerStateHandle) {
         self.backbone_peer_state
             .insert(handle.interface_name.clone(), handle);
     }
@@ -949,19 +945,13 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn register_tcp_server_runtime(
-        &mut self,
-        handle: TcpServerRuntimeConfigHandle,
-    ) {
+    pub(crate) fn register_tcp_server_runtime(&mut self, handle: TcpServerRuntimeConfigHandle) {
         self.tcp_server_runtime
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn register_tcp_client_runtime(
-        &mut self,
-        handle: TcpClientRuntimeConfigHandle,
-    ) {
+    pub(crate) fn register_tcp_client_runtime(&mut self, handle: TcpClientRuntimeConfigHandle) {
         self.tcp_client_runtime
             .insert(handle.interface_name.clone(), handle);
     }
@@ -977,27 +967,32 @@ impl Driver {
 
     #[cfg(feature = "iface-udp")]
     pub(crate) fn register_udp_runtime(&mut self, handle: UdpRuntimeConfigHandle) {
-        self.udp_runtime.insert(handle.interface_name.clone(), handle);
+        self.udp_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-auto")]
     pub(crate) fn register_auto_runtime(&mut self, handle: AutoRuntimeConfigHandle) {
-        self.auto_runtime.insert(handle.interface_name.clone(), handle);
+        self.auto_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-i2p")]
     pub(crate) fn register_i2p_runtime(&mut self, handle: I2pRuntimeConfigHandle) {
-        self.i2p_runtime.insert(handle.interface_name.clone(), handle);
+        self.i2p_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-pipe")]
     pub(crate) fn register_pipe_runtime(&mut self, handle: PipeRuntimeConfigHandle) {
-        self.pipe_runtime.insert(handle.interface_name.clone(), handle);
+        self.pipe_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn register_rnode_runtime(&mut self, handle: RNodeRuntimeConfigHandle) {
-        self.rnode_runtime.insert(handle.interface_name.clone(), handle);
+        self.rnode_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     pub(crate) fn register_interface_runtime_defaults(
@@ -1044,9 +1039,7 @@ impl Driver {
         match key {
             "global.tick_interval_ms" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Int(
-                    self.tick_interval_ms.load(Ordering::Relaxed) as i64,
-                ),
+                RuntimeConfigValue::Int(self.tick_interval_ms.load(Ordering::Relaxed) as i64),
                 RuntimeConfigValue::Int(defaults.tick_interval_ms as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Driver tick interval in milliseconds.",
@@ -1068,9 +1061,7 @@ impl Driver {
             "global.known_destinations_cleanup_interval_ticks" => Some(make_entry(
                 key,
                 RuntimeConfigValue::Int(self.known_destinations_cleanup_interval_ticks as i64),
-                RuntimeConfigValue::Int(
-                    defaults.known_destinations_cleanup_interval_ticks as i64,
-                ),
+                RuntimeConfigValue::Int(defaults.known_destinations_cleanup_interval_ticks as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Tick interval between known-destinations cleanup passes.",
             )),
@@ -1622,16 +1613,34 @@ impl Driver {
         match setting {
             "idle_timeout_secs" => runtime.idle_timeout = startup.idle_timeout,
             "write_stall_timeout_secs" => runtime.write_stall_timeout = startup.write_stall_timeout,
-            "blacklist_duration_secs" => runtime.abuse.blacklist_duration = startup.abuse.blacklist_duration,
-            "idle_timeout_blacklist_threshold" => runtime.abuse.idle_timeout_threshold = startup.abuse.idle_timeout_threshold,
-            "idle_timeout_blacklist_window_secs" => runtime.abuse.idle_timeout_window = startup.abuse.idle_timeout_window,
-            "flap_blacklist_threshold" => runtime.abuse.flap_threshold = startup.abuse.flap_threshold,
+            "blacklist_duration_secs" => {
+                runtime.abuse.blacklist_duration = startup.abuse.blacklist_duration
+            }
+            "idle_timeout_blacklist_threshold" => {
+                runtime.abuse.idle_timeout_threshold = startup.abuse.idle_timeout_threshold
+            }
+            "idle_timeout_blacklist_window_secs" => {
+                runtime.abuse.idle_timeout_window = startup.abuse.idle_timeout_window
+            }
+            "flap_blacklist_threshold" => {
+                runtime.abuse.flap_threshold = startup.abuse.flap_threshold
+            }
             "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
-            "flap_max_connection_age_secs" => runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age,
-            "connect_rate_threshold" => runtime.abuse.connect_rate_threshold = startup.abuse.connect_rate_threshold,
-            "connect_rate_window_secs" => runtime.abuse.connect_rate_window = startup.abuse.connect_rate_window,
-            "max_penalty_duration_secs" => runtime.abuse.max_penalty_duration = startup.abuse.max_penalty_duration,
-            "penalty_decay_interval_secs" => runtime.abuse.penalty_decay_interval = startup.abuse.penalty_decay_interval,
+            "flap_max_connection_age_secs" => {
+                runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age
+            }
+            "connect_rate_threshold" => {
+                runtime.abuse.connect_rate_threshold = startup.abuse.connect_rate_threshold
+            }
+            "connect_rate_window_secs" => {
+                runtime.abuse.connect_rate_window = startup.abuse.connect_rate_window
+            }
+            "max_penalty_duration_secs" => {
+                runtime.abuse.max_penalty_duration = startup.abuse.max_penalty_duration
+            }
+            "penalty_decay_interval_secs" => {
+                runtime.abuse.penalty_decay_interval = startup.abuse.penalty_decay_interval
+            }
             "max_connections" => runtime.max_connections = startup.max_connections,
             _ => {
                 return Err(RuntimeConfigError {
@@ -1672,7 +1681,8 @@ impl Driver {
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -1711,10 +1721,12 @@ impl Driver {
         &self,
         key: &'a str,
     ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
-        let rest = key.strip_prefix("backbone_client.").ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::UnknownKey,
-            message: format!("unknown runtime-config key '{}'", key),
-        })?;
+        let rest = key
+            .strip_prefix("backbone_client.")
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            })?;
         rest.split_once('.').ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::UnknownKey,
             message: format!("unknown runtime-config key '{}'", key),
@@ -1843,7 +1855,8 @@ impl Driver {
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -1899,10 +1912,13 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
-        let handle = self.tcp_client_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("tcp client interface '{}' not found", name),
-        })?;
+        let handle = self
+            .tcp_client_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp client interface '{}' not found", name),
+            })?;
         let mut runtime = handle.runtime.lock().unwrap();
         match setting {
             "connect_timeout_secs" => {
@@ -1930,10 +1946,13 @@ impl Driver {
     #[cfg(feature = "iface-tcp")]
     fn reset_tcp_client_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
-        let handle = self.tcp_client_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("tcp client interface '{}' not found", name),
-        })?;
+        let handle = self
+            .tcp_client_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp client interface '{}' not found", name),
+            })?;
         let mut runtime = handle.runtime.lock().unwrap();
         let startup = handle.startup.clone();
         match setting {
@@ -1975,7 +1994,8 @@ impl Driver {
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -2115,7 +2135,8 @@ impl Driver {
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -2180,7 +2201,9 @@ impl Driver {
             "announce_interval_secs" => {
                 runtime.announce_interval_secs = Self::expect_f64(value, key)?.max(0.1)
             }
-            "peer_timeout_secs" => runtime.peer_timeout_secs = Self::expect_f64(value, key)?.max(0.1),
+            "peer_timeout_secs" => {
+                runtime.peer_timeout_secs = Self::expect_f64(value, key)?.max(0.1)
+            }
             "peer_job_interval_secs" => {
                 runtime.peer_job_interval_secs = Self::expect_f64(value, key)?.max(0.1)
             }
@@ -2204,9 +2227,13 @@ impl Driver {
         let mut runtime = handle.runtime.lock().unwrap();
         let startup = handle.startup.clone();
         match setting {
-            "announce_interval_secs" => runtime.announce_interval_secs = startup.announce_interval_secs,
+            "announce_interval_secs" => {
+                runtime.announce_interval_secs = startup.announce_interval_secs
+            }
             "peer_timeout_secs" => runtime.peer_timeout_secs = startup.peer_timeout_secs,
-            "peer_job_interval_secs" => runtime.peer_job_interval_secs = startup.peer_job_interval_secs,
+            "peer_job_interval_secs" => {
+                runtime.peer_job_interval_secs = startup.peer_job_interval_secs
+            }
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -2286,7 +2313,8 @@ impl Driver {
         let mut runtime = handle.runtime.lock().unwrap();
         match setting {
             "reconnect_wait_secs" => {
-                runtime.reconnect_wait = Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
+                runtime.reconnect_wait =
+                    Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
                 Ok(())
             }
             _ => Err(RuntimeConfigError {
@@ -2386,7 +2414,8 @@ impl Driver {
         let mut runtime = handle.runtime.lock().unwrap();
         match setting {
             "respawn_delay_secs" => {
-                runtime.respawn_delay = Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
+                runtime.respawn_delay =
+                    Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
                 Ok(())
             }
             _ => Err(RuntimeConfigError {
@@ -2450,7 +2479,8 @@ impl Driver {
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -2570,7 +2600,9 @@ impl Driver {
             "frequency_hz" => runtime.sub.frequency = Self::expect_u64(value, key)? as u32,
             "bandwidth_hz" => runtime.sub.bandwidth = Self::expect_u64(value, key)? as u32,
             "txpower_dbm" => runtime.sub.txpower = Self::expect_i64(value, key)? as i8,
-            "spreading_factor" => runtime.sub.spreading_factor = Self::expect_u64(value, key)? as u8,
+            "spreading_factor" => {
+                runtime.sub.spreading_factor = Self::expect_u64(value, key)? as u8
+            }
             "coding_rate" => runtime.sub.coding_rate = Self::expect_u64(value, key)? as u8,
             "st_alock_pct" => {
                 runtime.sub.st_alock = match value {
@@ -2672,7 +2704,8 @@ impl Driver {
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
                           apply_mode: RuntimeConfigApplyMode,
-                          description: &str| -> RuntimeConfigEntry {
+                          description: &str|
+         -> RuntimeConfigEntry {
             RuntimeConfigEntry {
                 key: key.to_string(),
                 source: if value == default {
@@ -2688,7 +2721,10 @@ impl Driver {
         };
         match setting {
             "enabled" => {
-                let entry = self.interfaces.values().find(|entry| entry.info.name == name)?;
+                let entry = self
+                    .interfaces
+                    .values()
+                    .find(|entry| entry.info.name == name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Bool(entry.enabled),
                     RuntimeConfigValue::Bool(true),
@@ -2864,8 +2900,12 @@ impl Driver {
             RuntimeConfigValue::Int(v) if *v >= 0 && *v <= u8::MAX as i64 => Some(*v as u8),
             RuntimeConfigValue::String(s) => match s.to_ascii_lowercase().as_str() {
                 "full" => Some(rns_core::constants::MODE_FULL),
-                "access_point" | "accesspoint" | "ap" => Some(rns_core::constants::MODE_ACCESS_POINT),
-                "point_to_point" | "pointtopoint" | "ptp" => Some(rns_core::constants::MODE_POINT_TO_POINT),
+                "access_point" | "accesspoint" | "ap" => {
+                    Some(rns_core::constants::MODE_ACCESS_POINT)
+                }
+                "point_to_point" | "pointtopoint" | "ptp" => {
+                    Some(rns_core::constants::MODE_POINT_TO_POINT)
+                }
                 "roaming" => Some(rns_core::constants::MODE_ROAMING),
                 "boundary" => Some(rns_core::constants::MODE_BOUNDARY),
                 "gateway" | "gw" => Some(rns_core::constants::MODE_GATEWAY),
@@ -2875,10 +2915,7 @@ impl Driver {
         }
     }
 
-    fn apply_interface_ifac_runtime(
-        entry: &mut InterfaceEntry,
-        config: &IfacRuntimeConfig,
-    ) {
+    fn apply_interface_ifac_runtime(entry: &mut InterfaceEntry, config: &IfacRuntimeConfig) {
         entry.ifac = if config.netname.is_some() || config.netkey.is_some() {
             Some(ifac::derive_ifac(
                 config.netname.as_deref(),
@@ -2911,13 +2948,13 @@ impl Driver {
                 entry.enabled = Self::expect_bool(value, key)?;
             }
             "ifac_netname" => {
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
                 runtime.netname = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -2931,13 +2968,13 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
                 runtime.netkey = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -2951,14 +2988,15 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
-                runtime.size = (Self::expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
+                runtime.size =
+                    (Self::expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "mode" => {
@@ -2986,8 +3024,12 @@ impl Driver {
                     }
                 };
             }
-            "announce_rate_grace" => entry.info.announce_rate_grace = Self::expect_u64(value, key)? as u32,
-            "announce_rate_penalty" => entry.info.announce_rate_penalty = Self::expect_f64(value, key)?,
+            "announce_rate_grace" => {
+                entry.info.announce_rate_grace = Self::expect_u64(value, key)? as u32
+            }
+            "announce_rate_penalty" => {
+                entry.info.announce_rate_penalty = Self::expect_f64(value, key)?
+            }
             "announce_cap" => entry.info.announce_cap = Self::expect_f64(value, key)?,
             "ingress_control" => entry.info.ingress_control = Self::expect_bool(value, key)?,
             _ => {
@@ -3002,12 +3044,19 @@ impl Driver {
         Ok(())
     }
 
-    fn reset_generic_interface_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    fn reset_generic_interface_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_generic_interface_runtime_key(key)?;
-        let startup = self.interface_runtime_defaults.get(name).cloned().ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("interface '{}' not found", name),
-        })?;
+        let startup =
+            self.interface_runtime_defaults
+                .get(name)
+                .cloned()
+                .ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::NotFound,
+                    message: format!("interface '{}' not found", name),
+                })?;
         let entry = self
             .interfaces
             .values_mut()
@@ -3019,63 +3068,67 @@ impl Driver {
         match setting {
             "enabled" => entry.enabled = true,
             "ifac_netname" => {
-                let startup_ifac = self
-                    .interface_ifac_runtime_defaults
-                    .get(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac =
+                    self.interface_ifac_runtime_defaults
+                        .get(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
                 runtime.netname = startup_ifac.netname.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
-                let startup_ifac = self
-                    .interface_ifac_runtime_defaults
-                    .get(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac =
+                    self.interface_ifac_runtime_defaults
+                        .get(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
                 runtime.netkey = startup_ifac.netkey.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
-                let startup_ifac = self
-                    .interface_ifac_runtime_defaults
-                    .get(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
-                let runtime = self
-                    .interface_ifac_runtime
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac =
+                    self.interface_ifac_runtime_defaults
+                        .get(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
+                let runtime =
+                    self.interface_ifac_runtime
+                        .get_mut(name)
+                        .ok_or(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        })?;
                 runtime.size = startup_ifac.size;
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "mode" => entry.info.mode = startup.mode,
-            "announce_rate_target" => entry.info.announce_rate_target = startup.announce_rate_target,
+            "announce_rate_target" => {
+                entry.info.announce_rate_target = startup.announce_rate_target
+            }
             "announce_rate_grace" => entry.info.announce_rate_grace = startup.announce_rate_grace,
-            "announce_rate_penalty" => entry.info.announce_rate_penalty = startup.announce_rate_penalty,
+            "announce_rate_penalty" => {
+                entry.info.announce_rate_penalty = startup.announce_rate_penalty
+            }
             "announce_cap" => entry.info.announce_cap = startup.announce_cap,
             "ingress_control" => entry.info.ingress_control = startup.ingress_control,
             _ => {
@@ -3111,7 +3164,8 @@ impl Driver {
             let make_entry = |value: RuntimeConfigValue,
                               default: RuntimeConfigValue,
                               apply_mode: RuntimeConfigApplyMode,
-                              description: &str| -> RuntimeConfigEntry {
+                              description: &str|
+             -> RuntimeConfigEntry {
                 RuntimeConfigEntry {
                     key: key.to_string(),
                     source: if value == default {
@@ -3270,10 +3324,13 @@ impl Driver {
         ) {
             return self.set_tcp_server_discovery_runtime_config(key, value);
         }
-        let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("tcp server interface '{}' not found", name),
-        })?;
+        let handle = self
+            .tcp_server_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp server interface '{}' not found", name),
+            })?;
         let mut runtime = handle.runtime.lock().unwrap();
         match setting {
             "max_connections" => {
@@ -3303,10 +3360,13 @@ impl Driver {
         ) {
             return self.reset_tcp_server_discovery_runtime_config(key);
         }
-        let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("tcp server interface '{}' not found", name),
-        })?;
+        let handle = self
+            .tcp_server_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp server interface '{}' not found", name),
+            })?;
         let mut runtime = handle.runtime.lock().unwrap();
         let startup = handle.startup.clone();
         match setting {
@@ -3364,9 +3424,7 @@ impl Driver {
                 handle.current.config.stamp_value = raw as u8;
             }
             "latitude" => handle.current.config.latitude = Self::expect_optional_f64(value, key)?,
-            "longitude" => {
-                handle.current.config.longitude = Self::expect_optional_f64(value, key)?
-            }
+            "longitude" => handle.current.config.longitude = Self::expect_optional_f64(value, key)?,
             "height" => handle.current.config.height = Self::expect_optional_f64(value, key)?,
             _ => {
                 return Err(RuntimeConfigError {
@@ -3945,9 +4003,7 @@ impl Driver {
                     // Periodic discovery cleanup
                     if self.discover_interfaces {
                         self.discovery_cleanup_counter += 1;
-                        if self.discovery_cleanup_counter
-                            >= self.discovery_cleanup_interval_ticks
-                        {
+                        if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
                             self.discovery_cleanup_counter = 0;
                             if let Ok(removed) = self.discovered_interfaces.cleanup() {
                                 if removed > 0 {
@@ -3962,8 +4018,7 @@ impl Driver {
 
                     // Periodic known-destinations cleanup
                     self.cache_cleanup_counter += 1;
-                    if self.cache_cleanup_counter
-                        >= self.known_destinations_cleanup_interval_ticks
+                    if self.cache_cleanup_counter >= self.known_destinations_cleanup_interval_ticks
                     {
                         self.cache_cleanup_counter = 0;
 
@@ -4002,7 +4057,9 @@ impl Driver {
                         >= self.announce_cache_cleanup_interval_ticks
                     {
                         self.announce_cache_cleanup_counter = 0;
-                        if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
+                        if self.announce_cache.is_some()
+                            && self.cache_cleanup_active_hashes.is_none()
+                        {
                             self.cache_cleanup_active_hashes =
                                 Some(self.engine.active_packet_hashes());
                             self.cache_cleanup_entries = None;
@@ -4017,7 +4074,10 @@ impl Driver {
                                 match cache.entries() {
                                     Ok(entries) => self.cache_cleanup_entries = Some(entries),
                                     Err(e) => {
-                                        log::warn!("Announce cache cleanup failed to open directory: {}", e);
+                                        log::warn!(
+                                            "Announce cache cleanup failed to open directory: {}",
+                                            e
+                                        );
                                         self.cache_cleanup_active_hashes = None;
                                         self.cache_cleanup_entries = None;
                                     }
@@ -4627,10 +4687,9 @@ impl Driver {
                 } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let result =
-                            self.update_hook_program(&name, &attach_point, |program| {
-                                program.enabled = enabled;
-                            });
+                        let result = self.update_hook_program(&name, &attach_point, |program| {
+                            program.enabled = enabled;
+                        });
                         if result.is_ok() {
                             log::info!(
                                 "{} hook '{}' at point {}",
@@ -4655,10 +4714,9 @@ impl Driver {
                 } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let result =
-                            self.update_hook_program(&name, &attach_point, |program| {
-                                program.priority = priority;
-                            });
+                        let result = self.update_hook_program(&name, &attach_point, |program| {
+                            program.priority = priority;
+                        });
                         if result.is_ok() {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
                                 .expect("validated hook point");
@@ -4938,24 +4996,24 @@ impl Driver {
             QueryRequest::GetRuntimeConfig { key } => {
                 QueryResponse::RuntimeConfigEntry(self.runtime_config_entry(&key))
             }
-            QueryRequest::BackbonePeerState { interface_name } => {
-                QueryResponse::BackbonePeerState(self.list_backbone_peer_state(interface_name.as_deref()))
-            }
+            QueryRequest::BackbonePeerState { interface_name } => QueryResponse::BackbonePeerState(
+                self.list_backbone_peer_state(interface_name.as_deref()),
+            ),
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
-            QueryRequest::SetRuntimeConfig { .. } => QueryResponse::RuntimeConfigSet(Err(
-                RuntimeConfigError {
+            QueryRequest::SetRuntimeConfig { .. } => {
+                QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::Unsupported,
                     message: "mutating runtime config is handled separately".to_string(),
-                },
-            )),
-            QueryRequest::ResetRuntimeConfig { .. } => QueryResponse::RuntimeConfigReset(Err(
-                RuntimeConfigError {
+                }))
+            }
+            QueryRequest::ResetRuntimeConfig { .. } => {
+                QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::Unsupported,
                     message: "mutating runtime config is handled separately".to_string(),
-                },
-            )),
+                }))
+            }
             QueryRequest::ClearBackbonePeerState { .. } => {
                 QueryResponse::ClearBackbonePeerState(false)
             }
@@ -5127,38 +5185,32 @@ impl Driver {
             }
             QueryRequest::SetRuntimeConfig { key, value } => {
                 let result = match key.as_str() {
-                    "global.tick_interval_ms" => {
-                        match Self::expect_u64(value, &key) {
-                            Ok(value) => {
-                                let clamped = value.clamp(100, 10_000);
-                                self.tick_interval_ms.store(clamped, Ordering::Relaxed);
-                                Ok(())
-                            }
-                            Err(err) => Err(err),
+                    "global.tick_interval_ms" => match Self::expect_u64(value, &key) {
+                        Ok(value) => {
+                            let clamped = value.clamp(100, 10_000);
+                            self.tick_interval_ms.store(clamped, Ordering::Relaxed);
+                            Ok(())
                         }
-                    }
-                    "global.known_destinations_ttl_secs" => {
-                        match Self::expect_f64(value, &key) {
-                            Ok(value) => {
-                                self.known_destinations_ttl = value;
-                                Ok(())
-                            }
-                            Err(err) => Err(err),
+                        Err(err) => Err(err),
+                    },
+                    "global.known_destinations_ttl_secs" => match Self::expect_f64(value, &key) {
+                        Ok(value) => {
+                            self.known_destinations_ttl = value;
+                            Ok(())
                         }
-                    }
-                    "global.rate_limiter_ttl_secs" => {
-                        match Self::expect_f64(value, &key) {
-                            Ok(value) if value >= 0.0 => {
-                                self.rate_limiter_ttl_secs = value;
-                                Ok(())
-                            }
-                            Ok(_) => Err(RuntimeConfigError {
-                                code: RuntimeConfigErrorCode::InvalidValue,
-                                message: format!("{} must be >= 0", key),
-                            }),
-                            Err(err) => Err(err),
+                        Err(err) => Err(err),
+                    },
+                    "global.rate_limiter_ttl_secs" => match Self::expect_f64(value, &key) {
+                        Ok(value) if value >= 0.0 => {
+                            self.rate_limiter_ttl_secs = value;
+                            Ok(())
                         }
-                    }
+                        Ok(_) => Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidValue,
+                            message: format!("{} must be >= 0", key),
+                        }),
+                        Err(err) => Err(err),
+                    },
                     "global.known_destinations_cleanup_interval_ticks" => {
                         match Self::expect_u64(value, &key) {
                             Ok(value) if value > 0 => {
@@ -5237,40 +5289,37 @@ impl Driver {
                         Ok(())
                     }
                     #[cfg(feature = "rns-hooks")]
-                    "provider.queue_max_events" => {
-                        match Self::expect_u64(value, &key) {
-                            Ok(v) if v > 0 => {
-                                if let Some(ref bridge) = self.provider_bridge {
-                                    bridge.set_queue_max_events(v as usize);
-                                }
-                                Ok(())
+                    "provider.queue_max_events" => match Self::expect_u64(value, &key) {
+                        Ok(v) if v > 0 => {
+                            if let Some(ref bridge) = self.provider_bridge {
+                                bridge.set_queue_max_events(v as usize);
                             }
-                            Ok(_) => Err(RuntimeConfigError {
-                                code: RuntimeConfigErrorCode::InvalidValue,
-                                message: format!("{} must be >= 1", key),
-                            }),
-                            Err(err) => Err(err),
+                            Ok(())
                         }
-                    }
+                        Ok(_) => Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidValue,
+                            message: format!("{} must be >= 1", key),
+                        }),
+                        Err(err) => Err(err),
+                    },
                     #[cfg(feature = "rns-hooks")]
-                    "provider.queue_max_bytes" => {
-                        match Self::expect_u64(value, &key) {
-                            Ok(v) if v > 0 => {
-                                if let Some(ref bridge) = self.provider_bridge {
-                                    bridge.set_queue_max_bytes(v as usize);
-                                }
-                                Ok(())
+                    "provider.queue_max_bytes" => match Self::expect_u64(value, &key) {
+                        Ok(v) if v > 0 => {
+                            if let Some(ref bridge) = self.provider_bridge {
+                                bridge.set_queue_max_bytes(v as usize);
                             }
-                            Ok(_) => Err(RuntimeConfigError {
-                                code: RuntimeConfigErrorCode::InvalidValue,
-                                message: format!("{} must be >= 1", key),
-                            }),
-                            Err(err) => Err(err),
+                            Ok(())
                         }
-                    }
+                        Ok(_) => Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidValue,
+                            message: format!("{} must be >= 1", key),
+                        }),
+                        Err(err) => Err(err),
+                    },
                     #[cfg(feature = "iface-backbone")]
-                    _ if key.starts_with("backbone.") => self
-                        .set_backbone_runtime_config(&key, value),
+                    _ if key.starts_with("backbone.") => {
+                        self.set_backbone_runtime_config(&key, value)
+                    }
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone_client.") => {
                         self.set_backbone_client_runtime_config(&key, value)
@@ -7200,7 +7249,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let (callbacks, _, _, _, _, _) = MockCallbacks::new();
         let (tx, rx) = event::channel();
@@ -7644,7 +7697,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7682,7 +7739,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7714,7 +7775,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7751,7 +7816,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7788,7 +7857,11 @@ mod tests {
                 identity_hash: Some([0x42; 16]),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7818,7 +7891,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7839,7 +7916,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7882,7 +7963,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7926,7 +8011,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -7977,7 +8066,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8026,7 +8119,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8072,7 +8169,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8112,7 +8213,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8152,7 +8257,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8185,7 +8294,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8224,7 +8337,11 @@ mod tests {
                 identity_hash: Some([0x42; 16]),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8264,7 +8381,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8315,7 +8436,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8365,7 +8490,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8413,7 +8542,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8466,7 +8599,11 @@ mod tests {
                 identity_hash: Some([0xAA; 16]),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8497,7 +8634,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8526,7 +8667,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8555,7 +8700,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8588,7 +8737,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8621,7 +8774,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8656,7 +8813,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8689,7 +8850,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8732,7 +8897,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8783,7 +8952,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8829,7 +9002,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8880,7 +9057,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8927,7 +9108,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -8961,7 +9146,11 @@ mod tests {
                 identity_hash: Some(identity_hash),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -9768,7 +9957,14 @@ mod tests {
         };
         assert_eq!(entry.value, RuntimeConfigValue::String("mesh".into()));
         assert_eq!(
-            driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.as_ref().unwrap().size,
+            driver
+                .interfaces
+                .get(&InterfaceId(1))
+                .unwrap()
+                .ifac
+                .as_ref()
+                .unwrap()
+                .size,
             16
         );
 
@@ -9779,10 +9975,7 @@ mod tests {
         let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
             panic!("expected set ok");
         };
-        assert_eq!(
-            entry.value,
-            RuntimeConfigValue::String("<redacted>".into())
-        );
+        assert_eq!(entry.value, RuntimeConfigValue::String("<redacted>".into()));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "interface.public.ifac_size_bytes".into(),
@@ -9792,7 +9985,13 @@ mod tests {
             panic!("expected set ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(24));
-        let ifac = driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.as_ref().unwrap();
+        let ifac = driver
+            .interfaces
+            .get(&InterfaceId(1))
+            .unwrap()
+            .ifac
+            .as_ref()
+            .unwrap();
         assert_eq!(ifac.size, 24);
 
         let response = driver.handle_query(QueryRequest::GetRuntimeConfig {
@@ -9801,10 +10000,7 @@ mod tests {
         let QueryResponse::RuntimeConfigEntry(Some(entry)) = response else {
             panic!("expected runtime config entry");
         };
-        assert_eq!(
-            entry.value,
-            RuntimeConfigValue::String("<redacted>".into())
-        );
+        assert_eq!(entry.value, RuntimeConfigValue::String("<redacted>".into()));
 
         let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
             key: "interface.public.ifac_netname".into(),
@@ -9813,7 +10009,12 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
-        assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_some());
+        assert!(driver
+            .interfaces
+            .get(&InterfaceId(1))
+            .unwrap()
+            .ifac
+            .is_some());
 
         let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
             key: "interface.public.ifac_passphrase".into(),
@@ -9822,7 +10023,12 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
-        assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_none());
+        assert!(driver
+            .interfaces
+            .get(&InterfaceId(1))
+            .unwrap()
+            .ifac
+            .is_none());
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -9854,10 +10060,7 @@ mod tests {
             panic!("expected set ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(4096));
-        assert_eq!(
-            entry.source,
-            RuntimeConfigSource::RuntimeOverride,
-        );
+        assert_eq!(entry.source, RuntimeConfigSource::RuntimeOverride,);
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "provider.queue_max_bytes".into(),
@@ -9873,10 +10076,7 @@ mod tests {
             key: "provider.queue_max_events".into(),
             value: RuntimeConfigValue::Int(0),
         });
-        assert!(matches!(
-            response,
-            QueryResponse::RuntimeConfigSet(Err(_))
-        ));
+        assert!(matches!(response, QueryResponse::RuntimeConfigSet(Err(_))));
 
         // Reset
         let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
@@ -9907,7 +10107,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -9963,7 +10167,11 @@ mod tests {
                 identity_hash: Some(identity_hash),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10005,7 +10213,11 @@ mod tests {
                 identity_hash: Some(identity_hash),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10046,7 +10258,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10092,7 +10308,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10147,7 +10367,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10211,7 +10435,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10258,7 +10486,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10329,7 +10561,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10375,7 +10611,11 @@ mod tests {
                 identity_hash: Some([0xBB; 16]),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10432,7 +10672,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10461,7 +10705,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10497,7 +10745,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10530,7 +10782,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10581,7 +10837,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10655,7 +10915,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10718,7 +10982,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10795,7 +11063,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10887,7 +11159,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -10978,7 +11254,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11054,7 +11334,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11153,7 +11437,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11230,7 +11518,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11310,7 +11602,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -11341,7 +11637,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -11378,7 +11678,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -11417,7 +11721,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -11443,7 +11751,11 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -11502,7 +11814,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11544,7 +11860,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11629,7 +11949,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11663,7 +11987,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11728,7 +12056,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11840,7 +12172,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx2,
             tx2.clone(),
@@ -11895,7 +12231,11 @@ mod tests {
                 identity_hash: Some([0x42; 16]),
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -11933,7 +12273,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -12005,7 +12349,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -12050,7 +12398,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -12094,7 +12446,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -12154,7 +12510,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),
@@ -12226,7 +12586,11 @@ mod tests {
                 identity_hash: None,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             },
             rx,
             tx.clone(),

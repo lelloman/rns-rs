@@ -42,8 +42,8 @@ impl Args {
                     // Boolean flags that don't take values
                     match key.as_str() {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
-                        | "blackholed" | "daemon" | "disable-auth" | "json"
-                        | "value-only" | "keys-only" => {
+                        | "blackholed" | "daemon" | "disable-auth" | "json" | "value-only"
+                        | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {

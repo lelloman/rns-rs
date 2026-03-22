@@ -46,7 +46,8 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
             if json_output {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&pickle_list_to_json(&response)).unwrap_or_default()
+                    serde_json::to_string_pretty(&pickle_list_to_json(&response))
+                        .unwrap_or_default()
                 );
             } else {
                 print_blacklist(&response);
@@ -111,7 +112,10 @@ fn print_blacklist(response: &PickleValue) {
     );
     println!("{}", "-".repeat(128));
     for entry in entries {
-        let interface = entry.get("interface").and_then(|v| v.as_str()).unwrap_or("-");
+        let interface = entry
+            .get("interface")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
         let ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("-");
         let connected = entry
             .get("connected_count")
@@ -216,7 +220,10 @@ fn connect(config_path: Option<&str>) -> RpcClient {
     };
 
     let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-    let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rns_config.reticulum.instance_control_port);
+    let rpc_addr = RpcAddr::Tcp(
+        "127.0.0.1".into(),
+        rns_config.reticulum.instance_control_port,
+    );
     match RpcClient::connect(&rpc_addr, &auth_key) {
         Ok(client) => client,
         Err(e) => {

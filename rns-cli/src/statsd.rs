@@ -276,10 +276,7 @@ impl StatsAggregator {
                             interface_id: p.interface_id,
                         }),
                         None => {
-                            log::warn!(
-                                "invalid announce payload length: {}",
-                                event.payload.len()
-                            );
+                            log::warn!("invalid announce payload length: {}", event.payload.len());
                         }
                     }
                     return;
@@ -468,10 +465,7 @@ impl StatsDb {
                 if inserted == 0 {
                     continue;
                 }
-                id_stmt.execute(params![
-                    rec.identity_hash.as_slice(),
-                    now,
-                ])?;
+                id_stmt.execute(params![rec.identity_hash.as_slice(), now,])?;
                 dest_stmt.execute(params![
                     rec.destination_hash.as_slice(),
                     rec.identity_hash.as_slice(),
@@ -480,10 +474,7 @@ impl StatsDb {
                     rec.hops as i64,
                     rec.interface_id as i64,
                 ])?;
-                name_stmt.execute(params![
-                    rec.name_hash.as_slice(),
-                    now,
-                ])?;
+                name_stmt.execute(params![rec.name_hash.as_slice(), now,])?;
             }
         }
         tx.commit()
@@ -866,9 +857,7 @@ mod tests {
 
         let id_count: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM seen_identities", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT COUNT(*) FROM seen_identities", [], |row| row.get(0))
             .unwrap();
         assert_eq!(id_count, 1);
 
@@ -921,21 +910,17 @@ mod tests {
         // Should only count as 1 unique announce
         let count: i64 = db
             .conn
-            .query_row(
-                "SELECT announce_count FROM seen_identities",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT announce_count FROM seen_identities", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 1);
 
         let count: i64 = db
             .conn
-            .query_row(
-                "SELECT announce_count FROM seen_destinations",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT announce_count FROM seen_destinations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 1);
 
@@ -968,11 +953,9 @@ mod tests {
 
         let count: i64 = db
             .conn
-            .query_row(
-                "SELECT announce_count FROM seen_destinations",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT announce_count FROM seen_destinations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(count, 2);
 

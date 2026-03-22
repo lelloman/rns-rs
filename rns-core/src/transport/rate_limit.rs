@@ -39,9 +39,8 @@ impl AnnounceRateLimiter {
         ttl_secs: f64,
     ) -> usize {
         let before = self.table.len();
-        self.table.retain(|k, entry| {
-            active_destinations.contains(k) || now - entry.last < ttl_secs
-        });
+        self.table
+            .retain(|k, entry| active_destinations.contains(k) || now - entry.last < ttl_secs);
         before - self.table.len()
     }
 

@@ -610,7 +610,8 @@ fn start_test_pair() -> TestPair {
         tls_key: None,
     };
 
-    let ifaces_a = vec![InterfaceConfig { name: String::new(),
+    let ifaces_a = vec![InterfaceConfig {
+        name: String::new(),
         type_name: "TCPServerInterface".to_string(),
         config_data: Box::new(TcpServerConfig {
             name: "Test TCP Server".into(),
@@ -639,7 +640,8 @@ fn start_test_pair() -> TestPair {
         tls_key: None,
     };
 
-    let ifaces_b = vec![InterfaceConfig { name: String::new(),
+    let ifaces_b = vec![InterfaceConfig {
+        name: String::new(),
         type_name: "TCPClientInterface".to_string(),
         config_data: Box::new(TcpClientConfig {
             name: "Test TCP Client".into(),

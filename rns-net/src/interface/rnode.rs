@@ -273,7 +273,11 @@ pub fn start(
     {
         let mut runtime = config.runtime.lock().unwrap();
         runtime.writer = Some(shared_writer.clone());
-        runtime.sub = config.subinterfaces.first().cloned().unwrap_or(runtime.sub.clone());
+        runtime.sub = config
+            .subinterfaces
+            .first()
+            .cloned()
+            .unwrap_or(runtime.sub.clone());
     }
     let reader_config = config.clone();
     let reader_flow_states = flow_states;

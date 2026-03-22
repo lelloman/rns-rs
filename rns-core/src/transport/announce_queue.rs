@@ -158,10 +158,7 @@ impl AnnounceQueues {
         bitrate: Option<u64>,
         announce_cap: f64,
     ) -> Option<TransportAction> {
-        let queue = self
-            .queues
-            .entry(interface)
-            .or_default();
+        let queue = self.queues.entry(interface).or_default();
 
         // If no bitrate, no cap applies — send immediately
         let bitrate = match bitrate {

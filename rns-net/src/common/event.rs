@@ -354,13 +354,19 @@ pub enum QueryRequest {
     /// Get a single runtime-config entry by key.
     GetRuntimeConfig { key: String },
     /// Set a runtime-config value by key.
-    SetRuntimeConfig { key: String, value: RuntimeConfigValue },
+    SetRuntimeConfig {
+        key: String,
+        value: RuntimeConfigValue,
+    },
     /// Reset a runtime-config value to its startup/default value.
     ResetRuntimeConfig { key: String },
     /// List live backbone peer state, optionally filtered to one interface.
     BackbonePeerState { interface_name: Option<String> },
     /// Clear live backbone peer state for one interface/IP pair.
-    ClearBackbonePeerState { interface_name: String, peer_ip: IpAddr },
+    ClearBackbonePeerState {
+        interface_name: String,
+        peer_ip: IpAddr,
+    },
 }
 
 /// Responses to queries.

@@ -355,9 +355,9 @@ impl BackbonePeerMonitor {
                 connected_count: state.connected_count,
                 idle_timeout_events: state.idle_timeouts.events.len(),
                 flap_events: state.flaps.events.len(),
-                blacklisted_remaining_secs: state.blacklisted_until.and_then(|until| {
-                    (until > now).then(|| (until - now).as_secs_f64())
-                }),
+                blacklisted_remaining_secs: state
+                    .blacklisted_until
+                    .and_then(|until| (until > now).then(|| (until - now).as_secs_f64())),
                 blacklist_reason: state.blacklist_reason.clone(),
                 reject_count: state.reject_count,
                 penalty_level: state.penalty_level,
@@ -446,24 +446,18 @@ fn poll_loop(
                                     state.reject_count = state.reject_count.saturating_add(1);
                                 }
                                 peer_state.lock().unwrap().upsert_snapshot(&peers);
-                                log::debug!(
-                                    "[{}] rejecting blacklisted peer {}",
-                                    name,
-                                    peer_addr
-                                );
+                                log::debug!("[{}] rejecting blacklisted peer {}", name, peer_addr);
                                 drop(stream);
                                 continue;
                             }
 
                             // Connect-rate abuse detection
-                            if let (Some(threshold), Some(window)) = (
-                                abuse.connect_rate_threshold,
-                                abuse.connect_rate_window,
-                            ) {
+                            if let (Some(threshold), Some(window)) =
+                                (abuse.connect_rate_threshold, abuse.connect_rate_window)
+                            {
                                 let now = Instant::now();
-                                let state = peers
-                                    .entry(peer_ip)
-                                    .or_insert_with(PeerBehaviorState::new);
+                                let state =
+                                    peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
                                 if state.connect_attempts.record(now, window) >= threshold {
                                     apply_penalty(
                                         state,
@@ -515,14 +509,9 @@ fn poll_loop(
 
                             // Register client with poller
                             // SAFETY: stream is stored in ClientState and outlives registration.
-                            if let Err(e) =
-                                unsafe { poller.add(&stream, PollEvent::readable(key)) }
+                            if let Err(e) = unsafe { poller.add(&stream, PollEvent::readable(key)) }
                             {
-                                log::warn!(
-                                    "[{}] failed to add client to poller: {}",
-                                    name,
-                                    e
-                                );
+                                log::warn!("[{}] failed to add client to poller: {}", name, e);
                                 continue; // stream drops, closing socket
                             }
 
@@ -530,26 +519,21 @@ fn poll_loop(
                             let writer_stream = match stream.try_clone() {
                                 Ok(s) => s,
                                 Err(e) => {
-                                    log::warn!(
-                                        "[{}] failed to clone client stream: {}",
-                                        name,
-                                        e
-                                    );
+                                    log::warn!("[{}] failed to clone client stream: {}", name, e);
                                     let _ = poller.delete(&stream);
                                     continue; // stream drops
                                 }
                             };
-                            let writer: Box<dyn Writer> =
-                                Box::new(BackboneWriter {
-                                    stream: writer_stream,
-                                    runtime: Arc::clone(&runtime),
-                                    interface_name: name.clone(),
-                                    interface_id: client_id,
-                                    event_tx: tx.clone(),
-                                    pending: Vec::new(),
-                                    stall_started: None,
-                                    disconnect_notified: false,
-                                });
+                            let writer: Box<dyn Writer> = Box::new(BackboneWriter {
+                                stream: writer_stream,
+                                runtime: Arc::clone(&runtime),
+                                interface_name: name.clone(),
+                                interface_id: client_id,
+                                event_tx: tx.clone(),
+                                pending: Vec::new(),
+                                stall_started: None,
+                                disconnect_notified: false,
+                            });
 
                             clients.insert(
                                 key,
@@ -644,17 +628,17 @@ fn poll_loop(
                 }
 
                 if should_remove {
-                disconnect_client(
-                    &poller,
-                    &mut clients,
-                    &mut peers,
-                    &abuse,
-                    &name,
-                    &tx,
-                    &peer_state,
-                    key,
-                    client_id,
-                    DisconnectReason::RemoteClosed,
+                    disconnect_client(
+                        &poller,
+                        &mut clients,
+                        &mut peers,
+                        &abuse,
+                        &name,
+                        &tx,
+                        &peer_state,
+                        key,
+                        client_id,
+                        DisconnectReason::RemoteClosed,
                     );
                 } else if let Some(client) = clients.get(&key) {
                     // Re-arm client (oneshot semantics)
@@ -809,12 +793,7 @@ fn record_peer_behavior(
         .entry(client.peer_ip)
         .or_insert_with(PeerBehaviorState::new);
 
-    if let (
-        DisconnectReason::IdleTimeout,
-        Some(threshold),
-        Some(window),
-        Some(_),
-    ) = (
+    if let (DisconnectReason::IdleTimeout, Some(threshold), Some(window), Some(_)) = (
         reason,
         abuse.idle_timeout_threshold,
         abuse.idle_timeout_window,
@@ -836,7 +815,13 @@ fn record_peer_behavior(
         let threshold = abuse.flap_threshold.unwrap();
         let window = abuse.flap_window.unwrap();
         if state.flaps.record(now, window) >= threshold {
-            apply_penalty(state, abuse, name, client.peer_ip, "rapid silent reconnect churn");
+            apply_penalty(
+                state,
+                abuse,
+                name,
+                client.peer_ip,
+                "rapid silent reconnect churn",
+            );
         }
     }
 }
@@ -1189,9 +1174,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .or_else(|| params.get("port"))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
-            let max_connections = params
-                .get("max_connections")
-                .and_then(|v| v.parse().ok());
+            let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
             let idle_timeout = parse_positive_duration_secs(params, "idle_timeout");
             let write_stall_timeout = parse_positive_duration_secs(params, "write_stall_timeout");
             let abuse = BackboneAbuseConfig {
@@ -1698,7 +1681,14 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8800));
 
-        let config = make_server_config(port, 88, Some(2), None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(
+            port,
+            88,
+            Some(2),
+            None,
+            None,
+            BackboneAbuseConfig::default(),
+        );
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1737,7 +1727,14 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8900));
 
-        let config = make_server_config(port, 89, Some(1), None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(
+            port,
+            89,
+            Some(1),
+            None,
+            None,
+            BackboneAbuseConfig::default(),
+        );
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1962,7 +1959,9 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        client.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
         let sock = SockRef::from(&client);
         sock.set_recv_buffer_size(4096).ok();
 
@@ -2024,7 +2023,10 @@ mod tests {
                 assert_eq!(config.listen_port, 4242);
                 assert_eq!(config.idle_timeout, Some(Duration::from_secs(15)));
                 assert_eq!(config.write_stall_timeout, Some(Duration::from_secs(45)));
-                assert_eq!(config.abuse.blacklist_duration, Some(Duration::from_secs(120)));
+                assert_eq!(
+                    config.abuse.blacklist_duration,
+                    Some(Duration::from_secs(120))
+                );
                 assert_eq!(config.abuse.idle_timeout_threshold, Some(4));
                 assert_eq!(
                     config.abuse.idle_timeout_window,
@@ -2103,7 +2105,11 @@ mod tests {
             "should have peer state for localhost"
         );
         let entry = &local_entries[0];
-        assert!(entry.penalty_level >= 1, "penalty_level should be >= 1, got {}", entry.penalty_level);
+        assert!(
+            entry.penalty_level >= 1,
+            "penalty_level should be >= 1, got {}",
+            entry.penalty_level
+        );
         assert!(
             entry.blacklisted_remaining_secs.is_some(),
             "peer should be blacklisted"
@@ -2124,19 +2130,28 @@ mod tests {
         // First penalty: 20s
         apply_penalty(&mut state, &abuse, "test", ip, "test reason");
         assert_eq!(state.penalty_level, 1);
-        let remaining1 = state.blacklisted_until.unwrap().duration_since(Instant::now());
+        let remaining1 = state
+            .blacklisted_until
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(remaining1.as_secs() <= 20 && remaining1.as_secs() >= 18);
 
         // Second penalty: 40s
         apply_penalty(&mut state, &abuse, "test", ip, "test reason");
         assert_eq!(state.penalty_level, 2);
-        let remaining2 = state.blacklisted_until.unwrap().duration_since(Instant::now());
+        let remaining2 = state
+            .blacklisted_until
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(remaining2.as_secs() <= 40 && remaining2.as_secs() >= 38);
 
         // Third penalty: 80s
         apply_penalty(&mut state, &abuse, "test", ip, "test reason");
         assert_eq!(state.penalty_level, 3);
-        let remaining3 = state.blacklisted_until.unwrap().duration_since(Instant::now());
+        let remaining3 = state
+            .blacklisted_until
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(remaining3.as_secs() <= 80 && remaining3.as_secs() >= 78);
     }
 
@@ -2156,7 +2171,10 @@ mod tests {
             apply_penalty(&mut state, &abuse, "test", ip, "test");
         }
         assert_eq!(state.penalty_level, 4);
-        let remaining = state.blacklisted_until.unwrap().duration_since(Instant::now());
+        let remaining = state
+            .blacklisted_until
+            .unwrap()
+            .duration_since(Instant::now());
         assert!(remaining.as_secs() <= 100 && remaining.as_secs() >= 98);
     }
 

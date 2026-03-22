@@ -7,12 +7,7 @@ pub trait Callbacks: Send {
 
     fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8);
 
-    fn on_local_delivery(
-        &mut self,
-        dest_hash: DestHash,
-        raw: Vec<u8>,
-        packet_hash: PacketHash,
-    );
+    fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash);
 
     /// Called when an interface comes online.
     fn on_interface_up(&mut self, _id: InterfaceId) {}
@@ -31,12 +26,7 @@ pub trait Callbacks: Send {
     }
 
     /// Called when a link is closed.
-    fn on_link_closed(
-        &mut self,
-        _link_id: LinkId,
-        _reason: Option<TeardownReason>,
-    ) {
-    }
+    fn on_link_closed(&mut self, _link_id: LinkId, _reason: Option<TeardownReason>) {}
 
     /// Called when a remote peer identifies on a link.
     fn on_remote_identified(
@@ -63,13 +53,7 @@ pub trait Callbacks: Send {
     fn on_resource_failed(&mut self, _link_id: LinkId, _error: String) {}
 
     /// Called with resource transfer progress updates.
-    fn on_resource_progress(
-        &mut self,
-        _link_id: LinkId,
-        _received: usize,
-        _total: usize,
-    ) {
-    }
+    fn on_resource_progress(&mut self, _link_id: LinkId, _received: usize, _total: usize) {}
 
     /// Called to ask whether to accept an incoming resource (for AcceptApp strategy).
     /// Return true to accept, false to reject.
@@ -84,43 +68,21 @@ pub trait Callbacks: Send {
     }
 
     /// Called when a channel message is received on a link.
-    fn on_channel_message(
-        &mut self,
-        _link_id: LinkId,
-        _msgtype: u16,
-        _payload: Vec<u8>,
-    ) {
-    }
+    fn on_channel_message(&mut self, _link_id: LinkId, _msgtype: u16, _payload: Vec<u8>) {}
 
     /// Called when generic link data is received.
     fn on_link_data(&mut self, _link_id: LinkId, _context: u8, _data: Vec<u8>) {}
 
     /// Called when a response is received on a link.
-    fn on_response(
-        &mut self,
-        _link_id: LinkId,
-        _request_id: [u8; 16],
-        _data: Vec<u8>,
-    ) {
-    }
+    fn on_response(&mut self, _link_id: LinkId, _request_id: [u8; 16], _data: Vec<u8>) {}
 
     /// Called when a delivery proof is received for a packet we sent.
     /// `rtt` is the round-trip time in seconds.
-    fn on_proof(
-        &mut self,
-        _dest_hash: DestHash,
-        _packet_hash: PacketHash,
-        _rtt: f64,
-    ) {
-    }
+    fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {}
 
     /// Called for ProveApp strategy: should we prove this incoming packet?
     /// Return true to generate and send a proof, false to skip.
-    fn on_proof_requested(
-        &mut self,
-        _dest_hash: DestHash,
-        _packet_hash: PacketHash,
-    ) -> bool {
+    fn on_proof_requested(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash) -> bool {
         true
     }
 
@@ -135,12 +97,7 @@ pub trait Callbacks: Send {
     }
 
     /// Called when a direct P2P connection is established via hole punching.
-    fn on_direct_connect_established(
-        &mut self,
-        _link_id: LinkId,
-        _interface_id: InterfaceId,
-    ) {
-    }
+    fn on_direct_connect_established(&mut self, _link_id: LinkId, _interface_id: InterfaceId) {}
 
     /// Called when a direct connection attempt fails.
     fn on_direct_connect_failed(&mut self, _link_id: LinkId, _reason: u8) {}
