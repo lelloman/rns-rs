@@ -62,7 +62,7 @@ jobs:
 
       - name: Build firmware
         working-directory: rns-esp32
-        run: cargo build --release
+        run: cargo build --features firmware --target xtensa-esp32s3-espidf --release
 
       - name: Create flashable image
         run: |
