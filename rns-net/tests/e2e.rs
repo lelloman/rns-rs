@@ -587,6 +587,9 @@ fn start_transport_node_with_packet_hashlist(
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -663,6 +666,9 @@ fn start_client_node_with_packet_hashlist(
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -735,8 +741,8 @@ fn setup_two_peers_with_packet_hashlist_and_proof(
 
     let bob_identity = Identity::new(&mut OsRng);
     let bob_ih = IdentityHash(*bob_identity.hash());
-    let bob_dest = Destination::single_in(APP_NAME, &["msg", "rx"], bob_ih)
-        .set_proof_strategy(proof_strategy);
+    let bob_dest =
+        Destination::single_in(APP_NAME, &["msg", "rx"], bob_ih).set_proof_strategy(proof_strategy);
 
     let (alice_tx, alice_rx) = mpsc::channel();
     let alice_node = start_client_node_with_packet_hashlist(
@@ -1023,6 +1029,9 @@ fn test_direct_link_no_transport() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1507,6 +1516,9 @@ fn test_plain_message_delivery() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1575,7 +1587,9 @@ fn test_single_duplicate_packet_dropped_until_fifo_eviction() {
     alice_node.send_packet(&dest_to_bob, b"packet-two").unwrap();
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive second unique single packet");
 
-    alice_node.send_packet(&dest_to_bob, b"packet-three").unwrap();
+    alice_node
+        .send_packet(&dest_to_bob, b"packet-three")
+        .unwrap();
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive third unique single packet");
 
     alice_node
@@ -1621,7 +1635,11 @@ fn test_single_duplicate_does_not_refresh_recency() {
     assert_eq!(recv_newer_hash, newer_hash);
 
     alice_node
-        .send_raw(oldest_raw.clone(), rns_core::constants::DESTINATION_SINGLE, None)
+        .send_raw(
+            oldest_raw.clone(),
+            rns_core::constants::DESTINATION_SINGLE,
+            None,
+        )
         .unwrap();
     assert!(
         wait_for_delivery(&bob_rx, Duration::from_millis(500)).is_none(),
@@ -1632,7 +1650,11 @@ fn test_single_duplicate_does_not_refresh_recency() {
     wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive fresh packet");
 
     alice_node
-        .send_raw(newer_raw.clone(), rns_core::constants::DESTINATION_SINGLE, None)
+        .send_raw(
+            newer_raw.clone(),
+            rns_core::constants::DESTINATION_SINGLE,
+            None,
+        )
         .unwrap();
     assert!(
         wait_for_delivery(&bob_rx, Duration::from_millis(500)).is_none(),
@@ -1645,8 +1667,7 @@ fn test_single_duplicate_does_not_refresh_recency() {
     let (_, oldest_raw_again, recv_oldest_hash_again) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("oldest packet should be deliverable again after FIFO eviction");
     assert_eq!(recv_oldest_hash_again, oldest_hash);
-    let decrypted =
-        decrypt_delivery(&oldest_raw_again, &bob_id).expect("Decryption failed");
+    let decrypted = decrypt_delivery(&oldest_raw_again, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"oldest");
 
     alice_node.shutdown();
@@ -1712,6 +1733,9 @@ fn test_group_message_delivery() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1808,6 +1832,9 @@ fn test_group_wrong_key_fails() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2894,6 +2921,9 @@ fn test_udp_announce_and_message() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2945,6 +2975,9 @@ fn test_udp_announce_and_message() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3100,6 +3133,9 @@ fn discovery_announce_received_by_client() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3156,6 +3192,9 @@ fn discovery_announce_received_by_client() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3271,6 +3310,9 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3337,6 +3379,9 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3391,6 +3436,9 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3487,6 +3535,9 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3505,7 +3556,10 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
                 break;
             }
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
-            Err(err) => panic!("Daemon TCP listener on {} did not come up: {}", tcp_port, err),
+            Err(err) => panic!(
+                "Daemon TCP listener on {} did not come up: {}",
+                tcp_port, err
+            ),
         }
     }
 
@@ -3549,12 +3603,9 @@ fn test_issue4_shared_client_announce_reaches_remote() {
     let bob_id = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
-    let bob_dest = Destination::single_in(
-        APP_NAME,
-        &["issue4", "ann"],
-        IdentityHash(*bob_id.hash()),
-    )
-    .set_proof_strategy(ProofStrategy::ProveAll);
+    let bob_dest =
+        Destination::single_in(APP_NAME, &["issue4", "ann"], IdentityHash(*bob_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     bob_node
         .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
         .unwrap();
@@ -3567,12 +3618,9 @@ fn test_issue4_shared_client_announce_reaches_remote() {
         &instance_name,
         Box::new(TestCallbacks::new(alice_tx)),
     );
-    let alice_dest = Destination::single_in(
-        APP_NAME,
-        &["issue4", "ann"],
-        IdentityHash(*alice_id.hash()),
-    )
-    .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["issue4", "ann"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     alice_node
         .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
         .unwrap();
@@ -3620,12 +3668,9 @@ fn test_issue4_shared_client_message_to_remote_peer() {
     let bob_id = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
-    let bob_dest = Destination::single_in(
-        APP_NAME,
-        &["issue4", "msg"],
-        IdentityHash(*bob_id.hash()),
-    )
-    .set_proof_strategy(ProofStrategy::ProveAll);
+    let bob_dest =
+        Destination::single_in(APP_NAME, &["issue4", "msg"], IdentityHash(*bob_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     bob_node
         .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
         .unwrap();
@@ -3638,12 +3683,9 @@ fn test_issue4_shared_client_message_to_remote_peer() {
         &instance_name,
         Box::new(TestCallbacks::new(alice_tx)),
     );
-    let alice_dest = Destination::single_in(
-        APP_NAME,
-        &["issue4", "msg"],
-        IdentityHash(*alice_id.hash()),
-    )
-    .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["issue4", "msg"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     alice_node
         .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
         .unwrap();
@@ -3660,13 +3702,7 @@ fn test_issue4_shared_client_message_to_remote_peer() {
     std::thread::sleep(SETTLE);
 
     // Bob announces so Alice can discover him
-    let bob_announced = announce_with_retry(
-        &bob_node,
-        &bob_dest,
-        &bob_id,
-        Some(b"bob"),
-        &alice_rx,
-    );
+    let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"bob"), &alice_rx);
     assert!(
         bob_announced.is_some(),
         "Alice should receive Bob's announce"
@@ -3722,12 +3758,9 @@ fn test_issue4_remote_peer_message_to_shared_client() {
         &instance_name,
         Box::new(TestCallbacks::new(alice_tx)),
     );
-    let alice_dest = Destination::single_in(
-        APP_NAME,
-        &["issue4", "rev"],
-        IdentityHash(*alice_id.hash()),
-    )
-    .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["issue4", "rev"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     alice_node
         .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
         .unwrap();
@@ -3744,13 +3777,8 @@ fn test_issue4_remote_peer_message_to_shared_client() {
     std::thread::sleep(SETTLE);
 
     // Alice announces so Bob can discover her
-    let alice_announced = announce_with_retry(
-        &alice_node,
-        &alice_dest,
-        &alice_id,
-        Some(b"alice"),
-        &bob_rx,
-    );
+    let alice_announced =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"alice"), &bob_rx);
     assert!(
         alice_announced.is_some(),
         "Bob should receive Alice's announce from shared client"

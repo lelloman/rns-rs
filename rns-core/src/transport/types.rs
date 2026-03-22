@@ -145,6 +145,14 @@ pub struct TransportConfig {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Maximum number of discovery path-request tags remembered for duplicate suppression.
+    pub max_discovery_pr_tags: usize,
+    /// Maximum number of destination hashes retained in the live path table.
+    pub max_path_destinations: usize,
+    /// Maximum number of destination hashes retained across all tunnel entries.
+    pub max_tunnel_destinations_total: usize,
+    /// Retention timeout for tunnel-known destinations, in seconds.
+    pub destination_timeout_secs: f64,
 }
 
 #[cfg(test)]
@@ -167,6 +175,10 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: crate::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
@@ -175,6 +187,13 @@ mod tests {
         assert_eq!(
             cfg.packet_hashlist_max_entries,
             crate::constants::HASHLIST_MAXSIZE
+        );
+        assert_eq!(cfg.max_discovery_pr_tags, crate::constants::MAX_PR_TAGS);
+        assert_eq!(cfg.max_path_destinations, usize::MAX);
+        assert_eq!(cfg.max_tunnel_destinations_total, usize::MAX);
+        assert_eq!(
+            cfg.destination_timeout_secs,
+            crate::constants::DESTINATION_TIMEOUT
         );
     }
 }

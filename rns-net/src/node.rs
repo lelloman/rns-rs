@@ -17,18 +17,17 @@ use crate::config;
 use crate::driver::{Callbacks, Driver};
 use crate::event::{self, Event, EventSender};
 use crate::ifac;
-#[cfg(feature = "iface-local")]
-use crate::interface::local::LocalServerConfig;
-use crate::interface::{InterfaceEntry, InterfaceStats};
+#[cfg(feature = "iface-auto")]
+use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
     client_runtime_handle_from_mode, peer_state_handle_from_mode, runtime_handle_from_mode,
     BackboneMode,
 };
-#[cfg(feature = "iface-auto")]
-use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 #[cfg(feature = "iface-i2p")]
 use crate::interface::i2p::{i2p_runtime_handle_from_config, I2pConfig};
+#[cfg(feature = "iface-local")]
+use crate::interface::local::LocalServerConfig;
 #[cfg(feature = "iface-pipe")]
 use crate::interface::pipe::{pipe_runtime_handle_from_config, PipeConfig};
 #[cfg(feature = "iface-rnode")]
@@ -36,9 +35,12 @@ use crate::interface::rnode::{rnode_runtime_handle_from_config, RNodeConfig};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::{tcp_client_runtime_handle_from_config, TcpClientConfig};
 #[cfg(feature = "iface-tcp")]
-use crate::interface::tcp_server::{runtime_handle_from_config as tcp_runtime_handle_from_config, TcpServerConfig};
+use crate::interface::tcp_server::{
+    runtime_handle_from_config as tcp_runtime_handle_from_config, TcpServerConfig,
+};
 #[cfg(feature = "iface-udp")]
 use crate::interface::udp::{udp_runtime_handle_from_config, UdpConfig};
+use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::storage;
 use crate::time;
 
@@ -166,17 +168,19 @@ fn backbone_discovery_runtime_from_interface(
         BackboneMode::Client(_) => return None,
     };
 
-    let startup_config = discovery.cloned().unwrap_or(crate::discovery::DiscoveryConfig {
-        discovery_name: interface_name.to_string(),
-        announce_interval: 21600,
-        stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
-        reachable_on: None,
-        interface_type: "BackboneInterface".to_string(),
-        listen_port: Some(config.listen_port),
-        latitude: None,
-        longitude: None,
-        height: None,
-    });
+    let startup_config = discovery
+        .cloned()
+        .unwrap_or(crate::discovery::DiscoveryConfig {
+            discovery_name: interface_name.to_string(),
+            announce_interval: 21600,
+            stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+            reachable_on: None,
+            interface_type: "BackboneInterface".to_string(),
+            listen_port: Some(config.listen_port),
+            latitude: None,
+            longitude: None,
+            height: None,
+        });
     let startup = crate::driver::BackboneDiscoveryRuntime {
         discoverable: discovery.is_some(),
         config: startup_config,
@@ -200,17 +204,19 @@ fn tcp_server_discovery_runtime_from_interface(
     transport_enabled: bool,
     ifac: Option<&IfacConfig>,
 ) -> crate::driver::TcpServerDiscoveryRuntimeHandle {
-    let startup_config = discovery.cloned().unwrap_or(crate::discovery::DiscoveryConfig {
-        discovery_name: interface_name.to_string(),
-        announce_interval: 21600,
-        stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
-        reachable_on: None,
-        interface_type: "TCPServerInterface".to_string(),
-        listen_port: Some(config.listen_port),
-        latitude: None,
-        longitude: None,
-        height: None,
-    });
+    let startup_config = discovery
+        .cloned()
+        .unwrap_or(crate::discovery::DiscoveryConfig {
+            discovery_name: interface_name.to_string(),
+            announce_interval: 21600,
+            stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+            reachable_on: None,
+            interface_type: "TCPServerInterface".to_string(),
+            listen_port: Some(config.listen_port),
+            latitude: None,
+            longitude: None,
+            height: None,
+        });
     let startup = crate::driver::TcpServerDiscoveryRuntime {
         discoverable: discovery.is_some(),
         config: startup_config,
@@ -269,6 +275,12 @@ pub struct NodeConfig {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Maximum number of discovery path-request tags remembered.
+    pub max_discovery_pr_tags: usize,
+    /// Maximum number of destination hashes retained in the live path table.
+    pub max_path_destinations: usize,
+    /// Maximum number of retained tunnel-known destinations.
+    pub max_tunnel_destinations_total: usize,
     /// TTL for recalled known destinations without an active path.
     pub known_destinations_ttl: Duration,
     /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
@@ -304,6 +316,9 @@ impl Default for NodeConfig {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             registry: None,
             panic_on_interface_error: false,
@@ -569,6 +584,9 @@ impl RnsNode {
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
             packet_hashlist_max_entries: rns_config.reticulum.packet_hashlist_max_entries,
+            max_discovery_pr_tags: rns_config.reticulum.max_discovery_pr_tags,
+            max_path_destinations: rns_config.reticulum.max_path_destinations,
+            max_tunnel_destinations_total: rns_config.reticulum.max_tunnel_destinations_total,
             known_destinations_ttl: Duration::from_secs(
                 rns_config.reticulum.known_destinations_ttl,
             ),
@@ -611,6 +629,10 @@ impl RnsNode {
             prefer_shorter_path: config.prefer_shorter_path,
             max_paths_per_destination: config.max_paths_per_destination,
             packet_hashlist_max_entries: config.packet_hashlist_max_entries,
+            max_discovery_pr_tags: config.max_discovery_pr_tags,
+            max_path_destinations: config.max_path_destinations,
+            max_tunnel_destinations_total: config.max_tunnel_destinations_total,
+            destination_timeout_secs: config.known_destinations_ttl.as_secs_f64(),
         };
 
         let (tx, rx) = event::channel();
@@ -619,7 +641,8 @@ impl RnsNode {
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
         driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
-        driver.runtime_config_defaults.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
+        driver.runtime_config_defaults.known_destinations_ttl =
+            config.known_destinations_ttl.as_secs_f64();
 
         #[cfg(feature = "rns-hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
@@ -781,9 +804,9 @@ impl RnsNode {
                     .as_any()
                     .downcast_ref::<TcpClientConfig>()
                 {
-                    driver.register_tcp_client_runtime(
-                        tcp_client_runtime_handle_from_config(tcp_config),
-                    );
+                    driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(
+                        tcp_config,
+                    ));
                 }
             }
             #[cfg(feature = "iface-tcp")]
@@ -970,7 +993,8 @@ impl RnsNode {
                         };
 
                         driver.register_interface_runtime_defaults(&sub.info);
-                        driver.register_interface_ifac_runtime(&sub.info.name, ifac_runtime.clone());
+                        driver
+                            .register_interface_ifac_runtime(&sub.info.name, ifac_runtime.clone());
                         driver.engine.register_interface(sub.info.clone());
                         driver.interfaces.insert(
                             sub.id,
@@ -1846,6 +1870,9 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -1884,6 +1911,9 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -1922,6 +1952,9 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2062,7 +2095,8 @@ instance_control_port = {}
 
     #[test]
     fn from_config_starts_rpc_when_transport_enabled() {
-        let dir = std::env::temp_dir().join(format!("rns-test-rpc-transport-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rns-test-rpc-transport-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -2098,7 +2132,8 @@ instance_control_port = {}
 
     #[test]
     fn from_config_starts_rpc_when_tcp_client_is_unreachable() {
-        let dir = std::env::temp_dir().join(format!("rns-test-rpc-unreachable-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rns-test-rpc-unreachable-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -2437,6 +2472,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2484,6 +2522,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2527,6 +2568,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2567,6 +2611,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2614,6 +2661,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2662,6 +2712,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2708,6 +2761,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2765,6 +2821,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2814,6 +2873,9 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]

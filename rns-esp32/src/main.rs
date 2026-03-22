@@ -148,6 +148,10 @@ fn main() {
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
         packet_hashlist_max_entries: 1024,
+        max_discovery_pr_tags: 256,
+        max_path_destinations: 256,
+        max_tunnel_destinations_total: 128,
+        destination_timeout_secs: 24.0 * 60.0 * 60.0,
     };
 
     // Build driver and register interface (once, reused across mode switches)

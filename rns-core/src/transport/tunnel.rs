@@ -184,8 +184,9 @@ impl TunnelTable {
         tunnel_id: [u8; 32],
         interface: InterfaceId,
         now: f64,
+        destination_timeout_secs: f64,
     ) -> Vec<([u8; 16], TunnelPath)> {
-        let expires = now + constants::DESTINATION_TIMEOUT;
+        let expires = now + destination_timeout_secs;
 
         if let Some(entry) = self.tunnels.get_mut(&tunnel_id) {
             // Reattach: update interface and expiry
@@ -227,11 +228,21 @@ impl TunnelTable {
         destination_hash: [u8; 16],
         path: TunnelPath,
         now: f64,
+        destination_timeout_secs: f64,
+        max_destinations_total: usize,
     ) {
+        self.cull(now);
+        let is_new_destination = self
+            .tunnels
+            .get(tunnel_id)
+            .is_some_and(|entry| !entry.paths.contains_key(&destination_hash));
+        if is_new_destination {
+            self.enforce_destination_cap(max_destinations_total, now);
+        }
         if let Some(entry) = self.tunnels.get_mut(tunnel_id) {
             entry.paths.insert(destination_hash, path);
             // Extend tunnel expiry on activity
-            entry.expires = now + constants::DESTINATION_TIMEOUT;
+            entry.expires = now + destination_timeout_secs;
         }
     }
 
@@ -293,6 +304,47 @@ impl TunnelTable {
     /// Iterate over all tunnel entries.
     pub fn iter(&self) -> impl Iterator<Item = (&[u8; 32], &TunnelEntry)> {
         self.tunnels.iter()
+    }
+
+    /// Number of retained tunnel destinations across all tunnels.
+    pub fn path_count(&self) -> usize {
+        self.tunnels.values().map(|entry| entry.paths.len()).sum()
+    }
+
+    fn enforce_destination_cap(&mut self, max_destinations_total: usize, now: f64) {
+        if max_destinations_total == usize::MAX {
+            return;
+        }
+
+        while self.path_count() >= max_destinations_total {
+            let Some((tunnel_id, destination_hash)) = self.oldest_path() else {
+                break;
+            };
+            let mut remove_tunnel = false;
+            if let Some(entry) = self.tunnels.get_mut(&tunnel_id) {
+                entry.paths.remove(&destination_hash);
+                remove_tunnel = entry.paths.is_empty() && entry.expires <= now;
+            }
+            if remove_tunnel {
+                self.tunnels.remove(&tunnel_id);
+            }
+        }
+    }
+
+    fn oldest_path(&self) -> Option<([u8; 32], [u8; 16])> {
+        self.tunnels
+            .iter()
+            .flat_map(|(tunnel_id, entry)| {
+                entry.paths.iter().map(move |(destination_hash, path)| {
+                    (*tunnel_id, *destination_hash, path.timestamp, path.expires)
+                })
+            })
+            .min_by(|a, b| {
+                a.2.partial_cmp(&b.2)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+                    .then_with(|| a.3.partial_cmp(&b.3).unwrap_or(core::cmp::Ordering::Equal))
+            })
+            .map(|(tunnel_id, destination_hash, _, _)| (tunnel_id, destination_hash))
     }
 }
 
@@ -412,7 +464,12 @@ mod tests {
         let tunnel_id = [0x11; 32];
         let now = 1000.0;
 
-        let restored = table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        let restored = table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
         assert!(restored.is_empty());
         assert_eq!(table.len(), 1);
 
@@ -429,7 +486,12 @@ mod tests {
         let now = 1000.0;
 
         // Create tunnel
-        table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
 
         // Add a path
         let dest = [0xAA; 16];
@@ -445,6 +507,8 @@ mod tests {
                 packet_hash: [0xCC; 32],
             },
             now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
 
         // Void interface (disconnect)
@@ -452,7 +516,12 @@ mod tests {
         assert_eq!(table.get(&tunnel_id).unwrap().interface, None);
 
         // Reattach on new interface
-        let restored = table.handle_tunnel(tunnel_id, InterfaceId(2), now + 100.0);
+        let restored = table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(2),
+            now + 100.0,
+            constants::DESTINATION_TIMEOUT,
+        );
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].0, dest);
         assert_eq!(restored[0].1.hops, 3);
@@ -467,7 +536,12 @@ mod tests {
         let tunnel_id = [0x33; 32];
         let now = 1000.0;
 
-        table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
 
         let dest = [0xDD; 16];
         table.store_tunnel_path(
@@ -482,6 +556,8 @@ mod tests {
                 packet_hash: [0xFF; 32],
             },
             now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
 
         let entry = table.get(&tunnel_id).unwrap();
@@ -495,7 +571,12 @@ mod tests {
         let tunnel_id = [0x44; 32];
         let now = 1000.0;
 
-        table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
 
         // Not expired yet
         let removed = table.cull(now + 100.0);
@@ -515,7 +596,12 @@ mod tests {
         let tunnel_id = [0x55; 32];
         let now = 1000.0;
 
-        table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
 
         // Add two paths with different expiry
         let dest1 = [0xAA; 16];
@@ -532,6 +618,8 @@ mod tests {
                 packet_hash: [0; 32],
             },
             now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
         table.store_tunnel_path(
             &tunnel_id,
@@ -545,6 +633,8 @@ mod tests {
                 packet_hash: [0; 32],
             },
             now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
 
         // Cull: dest1 should be removed, dest2 kept
@@ -563,8 +653,8 @@ mod tests {
         let t2 = [0x77; 32];
         let now = 1000.0;
 
-        table.handle_tunnel(t1, InterfaceId(1), now);
-        table.handle_tunnel(t2, InterfaceId(2), now);
+        table.handle_tunnel(t1, InterfaceId(1), now, constants::DESTINATION_TIMEOUT);
+        table.handle_tunnel(t2, InterfaceId(2), now, constants::DESTINATION_TIMEOUT);
 
         // Only interface 1 is registered
         table.void_missing_interfaces(|id| *id == InterfaceId(1));
@@ -579,7 +669,12 @@ mod tests {
         let tunnel_id = [0x88; 32];
         let now = 1000.0;
 
-        table.handle_tunnel(tunnel_id, InterfaceId(1), now);
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
 
         let dest = [0xAA; 16];
         table.store_tunnel_path(
@@ -594,6 +689,8 @@ mod tests {
                 packet_hash: [0; 32],
             },
             now,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
 
         table.void_tunnel_interface(&tunnel_id);
@@ -619,7 +716,138 @@ mod tests {
                 packet_hash: [0; 32],
             },
             1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
         assert!(table.is_empty());
+    }
+
+    #[test]
+    fn test_tunnel_table_destination_cap_evicts_oldest_retained_path() {
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x90; 32];
+        let now = 1000.0;
+
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+
+        let make_path = |timestamp: f64, expires: f64, hops: u8, packet_hash_byte: u8| TunnelPath {
+            timestamp,
+            received_from: [0xAA; 16],
+            hops,
+            expires,
+            random_blobs: Vec::new(),
+            packet_hash: [packet_hash_byte; 32],
+        };
+
+        let dest1 = [0xA1; 16];
+        let dest2 = [0xA2; 16];
+        let dest3 = [0xA3; 16];
+
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest1,
+            make_path(now, now + 500.0, 1, 0x01),
+            now,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest2,
+            make_path(now + 1.0, now + 500.0, 1, 0x02),
+            now + 1.0,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest3,
+            make_path(now + 2.0, now + 500.0, 1, 0x03),
+            now + 2.0,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+
+        let entry = table.get(&tunnel_id).unwrap();
+        assert_eq!(table.path_count(), 2);
+        assert!(!entry.paths.contains_key(&dest1));
+        assert!(entry.paths.contains_key(&dest2));
+        assert!(entry.paths.contains_key(&dest3));
+    }
+
+    #[test]
+    fn test_tunnel_table_culls_expired_paths_before_live_eviction() {
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x91; 32];
+        let now = 1000.0;
+
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+
+        let dest1 = [0xB1; 16];
+        let dest2 = [0xB2; 16];
+        let dest3 = [0xB3; 16];
+
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest1,
+            TunnelPath {
+                timestamp: now,
+                received_from: [0; 16],
+                hops: 1,
+                expires: now + 1.0,
+                random_blobs: Vec::new(),
+                packet_hash: [0x11; 32],
+            },
+            now,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest2,
+            TunnelPath {
+                timestamp: now + 1.0,
+                received_from: [0; 16],
+                hops: 1,
+                expires: now + 100.0,
+                random_blobs: Vec::new(),
+                packet_hash: [0x22; 32],
+            },
+            now + 1.0,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+
+        table.store_tunnel_path(
+            &tunnel_id,
+            dest3,
+            TunnelPath {
+                timestamp: now + 2.0,
+                received_from: [0; 16],
+                hops: 1,
+                expires: now + 200.0,
+                random_blobs: Vec::new(),
+                packet_hash: [0x33; 32],
+            },
+            now + 2.0,
+            constants::DESTINATION_TIMEOUT,
+            2,
+        );
+
+        let entry = table.get(&tunnel_id).unwrap();
+        assert_eq!(table.path_count(), 2);
+        assert!(!entry.paths.contains_key(&dest1));
+        assert!(entry.paths.contains_key(&dest2));
+        assert!(entry.paths.contains_key(&dest3));
     }
 }

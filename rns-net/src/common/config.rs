@@ -62,6 +62,12 @@ pub struct ReticulumSection {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Maximum number of discovery path-request tags remembered.
+    pub max_discovery_pr_tags: usize,
+    /// Maximum number of destinations retained in the live path table.
+    pub max_path_destinations: usize,
+    /// Maximum number of destinations retained across tunnel-known paths.
+    pub max_tunnel_destinations_total: usize,
     /// TTL for recalled known destinations without an active path, in seconds.
     pub known_destinations_ttl: u64,
     #[cfg(feature = "rns-hooks")]
@@ -100,6 +106,9 @@ impl Default for ReticulumSection {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: 48 * 60 * 60,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
@@ -511,10 +520,38 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.packet_hashlist_max_entries = n.max(1);
     }
+    if let Some(v) = kvs.get("max_discovery_pr_tags") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "max_discovery_pr_tags".into(),
+            value: v.clone(),
+        })?;
+        section.max_discovery_pr_tags = n.max(1);
+    }
+    if let Some(v) = kvs.get("max_path_destinations") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "max_path_destinations".into(),
+            value: v.clone(),
+        })?;
+        section.max_path_destinations = n.max(1);
+    }
+    if let Some(v) = kvs.get("max_tunnel_destinations_total") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "max_tunnel_destinations_total".into(),
+            value: v.clone(),
+        })?;
+        section.max_tunnel_destinations_total = n.max(1);
+    }
     if let Some(v) = kvs.get("known_destinations_ttl") {
         section.known_destinations_ttl =
             v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
                 key: "known_destinations_ttl".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("destination_timeout_secs") {
+        section.known_destinations_ttl =
+            v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                key: "destination_timeout_secs".into(),
                 value: v.clone(),
             })?;
     }
@@ -660,6 +697,9 @@ respond_to_probes = True
 network_identity = /home/user/.reticulum/identity
 known_destinations_ttl = 1234
 packet_hashlist_max_entries = 321
+max_discovery_pr_tags = 222
+max_path_destinations = 111
+max_tunnel_destinations_total = 99
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -676,6 +716,22 @@ packet_hashlist_max_entries = 321
         );
         assert_eq!(config.reticulum.known_destinations_ttl, 1234);
         assert_eq!(config.reticulum.packet_hashlist_max_entries, 321);
+        assert_eq!(config.reticulum.max_discovery_pr_tags, 222);
+        assert_eq!(config.reticulum.max_path_destinations, 111);
+        assert_eq!(config.reticulum.max_tunnel_destinations_total, 99);
+    }
+
+    #[test]
+    fn parse_destination_timeout_secs_alias() {
+        let config = parse(
+            r#"
+[reticulum]
+destination_timeout_secs = 777
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.reticulum.known_destinations_ttl, 777);
     }
 
     #[test]

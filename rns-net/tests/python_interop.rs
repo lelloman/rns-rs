@@ -167,6 +167,9 @@ except (KeyboardInterrupt, SystemExit):
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]

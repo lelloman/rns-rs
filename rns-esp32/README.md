@@ -177,6 +177,19 @@ The board pinout and partition table are also part of the firmware configuration
 
 Build-time environment variables control the authenticated LoRa control plane and the default BLE-open policy.
 
+## Transport Memory Profile
+
+The ESP32 firmware now uses an explicit constrained `TransportConfig` profile instead of relying on the large desktop/server defaults from `rns-core`.
+
+- `packet_hashlist_max_entries = 1024`
+- `max_discovery_pr_tags = 256`
+- `max_path_destinations = 256`
+- `max_tunnel_destinations_total = 128`
+- `known_destinations_ttl = 24h`
+- `max_paths_per_destination = 2`
+
+These caps bound the main transport tables that would otherwise grow only by TTL eviction. If you are operating an ESP32 node from another `rns-rs` platform, these are the limits the device is using unless you change the firmware profile.
+
 ## Display Pages
 
 1. **Stats**: Identity hash (short), TX/RX byte counters, announce count

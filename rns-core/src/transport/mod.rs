@@ -95,6 +95,61 @@ impl TransportEngine {
         }
     }
 
+    fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
+        if self.discovery_pr_tags.contains(&unique_tag) {
+            return false;
+        }
+        if self.config.max_discovery_pr_tags != usize::MAX
+            && self.discovery_pr_tags.len() >= self.config.max_discovery_pr_tags
+            && !self.discovery_pr_tags.is_empty()
+        {
+            self.discovery_pr_tags.remove(0);
+        }
+        self.discovery_pr_tags.push(unique_tag);
+        true
+    }
+
+    fn upsert_path_destination(&mut self, dest_hash: [u8; 16], entry: PathEntry, now: f64) {
+        let max_paths = self.config.max_paths_per_destination;
+        if let Some(ps) = self.path_table.get_mut(&dest_hash) {
+            ps.upsert(entry);
+            return;
+        }
+        self.enforce_path_destination_cap(now);
+        self.path_table
+            .insert(dest_hash, PathSet::from_single(entry, max_paths));
+    }
+
+    fn enforce_path_destination_cap(&mut self, now: f64) {
+        if self.config.max_path_destinations == usize::MAX {
+            return;
+        }
+        jobs::cull_path_table(&mut self.path_table, &self.interfaces, now);
+        while self.path_table.len() >= self.config.max_path_destinations {
+            let Some(dest_hash) = self.oldest_path_destination() else {
+                break;
+            };
+            self.path_table.remove(&dest_hash);
+            self.path_states.remove(&dest_hash);
+        }
+    }
+
+    fn oldest_path_destination(&self) -> Option<[u8; 16]> {
+        self.path_table
+            .iter()
+            .filter_map(|(dest_hash, path_set)| {
+                path_set
+                    .primary()
+                    .map(|primary| (*dest_hash, primary.timestamp, primary.hops))
+            })
+            .min_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+                    .then_with(|| b.2.cmp(&a.2))
+            })
+            .map(|(dest_hash, _, _)| dest_hash)
+    }
+
     // =========================================================================
     // Interface management
     // =========================================================================
@@ -292,10 +347,14 @@ impl TransportEngine {
             info.tunnel_id = Some(tunnel_id);
         }
 
-        let restored_paths = self.tunnel_table.handle_tunnel(tunnel_id, interface, now);
+        let restored_paths = self.tunnel_table.handle_tunnel(
+            tunnel_id,
+            interface,
+            now,
+            self.config.destination_timeout_secs,
+        );
 
         // Restore paths to path table if they're better than existing
-        let max_paths = self.config.max_paths_per_destination;
         for (dest_hash, tunnel_path) in &restored_paths {
             let should_restore = match self.path_table.get(dest_hash).and_then(|ps| ps.primary()) {
                 Some(existing) => {
@@ -316,8 +375,7 @@ impl TransportEngine {
                     packet_hash: tunnel_path.packet_hash,
                     announce_raw: None,
                 };
-                self.path_table
-                    .insert(*dest_hash, PathSet::from_single(entry, max_paths));
+                self.upsert_path_destination(*dest_hash, entry, now);
             }
         }
 
@@ -634,7 +692,9 @@ impl TransportEngine {
         // 9. Local delivery for LINKREQUEST and DATA
         if (packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
             || packet.flags.packet_type == constants::PACKET_TYPE_DATA)
-            && self.local_destinations.contains_key(&packet.destination_hash)
+            && self
+                .local_destinations
+                .contains_key(&packet.destination_hash)
         {
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: packet.destination_hash,
@@ -863,15 +923,7 @@ impl TransportEngine {
         });
 
         // Store path via upsert into PathSet
-        let max_paths = self.config.max_paths_per_destination;
-        if let Some(ps) = self.path_table.get_mut(&packet.destination_hash) {
-            ps.upsert(path_entry);
-        } else {
-            self.path_table.insert(
-                packet.destination_hash,
-                PathSet::from_single(path_entry, max_paths),
-            );
-        }
+        self.upsert_path_destination(packet.destination_hash, path_entry, now);
 
         // If receiving interface has a tunnel_id, store path in tunnel table too
         if let Some(tunnel_id) = self.interfaces.get(&iface).and_then(|i| i.tunnel_id) {
@@ -893,6 +945,8 @@ impl TransportEngine {
                     packet_hash: packet.packet_hash,
                 },
                 now,
+                self.config.destination_timeout_secs,
+                self.config.max_tunnel_destinations_total,
             );
         }
 
@@ -1170,12 +1224,6 @@ impl TransportEngine {
             self.tables_last_culled = now;
         }
 
-        // Cull PR tags if over limit
-        if self.discovery_pr_tags.len() > constants::MAX_PR_TAGS {
-            let start = self.discovery_pr_tags.len() - constants::MAX_PR_TAGS;
-            self.discovery_pr_tags = self.discovery_pr_tags[start..].to_vec();
-        }
-
         actions
     }
 
@@ -1333,10 +1381,9 @@ impl TransportEngine {
             unique_tag[..16].copy_from_slice(&destination_hash);
             unique_tag[16..16 + tag_len].copy_from_slice(&tag[..tag_len]);
 
-            if self.discovery_pr_tags.contains(&unique_tag) {
+            if !self.insert_discovery_pr_tag(unique_tag) {
                 return actions; // Duplicate tag
             }
-            self.discovery_pr_tags.push(unique_tag);
         } else {
             return actions; // Tagless request
         }
@@ -1546,31 +1593,26 @@ impl TransportEngine {
             entry.receiving_interface = interface;
             entry.hops = 1;
         } else {
-            let max_paths = self.config.max_paths_per_destination;
-            self.path_table.insert(
+            self.upsert_path_destination(
                 *dest_hash,
-                PathSet::from_single(
-                    PathEntry {
-                        timestamp: now,
-                        next_hop: [0u8; 16],
-                        hops: 1,
-                        expires: now + 3600.0,
-                        random_blobs: Vec::new(),
-                        receiving_interface: interface,
-                        packet_hash: [0u8; 32],
-                        announce_raw: None,
-                    },
-                    max_paths,
-                ),
+                PathEntry {
+                    timestamp: now,
+                    next_hop: [0u8; 16],
+                    hops: 1,
+                    expires: now + 3600.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: interface,
+                    packet_hash: [0u8; 32],
+                    announce_raw: None,
+                },
+                now,
             );
         }
     }
 
     /// Inject a path entry directly into the path table (full override).
     pub fn inject_path(&mut self, dest_hash: [u8; 16], entry: PathEntry) {
-        let max_paths = self.config.max_paths_per_destination;
-        self.path_table
-            .insert(dest_hash, PathSet::from_single(entry, max_paths));
+        self.upsert_path_destination(dest_hash, entry.clone(), entry.timestamp);
     }
 
     /// Drop a path from the path table.
@@ -1804,6 +1846,10 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         }
     }
 
@@ -1827,6 +1873,32 @@ mod tests {
             ia_freq: 0.0,
             started: 0.0,
         }
+    }
+
+    fn make_path_entry(
+        timestamp: f64,
+        hops: u8,
+        receiving_interface: InterfaceId,
+        next_hop: [u8; 16],
+    ) -> PathEntry {
+        PathEntry {
+            timestamp,
+            next_hop,
+            hops,
+            expires: timestamp + 10_000.0,
+            random_blobs: Vec::new(),
+            receiving_interface,
+            packet_hash: [0; 32],
+            announce_raw: None,
+        }
+    }
+
+    fn make_unique_tag(dest_hash: [u8; 16], tag: &[u8]) -> [u8; 32] {
+        let mut unique_tag = [0u8; 32];
+        let tag_len = tag.len().min(16);
+        unique_tag[..16].copy_from_slice(&dest_hash);
+        unique_tag[16..16 + tag_len].copy_from_slice(&tag[..tag_len]);
+        unique_tag
     }
 
     #[test]
@@ -2718,6 +2790,8 @@ mod tests {
                 packet_hash: [0xFF; 32],
             },
             1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
         );
 
         // Void the tunnel interface (disconnect)
@@ -2870,6 +2944,125 @@ mod tests {
         // MODE_FULL is not in DISCOVER_PATHS_FOR, so no forwarding
         assert!(actions.is_empty());
         assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_discovery_pr_tags_fifo_eviction() {
+        let mut config = make_config(true);
+        config.max_discovery_pr_tags = 2;
+        let mut engine = TransportEngine::new(config);
+
+        let dest1 = [0xA1; 16];
+        let dest2 = [0xA2; 16];
+        let dest3 = [0xA3; 16];
+        let tag1 = [0x01; 16];
+        let tag2 = [0x02; 16];
+        let tag3 = [0x03; 16];
+
+        engine.handle_path_request(
+            &make_path_request_data(&dest1, &tag1),
+            InterfaceId(1),
+            1000.0,
+        );
+        engine.handle_path_request(
+            &make_path_request_data(&dest2, &tag2),
+            InterfaceId(1),
+            1001.0,
+        );
+        assert_eq!(engine.discovery_pr_tags_count(), 2);
+
+        let unique1 = make_unique_tag(dest1, &tag1);
+        let unique2 = make_unique_tag(dest2, &tag2);
+        assert!(engine.discovery_pr_tags.contains(&unique1));
+        assert!(engine.discovery_pr_tags.contains(&unique2));
+
+        engine.handle_path_request(
+            &make_path_request_data(&dest3, &tag3),
+            InterfaceId(1),
+            1002.0,
+        );
+        assert_eq!(engine.discovery_pr_tags_count(), 2);
+        assert!(!engine.discovery_pr_tags.contains(&unique1));
+        assert!(engine.discovery_pr_tags.contains(&unique2));
+
+        engine.handle_path_request(
+            &make_path_request_data(&dest1, &tag1),
+            InterfaceId(1),
+            1003.0,
+        );
+        assert_eq!(engine.discovery_pr_tags_count(), 2);
+        assert!(engine.discovery_pr_tags.contains(&unique1));
+    }
+
+    #[test]
+    fn test_path_destination_cap_evicts_oldest_and_clears_state() {
+        let mut config = make_config(false);
+        config.max_path_destinations = 2;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let dest1 = [0xB1; 16];
+        let dest2 = [0xB2; 16];
+        let dest3 = [0xB3; 16];
+
+        engine.upsert_path_destination(
+            dest1,
+            make_path_entry(1000.0, 1, InterfaceId(1), [0x11; 16]),
+            1000.0,
+        );
+        engine.upsert_path_destination(
+            dest2,
+            make_path_entry(1001.0, 1, InterfaceId(1), [0x22; 16]),
+            1001.0,
+        );
+        engine
+            .path_states
+            .insert(dest1, constants::STATE_UNRESPONSIVE);
+
+        engine.upsert_path_destination(
+            dest3,
+            make_path_entry(1002.0, 1, InterfaceId(1), [0x33; 16]),
+            1002.0,
+        );
+
+        assert_eq!(engine.path_table_count(), 2);
+        assert!(!engine.has_path(&dest1));
+        assert!(engine.has_path(&dest2));
+        assert!(engine.has_path(&dest3));
+        assert!(!engine.path_states.contains_key(&dest1));
+    }
+
+    #[test]
+    fn test_existing_path_destination_update_does_not_trigger_cap_eviction() {
+        let mut config = make_config(false);
+        config.max_path_destinations = 2;
+        config.max_paths_per_destination = 2;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let dest1 = [0xC1; 16];
+        let dest2 = [0xC2; 16];
+
+        engine.upsert_path_destination(
+            dest1,
+            make_path_entry(1000.0, 2, InterfaceId(1), [0x11; 16]),
+            1000.0,
+        );
+        engine.upsert_path_destination(
+            dest2,
+            make_path_entry(1001.0, 2, InterfaceId(1), [0x22; 16]),
+            1001.0,
+        );
+
+        engine.upsert_path_destination(
+            dest2,
+            make_path_entry(1002.0, 1, InterfaceId(1), [0x23; 16]),
+            1002.0,
+        );
+
+        assert_eq!(engine.path_table_count(), 2);
+        assert!(engine.has_path(&dest1));
+        assert!(engine.has_path(&dest2));
     }
 
     #[test]
@@ -3045,9 +3238,16 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        RawPacket::pack(flags, 0, dest_hash, None, constants::CONTEXT_NONE, &announce_data)
-            .unwrap()
-            .raw
+        RawPacket::pack(
+            flags,
+            0,
+            dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap()
+        .raw
     }
 
     #[test]
@@ -3061,11 +3261,8 @@ mod tests {
 
         let identity =
             rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
-        let dest_hash = crate::destination::destination_hash(
-            "issue4",
-            &["test"],
-            Some(identity.hash()),
-        );
+        let dest_hash =
+            crate::destination::destination_hash("issue4", &["test"], Some(identity.hash()));
         let name_hash = crate::destination::name_hash("issue4", &["test"]);
         let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
 
@@ -3097,12 +3294,8 @@ mod tests {
         )
         .unwrap();
 
-        let actions = engine.handle_outbound(
-            &data_packet,
-            constants::DESTINATION_SINGLE,
-            None,
-            1001.0,
-        );
+        let actions =
+            engine.handle_outbound(&data_packet, constants::DESTINATION_SINGLE, None, 1001.0);
 
         let send = actions.iter().find_map(|a| match a {
             TransportAction::SendOnInterface { interface, raw } => Some((interface, raw)),
@@ -3129,17 +3322,18 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         });
         engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
         engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob
 
         let identity =
             rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
-        let dest_hash = crate::destination::destination_hash(
-            "issue4",
-            &["ctrl"],
-            Some(identity.hash()),
-        );
+        let dest_hash =
+            crate::destination::destination_hash("issue4", &["ctrl"], Some(identity.hash()));
         let name_hash = crate::destination::name_hash("issue4", &["ctrl"]);
         let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
 
