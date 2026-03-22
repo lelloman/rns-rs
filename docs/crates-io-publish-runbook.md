@@ -41,8 +41,9 @@ Common currently published crates:
 - `rns-hooks-sdk`
 - `rns-hooks-abi`
 
-`rns-esp32` is excluded from the workspace and is not currently published on
-crates.io.
+`rns-esp32` is excluded from the workspace and is not published on crates.io.
+It has its own release process — see
+[esp32-release-runbook.md](esp32-release-runbook.md).
 
 Important detail:
 
