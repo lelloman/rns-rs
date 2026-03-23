@@ -213,6 +213,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             device: None,
             hooks: Vec::new(),
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            announce_table_ttl: std::time::Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
@@ -222,7 +224,6 @@ fn start_transport_node(port: u16) -> RnsNode {
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
-            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -265,6 +266,8 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             device: None,
             hooks: Vec::new(),
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            announce_table_ttl: std::time::Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
@@ -274,7 +277,6 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
-            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
