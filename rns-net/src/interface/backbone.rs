@@ -10,6 +10,7 @@
 //! Matches Python `BackboneInterface.py`.
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1063,13 +1064,38 @@ fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: E
     }
 }
 
-/// Attempt to reconnect with retry logic. Returns the new reader stream on success.
+/// Maximum backoff multiplier: `base_delay * 2^MAX_BACKOFF_SHIFT`.
+/// With a 5 s base this caps at 5 × 2^6 = 320 s ≈ 5 min.
+const MAX_BACKOFF_SHIFT: u32 = 6;
+
+/// Attempt to reconnect with exponential backoff and jitter.
+/// Returns the new reader stream on success.
 /// Sends the new writer to the driver via InterfaceUp event.
 fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
         let runtime = config.runtime.lock().unwrap().clone();
-        thread::sleep(runtime.reconnect_wait);
+
+        let shift = attempts.min(MAX_BACKOFF_SHIFT);
+        let backoff = runtime.reconnect_wait * 2u32.pow(shift);
+        // Add ±25 % jitter to avoid thundering-herd reconnects.
+        let jitter_range = backoff / 4;
+        let jitter = if jitter_range.as_nanos() > 0 {
+            let offset = Duration::from_nanos(
+                (std::hash::RandomState::new().build_hasher().finish()
+                    % jitter_range.as_nanos() as u64)
+                    * 2,
+            );
+            if offset > jitter_range {
+                backoff + (offset - jitter_range)
+            } else {
+                backoff - (jitter_range - offset)
+            }
+        } else {
+            backoff
+        };
+        thread::sleep(jitter);
+
         attempts += 1;
 
         if let Some(max) = runtime.max_reconnect_tries {
@@ -1079,7 +1105,12 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
             }
         }
 
-        log::info!("[{}] reconnect attempt {} ...", config.name, attempts);
+        log::info!(
+            "[{}] reconnect attempt {} (backoff {:.1}s) ...",
+            config.name,
+            attempts,
+            jitter.as_secs_f64(),
+        );
 
         match try_connect_client(config) {
             Ok(new_stream) => {
@@ -1090,7 +1121,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
                         continue;
                     }
                 };
-                log::info!("[{}] reconnected", config.name);
+                log::info!("[{}] reconnected after {} attempt(s)", config.name, attempts);
                 let new_writer: Box<dyn Writer> = Box::new(BackboneClientWriter {
                     stream: writer_stream,
                 });
