@@ -67,6 +67,8 @@ impl RnsNode {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
         };
 
         let (tx, rx) = event::channel();

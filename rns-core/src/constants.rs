@@ -165,6 +165,12 @@ pub const MAX_QUEUED_ANNOUNCES: usize = 16384;
 /// Queued announce lifetime (24 hours)
 pub const QUEUED_ANNOUNCE_LIFE: f64 = 86400.0;
 
+/// Retention TTL for announce retransmission state (seconds)
+pub const ANNOUNCE_TABLE_TTL: f64 = 30.0;
+
+/// Maximum retained bytes for announce retransmission state
+pub const ANNOUNCE_TABLE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
 // --- Table limits ---
 
 /// How many local rebroadcasts of an announce is allowed

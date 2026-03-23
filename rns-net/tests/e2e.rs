@@ -543,12 +543,31 @@ const APP_NAME: &str = "e2e_test";
 
 /// Start a transport node (TCP server) on the given port.
 fn start_transport_node(port: u16) -> RnsNode {
-    start_transport_node_with_packet_hashlist(port, rns_core::constants::HASHLIST_MAXSIZE)
+    start_transport_node_with_limits(
+        port,
+        rns_core::constants::HASHLIST_MAXSIZE,
+        Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+        rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+    )
 }
 
 fn start_transport_node_with_packet_hashlist(
     port: u16,
     packet_hashlist_max_entries: usize,
+) -> RnsNode {
+    start_transport_node_with_limits(
+        port,
+        packet_hashlist_max_entries,
+        Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+        rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+    )
+}
+
+fn start_transport_node_with_limits(
+    port: u16,
+    packet_hashlist_max_entries: usize,
+    announce_table_ttl: Duration,
+    announce_table_max_bytes: usize,
 ) -> RnsNode {
     let node = RnsNode::start(
         NodeConfig {
@@ -591,6 +610,8 @@ fn start_transport_node_with_packet_hashlist(
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl,
+            announce_table_max_bytes,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -670,6 +691,8 @@ fn start_client_node_with_packet_hashlist(
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1033,6 +1056,8 @@ fn test_direct_link_no_transport() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1169,6 +1194,103 @@ fn test_announce_binary_app_data() {
         .expect("Bob did not receive binary announce");
 
     assert_eq!(announced.app_data.as_deref(), Some(binary_data.as_slice()));
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_announce_relay_respects_short_ttl() {
+    let port = find_free_port();
+    let transport = start_transport_node_with_limits(
+        port,
+        rns_core::constants::HASHLIST_MAXSIZE,
+        Duration::from_millis(50),
+        rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+    );
+
+    let alice_identity = Identity::new(&mut OsRng);
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["announce", "ttl_drop"],
+        IdentityHash(*alice_identity.hash()),
+    );
+
+    let (alice_tx, _alice_rx) = mpsc::channel();
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    alice_node
+        .register_destination_with_proof(&alice_dest, None)
+        .unwrap();
+
+    let bob_identity = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+
+    std::thread::sleep(SETTLE);
+
+    alice_node
+        .announce(&alice_dest, &alice_identity, Some(b"ttl-expire"))
+        .unwrap();
+
+    let announced = wait_for_announce(&bob_rx, &alice_dest.hash, Duration::from_secs(3));
+    assert!(
+        announced.is_none(),
+        "Bob unexpectedly received Alice's announce despite relay TTL expiry"
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_announce_relay_respects_max_bytes() {
+    let port = find_free_port();
+    let transport = start_transport_node_with_limits(
+        port,
+        rns_core::constants::HASHLIST_MAXSIZE,
+        Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+        1,
+    );
+
+    let alice_identity = Identity::new(&mut OsRng);
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["announce", "max_bytes_drop"],
+        IdentityHash(*alice_identity.hash()),
+    );
+
+    let (alice_tx, _alice_rx) = mpsc::channel();
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    alice_node
+        .register_destination_with_proof(&alice_dest, None)
+        .unwrap();
+
+    let bob_identity = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+
+    std::thread::sleep(SETTLE);
+
+    let large_app_data = vec![0xAB; 32];
+    alice_node
+        .announce(&alice_dest, &alice_identity, Some(&large_app_data))
+        .unwrap();
+
+    let announced = wait_for_announce(&bob_rx, &alice_dest.hash, Duration::from_secs(3));
+    assert!(
+        announced.is_none(),
+        "Bob unexpectedly received Alice's announce despite relay byte cap"
+    );
 
     alice_node.shutdown();
     bob_node.shutdown();
@@ -1520,6 +1642,8 @@ fn test_plain_message_delivery() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1737,6 +1861,8 @@ fn test_group_message_delivery() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1836,6 +1962,8 @@ fn test_group_wrong_key_fails() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2925,6 +3053,8 @@ fn test_udp_announce_and_message() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2979,6 +3109,8 @@ fn test_udp_announce_and_message() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3137,6 +3269,8 @@ fn discovery_announce_received_by_client() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3196,6 +3330,8 @@ fn discovery_announce_received_by_client() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3314,6 +3450,8 @@ fn discovery_announce_through_relay() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3383,6 +3521,8 @@ fn discovery_announce_through_relay() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3440,6 +3580,8 @@ fn discovery_announce_through_relay() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3539,6 +3681,8 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,

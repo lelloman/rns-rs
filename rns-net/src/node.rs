@@ -283,6 +283,10 @@ pub struct NodeConfig {
     pub max_tunnel_destinations_total: usize,
     /// TTL for recalled known destinations without an active path.
     pub known_destinations_ttl: Duration,
+    /// TTL for announce retransmission state.
+    pub announce_table_ttl: Duration,
+    /// Maximum retained bytes for announce retransmission state.
+    pub announce_table_max_bytes: usize,
     /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
     pub registry: Option<crate::interface::registry::InterfaceRegistry>,
     /// If true, a single interface failing to start will abort the entire node.
@@ -320,6 +324,8 @@ impl Default for NodeConfig {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             registry: None,
             panic_on_interface_error: false,
             #[cfg(feature = "rns-hooks")]
@@ -590,6 +596,8 @@ impl RnsNode {
             known_destinations_ttl: Duration::from_secs(
                 rns_config.reticulum.known_destinations_ttl,
             ),
+            announce_table_ttl: Duration::from_secs(rns_config.reticulum.announce_table_ttl),
+            announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
@@ -633,6 +641,8 @@ impl RnsNode {
             max_path_destinations: config.max_path_destinations,
             max_tunnel_destinations_total: config.max_tunnel_destinations_total,
             destination_timeout_secs: config.known_destinations_ttl.as_secs_f64(),
+            announce_table_ttl_secs: config.announce_table_ttl.as_secs_f64(),
+            announce_table_max_bytes: config.announce_table_max_bytes,
         };
 
         let (tx, rx) = event::channel();
@@ -1874,6 +1884,8 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1915,6 +1927,8 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1956,6 +1970,8 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2476,6 +2492,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2526,6 +2544,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2572,6 +2592,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2615,6 +2637,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2665,6 +2689,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2716,6 +2742,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2765,6 +2793,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2825,6 +2855,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2877,6 +2909,8 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,

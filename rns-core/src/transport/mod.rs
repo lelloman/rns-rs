@@ -14,6 +14,7 @@ pub mod types;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::mem::size_of;
 
 use rns_crypto::Rng;
 
@@ -148,6 +149,107 @@ impl TransportEngine {
                     .then_with(|| b.2.cmp(&a.2))
             })
             .map(|(dest_hash, _, _)| dest_hash)
+    }
+
+    fn announce_entry_size_bytes(entry: &AnnounceEntry) -> usize {
+        size_of::<AnnounceEntry>()
+            + entry.packet_raw.capacity()
+            + entry.packet_data.capacity()
+    }
+
+    fn announce_retained_bytes_total(&self) -> usize {
+        self.announce_table
+            .values()
+            .chain(self.held_announces.values())
+            .map(Self::announce_entry_size_bytes)
+            .sum()
+    }
+
+    fn cull_expired_announce_entries(&mut self, now: f64) -> usize {
+        let ttl = self.config.announce_table_ttl_secs;
+        let mut removed = 0usize;
+
+        self.announce_table.retain(|_, entry| {
+            let keep = now <= entry.timestamp + ttl;
+            if !keep {
+                removed += 1;
+            }
+            keep
+        });
+
+        self.held_announces.retain(|_, entry| {
+            let keep = now <= entry.timestamp + ttl;
+            if !keep {
+                removed += 1;
+            }
+            keep
+        });
+
+        removed
+    }
+
+    fn oldest_retained_announce(&self) -> Option<([u8; 16], bool)> {
+        let oldest_active = self
+            .announce_table
+            .iter()
+            .map(|(dest_hash, entry)| (*dest_hash, false, entry.timestamp))
+            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
+        let oldest_held = self
+            .held_announces
+            .iter()
+            .map(|(dest_hash, entry)| (*dest_hash, true, entry.timestamp))
+            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
+
+        match (oldest_active, oldest_held) {
+            (Some(active), Some(held)) => {
+                let ordering = active
+                    .2
+                    .partial_cmp(&held.2)
+                    .unwrap_or(core::cmp::Ordering::Equal);
+                if ordering == core::cmp::Ordering::Less {
+                    Some((active.0, active.1))
+                } else {
+                    Some((held.0, held.1))
+                }
+            }
+            (Some(active), None) => Some((active.0, active.1)),
+            (None, Some(held)) => Some((held.0, held.1)),
+            (None, None) => None,
+        }
+    }
+
+    fn enforce_announce_retention_cap(&mut self, now: f64) {
+        self.cull_expired_announce_entries(now);
+        while self.announce_retained_bytes_total() > self.config.announce_table_max_bytes {
+            let Some((dest_hash, is_held)) = self.oldest_retained_announce() else {
+                break;
+            };
+            if is_held {
+                self.held_announces.remove(&dest_hash);
+            } else {
+                self.announce_table.remove(&dest_hash);
+            }
+        }
+    }
+
+    fn insert_announce_entry(&mut self, dest_hash: [u8; 16], entry: AnnounceEntry, now: f64) -> bool {
+        self.cull_expired_announce_entries(now);
+        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
+            return false;
+        }
+        self.announce_table.insert(dest_hash, entry);
+        self.enforce_announce_retention_cap(now);
+        self.announce_table.contains_key(&dest_hash)
+    }
+
+    fn insert_held_announce(&mut self, dest_hash: [u8; 16], entry: AnnounceEntry, now: f64) -> bool {
+        self.cull_expired_announce_entries(now);
+        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
+            return false;
+        }
+        self.held_announces.insert(dest_hash, entry);
+        self.enforce_announce_retention_cap(now);
+        self.held_announces.contains_key(&dest_hash)
     }
 
     // =========================================================================
@@ -955,7 +1057,7 @@ impl TransportEngine {
 
         // Store announce for retransmission
         if let Some(ann) = announce_entry {
-            self.announce_table.insert(packet.destination_hash, ann);
+            self.insert_announce_entry(packet.destination_hash, ann, now);
         }
 
         // Emit actions
@@ -1002,7 +1104,7 @@ impl TransportEngine {
                 block_rebroadcasts: true,
                 attached_interface: Some(pr_entry),
             };
-            self.announce_table.insert(packet.destination_hash, entry);
+            self.insert_announce_entry(packet.destination_hash, entry, now);
         }
     }
 
@@ -1166,6 +1268,8 @@ impl TransportEngine {
 
         // Process pending announces
         if now > self.announces_last_checked + constants::ANNOUNCES_CHECK_INTERVAL {
+            self.cull_expired_announce_entries(now);
+            self.enforce_announce_retention_cap(now);
             if let Some(ref identity_hash) = self.config.identity_hash {
                 let ih = *identity_hash;
                 let announce_actions = jobs::process_pending_announces(
@@ -1178,6 +1282,8 @@ impl TransportEngine {
                 let gated = self.gate_retransmit_actions(announce_actions, now);
                 actions.extend(gated);
             }
+            self.cull_expired_announce_entries(now);
+            self.enforce_announce_retention_cap(now);
             self.announces_last_checked = now;
         }
 
@@ -1420,7 +1526,7 @@ impl TransportEngine {
             if let Some(ref raw) = path.announce_raw {
                 // Check if there's already an announce in the table
                 if let Some(existing) = self.announce_table.remove(&destination_hash) {
-                    self.held_announces.insert(destination_hash, existing);
+                    self.insert_held_announce(destination_hash, existing, now);
                 }
                 let retransmit_timeout =
                     if let Some(iface_info) = self.interfaces.get(&interface_id) {
@@ -1456,7 +1562,7 @@ impl TransportEngine {
                     attached_interface: Some(interface_id),
                 };
 
-                self.announce_table.insert(destination_hash, entry);
+                self.insert_announce_entry(destination_hash, entry, now);
             }
         } else if self.config.transport_enabled {
             // Unknown path: check if receiving interface is in DISCOVER_PATHS_FOR
@@ -1819,6 +1925,18 @@ impl TransportEngine {
 
     #[cfg(test)]
     #[allow(dead_code)]
+    pub(crate) fn held_announces(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
+        &self.held_announces
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn announce_retained_bytes(&self) -> usize {
+        self.announce_retained_bytes_total()
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn reverse_table(&self) -> &BTreeMap<[u8; 16], tables::ReverseEntry> {
         &self.reverse_table
     }
@@ -1850,6 +1968,8 @@ mod tests {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
         }
     }
 
@@ -1872,6 +1992,23 @@ mod tests {
             ingress_control: false,
             ia_freq: 0.0,
             started: 0.0,
+        }
+    }
+
+    fn make_announce_entry(dest_hash: [u8; 16], timestamp: f64, fill_len: usize) -> AnnounceEntry {
+        AnnounceEntry {
+            timestamp,
+            retransmit_timeout: timestamp,
+            retries: 0,
+            received_from: [0xAA; 16],
+            hops: 2,
+            packet_raw: vec![0x01; fill_len],
+            packet_data: vec![0x02; fill_len],
+            destination_hash: dest_hash,
+            context_flag: 0,
+            local_rebroadcasts: 0,
+            block_rebroadcasts: false,
+            attached_interface: None,
         }
     }
 
@@ -2188,10 +2325,10 @@ mod tests {
         engine.register_interface(make_interface(1, constants::MODE_FULL));
 
         let dest = [0x55; 16];
-        engine.announce_table.insert(
+        engine.insert_announce_entry(
             dest,
             AnnounceEntry {
-                timestamp: 100.0,
+                timestamp: 190.0,
                 retransmit_timeout: 100.0, // ready to retransmit
                 retries: 0,
                 received_from: [0xAA; 16],
@@ -2204,6 +2341,7 @@ mod tests {
                 block_rebroadcasts: false,
                 attached_interface: None,
             },
+            190.0,
         );
 
         let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
@@ -2219,6 +2357,72 @@ mod tests {
 
         // Retries should have increased
         assert_eq!(engine.announce_table[&dest].retries, 1);
+    }
+
+    #[test]
+    fn test_tick_culls_expired_announce_entries() {
+        let mut config = make_config(true);
+        config.announce_table_ttl_secs = 10.0;
+        let mut engine = TransportEngine::new(config);
+
+        let dest1 = [0x61; 16];
+        let dest2 = [0x62; 16];
+        assert!(engine.insert_announce_entry(dest1, make_announce_entry(dest1, 100.0, 8), 100.0));
+        assert!(engine.insert_held_announce(dest2, make_announce_entry(dest2, 100.0, 8), 100.0));
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        let _ = engine.tick(111.0, &mut rng);
+
+        assert!(!engine.announce_table().contains_key(&dest1));
+        assert!(!engine.held_announces().contains_key(&dest2));
+    }
+
+    #[test]
+    fn test_announce_retention_cap_evicts_oldest_and_prefers_held_on_tie() {
+        let sample_entry = make_announce_entry([0x70; 16], 100.0, 32);
+        let mut config = make_config(true);
+        config.announce_table_max_bytes =
+            TransportEngine::announce_entry_size_bytes(&sample_entry) * 2
+                + TransportEngine::announce_entry_size_bytes(&sample_entry) / 2;
+        let max_bytes = config.announce_table_max_bytes;
+        let mut engine = TransportEngine::new(config);
+
+        let held_dest = [0x71; 16];
+        let active_dest = [0x72; 16];
+        let newest_dest = [0x73; 16];
+
+        assert!(engine.insert_held_announce(
+            held_dest,
+            make_announce_entry(held_dest, 100.0, 32),
+            100.0,
+        ));
+        assert!(engine.insert_announce_entry(
+            active_dest,
+            make_announce_entry(active_dest, 100.0, 32),
+            100.0,
+        ));
+        assert!(engine.insert_announce_entry(
+            newest_dest,
+            make_announce_entry(newest_dest, 101.0, 32),
+            101.0,
+        ));
+
+        assert!(!engine.held_announces().contains_key(&held_dest));
+        assert!(engine.announce_table().contains_key(&active_dest));
+        assert!(engine.announce_table().contains_key(&newest_dest));
+        assert!(engine.announce_retained_bytes() <= max_bytes);
+    }
+
+    #[test]
+    fn test_oversized_announce_entry_is_not_retained() {
+        let mut config = make_config(true);
+        config.announce_table_max_bytes = 200;
+        let mut engine = TransportEngine::new(config);
+        let dest = [0x81; 16];
+
+        assert!(!engine.insert_announce_entry(dest, make_announce_entry(dest, 100.0, 256), 100.0));
+        assert!(!engine.announce_table().contains_key(&dest));
+        assert_eq!(engine.announce_retained_bytes(), 0);
     }
 
     #[test]
@@ -3326,6 +3530,8 @@ mod tests {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
         });
         engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
         engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob

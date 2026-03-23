@@ -153,6 +153,10 @@ pub struct TransportConfig {
     pub max_tunnel_destinations_total: usize,
     /// Retention timeout for tunnel-known destinations, in seconds.
     pub destination_timeout_secs: f64,
+    /// Retention timeout for announce retransmission state, in seconds.
+    pub announce_table_ttl_secs: f64,
+    /// Maximum retained bytes across announce retransmission state maps.
+    pub announce_table_max_bytes: usize,
 }
 
 #[cfg(test)]
@@ -179,6 +183,8 @@ mod tests {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: crate::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: crate::constants::ANNOUNCE_TABLE_MAX_BYTES,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
@@ -194,6 +200,14 @@ mod tests {
         assert_eq!(
             cfg.destination_timeout_secs,
             crate::constants::DESTINATION_TIMEOUT
+        );
+        assert_eq!(
+            cfg.announce_table_ttl_secs,
+            crate::constants::ANNOUNCE_TABLE_TTL
+        );
+        assert_eq!(
+            cfg.announce_table_max_bytes,
+            crate::constants::ANNOUNCE_TABLE_MAX_BYTES
         );
     }
 }
