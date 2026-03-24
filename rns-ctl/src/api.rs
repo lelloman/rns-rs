@@ -548,6 +548,20 @@ fn handle_post_send(req: &HttpRequest, node: &NodeHandle, state: &SharedState) -
     };
     drop(s);
 
+    let max_len = match dest.dest_type {
+        rns_core::types::DestinationType::Plain => rns_core::constants::PLAIN_MDU,
+        rns_core::types::DestinationType::Single | rns_core::types::DestinationType::Group => {
+            rns_core::constants::ENCRYPTED_MDU
+        }
+    };
+    if data.len() > max_len {
+        return HttpResponse::bad_request(&format!(
+            "Payload too large for single-packet send: {} bytes > {} byte limit",
+            data.len(),
+            max_len
+        ));
+    }
+
     with_node(node, |n| match n.send_packet(&dest, &data) {
         Ok(ph) => HttpResponse::ok(json!({
             "status": "sent",
@@ -650,7 +664,7 @@ fn handle_post_channel(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     with_node(node, |n| {
         match n.send_channel_message(link_id, msgtype, payload) {
             Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
-            Err(_) => HttpResponse::internal_error("Channel message failed"),
+            Err(_) => HttpResponse::bad_request("Channel message failed"),
         }
     })
 }

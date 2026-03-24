@@ -4487,14 +4487,20 @@ impl Driver {
                     link_id,
                     msgtype,
                     payload,
+                    response_tx,
                 } => {
-                    let link_actions = self.link_manager.send_channel_message(
-                        &link_id,
-                        msgtype,
-                        &payload,
-                        &mut self.rng,
-                    );
-                    self.dispatch_link_actions(link_actions);
+                    match self
+                        .link_manager
+                        .send_channel_message(&link_id, msgtype, &payload, &mut self.rng)
+                    {
+                        Ok(link_actions) => {
+                            self.dispatch_link_actions(link_actions);
+                            let _ = response_tx.send(Ok(()));
+                        }
+                        Err(err) => {
+                            let _ = response_tx.send(Err(err));
+                        }
+                    }
                 }
                 Event::SendOnLink {
                     link_id,
@@ -6749,13 +6755,14 @@ impl Driver {
                     msgtype,
                     payload,
                 } => {
-                    let link_actions = self.link_manager.send_channel_message(
+                    if let Ok(link_actions) = self.link_manager.send_channel_message(
                         &link_id,
                         msgtype,
                         &payload,
                         &mut self.rng,
-                    );
-                    self.dispatch_link_actions(link_actions);
+                    ) {
+                        self.dispatch_link_actions(link_actions);
+                    }
                 }
                 HolePunchManagerAction::DirectConnectEstablished {
                     link_id,

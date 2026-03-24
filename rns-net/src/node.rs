@@ -1438,12 +1438,16 @@ impl RnsNode {
         msgtype: u16,
         payload: Vec<u8>,
     ) -> Result<(), SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::SendChannelMessage {
                 link_id,
                 msgtype,
                 payload,
+                response_tx,
             })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)?
             .map_err(|_| SendError)
     }
 

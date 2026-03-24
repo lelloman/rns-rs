@@ -172,6 +172,7 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         msgtype: u16,
         payload: Vec<u8>,
+        response_tx: mpsc::Sender<Result<(), String>>,
     },
     /// Send generic data on a link with a given context.
     SendOnLink {
@@ -612,6 +613,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 link_id,
                 msgtype,
                 payload,
+                ..
             } => f
                 .debug_struct("SendChannelMessage")
                 .field("link_id", link_id)

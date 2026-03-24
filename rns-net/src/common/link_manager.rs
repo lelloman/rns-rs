@@ -1845,29 +1845,29 @@ impl LinkManager {
         msgtype: u16,
         payload: &[u8],
         rng: &mut dyn Rng,
-    ) -> Vec<LinkManagerAction> {
+    ) -> Result<Vec<LinkManagerAction>, String> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
-            None => return Vec::new(),
+            None => return Err("unknown link".to_string()),
         };
 
         let channel = match link.channel {
             Some(ref mut ch) => ch,
-            None => return Vec::new(),
+            None => return Err("link has no active channel".to_string()),
         };
 
-        let link_mdu = constants::MDU; // Use MDU as approximate link MDU
+        let link_mdu = link.engine.mdu();
         let now = time::now();
         let chan_actions = match channel.send(msgtype, payload, now, link_mdu) {
             Ok(a) => a,
             Err(e) => {
                 log::debug!("Channel send failed: {:?}", e);
-                return Vec::new();
+                return Err(e.to_string());
             }
         };
 
         let _ = link;
-        self.process_channel_actions(link_id, chan_actions, rng)
+        Ok(self.process_channel_actions(link_id, chan_actions, rng))
     }
 
     /// Periodic tick: check keepalive, stale, timeouts for all links.
@@ -3228,7 +3228,9 @@ mod tests {
         let mut rng = OsRng;
 
         // Send channel message from initiator
-        let chan_actions = init_mgr.send_channel_message(&link_id, 42, b"channel data", &mut rng);
+        let chan_actions = init_mgr
+            .send_channel_message(&link_id, 42, b"channel data", &mut rng)
+            .expect("active link channel send should succeed");
         assert!(!chan_actions.is_empty());
 
         // Deliver to responder
@@ -3345,8 +3347,10 @@ mod tests {
             mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Link is Pending (no channel), should return empty
-        let actions = mgr.send_channel_message(&link_id, 1, b"test", &mut rng);
-        assert!(actions.is_empty(), "No channel on pending link");
+        let err = mgr
+            .send_channel_message(&link_id, 1, b"test", &mut rng)
+            .expect_err("pending link should reject channel send");
+        assert_eq!(err, "link has no active channel");
     }
 
     #[test]
