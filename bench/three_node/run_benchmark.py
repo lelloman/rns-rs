@@ -70,7 +70,7 @@ def json_request(
     method: str,
     url: str,
     body: dict[str, Any] | None = None,
-    timeout: float = 10.0,
+    timeout: float = 30.0,
 ) -> Any:
     data = None
     headers = {}
@@ -184,10 +184,10 @@ class BenchNode:
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.http_port}"
 
-    def get(self, path: str, timeout: float = 10.0) -> Any:
+    def get(self, path: str, timeout: float = 30.0) -> Any:
         return json_request("GET", self.base_url + path, timeout=timeout)
 
-    def post(self, path: str, body: dict[str, Any], timeout: float = 10.0) -> Any:
+    def post(self, path: str, body: dict[str, Any], timeout: float = 30.0) -> Any:
         return json_request("POST", self.base_url + path, body=body, timeout=timeout)
 
 
@@ -338,6 +338,13 @@ class BenchmarkHarness:
         if self._stop:
             return
         self._stop = True
+        self.stop_nodes()
+        if self.args.keep_artifacts:
+            self.log(f"Artifacts kept under {self.run_root}")
+        elif self.args.run_dir is None:
+            shutil.rmtree(self.run_root, ignore_errors=True)
+
+    def stop_nodes(self) -> None:
         for node in self.nodes:
             proc = node.process
             if proc is None or proc.poll() is not None:
@@ -353,10 +360,19 @@ class BenchmarkHarness:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
-        if self.args.keep_artifacts:
-            self.log(f"Artifacts kept under {self.run_root}")
-        elif self.args.run_dir is None:
-            shutil.rmtree(self.run_root, ignore_errors=True)
+            proc.wait(timeout=1.0)
+        for node in self.nodes:
+            node.process = None
+            node.pid = None
+
+    def restart_nodes_for_mixed(self) -> None:
+        self.stop_nodes()
+        self._stop = False
+        self.destinations = {}
+        self.link_ids = {"edge-a": [], "edge-b": []}
+        self.proof_destinations_ready = False
+        self.start_nodes()
+        self.bootstrap_destinations()
 
     def clear_event_queues(self) -> None:
         for node in self.nodes:
@@ -509,6 +525,29 @@ class BenchmarkHarness:
         suffix = "?clear=true" if clear else ""
         return list(node.get(f"/api/link_events{suffix}")["link_events"])
 
+    def reset_links(self) -> None:
+        for node in (self.edge_a, self.edge_b):
+            try:
+                links = node.get("/api/links", timeout=30.0)["links"]
+            except Exception:
+                continue
+            for link in links:
+                if link.get("state") in {"active", "pending", "handshake", "stale"}:
+                    try:
+                        self.close_link(node, str(link["link_id"]))
+                    except Exception:
+                        pass
+
+        wait_until(
+            "all edge links closed",
+            lambda: len(self.edge_a.get("/api/links", timeout=30.0)["links"]) == 0
+            and len(self.edge_b.get("/api/links", timeout=30.0)["links"]) == 0,
+            timeout=self.args.link_timeout,
+            interval=0.5,
+        )
+        self.link_ids = {"edge-a": [], "edge-b": []}
+        self.clear_event_queues()
+
     def bootstrap_destinations(self) -> None:
         self.log("Bootstrapping destinations and path convergence...")
         self.destinations["edge_a_raw_in"] = self.create_inbound_destination(
@@ -604,6 +643,7 @@ class BenchmarkHarness:
         def run() -> None:
             sent = 0
             errors = 0
+            error_messages: dict[str, int] = {}
             started = time.time()
             interval = 1.0 / rate if rate > 0 else 0.0
             next_deadline = started
@@ -612,15 +652,22 @@ class BenchmarkHarness:
                 try:
                     fn(counter)
                     sent += 1
-                except Exception:
+                except Exception as exc:
                     errors += 1
+                    message = str(exc).strip() or exc.__class__.__name__
+                    error_messages[message] = error_messages.get(message, 0) + 1
                 counter += 1
                 if interval > 0:
                     next_deadline += interval
                     sleep_for = next_deadline - time.time()
                     if sleep_for > 0:
                         time.sleep(sleep_for)
-            stats[name] = {"attempted": counter, "sent": sent, "errors": errors}
+            stats[name] = {
+                "attempted": counter,
+                "sent": sent,
+                "errors": errors,
+                "error_messages": error_messages,
+            }
 
         thread = threading.Thread(target=run, name=name, daemon=True)
         thread.start()
@@ -955,6 +1002,7 @@ class BenchmarkHarness:
         )
 
     def wave_mixed(self) -> WaveResult:
+        self.restart_nodes_for_mixed()
         self.ensure_link_pool()
 
         def body(result: WaveResult) -> None:
@@ -1014,12 +1062,42 @@ class BenchmarkHarness:
             result.sender_stats = stats
             packets_a = self.edge_a.get("/api/packets?clear=true")["packets"]
             packets_b = self.edge_b.get("/api/packets?clear=true")["packets"]
+            link_stats_a = {
+                link["link_id"]: link
+                for link in self.active_links(self.edge_a, initiator_only=True)
+                if link["link_id"] in edge_a_links
+            }
+            link_stats_b = {
+                link["link_id"]: link
+                for link in self.active_links(self.edge_b, initiator_only=True)
+                if link["link_id"] in edge_b_links
+            }
             result.counters = {
                 "edge_a_packets_received": len(packets_a),
                 "edge_b_packets_received": len(packets_b),
                 "edge_a_proofs_received": self.count_proofs(self.edge_a, clear=True),
                 "edge_b_proofs_received": self.count_proofs(self.edge_b, clear=True),
                 "middle_active_links": len(self.active_links(self.middle)),
+                "edge_a_channel_send_ok": sum(int(link.get("channel_send_ok", 0)) for link in link_stats_a.values()),
+                "edge_b_channel_send_ok": sum(int(link.get("channel_send_ok", 0)) for link in link_stats_b.values()),
+                "edge_a_channel_not_ready": sum(
+                    int(link.get("channel_send_not_ready", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_not_ready": sum(
+                    int(link.get("channel_send_not_ready", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_channel_proofs_received": sum(
+                    int(link.get("channel_proofs_received", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_proofs_received": sum(
+                    int(link.get("channel_proofs_received", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_pending_channel_packets": sum(
+                    int(link.get("pending_channel_packets", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_pending_channel_packets": sum(
+                    int(link.get("pending_channel_packets", 0)) for link in link_stats_b.values()
+                ),
             }
 
         return self.run_wave(
