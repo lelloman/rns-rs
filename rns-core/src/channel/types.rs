@@ -8,7 +8,7 @@ pub type Sequence = u16;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelAction {
     /// Send plaintext envelope bytes on the link with CHANNEL context.
-    SendOnLink { raw: Vec<u8> },
+    SendOnLink { raw: Vec<u8>, sequence: Sequence },
     /// Message received and decoded.
     MessageReceived {
         msgtype: MessageType,

@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use super::compressor::Bzip2Compressor;
-use rns_core::channel::Channel;
+use rns_core::channel::{Channel, Sequence};
 use rns_core::constants;
 use rns_core::link::types::{LinkId, LinkState, TeardownReason};
 use rns_core::link::{LinkAction, LinkEngine, LinkMode};
@@ -41,6 +41,14 @@ impl Default for ResourceStrategy {
 struct ManagedLink {
     engine: LinkEngine,
     channel: Option<Channel>,
+    pending_channel_packets: HashMap<[u8; 32], Sequence>,
+    channel_send_ok: u64,
+    channel_send_not_ready: u64,
+    channel_send_too_big: u64,
+    channel_send_other_error: u64,
+    channel_messages_received: u64,
+    channel_proofs_sent: u64,
+    channel_proofs_received: u64,
     /// Destination hash this link belongs to.
     dest_hash: [u8; 16],
     /// Remote identity (hash, public_key) once identified.
@@ -298,6 +306,14 @@ impl LinkManager {
         let managed = ManagedLink {
             engine,
             channel: None,
+            pending_channel_packets: HashMap::new(),
+            channel_send_ok: 0,
+            channel_send_not_ready: 0,
+            channel_send_too_big: 0,
+            channel_send_other_error: 0,
+            channel_messages_received: 0,
+            channel_proofs_sent: 0,
+            channel_proofs_received: 0,
             dest_hash: *dest_hash,
             remote_identity: None,
             dest_sig_pub_bytes: Some(*dest_sig_pub_bytes),
@@ -346,6 +362,7 @@ impl LinkManager {
                 // LRPROOF: dest_hash is the link_id
                 self.handle_lrproof(&dest_hash, &packet, rng)
             }
+            constants::PACKET_TYPE_PROOF => self.handle_link_proof(&dest_hash, &packet, rng),
             constants::PACKET_TYPE_DATA => {
                 self.handle_link_data(&dest_hash, &packet, packet_hash, rng)
             }
@@ -393,6 +410,14 @@ impl LinkManager {
         let managed = ManagedLink {
             engine,
             channel: None,
+            pending_channel_packets: HashMap::new(),
+            channel_send_ok: 0,
+            channel_send_not_ready: 0,
+            channel_send_too_big: 0,
+            channel_send_other_error: 0,
+            channel_messages_received: 0,
+            channel_proofs_sent: 0,
+            channel_proofs_received: 0,
             dest_hash: *dest_hash,
             remote_identity: None,
             dest_sig_pub_bytes: None,
@@ -438,6 +463,82 @@ impl LinkManager {
         });
 
         actions
+    }
+
+    fn handle_link_proof(
+        &mut self,
+        link_id: &LinkId,
+        packet: &RawPacket,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        if packet.data.len() < 32 {
+            return Vec::new();
+        }
+
+        let mut tracked_hash = [0u8; 32];
+        tracked_hash.copy_from_slice(&packet.data[..32]);
+
+        let Some(link) = self.links.get_mut(link_id) else {
+            return Vec::new();
+        };
+        let Some(sequence) = link.pending_channel_packets.remove(&tracked_hash) else {
+            return Vec::new();
+        };
+        link.channel_proofs_received += 1;
+        let Some(channel) = link.channel.as_mut() else {
+            return Vec::new();
+        };
+
+        let chan_actions = channel.packet_delivered(sequence);
+        let _ = channel;
+        let _ = link;
+        self.process_channel_actions(link_id, chan_actions, rng)
+    }
+
+    fn build_link_packet_proof(
+        &mut self,
+        link_id: &LinkId,
+        packet_hash: &[u8; 32],
+    ) -> Vec<LinkManagerAction> {
+        let dest_hash = match self.links.get(link_id) {
+            Some(link) => link.dest_hash,
+            None => return Vec::new(),
+        };
+        let Some(ld) = self.link_destinations.get(&dest_hash) else {
+            return Vec::new();
+        };
+        if let Some(link) = self.links.get_mut(link_id) {
+            link.channel_proofs_sent += 1;
+        }
+
+        let signature = ld.sig_prv.sign(packet_hash);
+        let mut proof_data = Vec::with_capacity(96);
+        proof_data.extend_from_slice(packet_hash);
+        proof_data.extend_from_slice(&signature);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        if let Ok(pkt) = RawPacket::pack(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_NONE,
+            &proof_data,
+        ) {
+            vec![LinkManagerAction::SendPacket {
+                raw: pkt.raw,
+                dest_type: constants::DESTINATION_LINK,
+                attached_interface: None,
+            }]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Handle an incoming LRPROOF packet (initiator side).
@@ -553,6 +654,7 @@ impl LinkManager {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
+                packet_hash: [u8; 32],
             },
             Request {
                 link_id: LinkId,
@@ -676,6 +778,7 @@ impl LinkManager {
                             link_id,
                             inbound_actions,
                             plaintext,
+                            packet_hash,
                         }
                     }
                     Err(_) => LinkDataResult::Error,
@@ -841,17 +944,28 @@ impl LinkManager {
                 link_id,
                 inbound_actions,
                 plaintext,
+                packet_hash,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Feed plaintext to channel
                 if let Some(link) = self.links.get_mut(&link_id) {
                     if let Some(ref mut channel) = link.channel {
                         let chan_actions = channel.receive(&plaintext, time::now());
+                        link.channel_messages_received += chan_actions
+                            .iter()
+                            .filter(|action| {
+                                matches!(
+                                    action,
+                                    rns_core::channel::ChannelAction::MessageReceived { .. }
+                                )
+                            })
+                            .count() as u64;
                         // process_channel_actions needs immutable self, so collect first
                         let _ = link;
                         actions.extend(self.process_channel_actions(&link_id, chan_actions, rng));
                     }
                 }
+                actions.extend(self.build_link_packet_proof(&link_id, &packet_hash));
             }
             LinkDataResult::Request {
                 link_id,
@@ -884,37 +998,7 @@ impl LinkManager {
                     data: plaintext,
                 });
 
-                // Generate proof for the link packet (Python: Link.prove_packet)
-                if let Some(link) = self.links.get(&link_id) {
-                    if let Some(ld) = self.link_destinations.get(&link.dest_hash) {
-                        let signature = ld.sig_prv.sign(&packet_hash);
-                        let mut proof_data = Vec::with_capacity(96);
-                        proof_data.extend_from_slice(&packet_hash);
-                        proof_data.extend_from_slice(&signature);
-
-                        let flags = PacketFlags {
-                            header_type: constants::HEADER_1,
-                            context_flag: constants::FLAG_UNSET,
-                            transport_type: constants::TRANSPORT_BROADCAST,
-                            destination_type: constants::DESTINATION_LINK,
-                            packet_type: constants::PACKET_TYPE_PROOF,
-                        };
-                        if let Ok(pkt) = RawPacket::pack(
-                            flags,
-                            0,
-                            &link_id,
-                            None,
-                            constants::CONTEXT_NONE,
-                            &proof_data,
-                        ) {
-                            actions.push(LinkManagerAction::SendPacket {
-                                raw: pkt.raw,
-                                dest_type: constants::DESTINATION_LINK,
-                                attached_interface: None,
-                            });
-                        }
-                    }
-                }
+                actions.extend(self.build_link_packet_proof(&link_id, &packet_hash));
             }
             LinkDataResult::ResourceAdv {
                 link_id,
@@ -1859,9 +1943,21 @@ impl LinkManager {
         let link_mdu = link.engine.mdu();
         let now = time::now();
         let chan_actions = match channel.send(msgtype, payload, now, link_mdu) {
-            Ok(a) => a,
+            Ok(a) => {
+                link.channel_send_ok += 1;
+                a
+            }
             Err(e) => {
                 log::debug!("Channel send failed: {:?}", e);
+                match e {
+                    rns_core::channel::ChannelError::NotReady => link.channel_send_not_ready += 1,
+                    rns_core::channel::ChannelError::MessageTooBig => {
+                        link.channel_send_too_big += 1;
+                    }
+                    rns_core::channel::ChannelError::InvalidEnvelope => {
+                        link.channel_send_other_error += 1;
+                    }
+                }
                 return Err(e.to_string());
             }
         };
@@ -1912,6 +2008,13 @@ impl LinkManager {
                     });
                     link.engine.record_outbound(now, true);
                 }
+            }
+
+            if let Some(channel) = link.channel.as_mut() {
+                let chan_actions = channel.tick(now);
+                let _ = channel;
+                let _ = link;
+                all_actions.extend(self.process_channel_actions(link_id, chan_actions, rng));
             }
         }
 
@@ -2023,6 +2126,16 @@ impl LinkManager {
                     dest_hash: managed.dest_hash,
                     remote_identity: managed.remote_identity.as_ref().map(|(h, _)| *h),
                     rtt: managed.engine.rtt(),
+                    channel_window: managed.channel.as_ref().map(|c| c.window()),
+                    channel_outstanding: managed.channel.as_ref().map(|c| c.outstanding()),
+                    pending_channel_packets: managed.pending_channel_packets.len(),
+                    channel_send_ok: managed.channel_send_ok,
+                    channel_send_not_ready: managed.channel_send_not_ready,
+                    channel_send_too_big: managed.channel_send_too_big,
+                    channel_send_other_error: managed.channel_send_other_error,
+                    channel_messages_received: managed.channel_messages_received,
+                    channel_proofs_sent: managed.channel_proofs_sent,
+                    channel_proofs_received: managed.channel_proofs_received,
                 }
             })
             .collect()
@@ -2113,7 +2226,7 @@ impl LinkManager {
 
     /// Convert ChannelActions to LinkManagerActions.
     fn process_channel_actions(
-        &self,
+        &mut self,
         link_id: &LinkId,
         actions: Vec<rns_core::channel::ChannelAction>,
         rng: &mut dyn Rng,
@@ -2121,32 +2234,40 @@ impl LinkManager {
         let mut result = Vec::new();
         for action in actions {
             match action {
-                rns_core::channel::ChannelAction::SendOnLink { raw } => {
+                rns_core::channel::ChannelAction::SendOnLink { raw, sequence } => {
                     // Encrypt and send as CHANNEL context
-                    if let Some(link) = self.links.get(link_id) {
-                        if let Ok(encrypted) = link.engine.encrypt(&raw, rng) {
-                            let flags = PacketFlags {
-                                header_type: constants::HEADER_1,
-                                context_flag: constants::FLAG_UNSET,
-                                transport_type: constants::TRANSPORT_BROADCAST,
-                                destination_type: constants::DESTINATION_LINK,
-                                packet_type: constants::PACKET_TYPE_DATA,
-                            };
-                            if let Ok(pkt) = RawPacket::pack(
-                                flags,
-                                0,
-                                link_id,
-                                None,
-                                constants::CONTEXT_CHANNEL,
-                                &encrypted,
-                            ) {
-                                result.push(LinkManagerAction::SendPacket {
-                                    raw: pkt.raw,
-                                    dest_type: constants::DESTINATION_LINK,
-                                    attached_interface: None,
-                                });
-                            }
+                    let encrypted = match self.links.get(link_id) {
+                        Some(link) => match link.engine.encrypt(&raw, rng) {
+                            Ok(encrypted) => encrypted,
+                            Err(_) => continue,
+                        },
+                        None => continue,
+                    };
+                    let flags = PacketFlags {
+                        header_type: constants::HEADER_1,
+                        context_flag: constants::FLAG_UNSET,
+                        transport_type: constants::TRANSPORT_BROADCAST,
+                        destination_type: constants::DESTINATION_LINK,
+                        packet_type: constants::PACKET_TYPE_DATA,
+                    };
+                    if let Ok(pkt) = RawPacket::pack(
+                        flags,
+                        0,
+                        link_id,
+                        None,
+                        constants::CONTEXT_CHANNEL,
+                        &encrypted,
+                    ) {
+                        if let Some(link_mut) = self.links.get_mut(link_id) {
+                            link_mut
+                                .pending_channel_packets
+                                .insert(pkt.packet_hash, sequence);
                         }
+                        result.push(LinkManagerAction::SendPacket {
+                            raw: pkt.raw,
+                            dest_type: constants::DESTINATION_LINK,
+                            attached_interface: None,
+                        });
                     }
                 }
                 rns_core::channel::ChannelAction::MessageReceived {
@@ -3258,6 +3379,58 @@ mod tests {
             }
         }
         assert!(got_channel_msg, "Responder should receive channel message");
+    }
+
+    #[test]
+    fn test_channel_proof_reopens_send_window() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        init_mgr
+            .send_channel_message(&link_id, 42, b"first", &mut rng)
+            .expect("first send should succeed");
+        init_mgr
+            .send_channel_message(&link_id, 42, b"second", &mut rng)
+            .expect("second send should succeed");
+
+        let err = init_mgr
+            .send_channel_message(&link_id, 42, b"third", &mut rng)
+            .expect_err("third send should hit the initial channel window");
+        assert_eq!(err, "Channel is not ready to send");
+
+        let queued_packets = init_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .pending_channel_packets
+            .clone();
+        assert_eq!(queued_packets.len(), 2);
+        for tracked_hash in queued_packets.keys().take(1) {
+            let mut proof_data = Vec::with_capacity(96);
+            proof_data.extend_from_slice(tracked_hash);
+            proof_data.extend_from_slice(&[0x11; 64]);
+            let flags = PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            };
+            let proof = RawPacket::pack(flags, 0, &link_id, None, constants::CONTEXT_NONE, &proof_data)
+                .expect("proof packet should pack");
+            let ack_actions = init_mgr.handle_local_delivery(
+                link_id,
+                &proof.raw,
+                proof.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            );
+            assert!(ack_actions.is_empty(), "proof delivery should only update channel state");
+        }
+
+        init_mgr
+            .send_channel_message(&link_id, 42, b"third", &mut rng)
+            .expect("proof should free one channel slot");
     }
 
     #[test]

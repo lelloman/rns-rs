@@ -466,6 +466,16 @@ pub struct LinkInfoEntry {
     pub dest_hash: [u8; 16],
     pub remote_identity: Option<[u8; 16]>,
     pub rtt: Option<f64>,
+    pub channel_window: Option<u16>,
+    pub channel_outstanding: Option<usize>,
+    pub pending_channel_packets: usize,
+    pub channel_send_ok: u64,
+    pub channel_send_not_ready: u64,
+    pub channel_send_too_big: u64,
+    pub channel_send_other_error: u64,
+    pub channel_messages_received: u64,
+    pub channel_proofs_sent: u64,
+    pub channel_proofs_received: u64,
 }
 
 /// Information about an active resource transfer.

@@ -207,6 +207,16 @@ fn handle_links(node: &NodeHandle) -> HttpResponse {
                         "dest_hash": to_hex(&l.dest_hash),
                         "remote_identity": l.remote_identity.map(|h| to_hex(&h)),
                         "rtt": l.rtt,
+                        "channel_window": l.channel_window,
+                        "channel_outstanding": l.channel_outstanding,
+                        "pending_channel_packets": l.pending_channel_packets,
+                        "channel_send_ok": l.channel_send_ok,
+                        "channel_send_not_ready": l.channel_send_not_ready,
+                        "channel_send_too_big": l.channel_send_too_big,
+                        "channel_send_other_error": l.channel_send_other_error,
+                        "channel_messages_received": l.channel_messages_received,
+                        "channel_proofs_sent": l.channel_proofs_sent,
+                        "channel_proofs_received": l.channel_proofs_received,
                     })
                 })
                 .collect();

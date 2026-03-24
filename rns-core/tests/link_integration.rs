@@ -419,7 +419,7 @@ fn test_channel_messaging_over_link() {
     assert_eq!(actions.len(), 1);
 
     let raw_envelope = match &actions[0] {
-        rns_core::channel::ChannelAction::SendOnLink { raw } => raw.clone(),
+        rns_core::channel::ChannelAction::SendOnLink { raw, .. } => raw.clone(),
         _ => panic!("Expected SendOnLink"),
     };
 

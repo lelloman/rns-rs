@@ -483,9 +483,12 @@ class BenchmarkHarness:
     def close_link(self, node: BenchNode, link_id: str) -> None:
         node.post("/api/link/close", {"link_id": link_id})
 
-    def active_links(self, node: BenchNode) -> list[dict[str, Any]]:
+    def active_links(self, node: BenchNode, initiator_only: bool = False) -> list[dict[str, Any]]:
         links = node.get("/api/links")["links"]
-        return [link for link in links if link.get("state") == "active"]
+        active = [link for link in links if link.get("state") == "active"]
+        if initiator_only:
+            active = [link for link in active if link.get("is_initiator")]
+        return active
 
     def request_path(self, node: BenchNode, dest_hash: str) -> None:
         node.post("/api/path/request", {"dest_hash": dest_hash})
@@ -817,7 +820,7 @@ class BenchmarkHarness:
             (self.edge_a, self.destinations["edge_b_raw_in"]),
             (self.edge_b, self.destinations["edge_a_raw_in"]),
         ]:
-            active = len(self.active_links(node))
+            active = len(self.active_links(node, initiator_only=True))
             target = self.args.link_data_links
             while active < target:
                 link_id = self.create_link(node, remote_hash)
@@ -825,7 +828,7 @@ class BenchmarkHarness:
                 active += 1
             wait_until(
                 f"{node.name} active links >= {target}",
-                lambda n=node, t=target: len(self.active_links(n)) >= t,
+                lambda n=node, t=target: len(self.active_links(n, initiator_only=True)) >= t,
                 timeout=self.args.link_timeout,
                 interval=0.5,
             )
@@ -837,8 +840,14 @@ class BenchmarkHarness:
         def body(result: WaveResult) -> None:
             stats: dict[str, Any] = {}
 
-            edge_a_links = [link["link_id"] for link in self.active_links(self.edge_a)[: self.args.link_data_links]]
-            edge_b_links = [link["link_id"] for link in self.active_links(self.edge_b)[: self.args.link_data_links]]
+            edge_a_links = [
+                link["link_id"]
+                for link in self.active_links(self.edge_a, initiator_only=True)[: self.args.link_data_links]
+            ]
+            edge_b_links = [
+                link["link_id"]
+                for link in self.active_links(self.edge_b, initiator_only=True)[: self.args.link_data_links]
+            ]
 
             def send_a(counter: int) -> None:
                 link_id = edge_a_links[counter % len(edge_a_links)]
@@ -859,11 +868,53 @@ class BenchmarkHarness:
             result.sender_stats = stats
             packets_a = self.edge_a.get("/api/packets?clear=true")["packets"]
             packets_b = self.edge_b.get("/api/packets?clear=true")["packets"]
+            link_stats_a = {
+                link["link_id"]: link
+                for link in self.active_links(self.edge_a, initiator_only=True)
+                if link["link_id"] in edge_a_links
+            }
+            link_stats_b = {
+                link["link_id"]: link
+                for link in self.active_links(self.edge_b, initiator_only=True)
+                if link["link_id"] in edge_b_links
+            }
             result.counters = {
                 "edge_a_packets_received": len(packets_a),
                 "edge_b_packets_received": len(packets_b),
                 "edge_a_channel_packets": sum(1 for pkt in packets_a if str(pkt["dest_hash"]).startswith("channel:")),
                 "edge_b_channel_packets": sum(1 for pkt in packets_b if str(pkt["dest_hash"]).startswith("channel:")),
+                "edge_a_channel_send_ok": sum(int(link.get("channel_send_ok", 0)) for link in link_stats_a.values()),
+                "edge_b_channel_send_ok": sum(int(link.get("channel_send_ok", 0)) for link in link_stats_b.values()),
+                "edge_a_channel_not_ready": sum(
+                    int(link.get("channel_send_not_ready", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_not_ready": sum(
+                    int(link.get("channel_send_not_ready", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_channel_messages_received": sum(
+                    int(link.get("channel_messages_received", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_messages_received": sum(
+                    int(link.get("channel_messages_received", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_channel_proofs_sent": sum(
+                    int(link.get("channel_proofs_sent", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_proofs_sent": sum(
+                    int(link.get("channel_proofs_sent", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_channel_proofs_received": sum(
+                    int(link.get("channel_proofs_received", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_channel_proofs_received": sum(
+                    int(link.get("channel_proofs_received", 0)) for link in link_stats_b.values()
+                ),
+                "edge_a_pending_channel_packets": sum(
+                    int(link.get("pending_channel_packets", 0)) for link in link_stats_a.values()
+                ),
+                "edge_b_pending_channel_packets": sum(
+                    int(link.get("pending_channel_packets", 0)) for link in link_stats_b.values()
+                ),
             }
 
         return self.run_wave(
@@ -877,8 +928,8 @@ class BenchmarkHarness:
         self.ensure_link_pool()
 
         def body(result: WaveResult) -> None:
-            edge_a_link = self.active_links(self.edge_a)[0]["link_id"]
-            edge_b_link = self.active_links(self.edge_b)[0]["link_id"]
+            edge_a_link = self.active_links(self.edge_a, initiator_only=True)[0]["link_id"]
+            edge_b_link = self.active_links(self.edge_b, initiator_only=True)[0]["link_id"]
             self.send_resource(self.edge_a, edge_a_link, b"R" * self.args.resource_size, b"edge-a")
             self.send_resource(self.edge_b, edge_b_link, b"S" * self.args.resource_size, b"edge-b")
             time.sleep(self.args.resource_wait_secs)
@@ -908,8 +959,14 @@ class BenchmarkHarness:
 
         def body(result: WaveResult) -> None:
             stats: dict[str, Any] = {}
-            edge_a_links = [link["link_id"] for link in self.active_links(self.edge_a)[: self.args.link_data_links]]
-            edge_b_links = [link["link_id"] for link in self.active_links(self.edge_b)[: self.args.link_data_links]]
+            edge_a_links = [
+                link["link_id"]
+                for link in self.active_links(self.edge_a, initiator_only=True)[: self.args.link_data_links]
+            ]
+            edge_b_links = [
+                link["link_id"]
+                for link in self.active_links(self.edge_b, initiator_only=True)[: self.args.link_data_links]
+            ]
             stop_at = time.time() + self.args.duration_secs
             link_stats = {"attempted": 0, "sent": 0, "errors": 0}
 

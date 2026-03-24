@@ -122,7 +122,7 @@ impl Channel {
             delivered: false,
         });
 
-        Ok(alloc::vec![ChannelAction::SendOnLink { raw }])
+        Ok(alloc::vec![ChannelAction::SendOnLink { raw, sequence }])
     }
 
     /// Receive decrypted envelope bytes.
@@ -208,7 +208,7 @@ impl Channel {
             }
         }
 
-        alloc::vec![ChannelAction::SendOnLink { raw }]
+        alloc::vec![ChannelAction::SendOnLink { raw, sequence }]
     }
 
     /// Compute timeout duration for the given try count.
@@ -227,6 +227,22 @@ impl Channel {
             .iter()
             .find(|e| e.sequence == sequence)
             .map(|e| e.tries)
+    }
+
+    /// Periodic maintenance for retransmissions and timeout handling.
+    pub fn tick(&mut self, now: f64) -> Vec<ChannelAction> {
+        let timed_out: Vec<Sequence> = self
+            .tx_ring
+            .iter()
+            .filter(|e| !e.delivered && now - e.sent_at >= self.get_packet_timeout(e.tries))
+            .map(|e| e.sequence)
+            .collect();
+
+        let mut actions = Vec::new();
+        for sequence in timed_out {
+            actions.extend(self.packet_timeout(sequence, now));
+        }
+        actions
     }
 
     /// Shut down the channel, clearing all rings.
@@ -379,7 +395,8 @@ mod tests {
         let actions = ch.send(0x01, b"hello", 1.0, 500).unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            ChannelAction::SendOnLink { raw } => {
+            ChannelAction::SendOnLink { raw, sequence } => {
+                assert_eq!(*sequence, 0);
                 // Simulate receive on the other side
                 let mut ch2 = Channel::new(0.1);
                 let recv_actions = ch2.receive(raw, 1.1);
@@ -437,6 +454,21 @@ mod tests {
         let actions = ch.packet_timeout(1, 2.0);
         assert_eq!(actions.len(), 1); // resend
         assert_eq!(ch.window, 2);
+    }
+
+    #[test]
+    fn test_tick_retransmits_timed_out_packets() {
+        let mut ch = Channel::new(0.1);
+        ch.send(0x01, b"a", 0.0, 500).unwrap();
+
+        let timeout = ch.get_packet_timeout(1);
+        let actions = ch.tick(timeout + 0.01);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ChannelAction::SendOnLink { sequence, .. } => assert_eq!(*sequence, 0),
+            _ => panic!("Expected SendOnLink"),
+        }
+        assert_eq!(ch.get_tries(0), Some(2));
     }
 
     #[test]
@@ -656,7 +688,7 @@ mod tests {
 
             let actions = sender.send(0x01, &[i as u8], i as f64, 500).unwrap();
             let raw = match &actions[0] {
-                ChannelAction::SendOnLink { raw } => raw.clone(),
+                ChannelAction::SendOnLink { raw, .. } => raw.clone(),
                 _ => panic!("Expected SendOnLink"),
             };
 
