@@ -130,12 +130,21 @@ def read_proc_stats(pid: int) -> dict[str, float]:
 
 
 class PerfSampler:
-    def __init__(self, enabled: bool, pid: int, duration_secs: float, output_path: Path):
+    def __init__(
+        self,
+        enabled: bool,
+        pid: int,
+        duration_secs: float,
+        output_path: Path,
+        mode: str,
+    ):
         self.enabled = enabled
         self.pid = pid
         self.duration_secs = duration_secs
         self.output_path = output_path
+        self.mode = mode
         self.process: subprocess.Popen[str] | None = None
+        self.data_path = output_path.with_suffix(".data")
 
     def start(self) -> None:
         if not self.enabled:
@@ -144,6 +153,27 @@ class PerfSampler:
             self.enabled = False
             return
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.mode == "record":
+            self.process = subprocess.Popen(
+                [
+                    "perf",
+                    "record",
+                    "-F",
+                    "99",
+                    "-g",
+                    "-p",
+                    str(self.pid),
+                    "-o",
+                    str(self.data_path),
+                    "--",
+                    "sleep",
+                    str(max(self.duration_secs, 0.1)),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            return
         with self.output_path.open("w", encoding="utf-8") as handle:
             self.process = subprocess.Popen(
                 [
@@ -165,9 +195,112 @@ class PerfSampler:
         if not self.enabled or self.process is None:
             return None
         self.process.wait(timeout=max(self.duration_secs + 5.0, 10.0))
+        if self.mode == "record" and self.process.returncode == 0 and self.data_path.exists():
+            with self.output_path.open("w", encoding="utf-8") as handle:
+                subprocess.run(
+                    [
+                        "perf",
+                        "report",
+                        "--stdio",
+                        "-i",
+                        str(self.data_path),
+                    ],
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    check=False,
+                )
+            return {
+                "path": str(self.output_path),
+                "data_path": str(self.data_path),
+                "returncode": self.process.returncode,
+                "mode": self.mode,
+            }
         return {
             "path": str(self.output_path),
             "returncode": self.process.returncode,
+            "mode": self.mode,
+        }
+
+
+class StraceSampler:
+    def __init__(self, enabled: bool, pid: int, duration_secs: float, output_path: Path):
+        self.enabled = enabled
+        self.pid = pid
+        self.duration_secs = duration_secs
+        self.output_path = output_path
+        self.process: subprocess.Popen[str] | None = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        if shutil.which("strace") is None:
+            self.enabled = False
+            return
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.process = subprocess.Popen(
+            [
+                "strace",
+                "-f",
+                "-c",
+                "-p",
+                str(self.pid),
+                "-o",
+                str(self.output_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        # Give strace a brief moment to attach before the measured body starts.
+        time.sleep(0.2)
+
+    def finish(self) -> dict[str, Any] | None:
+        if not self.enabled or self.process is None:
+            return None
+        if self.process.poll() is None:
+            self.process.send_signal(signal.SIGINT)
+        self.process.wait(timeout=max(self.duration_secs + 5.0, 10.0))
+        return {
+            "path": str(self.output_path),
+            "returncode": self.process.returncode,
+        }
+
+
+class SamplerBundle:
+    def __init__(
+        self,
+        profile_mode: str,
+        profile_kind: str,
+        perf_mode: str,
+        pid: int,
+        duration_secs: float,
+        run_root: Path,
+        wave_name: str,
+    ):
+        enabled = profile_mode in ("middle", "all")
+        self.perf = PerfSampler(
+            enabled=enabled and profile_kind in ("perf", "both"),
+            pid=pid,
+            duration_secs=duration_secs,
+            output_path=run_root / f"perf-{wave_name}.txt",
+            mode=perf_mode,
+        )
+        self.strace = StraceSampler(
+            enabled=enabled and profile_kind in ("strace", "both"),
+            pid=pid,
+            duration_secs=duration_secs,
+            output_path=run_root / f"strace-{wave_name}.txt",
+        )
+
+    def start(self) -> None:
+        self.perf.start()
+        self.strace.start()
+
+    def finish(self) -> dict[str, Any]:
+        return {
+            "perf": self.perf.finish(),
+            "strace": self.strace.finish(),
         }
 
 
@@ -202,6 +335,7 @@ class WaveResult:
     counters: dict[str, Any] = field(default_factory=dict)
     process_stats: dict[str, Any] = field(default_factory=dict)
     perf: dict[str, Any] | None = None
+    strace: dict[str, Any] | None = None
 
 
 class BenchmarkHarness:
@@ -246,6 +380,10 @@ class BenchmarkHarness:
             config_dir=node_dir,
             log_path=node_dir / "rns-ctl.log",
         )
+
+    @property
+    def control_timeout(self) -> float:
+        return max(120.0, self.args.link_timeout * 4.0)
 
     def log(self, message: str) -> None:
         print(message, flush=True)
@@ -475,7 +613,7 @@ class BenchmarkHarness:
         return node.post("/api/send", {"dest_hash": dest_hash, "data": b64(payload)})
 
     def create_link(self, node: BenchNode, dest_hash: str) -> str:
-        response = node.post("/api/link", {"dest_hash": dest_hash})
+        response = node.post("/api/link", {"dest_hash": dest_hash}, timeout=self.control_timeout)
         return str(response["link_id"])
 
     def send_channel(self, node: BenchNode, link_id: str, msgtype: int, payload: bytes) -> None:
@@ -500,7 +638,7 @@ class BenchmarkHarness:
         node.post("/api/link/close", {"link_id": link_id})
 
     def active_links(self, node: BenchNode, initiator_only: bool = False) -> list[dict[str, Any]]:
-        links = node.get("/api/links")["links"]
+        links = node.get("/api/links", timeout=self.control_timeout)["links"]
         active = [link for link in links if link.get("state") == "active"]
         if initiator_only:
             active = [link for link in active if link.get("is_initiator")]
@@ -684,13 +822,16 @@ class BenchmarkHarness:
         self.clear_event_queues()
         started = time.time()
         before = self.snapshot_nodes()
-        perf = PerfSampler(
-            enabled=profile_middle,
+        samplers = SamplerBundle(
+            profile_mode=self.args.profile if profile_middle else "none",
+            profile_kind=self.args.profile_kind,
+            perf_mode=self.args.perf_mode,
             pid=self.middle.pid or 0,
             duration_secs=duration_secs or self.args.duration_secs,
-            output_path=self.run_root / f"perf-{name}.txt",
+            run_root=self.run_root,
+            wave_name=name,
         )
-        perf.start()
+        samplers.start()
         result = WaveResult(name=name, started_at=started, ended_at=started, duration_secs=0.0)
         try:
             body(result)
@@ -700,7 +841,9 @@ class BenchmarkHarness:
             result.duration_secs = ended - started
             after = self.snapshot_nodes()
             result.process_stats = self.diff_snapshots(before, after, result.duration_secs)
-            result.perf = perf.finish()
+            profiling = samplers.finish()
+            result.perf = profiling["perf"]
+            result.strace = profiling["strace"]
         return result
 
     def wave_convergence(self) -> WaveResult:
@@ -758,7 +901,7 @@ class BenchmarkHarness:
             wave_name,
             body,
             duration_secs=self.args.duration_secs,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, wave_name),
         )
 
     def wave_raw_burst(self) -> WaveResult:
@@ -805,7 +948,7 @@ class BenchmarkHarness:
             "raw_burst",
             body,
             duration_secs=2.0,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, "raw_burst"),
         )
 
     def wave_link_setup(self) -> WaveResult:
@@ -859,7 +1002,7 @@ class BenchmarkHarness:
             "link_setup",
             body,
             duration_secs=2.0,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, "link_setup"),
         )
 
     def ensure_link_pool(self) -> None:
@@ -968,7 +1111,7 @@ class BenchmarkHarness:
             "link_data",
             body,
             duration_secs=self.args.duration_secs,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, "link_data"),
         )
 
     def wave_resource_large(self) -> WaveResult:
@@ -998,7 +1141,7 @@ class BenchmarkHarness:
             "resource_large",
             body,
             duration_secs=self.args.resource_wait_secs,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, "resource_large"),
         )
 
     def wave_mixed(self) -> WaveResult:
@@ -1104,7 +1247,7 @@ class BenchmarkHarness:
             "mixed",
             body,
             duration_secs=self.args.duration_secs,
-            profile_middle=self.args.profile in ("middle", "all"),
+            profile_middle=name_is_profiled(self.args, "mixed"),
         )
 
     def execute(self) -> dict[str, Any]:
@@ -1162,6 +1305,7 @@ class BenchmarkHarness:
             "counters": result.counters,
             "process_stats": result.process_stats,
             "perf": result.perf,
+            "strace": result.strace,
         }
 
 
@@ -1180,8 +1324,20 @@ def summarize_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- middle cpu_percent: {middle['cpu_percent']:.2f}")
             lines.append(f"- middle total_rxb_delta: {middle['total_rxb_delta']}")
             lines.append(f"- middle total_txb_delta: {middle['total_txb_delta']}")
+        if wave.get("perf"):
+            lines.append(f"- perf: {wave['perf']['path']}")
+        if wave.get("strace"):
+            lines.append(f"- strace: {wave['strace']['path']}")
         lines.append("")
     return "\n".join(lines)
+
+
+def name_is_profiled(args: argparse.Namespace, wave_name: str) -> bool:
+    if args.profile == "none":
+        return False
+    if not args.profile_waves:
+        return True
+    return wave_name in args.profile_waves
 
 
 def parse_args() -> argparse.Namespace:
@@ -1214,6 +1370,23 @@ def parse_args() -> argparse.Namespace:
         help="Collect perf stat for the middle node during profiled waves",
     )
     parser.add_argument(
+        "--profile-kind",
+        choices=["perf", "strace", "both"],
+        default="perf",
+        help="Profiler to attach during profiled waves",
+    )
+    parser.add_argument(
+        "--perf-mode",
+        choices=["stat", "record"],
+        default="stat",
+        help="Use perf stat counters or perf record/report call stacks for profiled waves",
+    )
+    parser.add_argument(
+        "--profile-waves",
+        default="",
+        help="Comma-separated subset of waves to profile; empty means profile all selected waves",
+    )
+    parser.add_argument(
         "--waves",
         default="all",
         help="Comma-separated subset of waves or 'all'",
@@ -1228,6 +1401,10 @@ def parse_args() -> argparse.Namespace:
     invalid = [wave for wave in args.waves if wave not in WAVE_ORDER]
     if invalid:
         parser.error(f"unknown waves: {', '.join(invalid)}")
+    args.profile_waves = [wave.strip() for wave in args.profile_waves.split(",") if wave.strip()]
+    invalid_profile = [wave for wave in args.profile_waves if wave not in WAVE_ORDER]
+    if invalid_profile:
+        parser.error(f"unknown profile waves: {', '.join(invalid_profile)}")
     return args
 
 
