@@ -89,15 +89,42 @@ fn run() -> Result<(), String> {
 
     let mut db = StatsDb::open(&db_path).map_err(|e| format!("sqlite open failed: {}", e))?;
     let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
-    unload_stale_hooks(&control);
-    load_hooks(&control, priority)?;
+    loop {
+        unload_stale_hooks(&control);
+        match load_hooks(&control, priority) {
+            Ok(()) => break,
+            Err(err) => {
+                log::warn!("waiting for rnsd RPC: {}", err);
+                for _ in 0..50 {
+                    if SHOULD_STOP.load(Ordering::Relaxed) {
+                        return Err("interrupted while waiting for rnsd".to_string());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
     let hook_guard = HookGuard {
         control: control.clone(),
         armed: true,
     };
 
-    let mut stream = UnixStream::connect(&runtime.provider_socket)
-        .map_err(|e| format!("provider bridge connect failed: {}", e))?;
+    let mut stream = loop {
+        match UnixStream::connect(&runtime.provider_socket) {
+            Ok(s) => break s,
+            Err(err) => {
+                log::warn!("waiting for provider bridge: {}", err);
+                for _ in 0..50 {
+                    if SHOULD_STOP.load(Ordering::Relaxed) {
+                        return Err(
+                            "interrupted while waiting for provider bridge".to_string(),
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    };
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
         .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
