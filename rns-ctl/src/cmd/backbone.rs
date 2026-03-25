@@ -107,20 +107,15 @@ fn print_blacklist(response: &PickleValue) {
     }
 
     println!(
-        "{:<24} {:<40} {:>5} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+        "{:<24} {:<40} {:>5} {:>9} {:>8}  {}",
         "Interface",
         "IP",
         "Conn",
-        "Idle",
-        "Flap",
-        "Stall",
-        "Lvl",
-        "Rate",
         "BlkSecs",
         "Rejects",
         "Reason"
     );
-    println!("{}", "-".repeat(134));
+    println!("{}", "-".repeat(96));
     for entry in entries {
         let interface = entry
             .get("interface")
@@ -129,26 +124,6 @@ fn print_blacklist(response: &PickleValue) {
         let ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("-");
         let connected = entry
             .get("connected_count")
-            .and_then(|v| v.as_int())
-            .unwrap_or(0);
-        let idle = entry
-            .get("idle_timeout_events")
-            .and_then(|v| v.as_int())
-            .unwrap_or(0);
-        let flap = entry
-            .get("flap_events")
-            .and_then(|v| v.as_int())
-            .unwrap_or(0);
-        let stall = entry
-            .get("write_stall_events")
-            .and_then(|v| v.as_int())
-            .unwrap_or(0);
-        let penalty_level = entry
-            .get("penalty_level")
-            .and_then(|v| v.as_int())
-            .unwrap_or(0);
-        let rate = entry
-            .get("connect_rate_events")
             .and_then(|v| v.as_int())
             .unwrap_or(0);
         let blacklist = entry
@@ -165,15 +140,10 @@ fn print_blacklist(response: &PickleValue) {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         println!(
-            "{:<24} {:<40} {:>5} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+            "{:<24} {:<40} {:>5} {:>9} {:>8}  {}",
             interface,
             ip,
             connected,
-            idle,
-            flap,
-            stall,
-            penalty_level,
-            rate,
             blacklist,
             rejects,
             reason
@@ -193,14 +163,9 @@ fn pickle_list_to_json(value: &PickleValue) -> Value {
                     "interface": entry.get("interface").and_then(|v| v.as_str()),
                     "ip": entry.get("ip").and_then(|v| v.as_str()),
                     "connected_count": entry.get("connected_count").and_then(|v| v.as_int()),
-                    "idle_timeout_events": entry.get("idle_timeout_events").and_then(|v| v.as_int()),
-                    "flap_events": entry.get("flap_events").and_then(|v| v.as_int()),
-                    "write_stall_events": entry.get("write_stall_events").and_then(|v| v.as_int()),
                     "blacklisted_remaining_secs": entry.get("blacklisted_remaining_secs").and_then(|v| v.as_float()),
                     "blacklist_reason": entry.get("blacklist_reason").and_then(|v| v.as_str()),
                     "reject_count": entry.get("reject_count").and_then(|v| v.as_int()),
-                    "penalty_level": entry.get("penalty_level").and_then(|v| v.as_int()),
-                    "connect_rate_events": entry.get("connect_rate_events").and_then(|v| v.as_int()),
                 })
             })
             .collect(),

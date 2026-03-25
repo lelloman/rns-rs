@@ -22,10 +22,10 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BackbonePeerStateEntry, BlackholeInfo, Event, EventSender, HookInfo, InterfaceStatsResponse,
-    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, Event, EventSender, HookInfo,
+    InterfaceStatsResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -409,6 +409,14 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "backbone_interfaces" => {
+                    let resp = send_query(event_tx, QueryRequest::BackboneInterfaces)?;
+                    if let QueryResponse::BackboneInterfaces(entries) = resp {
+                        Ok(backbone_interfaces_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
             };
         }
@@ -490,12 +498,24 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 .ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "missing duration_secs")
                 })?;
+            let reason = request
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("sentinel blacklist")
+                .to_string();
+            let penalty_level = request
+                .get("penalty_level")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0)
+                .clamp(0, u8::MAX as i64) as u8;
             let resp = send_query(
                 event_tx,
                 QueryRequest::BlacklistBackbonePeer {
                     interface_name,
                     peer_ip,
                     duration: Duration::from_secs(duration_secs as u64),
+                    reason,
+                    penalty_level,
                 },
             )?;
             return if let QueryResponse::BlacklistBackbonePeer(ok) = resp {
@@ -872,6 +892,10 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
 
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
     let mut dict = vec![
+        (
+            PickleValue::String("id".into()),
+            PickleValue::Int(s.id as i64),
+        ),
         (
             PickleValue::String("name".into()),
             PickleValue::String(s.name.clone()),
@@ -1277,18 +1301,6 @@ fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleVa
                         PickleValue::Int(entry.connected_count as i64),
                     ),
                     (
-                        PickleValue::String("idle_timeout_events".into()),
-                        PickleValue::Int(entry.idle_timeout_events as i64),
-                    ),
-                    (
-                        PickleValue::String("flap_events".into()),
-                        PickleValue::Int(entry.flap_events as i64),
-                    ),
-                    (
-                        PickleValue::String("write_stall_events".into()),
-                        PickleValue::Int(entry.write_stall_events as i64),
-                    ),
-                    (
                         PickleValue::String("blacklisted_remaining_secs".into()),
                         entry
                             .blacklisted_remaining_secs
@@ -1307,13 +1319,25 @@ fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleVa
                         PickleValue::String("reject_count".into()),
                         PickleValue::Int(entry.reject_count as i64),
                     ),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn backbone_interfaces_to_pickle(entries: &[BackboneInterfaceEntry]) -> PickleValue {
+    PickleValue::List(
+        entries
+            .iter()
+            .map(|entry| {
+                PickleValue::Dict(vec![
                     (
-                        PickleValue::String("penalty_level".into()),
-                        PickleValue::Int(entry.penalty_level as i64),
+                        PickleValue::String("id".into()),
+                        PickleValue::Int(entry.interface_id.0 as i64),
                     ),
                     (
-                        PickleValue::String("connect_rate_events".into()),
-                        PickleValue::Int(entry.connect_rate_events as i64),
+                        PickleValue::String("name".into()),
+                        PickleValue::String(entry.interface_name.clone()),
                     ),
                 ])
             })
@@ -1567,8 +1591,10 @@ impl RpcClient {
         interface: &str,
         ip: &str,
         duration_secs: u64,
+        reason: Option<&str>,
+        penalty_level: Option<u8>,
     ) -> io::Result<bool> {
-        let response = self.call(&PickleValue::Dict(vec![
+        let mut request = vec![
             (
                 PickleValue::String("set".into()),
                 PickleValue::String("backbone_peer_blacklist".into()),
@@ -1585,7 +1611,20 @@ impl RpcClient {
                 PickleValue::String("duration_secs".into()),
                 PickleValue::Int(duration_secs as i64),
             ),
-        ]))?;
+        ];
+        if let Some(reason) = reason {
+            request.push((
+                PickleValue::String("reason".into()),
+                PickleValue::String(reason.to_string()),
+            ));
+        }
+        if let Some(level) = penalty_level {
+            request.push((
+                PickleValue::String("penalty_level".into()),
+                PickleValue::Int(level as i64),
+            ));
+        }
+        let response = self.call(&PickleValue::Dict(request))?;
         Ok(response.as_bool().unwrap_or(false))
     }
 }
@@ -1795,6 +1834,7 @@ mod tests {
                 Ok(Event::Query(QueryRequest::InterfaceStats, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
                         interfaces: vec![SingleInterfaceStat {
+                            id: 7,
                             name: "TestInterface".into(),
                             status: true,
                             mode: 1,
@@ -1981,6 +2021,7 @@ mod tests {
     fn interface_stats_pickle_format() {
         let stats = InterfaceStatsResponse {
             interfaces: vec![SingleInterfaceStat {
+                id: 1,
                 name: "TCP".into(),
                 status: true,
                 mode: 1,
@@ -2013,6 +2054,7 @@ mod tests {
             true
         );
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
+        assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
     }
 

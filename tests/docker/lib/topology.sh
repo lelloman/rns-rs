@@ -20,7 +20,9 @@ gen_rns_config() {
   {
     echo "[reticulum]"
     echo "enable_transport = ${transport}"
-    echo "share_instance = No"
+    echo "share_instance = Yes"
+    echo "provider_bridge = Yes"
+    echo "provider_socket_path = /data/provider.sock"
     echo ""
     echo "[interfaces]"
   } > "$config_file"

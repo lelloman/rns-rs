@@ -1,11 +1,11 @@
 //! Event types for the driver loop — concrete sync instantiation.
 
 pub use crate::common::event::{
-    BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo, HolePunchPolicy, HookInfo,
-    InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo,
+    HolePunchPolicy, HookInfo, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
+    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 
 /// Concrete Event type using boxed sync Writer.

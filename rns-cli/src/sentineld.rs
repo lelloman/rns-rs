@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use rns_hooks_abi::sentinel::{BackbonePeerPayload, BACKBONE_PEER_PAYLOAD_TYPE};
 use rns_net::config;
+use rns_net::pickle::PickleValue;
 use rns_net::provider_bridge::{HookProviderEventEnvelope, ProviderEnvelope, ProviderMessage};
 use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
@@ -37,6 +38,12 @@ const DEFAULT_IDLE_TIMEOUT_THRESHOLD: u32 = 4;
 const DEFAULT_EVENT_WINDOW: Duration = Duration::from_secs(300);
 /// Base blacklist duration.
 const DEFAULT_BASE_BLACKLIST_SECS: u64 = 120;
+/// Default: flap detection disabled unless explicitly configured.
+const DEFAULT_FLAP_THRESHOLD: u32 = 0;
+/// Default: connect-rate detection disabled unless explicitly configured.
+const DEFAULT_CONNECT_RATE_THRESHOLD: u32 = 0;
+/// Default: only very short silent sessions count as flaps.
+const DEFAULT_FLAP_MAX_CONNECTION_AGE: Duration = Duration::from_secs(10);
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
 
@@ -97,16 +104,56 @@ fn run() -> Result<(), String> {
         .get("event-window")
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_EVENT_WINDOW.as_secs());
+    let write_stall_window_secs = args
+        .get("write-stall-window")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(event_window_secs);
+    let idle_timeout_window_secs = args
+        .get("idle-timeout-window")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(event_window_secs);
+    let flap_threshold = args
+        .get("flap-threshold")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_FLAP_THRESHOLD);
+    let flap_window_secs = args
+        .get("flap-window")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(event_window_secs);
+    let flap_max_connection_age_secs = args
+        .get("flap-max-connection-age")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_FLAP_MAX_CONNECTION_AGE.as_secs());
+    let connect_rate_threshold = args
+        .get("connect-rate-threshold")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_CONNECT_RATE_THRESHOLD);
+    let connect_rate_window_secs = args
+        .get("connect-rate-window")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(event_window_secs);
     let base_blacklist_secs = args
         .get("base-blacklist")
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_BASE_BLACKLIST_SECS);
+    let penalty_decay_secs = args
+        .get("penalty-decay-interval")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0u64);
 
     let policy = DetectionPolicy {
         write_stall_threshold,
         idle_timeout_threshold,
-        event_window: Duration::from_secs(event_window_secs),
+        write_stall_window: Duration::from_secs(write_stall_window_secs),
+        idle_timeout_window: Duration::from_secs(idle_timeout_window_secs),
+        flap_threshold,
+        flap_window: Duration::from_secs(flap_window_secs),
+        flap_max_connection_age: Duration::from_secs(flap_max_connection_age_secs),
+        connect_rate_threshold,
+        connect_rate_window: Duration::from_secs(connect_rate_window_secs),
         base_blacklist_secs,
+        penalty_decay_interval: (penalty_decay_secs > 0)
+            .then(|| Duration::from_secs(penalty_decay_secs)),
     };
 
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
@@ -153,11 +200,20 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
 
     log::info!(
-        "rns-sentineld started (write_stall={}, idle_timeout={}, window={}s, base_blacklist={}s)",
+        "rns-sentineld started (write_stall={}/{}, idle_timeout={}/{}, flap={}/{}, connect_rate={}/{}, base_blacklist={}s, decay={}s)",
         policy.write_stall_threshold,
+        policy.write_stall_window.as_secs(),
         policy.idle_timeout_threshold,
-        policy.event_window.as_secs(),
+        policy.idle_timeout_window.as_secs(),
+        policy.flap_threshold,
+        policy.flap_window.as_secs(),
+        policy.connect_rate_threshold,
+        policy.connect_rate_window.as_secs(),
         policy.base_blacklist_secs,
+        policy
+            .penalty_decay_interval
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
     );
 
     let mut tracker = PeerTracker::new(policy);
@@ -201,6 +257,18 @@ fn execute_blacklist(
     interface_name: &str,
     action: &BlacklistAction,
 ) -> Result<(), String> {
+    let interface_name = if interface_name.is_empty() {
+        control
+            .resolve_interface_name(action.server_interface_id)?
+            .ok_or_else(|| {
+                format!(
+                    "could not resolve backbone interface {} for {}",
+                    action.server_interface_id, action.peer_ip
+                )
+            })?
+    } else {
+        interface_name.to_string()
+    };
     log::warn!(
         "blacklisting {} on {} for {}s (level {}): {}",
         action.peer_ip,
@@ -210,7 +278,13 @@ fn execute_blacklist(
         action.reason
     );
     control.with_client(|client| {
-        client.blacklist_backbone_peer(interface_name, &action.peer_ip.to_string(), action.duration_secs)
+        client.blacklist_backbone_peer(
+            &interface_name,
+            &action.peer_ip.to_string(),
+            action.duration_secs,
+            Some(&action.reason),
+            Some(action.level),
+        )
     })?;
     Ok(())
 }
@@ -249,6 +323,27 @@ impl RpcControl {
 
     fn list_hooks(&self) -> Result<Vec<HookInfo>, String> {
         self.with_client(|client| client.list_hooks())
+    }
+
+    fn resolve_interface_name(&self, interface_id: u64) -> Result<Option<String>, String> {
+        self.with_client(|client| {
+            client.call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("backbone_interfaces".into()),
+            )]))
+        })
+        .map(|response| {
+            response.as_list().and_then(|entries| {
+                entries.iter().find_map(|entry| {
+                    let id = entry.get("id").and_then(|v| v.as_int())?;
+                    (id == interface_id as i64).then(|| {
+                        entry.get("name")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })?
+                })
+            })
+        })
     }
 }
 
@@ -306,37 +401,84 @@ impl RuntimeConfig {
 // --- Peer tracking & detection ---
 
 struct PeerRecord {
+    server_interface_id: u64,
     write_stall_events: Vec<Instant>,
     idle_timeout_events: Vec<Instant>,
-    disconnect_events: Vec<Instant>,
+    flap_events: Vec<Instant>,
     connect_events: Vec<Instant>,
     blacklist_level: u8,
     last_blacklist_at: Option<Instant>,
+    blacklisted_until: Option<Instant>,
+    last_decay_check_at: Option<Instant>,
+    live_connections: usize,
     interface_name: String,
 }
 
 impl PeerRecord {
-    fn new(interface_name: String) -> Self {
+    fn new(server_interface_id: u64, interface_name: String) -> Self {
         Self {
+            server_interface_id,
             write_stall_events: Vec::new(),
             idle_timeout_events: Vec::new(),
-            disconnect_events: Vec::new(),
+            flap_events: Vec::new(),
             connect_events: Vec::new(),
             blacklist_level: 0,
             last_blacklist_at: None,
+            blacklisted_until: None,
+            last_decay_check_at: None,
+            live_connections: 0,
             interface_name,
         }
     }
 
-    fn prune(&mut self, now: Instant, window: Duration) {
-        self.write_stall_events.retain(|t| now.duration_since(*t) <= window);
-        self.idle_timeout_events.retain(|t| now.duration_since(*t) <= window);
-        self.disconnect_events.retain(|t| now.duration_since(*t) <= window);
-        self.connect_events.retain(|t| now.duration_since(*t) <= window);
+    fn prune(&mut self, now: Instant, policy: &DetectionPolicy) {
+        self.write_stall_events
+            .retain(|t| now.duration_since(*t) <= policy.write_stall_window);
+        self.idle_timeout_events
+            .retain(|t| now.duration_since(*t) <= policy.idle_timeout_window);
+        self.flap_events
+            .retain(|t| now.duration_since(*t) <= policy.flap_window);
+        self.connect_events
+            .retain(|t| now.duration_since(*t) <= policy.connect_rate_window);
+    }
+
+    fn decay_penalty(&mut self, now: Instant, policy: &DetectionPolicy) {
+        let Some(interval) = policy.penalty_decay_interval else {
+            return;
+        };
+        if self.blacklist_level == 0 || self.live_connections > 0 {
+            return;
+        }
+        if self.blacklisted_until.is_some_and(|until| now < until) {
+            return;
+        }
+        let anchor = self
+            .last_decay_check_at
+            .or(self.blacklisted_until)
+            .or(self.last_blacklist_at);
+        let Some(anchor) = anchor else {
+            return;
+        };
+        if now <= anchor {
+            return;
+        }
+        let elapsed = now.duration_since(anchor).as_secs();
+        let step = interval.as_secs().max(1);
+        let levels = (elapsed / step).min(u8::MAX as u64) as u8;
+        if levels == 0 {
+            return;
+        }
+        self.blacklist_level = self.blacklist_level.saturating_sub(levels);
+        self.last_decay_check_at = if self.blacklist_level == 0 {
+            None
+        } else {
+            Some(anchor + interval * levels as u32)
+        };
     }
 }
 
 struct BlacklistAction {
+    server_interface_id: u64,
     peer_ip: IpAddr,
     interface_name: String,
     duration_secs: u64,
@@ -347,8 +489,15 @@ struct BlacklistAction {
 struct DetectionPolicy {
     write_stall_threshold: u32,
     idle_timeout_threshold: u32,
-    event_window: Duration,
+    write_stall_window: Duration,
+    idle_timeout_window: Duration,
+    flap_threshold: u32,
+    flap_window: Duration,
+    flap_max_connection_age: Duration,
+    connect_rate_threshold: u32,
+    connect_rate_window: Duration,
     base_blacklist_secs: u64,
+    penalty_decay_interval: Option<Duration>,
 }
 
 impl Default for DetectionPolicy {
@@ -356,14 +505,21 @@ impl Default for DetectionPolicy {
         Self {
             write_stall_threshold: DEFAULT_WRITE_STALL_THRESHOLD,
             idle_timeout_threshold: DEFAULT_IDLE_TIMEOUT_THRESHOLD,
-            event_window: DEFAULT_EVENT_WINDOW,
+            write_stall_window: DEFAULT_EVENT_WINDOW,
+            idle_timeout_window: DEFAULT_EVENT_WINDOW,
+            flap_threshold: DEFAULT_FLAP_THRESHOLD,
+            flap_window: DEFAULT_EVENT_WINDOW,
+            flap_max_connection_age: DEFAULT_FLAP_MAX_CONNECTION_AGE,
+            connect_rate_threshold: DEFAULT_CONNECT_RATE_THRESHOLD,
+            connect_rate_window: DEFAULT_EVENT_WINDOW,
             base_blacklist_secs: DEFAULT_BASE_BLACKLIST_SECS,
+            penalty_decay_interval: None,
         }
     }
 }
 
 struct PeerTracker {
-    peers: HashMap<IpAddr, PeerRecord>,
+    peers: HashMap<(u64, IpAddr), PeerRecord>,
     policy: DetectionPolicy,
 }
 
@@ -382,31 +538,55 @@ impl PeerTracker {
 
         let payload = BackbonePeerPayload::decode(&event.payload)?;
         let peer_ip = decode_ip(&payload)?;
+        let interface_name = payload.server_interface_name().unwrap_or("").to_string();
+        let server_interface_id = payload.server_interface_id;
         let now = Instant::now();
+        let peer_key = (server_interface_id, peer_ip);
 
         let record = self
             .peers
-            .entry(peer_ip)
-            .or_insert_with(|| PeerRecord::new(event.attach_point.clone()));
-        record.prune(now, self.policy.event_window);
+            .entry(peer_key.clone())
+            .or_insert_with(|| PeerRecord::new(server_interface_id, interface_name.clone()));
+        record.server_interface_id = server_interface_id;
+        if !interface_name.is_empty() {
+            record.interface_name = interface_name;
+        }
+        record.prune(now, &self.policy);
+        record.decay_penalty(now, &self.policy);
 
         match event.attach_point.as_str() {
             "BackbonePeerConnected" => {
+                record.live_connections = record.live_connections.saturating_add(1);
                 record.connect_events.push(now);
                 log::debug!("peer connected: {}", peer_ip);
-                None
+                (record.connect_events.len() as u32 >= self.policy.connect_rate_threshold
+                    && self.policy.connect_rate_threshold > 0)
+                    .then(|| self.apply_blacklist(&peer_key, "connection rate exceeded"))
             }
             "BackbonePeerDisconnected" => {
-                record.disconnect_events.push(now);
+                record.live_connections = record.live_connections.saturating_sub(1);
                 log::debug!(
                     "peer disconnected: {} (connected {}s, data={})",
                     peer_ip,
                     payload.connected_for_secs,
                     payload.had_received_data
                 );
+                if !payload.had_received_data
+                    && payload.connected_for_secs <= self.policy.flap_max_connection_age.as_secs()
+                {
+                    record.flap_events.push(now);
+                    if self.policy.flap_threshold > 0
+                        && record.flap_events.len() as u32 >= self.policy.flap_threshold
+                    {
+                        return Some(
+                            self.apply_blacklist(&peer_key, "rapid silent reconnect churn")
+                        );
+                    }
+                }
                 None
             }
             "BackbonePeerIdleTimeout" => {
+                record.live_connections = record.live_connections.saturating_sub(1);
                 record.idle_timeout_events.push(now);
                 log::debug!(
                     "peer idle timeout: {} ({}s)",
@@ -414,12 +594,13 @@ impl PeerTracker {
                     payload.connected_for_secs
                 );
                 if record.idle_timeout_events.len() as u32 >= self.policy.idle_timeout_threshold {
-                    Some(self.apply_blacklist(peer_ip, "repeated idle timeouts"))
+                    Some(self.apply_blacklist(&peer_key, "repeated idle timeouts"))
                 } else {
                     None
                 }
             }
             "BackbonePeerWriteStall" => {
+                record.live_connections = record.live_connections.saturating_sub(1);
                 record.write_stall_events.push(now);
                 log::debug!(
                     "peer write stall: {} ({}s)",
@@ -427,7 +608,7 @@ impl PeerTracker {
                     payload.connected_for_secs
                 );
                 if record.write_stall_events.len() as u32 >= self.policy.write_stall_threshold {
-                    Some(self.apply_blacklist(peer_ip, "repeated write stalls"))
+                    Some(self.apply_blacklist(&peer_key, "repeated write stalls"))
                 } else {
                     None
                 }
@@ -445,19 +626,24 @@ impl PeerTracker {
         }
     }
 
-    fn apply_blacklist(&mut self, peer_ip: IpAddr, reason: &str) -> BlacklistAction {
-        let record = self.peers.get_mut(&peer_ip).unwrap();
+    fn apply_blacklist(&mut self, peer_key: &(u64, IpAddr), reason: &str) -> BlacklistAction {
+        let record = self.peers.get_mut(peer_key).unwrap();
         record.blacklist_level = record.blacklist_level.saturating_add(1);
         let multiplier = 1u64 << (record.blacklist_level - 1).min(20);
         let duration_secs = self.policy.base_blacklist_secs.saturating_mul(multiplier);
-        record.last_blacklist_at = Some(Instant::now());
+        let now = Instant::now();
+        record.last_blacklist_at = Some(now);
+        record.blacklisted_until = Some(now + Duration::from_secs(duration_secs));
+        record.last_decay_check_at = None;
         // Clear event windows after applying penalty
         record.write_stall_events.clear();
         record.idle_timeout_events.clear();
-        record.disconnect_events.clear();
+        record.flap_events.clear();
+        record.connect_events.clear();
 
         BlacklistAction {
-            peer_ip,
+            server_interface_id: record.server_interface_id,
+            peer_ip: peer_key.1,
             interface_name: record.interface_name.clone(),
             duration_secs,
             level: record.blacklist_level,
@@ -468,7 +654,11 @@ impl PeerTracker {
 
 fn decode_ip(payload: &BackbonePeerPayload) -> Option<IpAddr> {
     if payload.peer_ip_family == 4 {
-        let octets = payload.ipv4_octets()?;
+        let mut octets = [0u8; 4];
+        octets.copy_from_slice(&payload.peer_ip[12..16]);
+        if octets == [0u8; 4] {
+            octets.copy_from_slice(&payload.peer_ip[..4]);
+        }
         Some(IpAddr::V4(std::net::Ipv4Addr::from(octets)))
     } else if payload.peer_ip_family == 6 {
         Some(IpAddr::V6(std::net::Ipv6Addr::from(payload.peer_ip)))
@@ -569,7 +759,15 @@ fn print_usage() {
     println!("  --write-stall-threshold N    Write stalls before blacklist (default: {})", DEFAULT_WRITE_STALL_THRESHOLD);
     println!("  --idle-timeout-threshold N   Idle timeouts before blacklist (default: {})", DEFAULT_IDLE_TIMEOUT_THRESHOLD);
     println!("  --event-window SECS          Sliding window for event counting (default: {})", DEFAULT_EVENT_WINDOW.as_secs());
+    println!("  --write-stall-window SECS    Sliding window for write stalls (default: event-window)");
+    println!("  --idle-timeout-window SECS   Sliding window for idle timeouts (default: event-window)");
+    println!("  --flap-threshold N           Silent reconnect flaps before blacklist (default: {})", DEFAULT_FLAP_THRESHOLD);
+    println!("  --flap-window SECS           Sliding window for flap detection (default: event-window)");
+    println!("  --flap-max-connection-age SECS  Max silent connection age counted as a flap (default: {})", DEFAULT_FLAP_MAX_CONNECTION_AGE.as_secs());
+    println!("  --connect-rate-threshold N   Connection attempts before blacklist (default: {})", DEFAULT_CONNECT_RATE_THRESHOLD);
+    println!("  --connect-rate-window SECS   Sliding window for connect-rate detection (default: event-window)");
     println!("  --base-blacklist SECS        Base blacklist duration (default: {})", DEFAULT_BASE_BLACKLIST_SECS);
+    println!("  --penalty-decay-interval SECS  Idle time needed to decay blacklist level by 1 (default: 0)");
     println!("  --version                    Print version");
     println!("  --help, -h                   Print this help");
     println!("  -v                           Increase verbosity");
@@ -580,6 +778,8 @@ mod tests {
     use super::*;
 
     fn make_event(attach_point: &str, ip_octets: [u8; 4], connected_for: u64) -> HookProviderEventEnvelope {
+        let mut server_interface_name = [0u8; rns_hooks_abi::sentinel::BACKBONE_PEER_INTERFACE_NAME_MAX];
+        server_interface_name[..6].copy_from_slice(b"public");
         let payload = BackbonePeerPayload {
             peer_ip_family: 4,
             peer_ip: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]],
@@ -591,6 +791,8 @@ mod tests {
             penalty_level: 0,
             blacklist_for_secs: 0,
             event_kind: 0,
+            server_interface_name_len: 6,
+            server_interface_name,
         };
         HookProviderEventEnvelope {
             ts_unix_ms: 1000,

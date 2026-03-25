@@ -1,9 +1,11 @@
 pub const BACKBONE_PEER_PAYLOAD_TYPE: &str = "sentinel.backbone_peer.v1";
+pub const BACKBONE_PEER_INTERFACE_NAME_MAX: usize = 96;
 
 /// peer_ip_family:1 + peer_ip:16 + peer_port:2 + server_interface_id:8 +
 /// peer_interface_id:8 + connected_for_secs:8 + had_received_data:1 +
-/// penalty_level:1 + blacklist_for_secs:8 + event_kind:1 = 54
-pub const BACKBONE_PEER_ENCODED_LEN: usize = 54;
+/// penalty_level:1 + blacklist_for_secs:8 + event_kind:1 +
+/// interface_name_len:1 + interface_name:96 = 151
+pub const BACKBONE_PEER_ENCODED_LEN: usize = 151;
 
 /// Event kind discriminants matching the 5 `BackbonePeer*` hook points.
 pub const EVENT_CONNECTED: u8 = 0;
@@ -26,6 +28,8 @@ pub struct BackbonePeerPayload {
     pub penalty_level: u8,
     pub blacklist_for_secs: u64,
     pub event_kind: u8,
+    pub server_interface_name_len: u8,
+    pub server_interface_name: [u8; BACKBONE_PEER_INTERFACE_NAME_MAX],
 }
 
 impl BackbonePeerPayload {
@@ -41,6 +45,8 @@ impl BackbonePeerPayload {
         buf[44] = self.penalty_level;
         buf[45..53].copy_from_slice(&self.blacklist_for_secs.to_le_bytes());
         buf[53] = self.event_kind;
+        buf[54] = self.server_interface_name_len.min(BACKBONE_PEER_INTERFACE_NAME_MAX as u8);
+        buf[55..].copy_from_slice(&self.server_interface_name);
         buf
     }
 
@@ -60,6 +66,8 @@ impl BackbonePeerPayload {
         connected.copy_from_slice(&bytes[35..43]);
         let mut blacklist = [0u8; 8];
         blacklist.copy_from_slice(&bytes[45..53]);
+        let mut server_interface_name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
+        server_interface_name.copy_from_slice(&bytes[55..]);
         Some(Self {
             peer_ip_family: bytes[0],
             peer_ip,
@@ -71,6 +79,8 @@ impl BackbonePeerPayload {
             penalty_level: bytes[44],
             blacklist_for_secs: u64::from_le_bytes(blacklist),
             event_kind: bytes[53],
+            server_interface_name_len: bytes[54].min(BACKBONE_PEER_INTERFACE_NAME_MAX as u8),
+            server_interface_name,
         })
     }
 
@@ -83,6 +93,11 @@ impl BackbonePeerPayload {
         } else {
             None
         }
+    }
+
+    pub fn server_interface_name(&self) -> Option<&str> {
+        let len = self.server_interface_name_len as usize;
+        core::str::from_utf8(&self.server_interface_name[..len]).ok()
     }
 }
 
@@ -103,6 +118,12 @@ mod tests {
             penalty_level: 3,
             blacklist_for_secs: 900,
             event_kind: EVENT_WRITE_STALL,
+            server_interface_name_len: 6,
+            server_interface_name: {
+                let mut name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
+                name[..6].copy_from_slice(b"public");
+                name
+            },
         };
         let encoded = payload.encode();
         assert_eq!(encoded.len(), BACKBONE_PEER_ENCODED_LEN);

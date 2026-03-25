@@ -1,36 +1,58 @@
 #!/usr/bin/env bash
-# Suite 20: Sentinel blacklist — verify backbone peer blacklisting via HTTP API
+# Suite 20: Sentinel behavioral blacklist
 #
 # Requires backbone interfaces (RNS_BACKBONE=1 during topology generation).
 # Tests:
-#   1. Backbone peer state API returns connected peers
-#   2. Blacklisting a peer via API succeeds
-#   3. Blacklisted peer appears in peer state with remaining seconds
-#   4. Blacklisted peer is rejected on reconnect (connection count doesn't increase)
+#   1. Start rns-sentineld against the local provider bridge
+#   2. Sentinel blacklists a backbone peer after repeated idle-timeout telemetry
+#   3. Reconnect attempts are rejected while the blacklist is active
+#   4. Peer reconnects after the blacklist expires
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/helpers.sh"
 
 _CURRENT_SUITE="20_sentinel_blacklist"
-echo "Suite 20: Sentinel blacklist (backbone peer state)"
+echo "Suite 20: Sentinel behavioral blacklist"
 
-# This suite only works with backbone interfaces
 if [[ "${RNS_BACKBONE:-0}" != "1" ]]; then
   skip_suite "requires RNS_BACKBONE=1 topology"
 fi
 
-# Need at least 2 nodes in the chain
 if (( TOPO_N < 2 )); then
   skip_suite "requires chain of >= 2 nodes"
 fi
 
-# Use the first node (node-a) as the backbone server
 PORT_A="${NODE_A_PORT}"
+SERVER_CONTAINER="node-a"
 
-# ── Test 1: Peer state API returns entries ──────────────────────────────────
+start_sentinel() {
+  local container="$1"
+  docker exec "$container" sh -lc '
+    pkill -f "/usr/local/bin/rns-sentineld" >/dev/null 2>&1 || true
+    nohup /usr/local/bin/rns-sentineld \
+      --config /data \
+      --socket /data/provider.sock \
+      --idle-timeout-threshold 1 \
+      --idle-timeout-window 30 \
+      --base-blacklist 15 \
+      --flap-threshold 0 \
+      --connect-rate-threshold 0 \
+      >/tmp/rns-sentineld.log 2>&1 &
+  '
+}
 
-# Wait for at least one backbone peer to connect (node-b connects to node-a)
+peer_field() {
+  local ip="$1"
+  local field="$2"
+  curl -sf "http://localhost:${PORT_A}/api/backbone/peers" \
+    | jq -r ".peers[] | select(.ip == \"${ip}\") | .${field}"
+}
+
+start_sentinel "$SERVER_CONTAINER"
+sleep 3
+pass_test "started rns-sentineld in ${SERVER_CONTAINER}"
+
 if poll_count "$PORT_A" "/api/backbone/peers" ".peers" 1 30; then
   pass_test "backbone peer state has at least 1 peer"
 else
@@ -39,56 +61,59 @@ else
   exit 0
 fi
 
-# Get the connected peer's IP
 PEER_IP=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" | jq -r '.peers[0].ip')
 PEER_INTERFACE=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" | jq -r '.peers[0].interface')
 
 assert_ne "$PEER_IP" "null" "peer IP is not null"
 assert_ne "$PEER_INTERFACE" "null" "peer interface is not null"
 
-echo "  Found peer: ${PEER_IP} on interface ${PEER_INTERFACE}"
+echo "  Observing peer: ${PEER_IP} on interface ${PEER_INTERFACE}"
 
-# ── Test 2: Blacklist the peer via API ──────────────────────────────────────
-
-BLACKLIST_RESULT=$(curl -sf -X POST -H "Content-Type: application/json" \
-  -d "{\"interface\": \"${PEER_INTERFACE}\", \"ip\": \"${PEER_IP}\", \"duration_secs\": 60}" \
-  "http://localhost:${PORT_A}/api/backbone/blacklist" | jq -r '.status')
-
-assert_eq "$BLACKLIST_RESULT" "ok" "blacklist API returns ok"
-
-# ── Test 3: Peer shows as blacklisted ──────────────────────────────────────
-
-sleep 1
-BLACKLIST_REMAINING=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" \
-  | jq -r ".peers[] | select(.ip == \"${PEER_IP}\") | .blacklisted_remaining_secs // 0")
-
-if [[ -n "$BLACKLIST_REMAINING" ]] && (( $(echo "$BLACKLIST_REMAINING > 0" | bc -l 2>/dev/null || echo 0) )); then
-  pass_test "peer ${PEER_IP} shows blacklisted with remaining seconds"
+if poll_until "$PORT_A" "/api/backbone/peers" \
+  ".peers[] | select(.ip == \"${PEER_IP}\") | .blacklist_reason // \"\"" \
+  "repeated idle timeouts" 40; then
+  pass_test "sentinel blacklists peer after idle timeout telemetry"
 else
-  fail_test "peer ${PEER_IP} shows blacklisted" "remaining_secs=${BLACKLIST_REMAINING:-null}"
+  fail_test "sentinel blacklists peer after idle timeout telemetry" \
+    "peer never reached blacklist reason 'repeated idle timeouts'"
+  echo "--- ${SERVER_CONTAINER} sentinel log ---"
+  docker exec "$SERVER_CONTAINER" sh -lc 'cat /tmp/rns-sentineld.log || true'
+  echo "--- end sentinel log ---"
+  suite_result "20_sentinel_blacklist"
+  exit 0
 fi
 
-BLACKLIST_REASON=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" \
-  | jq -r ".peers[] | select(.ip == \"${PEER_IP}\") | .blacklist_reason // \"none\"")
-assert_eq "$BLACKLIST_REASON" "sentinel blacklist" "blacklist reason is 'sentinel blacklist'"
-
-# ── Test 4: Blacklisted peer's reconnection attempts are rejected ──────────
-
-# Record the current reject count
-REJECT_BEFORE=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" \
-  | jq -r ".peers[] | select(.ip == \"${PEER_IP}\") | .reject_count // 0")
-
-# Wait a few seconds for the backbone client (node-b) to attempt reconnection
-# (backbone clients reconnect automatically after disconnect)
-sleep 5
-
-REJECT_AFTER=$(curl -sf "http://localhost:${PORT_A}/api/backbone/peers" \
-  | jq -r ".peers[] | select(.ip == \"${PEER_IP}\") | .reject_count // 0")
-
-if (( REJECT_AFTER > REJECT_BEFORE )); then
-  pass_test "blacklisted peer reconnection attempts rejected (rejects: ${REJECT_BEFORE} -> ${REJECT_AFTER})"
+BLACKLIST_REMAINING=$(peer_field "$PEER_IP" "blacklisted_remaining_secs // 0")
+if [[ -n "$BLACKLIST_REMAINING" ]] && (( $(echo "$BLACKLIST_REMAINING > 0" | bc -l 2>/dev/null || echo 0) )); then
+  pass_test "peer ${PEER_IP} shows active blacklist"
 else
-  fail_test "blacklisted peer reconnection attempts rejected" "reject_count did not increase: ${REJECT_BEFORE} -> ${REJECT_AFTER}"
+  fail_test "peer ${PEER_IP} shows active blacklist" "remaining_secs=${BLACKLIST_REMAINING:-null}"
+fi
+
+REJECT_BEFORE=$(peer_field "$PEER_IP" "reject_count // 0")
+sleep 5
+REJECT_AFTER=$(peer_field "$PEER_IP" "reject_count // 0")
+if (( REJECT_AFTER > REJECT_BEFORE )); then
+  pass_test "blacklisted peer reconnect attempts are rejected (${REJECT_BEFORE} -> ${REJECT_AFTER})"
+else
+  fail_test "blacklisted peer reconnect attempts are rejected" \
+    "reject_count did not increase: ${REJECT_BEFORE} -> ${REJECT_AFTER}"
+fi
+
+if poll_until "$PORT_A" "/api/backbone/peers" \
+  ".peers[] | select(.ip == \"${PEER_IP}\") | (.blacklisted_remaining_secs // 0 | floor)" \
+  "0" 20; then
+  pass_test "blacklist expires for peer ${PEER_IP}"
+else
+  fail_test "blacklist expires for peer ${PEER_IP}" "peer stayed blacklisted for longer than expected"
+fi
+
+if poll_until "$PORT_A" "/api/backbone/peers" \
+  ".peers[] | select(.ip == \"${PEER_IP}\") | .connected_count" \
+  "1" 20; then
+  pass_test "peer ${PEER_IP} reconnects after blacklist expiry"
+else
+  fail_test "peer ${PEER_IP} reconnects after blacklist expiry" "connected_count did not return to 1"
 fi
 
 suite_result "20_sentinel_blacklist"

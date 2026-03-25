@@ -306,14 +306,9 @@ pub struct BackbonePeerStateEntry {
     pub interface_name: String,
     pub peer_ip: IpAddr,
     pub connected_count: usize,
-    pub idle_timeout_events: usize,
-    pub flap_events: usize,
-    pub write_stall_events: usize,
     pub blacklisted_remaining_secs: Option<f64>,
     pub blacklist_reason: Option<String>,
     pub reject_count: u64,
-    pub penalty_level: u8,
-    pub connect_rate_events: usize,
 }
 
 /// Hook-visible snapshot of a backbone peer lifecycle event.
@@ -327,6 +322,12 @@ pub struct BackbonePeerHookEvent {
     pub had_received_data: bool,
     pub penalty_level: u8,
     pub blacklist_for: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackboneInterfaceEntry {
+    pub interface_id: InterfaceId,
+    pub interface_name: String,
 }
 
 /// Queries that can be sent to the driver.
@@ -417,6 +418,8 @@ pub enum QueryRequest {
     ResetRuntimeConfig { key: String },
     /// List live backbone peer state, optionally filtered to one interface.
     BackbonePeerState { interface_name: Option<String> },
+    /// List registered backbone server interfaces.
+    BackboneInterfaces,
     /// Clear live backbone peer state for one interface/IP pair.
     ClearBackbonePeerState {
         interface_name: String,
@@ -427,6 +430,8 @@ pub enum QueryRequest {
         interface_name: String,
         peer_ip: IpAddr,
         duration: Duration,
+        reason: String,
+        penalty_level: u8,
     },
 }
 
@@ -470,6 +475,8 @@ pub enum QueryResponse {
     RuntimeConfigReset(Result<RuntimeConfigEntry, RuntimeConfigError>),
     /// Live backbone peer state entries.
     BackbonePeerState(Vec<BackbonePeerStateEntry>),
+    /// Registered backbone server interfaces.
+    BackboneInterfaces(Vec<BackboneInterfaceEntry>),
     /// Result of clearing one backbone peer state entry.
     ClearBackbonePeerState(bool),
     /// Result of blacklisting a backbone peer.
@@ -494,6 +501,7 @@ pub struct InterfaceStatsResponse {
 /// Statistics for a single interface.
 #[derive(Debug, Clone)]
 pub struct SingleInterfaceStat {
+    pub id: u64,
     pub name: String,
     pub status: bool,
     pub mode: u8,

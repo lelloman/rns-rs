@@ -32,7 +32,7 @@ for (( i=0; i<N; i++ )); do
 
   # Build interface specs — backbone or TCP
   if [[ "$USE_BACKBONE" == "1" ]]; then
-    ifaces=("BackboneInterface:listen_ip=0.0.0.0:listen_port=4965:write_stall_timeout=30:blacklist_duration=120:idle_timeout_blacklist_threshold=4:idle_timeout_blacklist_window=300:write_stall_blacklist_threshold=2:write_stall_blacklist_window=300")
+    ifaces=("BackboneInterface:listen_ip=0.0.0.0:listen_port=4965:idle_timeout=2:write_stall_timeout=30:max_penalty_duration=15")
   else
     ifaces=("TCPServerInterface:listen_ip=0.0.0.0:listen_port=4965")
   fi

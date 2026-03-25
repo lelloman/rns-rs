@@ -3,7 +3,9 @@
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::context::{self, BackbonePeerContext, CTX_TYPE_BACKBONE_PEER};
 #[cfg(target_arch = "wasm32")]
-use rns_hooks_abi::sentinel::{BackbonePeerPayload, BACKBONE_PEER_PAYLOAD_TYPE};
+use rns_hooks_abi::sentinel::{
+    BackbonePeerPayload, BACKBONE_PEER_INTERFACE_NAME_MAX, BACKBONE_PEER_PAYLOAD_TYPE,
+};
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_sdk::host;
 #[cfg(target_arch = "wasm32")]
@@ -43,7 +45,14 @@ static mut RESULT: HookResult = HookResult {
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
     let ptr = ctx_ptr as *const u8;
     if unsafe { context::context_type(ptr) } == CTX_TYPE_BACKBONE_PEER {
-        let ctx = unsafe { &*(ptr as *const BackbonePeerContext) };
+        let ctx = unsafe { core::ptr::read_unaligned(ptr as *const BackbonePeerContext) };
+        let mut server_interface_name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
+        let server_interface_name_len = host::get_interface_name(
+            ctx.server_interface_id,
+            &mut server_interface_name,
+        )
+        .map(|len| len.min(BACKBONE_PEER_INTERFACE_NAME_MAX))
+        .unwrap_or(0) as u8;
         let payload = BackbonePeerPayload {
             peer_ip_family: ctx.peer_ip_family,
             peer_ip: ctx.peer_ip,
@@ -57,6 +66,8 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
             // Event kind is 0 here; the consumer uses attach_point from the
             // provider envelope to distinguish event types.
             event_kind: 0,
+            server_interface_name_len,
+            server_interface_name,
         }
         .encode();
         let _ = host::emit_event(BACKBONE_PEER_PAYLOAD_TYPE, &payload);

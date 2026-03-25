@@ -979,6 +979,20 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
+    fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
+        let mut entries: Vec<_> = self
+            .backbone_peer_state
+            .values()
+            .map(|handle| crate::event::BackboneInterfaceEntry {
+                interface_id: handle.interface_id,
+                interface_name: handle.interface_name.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.interface_name.cmp(&b.interface_name));
+        entries
+    }
+
+    #[cfg(feature = "iface-backbone")]
     fn clear_backbone_peer_state(
         &mut self,
         interface_name: &str,
@@ -995,17 +1009,49 @@ impl Driver {
         interface_name: &str,
         peer_ip: std::net::IpAddr,
         duration: std::time::Duration,
+        reason: String,
+        penalty_level: u8,
     ) -> bool {
-        self.backbone_peer_state
+        let capped_duration = self
+            .backbone_runtime
             .get(interface_name)
-            .map(|handle| {
-                handle.peer_state.lock().unwrap().blacklist(
+            .and_then(|handle| handle.runtime.lock().ok().map(|runtime| runtime.abuse.max_penalty_duration))
+            .flatten()
+            .map(|max| duration.min(max))
+            .unwrap_or(duration);
+        let Some(handle) = self.backbone_peer_state.get(interface_name) else {
+            return false;
+        };
+        let ok = handle
+            .peer_state
+            .lock()
+            .unwrap()
+            .blacklist(peer_ip, capped_duration, reason);
+        if ok {
+            #[cfg(feature = "rns-hooks")]
+            self.run_backbone_peer_hook(
+                "BackbonePeerPenalty",
+                HookPoint::BackbonePeerPenalty,
+                &BackbonePeerHookEvent {
+                    server_interface_id: self
+                        .interfaces
+                        .iter()
+                        .find(|(_, entry)| entry.info.name == interface_name)
+                        .map(|(id, _)| *id)
+                        .unwrap_or(InterfaceId(0)),
+                    peer_interface_id: None,
                     peer_ip,
-                    duration,
-                    "sentinel blacklist".to_string(),
-                )
-            })
-            .unwrap_or(false)
+                    peer_port: 0,
+                    connected_for: Duration::ZERO,
+                    had_received_data: false,
+                    penalty_level,
+                    blacklist_for: capped_duration,
+                },
+            );
+            #[cfg(not(feature = "rns-hooks"))]
+            let _ = (peer_ip, capped_duration, penalty_level);
+        }
+        ok
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -1485,44 +1531,8 @@ impl Driver {
                 runtime.write_stall_timeout = Self::set_optional_duration(value, key)?;
                 Ok(())
             }
-            "blacklist_duration_secs" => {
-                runtime.abuse.blacklist_duration = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
-            "idle_timeout_blacklist_threshold" => {
-                runtime.abuse.idle_timeout_threshold = Self::set_optional_usize(value, key)?;
-                Ok(())
-            }
-            "idle_timeout_blacklist_window_secs" => {
-                runtime.abuse.idle_timeout_window = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
-            "flap_blacklist_threshold" => {
-                runtime.abuse.flap_threshold = Self::set_optional_usize(value, key)?;
-                Ok(())
-            }
-            "flap_blacklist_window_secs" => {
-                runtime.abuse.flap_window = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
-            "flap_max_connection_age_secs" => {
-                runtime.abuse.flap_max_connection_age = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
-            "connect_rate_threshold" => {
-                runtime.abuse.connect_rate_threshold = Self::set_optional_usize(value, key)?;
-                Ok(())
-            }
-            "connect_rate_window_secs" => {
-                runtime.abuse.connect_rate_window = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
             "max_penalty_duration_secs" => {
                 runtime.abuse.max_penalty_duration = Self::set_optional_duration(value, key)?;
-                Ok(())
-            }
-            "penalty_decay_interval_secs" => {
-                runtime.abuse.penalty_decay_interval = Self::set_optional_duration(value, key)?;
                 Ok(())
             }
             "max_connections" => {
@@ -1677,33 +1687,8 @@ impl Driver {
         match setting {
             "idle_timeout_secs" => runtime.idle_timeout = startup.idle_timeout,
             "write_stall_timeout_secs" => runtime.write_stall_timeout = startup.write_stall_timeout,
-            "blacklist_duration_secs" => {
-                runtime.abuse.blacklist_duration = startup.abuse.blacklist_duration
-            }
-            "idle_timeout_blacklist_threshold" => {
-                runtime.abuse.idle_timeout_threshold = startup.abuse.idle_timeout_threshold
-            }
-            "idle_timeout_blacklist_window_secs" => {
-                runtime.abuse.idle_timeout_window = startup.abuse.idle_timeout_window
-            }
-            "flap_blacklist_threshold" => {
-                runtime.abuse.flap_threshold = startup.abuse.flap_threshold
-            }
-            "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
-            "flap_max_connection_age_secs" => {
-                runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age
-            }
-            "connect_rate_threshold" => {
-                runtime.abuse.connect_rate_threshold = startup.abuse.connect_rate_threshold
-            }
-            "connect_rate_window_secs" => {
-                runtime.abuse.connect_rate_window = startup.abuse.connect_rate_window
-            }
             "max_penalty_duration_secs" => {
                 runtime.abuse.max_penalty_duration = startup.abuse.max_penalty_duration
-            }
-            "penalty_decay_interval_secs" => {
-                runtime.abuse.penalty_decay_interval = startup.abuse.penalty_decay_interval
             }
             "max_connections" => runtime.max_connections = startup.max_connections,
             _ => {
@@ -3547,16 +3532,7 @@ impl Driver {
             for suffix in [
                 "idle_timeout_secs",
                 "write_stall_timeout_secs",
-                "blacklist_duration_secs",
-                "idle_timeout_blacklist_threshold",
-                "idle_timeout_blacklist_window_secs",
-                "flap_blacklist_threshold",
-                "flap_blacklist_window_secs",
-                "flap_max_connection_age_secs",
-                "connect_rate_threshold",
-                "connect_rate_window_secs",
                 "max_penalty_duration_secs",
-                "penalty_decay_interval_secs",
                 "max_connections",
             ] {
                 let key = format!("backbone.{}.{}", name, suffix);
@@ -3721,65 +3697,11 @@ impl Driver {
                     RuntimeConfigApplyMode::Immediate,
                     "Disconnect peers whose send buffer remains unwritable for this many seconds; 0 disables the timeout.",
                 )),
-                "blacklist_duration_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Temporary blacklist duration for abusive peers; 0 disables blacklisting.",
-                )),
-                "idle_timeout_blacklist_threshold" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigValue::Int(startup.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Repeated idle-timeout count needed before temporary blacklisting; 0 disables.",
-                )),
-                "idle_timeout_blacklist_window_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Window for counting repeated idle timeouts; 0 disables.",
-                )),
-                "flap_blacklist_threshold" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.abuse.flap_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigValue::Int(startup.abuse.flap_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Rapid silent reconnect count needed before temporary blacklisting; 0 disables.",
-                )),
-                "flap_blacklist_window_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Window for counting rapid silent reconnect churn; 0 disables.",
-                )),
-                "flap_max_connection_age_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Only connections shorter than this count as flap events; 0 disables.",
-                )),
-                "connect_rate_threshold" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.abuse.connect_rate_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigValue::Int(startup.abuse.connect_rate_threshold.unwrap_or(0) as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Connection attempts within the rate window needed before penalty; 0 disables.",
-                )),
-                "connect_rate_window_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.connect_rate_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.connect_rate_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Window for counting connection rate attempts; 0 disables.",
-                )),
                 "max_penalty_duration_secs" => Some(make_entry(
                     RuntimeConfigValue::Float(current.abuse.max_penalty_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
                     RuntimeConfigValue::Float(startup.abuse.max_penalty_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
                     RuntimeConfigApplyMode::Immediate,
-                    "Maximum penalty ban duration cap; 0 means no cap (exponential only).",
-                )),
-                "penalty_decay_interval_secs" => Some(make_entry(
-                    RuntimeConfigValue::Float(current.abuse.penalty_decay_interval.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigValue::Float(startup.abuse.penalty_decay_interval.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Time of clean behavior needed to decay penalty level by 1; 0 disables decay.",
+                    "Maximum accepted backbone blacklist duration; 0 means no cap.",
                 )),
                 "max_connections" => Some(make_entry(
                     RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
@@ -5054,6 +4976,7 @@ impl Driver {
                     total_rxb += entry.stats.rxb;
                     total_txb += entry.stats.txb;
                     interfaces.push(SingleInterfaceStat {
+                        id: entry.info.id.0,
                         name: entry.info.name.clone(),
                         status: entry.online && entry.enabled,
                         mode: entry.info.mode,
@@ -5080,6 +5003,9 @@ impl Driver {
                     total_txb,
                     probe_responder: self.probe_responder_hash,
                 })
+            }
+            QueryRequest::BackboneInterfaces => {
+                QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
             }
             QueryRequest::PathTable { max_hops } => {
                 let entries: Vec<PathTableEntry> = self
@@ -5292,8 +5218,16 @@ impl Driver {
                 interface_name,
                 peer_ip,
                 duration,
+                reason,
+                penalty_level,
             } => QueryResponse::BlacklistBackbonePeer(
-                self.blacklist_backbone_peer(&interface_name, peer_ip, duration),
+                self.blacklist_backbone_peer(
+                    &interface_name,
+                    peer_ip,
+                    duration,
+                    reason,
+                    penalty_level,
+                ),
             ),
             QueryRequest::InjectPath {
                 dest_hash,
@@ -7594,18 +7528,7 @@ mod tests {
             idle_timeout: Some(Duration::from_secs(10)),
             write_stall_timeout: Some(Duration::from_secs(30)),
             abuse: BackboneAbuseConfig {
-                blacklist_duration: Some(Duration::from_secs(120)),
-                idle_timeout_threshold: Some(4),
-                idle_timeout_window: Some(Duration::from_secs(300)),
-                flap_threshold: Some(8),
-                flap_window: Some(Duration::from_secs(60)),
-                flap_max_connection_age: Some(Duration::from_secs(5)),
-                connect_rate_threshold: Some(5),
-                connect_rate_window: Some(Duration::from_secs(3)),
-                write_stall_threshold: Some(2),
-                write_stall_window: Some(Duration::from_secs(300)),
                 max_penalty_duration: Some(Duration::from_secs(3600)),
-                penalty_decay_interval: Some(Duration::from_secs(300)),
             },
         };
         let peer_state = Arc::new(std::sync::Mutex::new(
@@ -7617,6 +7540,7 @@ mod tests {
             startup,
         });
         driver.register_backbone_peer_state(BackbonePeerStateHandle {
+            interface_id: InterfaceId(1),
             interface_name: name.to_string(),
             peer_state,
         });
@@ -10013,14 +9937,9 @@ mod tests {
                 interface_name: "public".into(),
                 peer_ip: "203.0.113.10".parse().unwrap(),
                 connected_count: 1,
-                idle_timeout_events: 3,
-                flap_events: 0,
-                write_stall_events: 0,
                 blacklisted_remaining_secs: Some(120.0),
                 blacklist_reason: Some("repeated idle timeouts".into()),
                 reject_count: 7,
-                penalty_level: 0,
-                connect_rate_events: 0,
             });
 
         let response = driver.handle_query(QueryRequest::BackbonePeerState {
@@ -10032,7 +9951,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].peer_ip.to_string(), "203.0.113.10");
         assert_eq!(entries[0].connected_count, 1);
-        assert_eq!(entries[0].idle_timeout_events, 3);
         assert_eq!(entries[0].reject_count, 7);
         assert_eq!(
             entries[0].blacklist_reason.as_deref(),
@@ -10057,14 +9975,9 @@ mod tests {
                 interface_name: "public".into(),
                 peer_ip: "203.0.113.11".parse().unwrap(),
                 connected_count: 0,
-                idle_timeout_events: 1,
-                flap_events: 0,
-                write_stall_events: 0,
                 blacklisted_remaining_secs: None,
                 blacklist_reason: None,
                 reject_count: 0,
-                penalty_level: 0,
-                connect_rate_events: 0,
             });
 
         let response = driver.handle_query_mut(QueryRequest::ClearBackbonePeerState {
@@ -10100,20 +10013,17 @@ mod tests {
                 interface_name: "public".into(),
                 peer_ip: "203.0.113.50".parse().unwrap(),
                 connected_count: 1,
-                idle_timeout_events: 0,
-                flap_events: 0,
-                write_stall_events: 0,
                 blacklisted_remaining_secs: None,
                 blacklist_reason: None,
                 reject_count: 0,
-                penalty_level: 0,
-                connect_rate_events: 0,
             });
 
         let response = driver.handle_query_mut(QueryRequest::BlacklistBackbonePeer {
             interface_name: "public".into(),
             peer_ip: "203.0.113.50".parse().unwrap(),
             duration: Duration::from_secs(300),
+            reason: "sentinel blacklist".into(),
+            penalty_level: 2,
         });
         let QueryResponse::BlacklistBackbonePeer(true) = response else {
             panic!("expected successful blacklist");
@@ -10147,6 +10057,8 @@ mod tests {
             interface_name: "nonexistent".into(),
             peer_ip: "203.0.113.50".parse().unwrap(),
             duration: Duration::from_secs(60),
+            reason: "sentinel blacklist".into(),
+            penalty_level: 1,
         });
         let QueryResponse::BlacklistBackbonePeer(false) = response else {
             panic!("expected false for unknown interface");
@@ -10164,6 +10076,8 @@ mod tests {
             interface_name: "public".into(),
             peer_ip: "198.51.100.1".parse().unwrap(),
             duration: Duration::from_secs(120),
+            reason: "sentinel blacklist".into(),
+            penalty_level: 1,
         });
         let QueryResponse::BlacklistBackbonePeer(true) = response else {
             panic!("expected successful blacklist for new IP");

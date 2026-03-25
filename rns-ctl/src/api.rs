@@ -118,6 +118,7 @@ fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
                 .iter()
                 .map(|i| {
                     json!({
+                        "id": i.id,
                         "name": i.name,
                         "status": if i.status { "up" } else { "down" },
                         "mode": i.mode,
@@ -769,14 +770,9 @@ fn handle_backbone_peers(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
                             "interface": e.interface_name,
                             "ip": e.peer_ip.to_string(),
                             "connected_count": e.connected_count,
-                            "idle_timeout_events": e.idle_timeout_events,
-                            "flap_events": e.flap_events,
-                            "write_stall_events": e.write_stall_events,
                             "blacklisted_remaining_secs": e.blacklisted_remaining_secs,
                             "blacklist_reason": e.blacklist_reason,
                             "reject_count": e.reject_count,
-                            "penalty_level": e.penalty_level,
-                            "connect_rate_events": e.connect_rate_events,
                         })
                     })
                     .collect();
@@ -807,11 +803,23 @@ fn handle_backbone_blacklist(req: &HttpRequest, node: &NodeHandle) -> HttpRespon
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing 'duration_secs' field"),
     };
+    let reason = body
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("sentinel blacklist")
+        .to_string();
+    let penalty_level = body
+        .get("penalty_level")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        .min(u8::MAX as u64) as u8;
     with_node(node, |n| {
         match n.query(QueryRequest::BlacklistBackbonePeer {
             interface_name,
             peer_ip: ip,
             duration: std::time::Duration::from_secs(duration_secs),
+            reason,
+            penalty_level,
         }) {
             Ok(QueryResponse::BlacklistBackbonePeer(true)) => {
                 HttpResponse::ok(json!({"status": "ok"}))

@@ -9,7 +9,7 @@
 //!
 //! Matches Python `BackboneInterface.py`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
@@ -51,18 +51,7 @@ pub struct BackboneConfig {
 /// Configurable behavior-based abuse detection for inbound peers.
 #[derive(Debug, Clone, Default)]
 pub struct BackboneAbuseConfig {
-    pub blacklist_duration: Option<Duration>,
-    pub idle_timeout_threshold: Option<usize>,
-    pub idle_timeout_window: Option<Duration>,
-    pub flap_threshold: Option<usize>,
-    pub flap_window: Option<Duration>,
-    pub flap_max_connection_age: Option<Duration>,
-    pub connect_rate_threshold: Option<usize>,
-    pub connect_rate_window: Option<Duration>,
-    pub write_stall_threshold: Option<usize>,
-    pub write_stall_window: Option<Duration>,
     pub max_penalty_duration: Option<Duration>,
-    pub penalty_decay_interval: Option<Duration>,
 }
 
 /// Live runtime state for a backbone server interface.
@@ -94,6 +83,7 @@ pub struct BackboneRuntimeConfigHandle {
 
 #[derive(Debug, Clone)]
 pub struct BackbonePeerStateHandle {
+    pub interface_id: InterfaceId,
     pub interface_name: String,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 }
@@ -283,65 +273,20 @@ struct ClientState {
 }
 
 #[derive(Debug, Clone)]
-struct PeerEventWindow {
-    events: VecDeque<Instant>,
-}
-
-impl PeerEventWindow {
-    fn new() -> Self {
-        Self {
-            events: VecDeque::new(),
-        }
-    }
-
-    fn record(&mut self, now: Instant, window: Duration) -> usize {
-        self.events.push_back(now);
-        self.prune(now, window);
-        self.events.len()
-    }
-
-    fn prune(&mut self, now: Instant, window: Duration) {
-        while let Some(oldest) = self.events.front().copied() {
-            if now.duration_since(oldest) > window {
-                self.events.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-}
-
-#[derive(Debug, Clone)]
 struct PeerBehaviorState {
-    idle_timeouts: PeerEventWindow,
-    flaps: PeerEventWindow,
-    connect_attempts: PeerEventWindow,
-    write_stalls: PeerEventWindow,
     blacklisted_until: Option<Instant>,
     blacklist_reason: Option<String>,
     reject_count: u64,
     connected_count: usize,
-    penalty_level: u8,
-    last_penalty_at: Option<Instant>,
 }
 
 impl PeerBehaviorState {
     fn new() -> Self {
         Self {
-            idle_timeouts: PeerEventWindow::new(),
-            flaps: PeerEventWindow::new(),
-            connect_attempts: PeerEventWindow::new(),
-            write_stalls: PeerEventWindow::new(),
             blacklisted_until: None,
             blacklist_reason: None,
             reject_count: 0,
             connected_count: 0,
-            penalty_level: 0,
-            last_penalty_at: None,
         }
     }
 }
@@ -359,7 +304,42 @@ impl BackbonePeerMonitor {
     }
 
     fn upsert_snapshot(&mut self, peers: &HashMap<IpAddr, PeerBehaviorState>) {
-        self.peers = peers.clone();
+        let mut merged = self.peers.clone();
+
+        for (peer_ip, state) in peers {
+            let entry = merged
+                .entry(*peer_ip)
+                .or_insert_with(PeerBehaviorState::new);
+            entry.connected_count = state.connected_count;
+            entry.reject_count = state.reject_count;
+            if state.blacklisted_until.is_some() {
+                entry.blacklisted_until = state.blacklisted_until;
+                entry.blacklist_reason = state.blacklist_reason.clone();
+            }
+        }
+
+        merged.retain(|peer_ip, state| {
+            peers.contains_key(peer_ip)
+                || state.blacklisted_until.is_some()
+                || state.reject_count > 0
+        });
+        self.peers = merged;
+    }
+
+    fn sync_into(&self, peers: &mut HashMap<IpAddr, PeerBehaviorState>) {
+        for (peer_ip, state) in &self.peers {
+            let entry = peers.entry(*peer_ip).or_insert_with(PeerBehaviorState::new);
+            entry.blacklisted_until = state.blacklisted_until;
+            entry.blacklist_reason = state.blacklist_reason.clone();
+            entry.reject_count = state.reject_count;
+        }
+
+        peers.retain(|peer_ip, state| {
+            if state.connected_count > 0 {
+                return true;
+            }
+            self.peers.contains_key(peer_ip)
+        });
     }
 
     pub fn list(&self, interface_name: &str) -> Vec<BackbonePeerStateEntry> {
@@ -371,16 +351,11 @@ impl BackbonePeerMonitor {
                 interface_name: interface_name.to_string(),
                 peer_ip: *peer_ip,
                 connected_count: state.connected_count,
-                idle_timeout_events: state.idle_timeouts.events.len(),
-                flap_events: state.flaps.events.len(),
-                write_stall_events: state.write_stalls.events.len(),
                 blacklisted_remaining_secs: state
                     .blacklisted_until
                     .and_then(|until| (until > now).then(|| (until - now).as_secs_f64())),
                 blacklist_reason: state.blacklist_reason.clone(),
                 reject_count: state.reject_count,
-                penalty_level: state.penalty_level,
-                connect_rate_events: state.connect_attempts.events.len(),
             })
             .collect();
         entries.sort_by(|a, b| a.peer_ip.cmp(&b.peer_ip));
@@ -404,22 +379,9 @@ impl BackbonePeerMonitor {
         state.connected_count = entry.connected_count;
         state.reject_count = entry.reject_count;
         state.blacklist_reason = entry.blacklist_reason;
-        state.penalty_level = entry.penalty_level;
         if let Some(remaining) = entry.blacklisted_remaining_secs {
             state.blacklisted_until = Some(Instant::now() + Duration::from_secs_f64(remaining));
         }
-        state.idle_timeouts.events = std::iter::repeat_with(Instant::now)
-            .take(entry.idle_timeout_events)
-            .collect();
-        state.flaps.events = std::iter::repeat_with(Instant::now)
-            .take(entry.flap_events)
-            .collect();
-        state.write_stalls.events = std::iter::repeat_with(Instant::now)
-            .take(entry.write_stall_events)
-            .collect();
-        state.connect_attempts.events = std::iter::repeat_with(Instant::now)
-            .take(entry.connect_rate_events)
-            .collect();
         self.peers.insert(entry.peer_ip, state);
     }
 }
@@ -457,9 +419,12 @@ fn poll_loop(
         let runtime_snapshot = runtime.lock().unwrap().clone();
         let max_connections = runtime_snapshot.max_connections;
         let idle_timeout = runtime_snapshot.idle_timeout;
-        let abuse = runtime_snapshot.abuse.clone();
-        cleanup_peer_state(&mut peers, &abuse);
-        peer_state.lock().unwrap().upsert_snapshot(&peers);
+        cleanup_peer_state(&mut peers);
+        {
+            let mut monitor = peer_state.lock().unwrap();
+            monitor.sync_into(&mut peers);
+            monitor.upsert_snapshot(&peers);
+        }
 
         events.clear();
         poller.wait(&mut events, Some(Duration::from_secs(1)))?;
@@ -481,29 +446,6 @@ fn poll_loop(
                                 log::debug!("[{}] rejecting blacklisted peer {}", name, peer_addr);
                                 drop(stream);
                                 continue;
-                            }
-
-                            // Connect-rate abuse detection
-                            if let (Some(threshold), Some(window)) =
-                                (abuse.connect_rate_threshold, abuse.connect_rate_window)
-                            {
-                                let now = Instant::now();
-                                let state =
-                                    peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
-                                if state.connect_attempts.record(now, window) >= threshold {
-                                    apply_penalty(
-                                        server_interface_id,
-                                        state,
-                                        &abuse,
-                                        &name,
-                                        peer_ip,
-                                        "connection rate exceeded",
-                                        &tx,
-                                    );
-                                    peer_state.lock().unwrap().upsert_snapshot(&peers);
-                                    drop(stream);
-                                    continue;
-                                }
                             }
 
                             if let Some(max) = max_connections {
@@ -684,7 +626,6 @@ fn poll_loop(
                         &poller,
                         &mut clients,
                         &mut peers,
-                        &abuse,
                         &name,
                         server_interface_id,
                         &tx,
@@ -719,7 +660,6 @@ fn poll_loop(
                     &poller,
                     &mut clients,
                     &mut peers,
-                    &abuse,
                     &name,
                     server_interface_id,
                     &tx,
@@ -733,57 +673,16 @@ fn poll_loop(
     }
 }
 
-fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &BackboneAbuseConfig) {
+fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>) {
     let now = Instant::now();
-    let idle_window = abuse.idle_timeout_window;
-    let flap_window = abuse.flap_window;
-    let connect_rate_window = abuse.connect_rate_window;
-    let write_stall_window = abuse.write_stall_window;
-    let decay_interval = abuse.penalty_decay_interval;
     peers.retain(|_, state| {
-        if let Some(window) = idle_window {
-            state.idle_timeouts.prune(now, window);
-        }
-        if let Some(window) = flap_window {
-            state.flaps.prune(now, window);
-        }
-        if let Some(window) = connect_rate_window {
-            state.connect_attempts.prune(now, window);
-        }
-        if let Some(window) = write_stall_window {
-            state.write_stalls.prune(now, window);
-        }
         if matches!(state.blacklisted_until, Some(until) if now >= until) {
             state.blacklisted_until = None;
             state.blacklist_reason = None;
         }
-        // Penalty decay: reduce level when not blacklisted, no connections, and enough time passed
-        if state.penalty_level > 0
-            && state.blacklisted_until.is_none()
-            && state.connected_count == 0
-        {
-            if let (Some(last), Some(interval)) = (state.last_penalty_at, decay_interval) {
-                let elapsed = now.duration_since(last);
-                let levels_to_decay =
-                    (elapsed.as_secs() / interval.as_secs().max(1)).min(u8::MAX as u64) as u8;
-                if levels_to_decay > 0 {
-                    state.penalty_level = state.penalty_level.saturating_sub(levels_to_decay);
-                    // Advance last_penalty_at so partial intervals aren't lost
-                    state.last_penalty_at = if state.penalty_level == 0 {
-                        None
-                    } else {
-                        Some(last + interval * levels_to_decay as u32)
-                    };
-                }
-            }
-        }
         state.blacklisted_until.is_some()
             || state.connected_count > 0
-            || !state.idle_timeouts.is_empty()
-            || !state.flaps.is_empty()
-            || !state.connect_attempts.is_empty()
-            || !state.write_stalls.is_empty()
-            || state.penalty_level > 0
+            || state.reject_count > 0
     });
 }
 
@@ -804,7 +703,6 @@ fn disconnect_client(
     poller: &Poller,
     clients: &mut HashMap<usize, ClientState>,
     peers: &mut HashMap<IpAddr, PeerBehaviorState>,
-    abuse: &BackboneAbuseConfig,
     name: &str,
     server_interface_id: InterfaceId,
     tx: &EventSender,
@@ -869,132 +767,11 @@ fn disconnect_client(
     if let Some(state) = peers.get_mut(&client.peer_ip) {
         state.connected_count = state.connected_count.saturating_sub(1);
     }
-    record_peer_behavior(peers, abuse, name, server_interface_id, tx, &client, reason);
     peer_state.lock().unwrap().upsert_snapshot(peers);
     // Writer already sent InterfaceDown for write stalls; avoid duplicate.
     if !matches!(reason, DisconnectReason::WriteStall) {
         let _ = tx.send(Event::InterfaceDown(client_id));
     }
-}
-
-fn record_peer_behavior(
-    peers: &mut HashMap<IpAddr, PeerBehaviorState>,
-    abuse: &BackboneAbuseConfig,
-    name: &str,
-    server_interface_id: InterfaceId,
-    tx: &EventSender,
-    client: &ClientState,
-    reason: DisconnectReason,
-) {
-    let now = Instant::now();
-    let state = peers
-        .entry(client.peer_ip)
-        .or_insert_with(PeerBehaviorState::new);
-
-    if let (DisconnectReason::IdleTimeout, Some(threshold), Some(window), Some(_)) = (
-        reason,
-        abuse.idle_timeout_threshold,
-        abuse.idle_timeout_window,
-        abuse.blacklist_duration,
-    ) {
-        if state.idle_timeouts.record(now, window) >= threshold {
-            apply_penalty(
-                server_interface_id,
-                state,
-                abuse,
-                name,
-                client.peer_ip,
-                "repeated idle timeouts",
-                tx,
-            );
-        }
-    }
-
-    if matches!(reason, DisconnectReason::RemoteClosed)
-        && !client.has_received_data
-        && abuse.flap_threshold.is_some()
-        && abuse.flap_window.is_some()
-        && abuse.flap_max_connection_age.is_some()
-        && abuse.blacklist_duration.is_some()
-        && now.duration_since(client.connected_at) <= abuse.flap_max_connection_age.unwrap()
-    {
-        let threshold = abuse.flap_threshold.unwrap();
-        let window = abuse.flap_window.unwrap();
-        if state.flaps.record(now, window) >= threshold {
-            apply_penalty(
-                server_interface_id,
-                state,
-                abuse,
-                name,
-                client.peer_ip,
-                "rapid silent reconnect churn",
-                tx,
-            );
-        }
-    }
-
-    if let (DisconnectReason::WriteStall, Some(threshold), Some(window), Some(_)) = (
-        reason,
-        abuse.write_stall_threshold,
-        abuse.write_stall_window,
-        abuse.blacklist_duration,
-    ) {
-        if state.write_stalls.record(now, window) >= threshold {
-            apply_penalty(
-                server_interface_id,
-                state,
-                abuse,
-                name,
-                client.peer_ip,
-                "repeated write stalls",
-                tx,
-            );
-        }
-    }
-}
-
-fn apply_penalty(
-    server_interface_id: InterfaceId,
-    state: &mut PeerBehaviorState,
-    abuse: &BackboneAbuseConfig,
-    name: &str,
-    peer_ip: IpAddr,
-    reason: &str,
-    tx: &EventSender,
-) {
-    let base_duration = match abuse.blacklist_duration {
-        Some(d) => d,
-        None => return,
-    };
-    state.penalty_level = state.penalty_level.saturating_add(1);
-    let multiplier = 1u64 << (state.penalty_level - 1).min(30);
-    let duration = base_duration.saturating_mul(multiplier as u32);
-    let duration = match abuse.max_penalty_duration {
-        Some(max) => duration.min(max),
-        None => duration,
-    };
-    let now = Instant::now();
-    state.blacklisted_until = Some(now + duration);
-    state.blacklist_reason = Some(reason.to_string());
-    state.last_penalty_at = Some(now);
-    state.idle_timeouts.events.clear();
-    state.flaps.events.clear();
-    state.connect_attempts.events.clear();
-    state.write_stalls.events.clear();
-    log::warn!(
-        "[{}] penalizing peer {} for {:.0}s (level {}) due to {}",
-        name,
-        peer_ip,
-        duration.as_secs_f64(),
-        state.penalty_level,
-        reason
-    );
-    let _ = tx.send(Event::BackbonePeerPenalty {
-        server_interface_id,
-        peer_ip,
-        penalty_level: state.penalty_level,
-        blacklist_for: duration,
-    });
 }
 
 fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
@@ -1348,38 +1125,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             let idle_timeout = parse_positive_duration_secs(params, "idle_timeout");
             let write_stall_timeout = parse_positive_duration_secs(params, "write_stall_timeout");
             let abuse = BackboneAbuseConfig {
-                blacklist_duration: parse_positive_duration_secs(params, "blacklist_duration"),
-                idle_timeout_threshold: params
-                    .get("idle_timeout_blacklist_threshold")
-                    .and_then(|v| v.parse().ok()),
-                idle_timeout_window: parse_positive_duration_secs(
-                    params,
-                    "idle_timeout_blacklist_window",
-                ),
-                flap_threshold: params
-                    .get("flap_blacklist_threshold")
-                    .and_then(|v| v.parse().ok()),
-                flap_window: parse_positive_duration_secs(params, "flap_blacklist_window"),
-                flap_max_connection_age: parse_positive_duration_secs(
-                    params,
-                    "flap_max_connection_age",
-                ),
-                connect_rate_threshold: params
-                    .get("connect_rate_threshold")
-                    .and_then(|v| v.parse().ok()),
-                connect_rate_window: parse_positive_duration_secs(params, "connect_rate_window"),
-                write_stall_threshold: params
-                    .get("write_stall_blacklist_threshold")
-                    .and_then(|v| v.parse().ok()),
-                write_stall_window: parse_positive_duration_secs(
-                    params,
-                    "write_stall_blacklist_window",
-                ),
                 max_penalty_duration: parse_positive_duration_secs(params, "max_penalty_duration"),
-                penalty_decay_interval: parse_positive_duration_secs(
-                    params,
-                    "penalty_decay_interval",
-                ),
             };
             let mut config = BackboneConfig {
                 name: name.to_string(),
@@ -1469,6 +1215,7 @@ pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRu
 pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<BackbonePeerStateHandle> {
     match mode {
         BackboneMode::Server(config) => Some(BackbonePeerStateHandle {
+            interface_id: config.interface_id,
             interface_name: config.name.clone(),
             peer_state: Arc::clone(&config.peer_state),
         }),
@@ -2066,52 +1813,6 @@ mod tests {
     }
 
     #[test]
-    fn backbone_blacklists_repeated_idle_timeouts() {
-        let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
-        let next_id = Arc::new(AtomicU64::new(9600));
-
-        let config = make_server_config(
-            port,
-            96,
-            None,
-            Some(Duration::from_millis(100)),
-            None,
-            BackboneAbuseConfig {
-                blacklist_duration: Some(Duration::from_millis(600)),
-                idle_timeout_threshold: Some(2),
-                idle_timeout_window: Some(Duration::from_secs(2)),
-                ..Default::default()
-            },
-        );
-
-        start(config, tx, next_id).unwrap();
-        thread::sleep(Duration::from_millis(50));
-
-        for _ in 0..2 {
-            let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
-            assert!(matches!(event, Event::InterfaceUp(_, _, _)));
-            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
-            assert!(matches!(event, Event::InterfaceDown(_)));
-        }
-
-        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let result = recv_non_peer_event(&rx, Duration::from_millis(300));
-        assert!(
-            result.is_err(),
-            "expected blacklisted peer to be rejected without InterfaceUp, got {:?}",
-            result
-        );
-
-        thread::sleep(Duration::from_millis(700));
-
-        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
-    }
-
-    #[test]
     fn backbone_runtime_idle_timeout_updates_live() {
         let port = find_free_port();
         let (tx, rx) = mpsc::channel();
@@ -2223,12 +1924,7 @@ mod tests {
             None,
             None,
             Some(Duration::from_millis(50)), // 50ms stall timeout
-            BackboneAbuseConfig {
-                blacklist_duration: Some(Duration::from_millis(600)),
-                write_stall_threshold: Some(1), // penalty after 1 stall
-                write_stall_window: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
+            BackboneAbuseConfig::default(),
         );
 
         start(config, tx, next_id).unwrap();
@@ -2272,14 +1968,6 @@ mod tests {
             "expected BackbonePeerWriteStall event"
         );
 
-        // Should see BackbonePeerPenalty event (threshold=1, so first stall triggers)
-        let penalty_event = wait_for(&rx, Duration::from_secs(2), |e| {
-            matches!(e, Event::BackbonePeerPenalty { .. })
-        });
-        assert!(
-            penalty_event.is_some(),
-            "expected BackbonePeerPenalty event after write stall"
-        );
     }
 
     #[test]
@@ -2294,10 +1982,7 @@ mod tests {
             None,
             None,
             None,
-            BackboneAbuseConfig {
-                blacklist_duration: Some(Duration::from_secs(60)),
-                ..Default::default()
-            },
+            BackboneAbuseConfig::default(),
         );
         let peer_state = config.peer_state.clone();
 
@@ -2350,16 +2035,7 @@ mod tests {
         params.insert("listen_port".into(), "4242".into());
         params.insert("idle_timeout".into(), "15".into());
         params.insert("write_stall_timeout".into(), "45".into());
-        params.insert("blacklist_duration".into(), "120".into());
-        params.insert("idle_timeout_blacklist_threshold".into(), "4".into());
-        params.insert("idle_timeout_blacklist_window".into(), "300".into());
-        params.insert("flap_blacklist_threshold".into(), "8".into());
-        params.insert("flap_blacklist_window".into(), "60".into());
-        params.insert("flap_max_connection_age".into(), "5".into());
-        params.insert("connect_rate_threshold".into(), "5".into());
-        params.insert("connect_rate_window".into(), "3".into());
         params.insert("max_penalty_duration".into(), "3600".into());
-        params.insert("penalty_decay_interval".into(), "300".into());
 
         let config = factory
             .parse_config("test-backbone", InterfaceId(97), &params)
@@ -2373,233 +2049,11 @@ mod tests {
                 assert_eq!(config.idle_timeout, Some(Duration::from_secs(15)));
                 assert_eq!(config.write_stall_timeout, Some(Duration::from_secs(45)));
                 assert_eq!(
-                    config.abuse.blacklist_duration,
-                    Some(Duration::from_secs(120))
-                );
-                assert_eq!(config.abuse.idle_timeout_threshold, Some(4));
-                assert_eq!(
-                    config.abuse.idle_timeout_window,
-                    Some(Duration::from_secs(300))
-                );
-                assert_eq!(config.abuse.flap_threshold, Some(8));
-                assert_eq!(config.abuse.flap_window, Some(Duration::from_secs(60)));
-                assert_eq!(
-                    config.abuse.flap_max_connection_age,
-                    Some(Duration::from_secs(5))
-                );
-                assert_eq!(config.abuse.connect_rate_threshold, Some(5));
-                assert_eq!(
-                    config.abuse.connect_rate_window,
-                    Some(Duration::from_secs(3))
-                );
-                assert_eq!(
                     config.abuse.max_penalty_duration,
                     Some(Duration::from_secs(3600))
                 );
-                assert_eq!(
-                    config.abuse.penalty_decay_interval,
-                    Some(Duration::from_secs(300))
-                );
             }
             BackboneMode::Client(_) => panic!("expected server config"),
-        }
-    }
-
-    #[test]
-    fn backbone_connect_rate_triggers_penalty() {
-        let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
-        let next_id = Arc::new(AtomicU64::new(9800));
-
-        let config = make_server_config(
-            port,
-            99,
-            None,
-            None,
-            None,
-            BackboneAbuseConfig {
-                blacklist_duration: Some(Duration::from_secs(20)),
-                connect_rate_threshold: Some(3),
-                connect_rate_window: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        );
-        let peer_state = config.peer_state.clone();
-
-        start(config, tx, next_id).unwrap();
-        thread::sleep(Duration::from_millis(50));
-
-        // Rapid connections — first 2 should succeed, 3rd triggers penalty
-        for i in 0..4 {
-            let result = TcpStream::connect(format!("127.0.0.1:{}", port));
-            if result.is_ok() {
-                // Drain InterfaceUp if it was accepted
-                let _ = rx.recv_timeout(Duration::from_millis(200));
-            }
-            // Small gap to ensure poll loop processes each
-            if i < 3 {
-                thread::sleep(Duration::from_millis(30));
-            }
-        }
-
-        // The peer should now be penalized
-        thread::sleep(Duration::from_millis(100));
-        let entries = peer_state.lock().unwrap().list("test-backbone");
-        let local_entries: Vec<_> = entries
-            .iter()
-            .filter(|e| matches!(e.peer_ip, IpAddr::V4(ip) if ip.is_loopback()))
-            .collect();
-        assert!(
-            !local_entries.is_empty(),
-            "should have peer state for localhost"
-        );
-        let entry = &local_entries[0];
-        assert!(
-            entry.penalty_level >= 1,
-            "penalty_level should be >= 1, got {}",
-            entry.penalty_level
-        );
-        assert!(
-            entry.blacklisted_remaining_secs.is_some(),
-            "peer should be blacklisted"
-        );
-    }
-
-    #[test]
-    fn backbone_penalty_escalation() {
-        let abuse = BackboneAbuseConfig {
-            blacklist_duration: Some(Duration::from_secs(20)),
-            max_penalty_duration: Some(Duration::from_secs(3600)),
-            ..Default::default()
-        };
-
-        let mut state = PeerBehaviorState::new();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let (tx, _rx) = crate::event::channel();
-        let server_interface_id = InterfaceId(1);
-
-        // First penalty: 20s
-        apply_penalty(
-            server_interface_id,
-            &mut state,
-            &abuse,
-            "test",
-            ip,
-            "test reason",
-            &tx,
-        );
-        assert_eq!(state.penalty_level, 1);
-        let remaining1 = state
-            .blacklisted_until
-            .unwrap()
-            .duration_since(Instant::now());
-        assert!(remaining1.as_secs() <= 20 && remaining1.as_secs() >= 18);
-
-        // Second penalty: 40s
-        apply_penalty(
-            server_interface_id,
-            &mut state,
-            &abuse,
-            "test",
-            ip,
-            "test reason",
-            &tx,
-        );
-        assert_eq!(state.penalty_level, 2);
-        let remaining2 = state
-            .blacklisted_until
-            .unwrap()
-            .duration_since(Instant::now());
-        assert!(remaining2.as_secs() <= 40 && remaining2.as_secs() >= 38);
-
-        // Third penalty: 80s
-        apply_penalty(
-            server_interface_id,
-            &mut state,
-            &abuse,
-            "test",
-            ip,
-            "test reason",
-            &tx,
-        );
-        assert_eq!(state.penalty_level, 3);
-        let remaining3 = state
-            .blacklisted_until
-            .unwrap()
-            .duration_since(Instant::now());
-        assert!(remaining3.as_secs() <= 80 && remaining3.as_secs() >= 78);
-    }
-
-    #[test]
-    fn backbone_penalty_escalation_caps_at_max() {
-        let abuse = BackboneAbuseConfig {
-            blacklist_duration: Some(Duration::from_secs(20)),
-            max_penalty_duration: Some(Duration::from_secs(100)),
-            ..Default::default()
-        };
-
-        let mut state = PeerBehaviorState::new();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let (tx, _rx) = crate::event::channel();
-        let server_interface_id = InterfaceId(1);
-
-        // Level 1: 20s, Level 2: 40s, Level 3: 80s, Level 4: would be 160 but capped at 100
-        for _ in 0..4 {
-            apply_penalty(
-                server_interface_id,
-                &mut state,
-                &abuse,
-                "test",
-                ip,
-                "test",
-                &tx,
-            );
-        }
-        assert_eq!(state.penalty_level, 4);
-        let remaining = state
-            .blacklisted_until
-            .unwrap()
-            .duration_since(Instant::now());
-        assert!(remaining.as_secs() <= 100 && remaining.as_secs() >= 98);
-    }
-
-    #[test]
-    fn backbone_penalty_decay() {
-        let abuse = BackboneAbuseConfig {
-            blacklist_duration: Some(Duration::from_secs(1)),
-            penalty_decay_interval: Some(Duration::from_secs(1)),
-            ..Default::default()
-        };
-
-        let ip: IpAddr = "10.0.0.2".parse().unwrap();
-        let mut peers: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
-
-        // Set up a peer with penalty_level=3 and an expired blacklist
-        let mut state = PeerBehaviorState::new();
-        state.penalty_level = 3;
-        state.last_penalty_at = Some(Instant::now() - Duration::from_secs(2));
-        // Blacklist already expired
-        state.blacklisted_until = None;
-        state.connected_count = 0;
-        peers.insert(ip, state);
-
-        // Run cleanup — 2 seconds elapsed with 1s decay interval → decay by 2
-        cleanup_peer_state(&mut peers, &abuse);
-
-        let state = peers.get(&ip).unwrap();
-        assert_eq!(state.penalty_level, 1, "should have decayed from 3 to 1");
-
-        // Simulate more time passing — decay the last level
-        let mut peers2: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
-        let mut state2 = PeerBehaviorState::new();
-        state2.penalty_level = 1;
-        state2.last_penalty_at = Some(Instant::now() - Duration::from_secs(2));
-        peers2.insert(ip, state2);
-
-        cleanup_peer_state(&mut peers2, &abuse);
-        // Should be fully decayed — entry may be retained or removed
-        if let Some(s) = peers2.get(&ip) {
-            assert_eq!(s.penalty_level, 0);
         }
     }
 }
