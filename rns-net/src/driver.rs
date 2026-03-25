@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rns_core::packet::RawPacket;
 use rns_core::transport::tables::PathEntry;
@@ -70,6 +70,8 @@ const DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE: usize = 10_000;
 const DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS: f64 = 300.0;
+const SEND_RETRY_BACKOFF_MIN: Duration = Duration::from_millis(25);
+const SEND_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(1000);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuntimeConfigDefaults {
@@ -4149,6 +4151,8 @@ impl Driver {
                                         ..Default::default()
                                     },
                                     interface_type: iface_type,
+                                    send_retry_at: None,
+                                    send_retry_backoff: Duration::ZERO,
                                 },
                             );
                         }
@@ -4489,10 +4493,12 @@ impl Driver {
                     payload,
                     response_tx,
                 } => {
-                    match self
-                        .link_manager
-                        .send_channel_message(&link_id, msgtype, &payload, &mut self.rng)
-                    {
+                    match self.link_manager.send_channel_message(
+                        &link_id,
+                        msgtype,
+                        &payload,
+                        &mut self.rng,
+                    ) {
                         Ok(link_actions) => {
                             self.dispatch_link_actions(link_actions);
                             let _ = response_tx.send(Ok(()));
@@ -5709,6 +5715,44 @@ impl Driver {
         }
     }
 
+    fn interface_send_deferred(entry: &InterfaceEntry, now: Instant) -> bool {
+        matches!(entry.send_retry_at, Some(retry_at) if now < retry_at)
+    }
+
+    fn record_send_result(
+        entry: &mut InterfaceEntry,
+        result: &std::io::Result<()>,
+        context: &str,
+        interface_id: InterfaceId,
+    ) {
+        match result {
+            Ok(()) => {
+                entry.send_retry_at = None;
+                entry.send_retry_backoff = Duration::ZERO;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let next_backoff = if entry.send_retry_backoff.is_zero() {
+                    SEND_RETRY_BACKOFF_MIN
+                } else {
+                    (entry.send_retry_backoff * 2).min(SEND_RETRY_BACKOFF_MAX)
+                };
+                entry.send_retry_backoff = next_backoff;
+                entry.send_retry_at = Some(Instant::now() + next_backoff);
+                log::debug!(
+                    "[{}] {} deferred after WouldBlock; retry in {:?}",
+                    interface_id.0,
+                    context,
+                    next_backoff
+                );
+            }
+            Err(e) => {
+                entry.send_retry_at = None;
+                entry.send_retry_backoff = Duration::ZERO;
+                log::warn!("[{}] {} failed: {}", interface_id.0, context, e);
+            }
+        }
+    }
+
     /// Dispatch a list of transport actions.
     fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
         #[cfg(feature = "rns-hooks")]
@@ -5776,6 +5820,9 @@ impl Driver {
                     }
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online && entry.enabled {
+                            if Self::interface_send_deferred(entry, Instant::now()) {
+                                continue;
+                            }
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -5787,9 +5834,10 @@ impl Driver {
                             if is_announce {
                                 entry.stats.record_outgoing_announce(time::now());
                             }
-                            if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!("[{}] send failed: {}", entry.info.id.0, e);
-                            } else if is_announce {
+                            let send_result = entry.writer.send_frame(&data);
+                            let sent_ok = send_result.is_ok();
+                            Self::record_send_result(entry, &send_result, "send", interface);
+                            if sent_ok && is_announce {
                                 // For HEADER_2 (transported), dest hash is at bytes 18-33
                                 // For HEADER_1 (original), dest hash is at bytes 2-17
                                 let header_type = (data[0] >> 6) & 0x03;
@@ -5860,6 +5908,9 @@ impl Driver {
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     for entry in self.interfaces.values_mut() {
                         if entry.online && entry.enabled && Some(entry.id) != exclude {
+                            if Self::interface_send_deferred(entry, Instant::now()) {
+                                continue;
+                            }
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -5871,9 +5922,8 @@ impl Driver {
                             if is_announce {
                                 entry.stats.record_outgoing_announce(time::now());
                             }
-                            if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!("[{}] broadcast failed: {}", entry.info.id.0, e);
-                            }
+                            let send_result = entry.writer.send_frame(&data);
+                            Self::record_send_result(entry, &send_result, "broadcast", entry.id);
                         }
                     }
                 }
@@ -6154,6 +6204,9 @@ impl Driver {
                             && entry.info.is_local_client
                             && Some(entry.id) != exclude
                         {
+                            if Self::interface_send_deferred(entry, Instant::now()) {
+                                continue;
+                            }
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -6161,13 +6214,13 @@ impl Driver {
                             };
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
-                            if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!(
-                                    "[{}] forward to local client failed: {}",
-                                    entry.info.id.0,
-                                    e
-                                );
-                            }
+                            let send_result = entry.writer.send_frame(&data);
+                            Self::record_send_result(
+                                entry,
+                                &send_result,
+                                "forward to local client",
+                                entry.id,
+                            );
                         }
                     }
                 }
@@ -6182,6 +6235,9 @@ impl Driver {
                             && entry.info.is_local_client == to_local
                             && Some(entry.id) != exclude
                         {
+                            if Self::interface_send_deferred(entry, Instant::now()) {
+                                continue;
+                            }
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -6189,13 +6245,13 @@ impl Driver {
                             };
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
-                            if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!(
-                                    "[{}] forward plain broadcast failed: {}",
-                                    entry.info.id.0,
-                                    e
-                                );
-                            }
+                            let send_result = entry.writer.send_frame(&data);
+                            Self::record_send_result(
+                                entry,
+                                &send_result,
+                                "forward plain broadcast",
+                                entry.id,
+                            );
                         }
                     }
                 }
@@ -7154,6 +7210,32 @@ mod tests {
         }
     }
 
+    struct WouldBlockWriter {
+        attempts: Arc<Mutex<usize>>,
+    }
+
+    impl WouldBlockWriter {
+        fn new() -> (Self, Arc<Mutex<usize>>) {
+            let attempts = Arc::new(Mutex::new(0));
+            (
+                WouldBlockWriter {
+                    attempts: attempts.clone(),
+                },
+                attempts,
+            )
+        }
+    }
+
+    impl Writer for WouldBlockWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            *self.attempts.lock().unwrap() += 1;
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "intentional stall",
+            ))
+        }
+    }
+
     use rns_core::types::{DestHash, IdentityHash, LinkId as TypedLinkId, PacketHash};
 
     struct MockCallbacks {
@@ -7450,6 +7532,8 @@ mod tests {
                     ..Default::default()
                 },
                 interface_type: "TestInterface".to_string(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
             },
         );
     }
@@ -7667,6 +7751,8 @@ mod tests {
             ifac: None,
             stats: InterfaceStats::default(),
             interface_type: String::new(),
+            send_retry_at: None,
+            send_retry_backoff: Duration::ZERO,
         }
     }
 
@@ -7715,11 +7801,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7762,11 +7848,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7803,11 +7889,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7849,11 +7935,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7895,11 +7981,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7934,11 +8020,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -7964,11 +8050,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8016,11 +8102,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8069,11 +8155,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8129,11 +8215,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8187,11 +8273,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8214,6 +8300,8 @@ mod tests {
                 ifac: None,
                 stats: InterfaceStats::default(),
                 interface_type: String::new(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
             },
         );
 
@@ -8225,6 +8313,56 @@ mod tests {
         assert!(!driver.interfaces.contains_key(&InterfaceId(200)));
         assert_eq!(iface_downs.lock().unwrap().len(), 1);
         assert_eq!(iface_downs.lock().unwrap()[0], InterfaceId(200));
+    }
+
+    #[test]
+    fn send_wouldblock_is_backed_off_between_dispatches() {
+        let (tx, rx) = event::channel();
+        let (cbs, ..) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+        let (writer, attempts) = WouldBlockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(7), make_entry(7, Box::new(writer), true));
+
+        let action = TransportAction::SendOnInterface {
+            interface: InterfaceId(7),
+            raw: vec![0x01, 0x00, 0x42],
+        };
+        driver.dispatch_all(vec![action.clone()]);
+        assert_eq!(*attempts.lock().unwrap(), 1);
+
+        driver.dispatch_all(vec![action.clone()]);
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            1,
+            "second dispatch should be deferred during backoff"
+        );
+
+        let entry = driver.interfaces.get_mut(&InterfaceId(7)).unwrap();
+        entry.send_retry_at = Some(Instant::now() - Duration::from_millis(1));
+        driver.dispatch_all(vec![action]);
+        assert_eq!(*attempts.lock().unwrap(), 2);
     }
 
     #[test]
@@ -8242,11 +8380,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8291,11 +8429,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8340,11 +8478,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8382,11 +8520,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8430,11 +8568,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8479,11 +8617,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8539,11 +8677,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8598,11 +8736,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8655,11 +8793,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8717,11 +8855,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8757,11 +8895,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8795,11 +8933,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8833,11 +8971,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8875,11 +9013,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8917,11 +9055,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -8961,11 +9099,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9003,11 +9141,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9055,11 +9193,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9115,11 +9253,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9170,11 +9308,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9230,11 +9368,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9286,11 +9424,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -9329,11 +9467,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10295,11 +10433,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10321,6 +10459,8 @@ mod tests {
                 ifac: None,
                 stats: InterfaceStats::default(),
                 interface_type: String::new(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
             },
         );
 
@@ -10360,11 +10500,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10411,11 +10551,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10461,11 +10601,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10516,11 +10656,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10580,11 +10720,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10653,11 +10793,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10709,11 +10849,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10789,11 +10929,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10844,11 +10984,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10910,11 +11050,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10948,11 +11088,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -10993,11 +11133,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11035,11 +11175,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11095,11 +11235,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11178,11 +11318,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11250,11 +11390,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11336,11 +11476,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11437,11 +11577,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11537,11 +11677,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11622,11 +11762,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11730,11 +11870,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -11816,11 +11956,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12142,11 +12282,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12193,11 +12333,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12287,11 +12427,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12330,11 +12470,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12404,11 +12544,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12525,11 +12665,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx2,
             tx2.clone(),
@@ -12589,11 +12729,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12636,11 +12776,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12717,11 +12857,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12771,11 +12911,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12824,11 +12964,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12893,11 +13033,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),
@@ -12974,11 +13114,11 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             },
             rx,
             tx.clone(),

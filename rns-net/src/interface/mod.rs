@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::event::EventSender;
 use crate::ifac::IfacState;
@@ -89,6 +90,10 @@ pub struct InterfaceEntry {
     pub stats: InterfaceStats,
     /// Human-readable interface type string (e.g. "TCPClientInterface").
     pub interface_type: String,
+    /// Next time a send should be retried after a transient WouldBlock.
+    pub send_retry_at: Option<Instant>,
+    /// Current retry backoff for transient send failures.
+    pub send_retry_backoff: Duration,
 }
 
 /// Result of starting an interface via a factory.
@@ -230,6 +235,8 @@ mod tests {
             ifac: None,
             stats: InterfaceStats::default(),
             interface_type: String::new(),
+            send_retry_at: None,
+            send_retry_backoff: Duration::ZERO,
         };
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);

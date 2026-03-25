@@ -13,6 +13,7 @@ mod tests {
     use rns_core::transport::TransportEngine;
     use std::collections::HashMap;
     use std::io;
+    use std::time::Duration;
 
     struct NullWriter;
     impl Writer for NullWriter {
@@ -82,6 +83,8 @@ mod tests {
                     oa_timestamps: vec![],
                 },
                 interface_type: "TestInterface".to_string(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
             },
         );
         let ids: Vec<InterfaceId> = map.keys().copied().collect();

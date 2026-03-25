@@ -334,7 +334,9 @@ impl Default for NodeConfig {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             panic_on_interface_error: false,
             #[cfg(feature = "rns-hooks")]
@@ -609,7 +611,9 @@ impl RnsNode {
             announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
             announce_sig_cache_enabled: rns_config.reticulum.announce_sig_cache_enabled,
             announce_sig_cache_max_entries: rns_config.reticulum.announce_sig_cache_max_entries,
-            announce_sig_cache_ttl: Duration::from_secs(rns_config.reticulum.announce_sig_cache_ttl),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_config.reticulum.announce_sig_cache_ttl,
+            ),
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
@@ -993,6 +997,8 @@ impl RnsNode {
                                 ..Default::default()
                             },
                             interface_type: interface_type_name,
+                            send_retry_at: None,
+                            send_retry_backoff: Duration::ZERO,
                         },
                     );
                 }
@@ -1036,6 +1042,8 @@ impl RnsNode {
                                     ..Default::default()
                                 },
                                 interface_type: sub.interface_type_name,
+                                send_retry_at: None,
+                                send_retry_backoff: Duration::ZERO,
                             },
                         );
                     }
@@ -1462,7 +1470,9 @@ impl RnsNode {
                 response_tx,
             })
             .map_err(|_| SendError)?;
-        response_rx.recv().map_err(|_| SendError)?
+        response_rx
+            .recv()
+            .map_err(|_| SendError)?
             .map_err(|_| SendError)
     }
 
@@ -1903,11 +1913,15 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1949,11 +1963,15 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1995,11 +2013,15 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2520,11 +2542,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2575,11 +2601,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2626,11 +2656,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2674,11 +2708,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2729,11 +2767,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2785,11 +2827,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2839,11 +2885,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2904,11 +2954,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2961,11 +3015,15 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-                announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+                announce_table_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
+                ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-                announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+                announce_sig_cache_ttl: Duration::from_secs(
+                    rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+                ),
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,

@@ -127,6 +127,8 @@ impl RnsNode {
                     ..Default::default()
                 },
                 interface_type: "LocalClientInterface".to_string(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
             },
         );
 
