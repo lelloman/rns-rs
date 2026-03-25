@@ -5,6 +5,7 @@ This runbook documents the current deployment procedure for the public VPS
 
 - `rnsd`
 - `rns-statsd`
+- `rns-sentineld`
 
 It is based on the production findings in:
 
@@ -16,13 +17,14 @@ It is based on the production findings in:
 From the repo root:
 
 ```bash
-cargo build --release --bin rnsd --bin rns-statsd --bin rns-ctl
+cargo build --release --bin rnsd --bin rns-statsd --bin rns-sentineld --bin rns-ctl
 target/release/rnsd --version
 target/release/rns-statsd --version
+target/release/rns-sentineld --version
 target/release/rns-ctl --version
 ```
 
-Expected result: all three binaries report the same target commit.
+Expected result: all four binaries report the same target commit.
 
 ## 2. Upload test binaries first
 
@@ -31,8 +33,9 @@ Do not replace the live binaries before testing startup on the VPS.
 ```bash
 ssh root@vps 'cat > /usr/local/bin/rnsd.new' < target/release/rnsd
 ssh root@vps 'cat > /usr/local/bin/rns-statsd.new' < target/release/rns-statsd
+ssh root@vps 'cat > /usr/local/bin/rns-sentineld.new' < target/release/rns-sentineld
 ssh root@vps 'cat > /usr/local/bin/rns-ctl.test' < target/release/rns-ctl
-ssh root@vps 'chmod +x /usr/local/bin/rnsd.new /usr/local/bin/rns-statsd.new'
+ssh root@vps 'chmod +x /usr/local/bin/rnsd.new /usr/local/bin/rns-statsd.new /usr/local/bin/rns-sentineld.new'
 ```
 
 Verify the uploaded versions:
@@ -40,6 +43,7 @@ Verify the uploaded versions:
 ```bash
 ssh root@vps '/usr/local/bin/rnsd.new --version'
 ssh root@vps '/usr/local/bin/rns-statsd.new --version'
+ssh root@vps '/usr/local/bin/rns-sentineld.new --version'
 ssh root@vps '/usr/local/bin/rns-ctl.test --version'
 ```
 
@@ -70,7 +74,8 @@ Before rollout, capture the live versions and service state:
 ```bash
 ssh root@vps '/usr/local/bin/rnsd --version'
 ssh root@vps '/usr/local/bin/rns-statsd --version'
-ssh root@vps 'systemctl is-active rnsd rns-statsd'
+ssh root@vps '/usr/local/bin/rns-sentineld --version'
+ssh root@vps 'systemctl is-active rnsd rns-statsd rns-sentineld'
 ```
 
 ## 5. Back up and promote the binaries
@@ -84,8 +89,10 @@ ssh root@vps '
   set -e
   cp /usr/local/bin/rnsd /usr/local/bin/rnsd.bak-f96ef5d
   cp /usr/local/bin/rns-statsd /usr/local/bin/rns-statsd.bak-339e071
+  cp /usr/local/bin/rns-sentineld /usr/local/bin/rns-sentineld.bak-339e071 2>/dev/null || true
   install -m 0755 /usr/local/bin/rnsd.new /usr/local/bin/rnsd
   install -m 0755 /usr/local/bin/rns-statsd.new /usr/local/bin/rns-statsd
+  install -m 0755 /usr/local/bin/rns-sentineld.new /usr/local/bin/rns-sentineld
 '
 ```
 
@@ -114,46 +121,48 @@ Required checks:
 
 If the RPC port is missing, roll back immediately.
 
-## 7. Restart `rns-statsd`
+## 7. Restart `rns-statsd` and `rns-sentineld`
 
 Once `rnsd` is confirmed healthy:
 
 ```bash
 ssh root@vps '
   systemctl restart rns-statsd
+  systemctl restart rns-sentineld
   sleep 6
   systemctl --no-pager --full status rns-statsd | sed -n "1,40p"
-  journalctl -u rns-statsd -n 20 --no-pager
+  systemctl --no-pager --full status rns-sentineld | sed -n "1,40p"
+  journalctl -u rns-statsd -n 10 --no-pager
+  journalctl -u rns-sentineld -n 10 --no-pager
 '
 ```
 
 Important behavior:
 
-- `rns-statsd` may fail once or twice immediately after an `rnsd` restart with
-  `rpc connect failed: Connection refused`
-- with `Restart=always`, it should recover automatically once `rnsd` finishes
-  bringing up the RPC listener
+- Both `rns-statsd` and `rns-sentineld` have internal RPC retry loops (5s
+  interval) and will wait for `rnsd` to become ready without crashing.
+- On first deploy, `rns-sentineld` needs a systemd unit (see section 10).
 
-This is expected during restart sequencing. The final state must still be
-`active (running)`.
+The final state must be `active (running)` for all three services.
 
 ## 8. Final verification
 
-After both services are restarted:
+After all services are restarted:
 
 ```bash
 ssh root@vps '
-  systemctl is-active rnsd rns-statsd
+  systemctl is-active rnsd rns-statsd rns-sentineld
   /usr/local/bin/rnsd --version
   /usr/local/bin/rns-statsd --version
+  /usr/local/bin/rns-sentineld --version
   ss -ltnp | grep -E "37429|4242"
 '
 ```
 
 Healthy result:
 
-- both services are `active`
-- both binaries report the intended release version
+- all three services are `active`
+- all binaries report the intended release version
 - `rnsd` is listening on:
   - `0.0.0.0:4242`
   - `127.0.0.1:37429`
@@ -163,6 +172,7 @@ Useful log checks:
 ```bash
 ssh root@vps 'journalctl -u rnsd -n 20 --no-pager'
 ssh root@vps 'journalctl -u rns-statsd -n 20 --no-pager'
+ssh root@vps 'journalctl -u rns-sentineld -n 20 --no-pager'
 ```
 
 ## 9. Rollback
@@ -175,9 +185,11 @@ ssh root@vps '
   set -e
   install -m 0755 /usr/local/bin/rnsd.bak-OLD /usr/local/bin/rnsd
   install -m 0755 /usr/local/bin/rns-statsd.bak-OLD /usr/local/bin/rns-statsd
+  install -m 0755 /usr/local/bin/rns-sentineld.bak-OLD /usr/local/bin/rns-sentineld 2>/dev/null || true
   systemctl restart rnsd
   sleep 6
   systemctl restart rns-statsd
+  systemctl restart rns-sentineld 2>/dev/null || true
 '
 ```
 
@@ -194,3 +206,43 @@ Then rerun the final verification commands from section 8.
 - The current live service paths are:
   - `/usr/local/bin/rnsd`
   - `/usr/local/bin/rns-statsd`
+  - `/usr/local/bin/rns-sentineld`
+
+## 11. First-time `rns-sentineld` setup
+
+On a VPS that has never run `rns-sentineld`, create the systemd unit:
+
+```bash
+ssh root@vps 'cat > /etc/systemd/system/rns-sentineld.service' <<'EOF'
+[Unit]
+Description=Reticulum Backbone Peer Sentinel
+After=network.target rnsd.service
+Requires=rnsd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rns-sentineld
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+ssh root@vps 'systemctl daemon-reload && systemctl enable rns-sentineld'
+```
+
+CLI options for tuning detection thresholds:
+
+```
+--write-stall-threshold N    Write stalls before blacklist (default: 2)
+--idle-timeout-threshold N   Idle timeouts before blacklist (default: 4)
+--event-window SECS          Sliding window for event counting (default: 300)
+--base-blacklist SECS        Base blacklist duration, doubles each escalation (default: 120)
+```
+
+To customize, edit the `ExecStart` line in the unit file, e.g.:
+
+```
+ExecStart=/usr/local/bin/rns-sentineld --write-stall-threshold 3 --base-blacklist 60
+```

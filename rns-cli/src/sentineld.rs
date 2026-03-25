@@ -85,6 +85,30 @@ fn run() -> Result<(), String> {
         .get("priority")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let write_stall_threshold = args
+        .get("write-stall-threshold")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_WRITE_STALL_THRESHOLD);
+    let idle_timeout_threshold = args
+        .get("idle-timeout-threshold")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_IDLE_TIMEOUT_THRESHOLD);
+    let event_window_secs = args
+        .get("event-window")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_EVENT_WINDOW.as_secs());
+    let base_blacklist_secs = args
+        .get("base-blacklist")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_BASE_BLACKLIST_SECS);
+
+    let policy = DetectionPolicy {
+        write_stall_threshold,
+        idle_timeout_threshold,
+        event_window: Duration::from_secs(event_window_secs),
+        base_blacklist_secs,
+    };
+
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
 
     let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
@@ -128,9 +152,15 @@ fn run() -> Result<(), String> {
         .set_read_timeout(Some(Duration::from_secs(1)))
         .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
 
-    log::info!("rns-sentineld started, monitoring backbone peers");
+    log::info!(
+        "rns-sentineld started (write_stall={}, idle_timeout={}, window={}s, base_blacklist={}s)",
+        policy.write_stall_threshold,
+        policy.idle_timeout_threshold,
+        policy.event_window.as_secs(),
+        policy.base_blacklist_secs,
+    );
 
-    let mut tracker = PeerTracker::new();
+    let mut tracker = PeerTracker::new(policy);
 
     while !SHOULD_STOP.load(Ordering::Relaxed) {
         match read_provider_envelope(&mut stream) {
@@ -314,14 +344,34 @@ struct BlacklistAction {
     reason: String,
 }
 
+struct DetectionPolicy {
+    write_stall_threshold: u32,
+    idle_timeout_threshold: u32,
+    event_window: Duration,
+    base_blacklist_secs: u64,
+}
+
+impl Default for DetectionPolicy {
+    fn default() -> Self {
+        Self {
+            write_stall_threshold: DEFAULT_WRITE_STALL_THRESHOLD,
+            idle_timeout_threshold: DEFAULT_IDLE_TIMEOUT_THRESHOLD,
+            event_window: DEFAULT_EVENT_WINDOW,
+            base_blacklist_secs: DEFAULT_BASE_BLACKLIST_SECS,
+        }
+    }
+}
+
 struct PeerTracker {
     peers: HashMap<IpAddr, PeerRecord>,
+    policy: DetectionPolicy,
 }
 
 impl PeerTracker {
-    fn new() -> Self {
+    fn new(policy: DetectionPolicy) -> Self {
         Self {
             peers: HashMap::new(),
+            policy,
         }
     }
 
@@ -338,7 +388,7 @@ impl PeerTracker {
             .peers
             .entry(peer_ip)
             .or_insert_with(|| PeerRecord::new(event.attach_point.clone()));
-        record.prune(now, DEFAULT_EVENT_WINDOW);
+        record.prune(now, self.policy.event_window);
 
         match event.attach_point.as_str() {
             "BackbonePeerConnected" => {
@@ -363,7 +413,7 @@ impl PeerTracker {
                     peer_ip,
                     payload.connected_for_secs
                 );
-                if record.idle_timeout_events.len() as u32 >= DEFAULT_IDLE_TIMEOUT_THRESHOLD {
+                if record.idle_timeout_events.len() as u32 >= self.policy.idle_timeout_threshold {
                     Some(self.apply_blacklist(peer_ip, "repeated idle timeouts"))
                 } else {
                     None
@@ -376,7 +426,7 @@ impl PeerTracker {
                     peer_ip,
                     payload.connected_for_secs
                 );
-                if record.write_stall_events.len() as u32 >= DEFAULT_WRITE_STALL_THRESHOLD {
+                if record.write_stall_events.len() as u32 >= self.policy.write_stall_threshold {
                     Some(self.apply_blacklist(peer_ip, "repeated write stalls"))
                 } else {
                     None
@@ -399,7 +449,7 @@ impl PeerTracker {
         let record = self.peers.get_mut(&peer_ip).unwrap();
         record.blacklist_level = record.blacklist_level.saturating_add(1);
         let multiplier = 1u64 << (record.blacklist_level - 1).min(20);
-        let duration_secs = DEFAULT_BASE_BLACKLIST_SECS.saturating_mul(multiplier);
+        let duration_secs = self.policy.base_blacklist_secs.saturating_mul(multiplier);
         record.last_blacklist_at = Some(Instant::now());
         // Clear event windows after applying penalty
         record.write_stall_events.clear();
@@ -516,6 +566,10 @@ fn print_usage() {
     println!("  --config PATH, -c PATH      Path to config directory");
     println!("  --socket PATH               Provider bridge socket override");
     println!("  --priority N                 Hook priority (default: 0)");
+    println!("  --write-stall-threshold N    Write stalls before blacklist (default: {})", DEFAULT_WRITE_STALL_THRESHOLD);
+    println!("  --idle-timeout-threshold N   Idle timeouts before blacklist (default: {})", DEFAULT_IDLE_TIMEOUT_THRESHOLD);
+    println!("  --event-window SECS          Sliding window for event counting (default: {})", DEFAULT_EVENT_WINDOW.as_secs());
+    println!("  --base-blacklist SECS        Base blacklist duration (default: {})", DEFAULT_BASE_BLACKLIST_SECS);
     println!("  --version                    Print version");
     println!("  --help, -h                   Print this help");
     println!("  -v                           Increase verbosity");
@@ -550,7 +604,7 @@ mod tests {
 
     #[test]
     fn write_stall_below_threshold_does_not_trigger() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerWriteStall", [192, 168, 1, 1], 30);
         // First stall — below threshold of 2
         assert!(tracker.ingest(&event).is_none());
@@ -558,7 +612,7 @@ mod tests {
 
     #[test]
     fn write_stall_at_threshold_triggers_blacklist() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerWriteStall", [192, 168, 1, 2], 30);
         assert!(tracker.ingest(&event).is_none());
         let action = tracker.ingest(&event).expect("expected blacklist on 2nd stall");
@@ -570,7 +624,7 @@ mod tests {
 
     #[test]
     fn idle_timeout_below_threshold_does_not_trigger() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerIdleTimeout", [10, 0, 0, 1], 5);
         for _ in 0..3 {
             assert!(tracker.ingest(&event).is_none());
@@ -579,7 +633,7 @@ mod tests {
 
     #[test]
     fn idle_timeout_at_threshold_triggers_blacklist() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerIdleTimeout", [10, 0, 0, 2], 5);
         for _ in 0..3 {
             assert!(tracker.ingest(&event).is_none());
@@ -592,7 +646,7 @@ mod tests {
 
     #[test]
     fn exponential_escalation() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerWriteStall", [172, 16, 0, 1], 30);
 
         // First penalty: level 1, base duration
@@ -616,7 +670,7 @@ mod tests {
 
     #[test]
     fn connect_and_disconnect_do_not_trigger() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         for _ in 0..20 {
             assert!(tracker.ingest(&make_event("BackbonePeerConnected", [1, 2, 3, 4], 0)).is_none());
             assert!(tracker.ingest(&make_event("BackbonePeerDisconnected", [1, 2, 3, 4], 60)).is_none());
@@ -625,7 +679,7 @@ mod tests {
 
     #[test]
     fn penalty_event_does_not_trigger() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         for _ in 0..20 {
             assert!(tracker.ingest(&make_event("BackbonePeerPenalty", [5, 6, 7, 8], 0)).is_none());
         }
@@ -633,7 +687,7 @@ mod tests {
 
     #[test]
     fn different_ips_tracked_independently() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event_a = make_event("BackbonePeerWriteStall", [10, 0, 0, 1], 30);
         let event_b = make_event("BackbonePeerWriteStall", [10, 0, 0, 2], 30);
         // One stall each — neither should trigger
@@ -649,7 +703,7 @@ mod tests {
 
     #[test]
     fn unknown_payload_type_ignored() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = HookProviderEventEnvelope {
             ts_unix_ms: 1000,
             node_instance: "test".into(),
@@ -663,7 +717,7 @@ mod tests {
 
     #[test]
     fn events_cleared_after_blacklist() {
-        let mut tracker = PeerTracker::new();
+        let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerWriteStall", [192, 168, 1, 1], 30);
         // Trigger first blacklist
         tracker.ingest(&event);
