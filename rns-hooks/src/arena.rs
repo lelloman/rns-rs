@@ -5,8 +5,9 @@ use crate::result::Verdict;
 use crate::runtime::StoreData;
 
 pub use rns_hooks_abi::context::{
-    AnnounceContext, InterfaceContext, LinkContext, PacketContext, TickContext, ARENA_BASE,
-    CTX_TYPE_ANNOUNCE, CTX_TYPE_INTERFACE, CTX_TYPE_LINK, CTX_TYPE_PACKET, CTX_TYPE_TICK,
+    AnnounceContext, BackbonePeerContext, InterfaceContext, LinkContext, PacketContext,
+    TickContext, ARENA_BASE, CTX_TYPE_ANNOUNCE, CTX_TYPE_BACKBONE_PEER, CTX_TYPE_INTERFACE,
+    CTX_TYPE_LINK, CTX_TYPE_PACKET, CTX_TYPE_TICK,
 };
 
 /// Write a HookContext into WASM linear memory at ARENA_BASE.
@@ -118,6 +119,37 @@ pub fn write_context(
             write_u64(data, base + 24, *interface_id);
             Ok(size)
         }
+        HookContext::BackbonePeer {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+            connected_for,
+            had_received_data,
+            penalty_level,
+            blacklist_for,
+        } => {
+            let size = std::mem::size_of::<BackbonePeerContext>();
+            if ARENA_BASE + size > mem_size {
+                return Err(HookError::InvalidResult(
+                    "arena overflow for BackbonePeer context".into(),
+                ));
+            }
+            let data = memory.data_mut(&mut store);
+            let base = ARENA_BASE;
+            write_u32(data, base, CTX_TYPE_BACKBONE_PEER);
+            data[base + 4] = peer_ip_family(peer_ip);
+            write_u16(data, base + 5, *peer_port);
+            data[base + 7] = u8::from(*had_received_data);
+            write_u64(data, base + 8, *server_interface_id);
+            write_u64(data, base + 16, peer_interface_id.unwrap_or(0));
+            write_u64(data, base + 24, connected_for.as_secs());
+            data[base + 32] = *penalty_level;
+            data[base + 33..base + 40].fill(0);
+            write_u64(data, base + 40, blacklist_for.as_secs());
+            data[base + 48..base + 64].copy_from_slice(&peer_ip_bytes(peer_ip));
+            Ok(size)
+        }
     }
 }
 
@@ -158,8 +190,30 @@ fn write_u32(data: &mut [u8], offset: usize, val: u32) {
     data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
 }
 
+fn write_u16(data: &mut [u8], offset: usize, val: u16) {
+    data[offset..offset + 2].copy_from_slice(&val.to_le_bytes());
+}
+
 fn write_u64(data: &mut [u8], offset: usize, val: u64) {
     data[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
+}
+
+fn peer_ip_family(ip: &std::net::IpAddr) -> u8 {
+    match ip {
+        std::net::IpAddr::V4(_) => 4,
+        std::net::IpAddr::V6(_) => 6,
+    }
+}
+
+fn peer_ip_bytes(ip: &std::net::IpAddr) -> [u8; 16] {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let mut out = [0u8; 16];
+            out[..4].copy_from_slice(&v4.octets());
+            out
+        }
+        std::net::IpAddr::V6(v6) => v6.octets(),
+    }
 }
 
 fn read_u32(data: &[u8], offset: usize) -> u32 {

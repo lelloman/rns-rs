@@ -7,6 +7,7 @@ pub const CTX_TYPE_INTERFACE: u32 = 1;
 pub const CTX_TYPE_TICK: u32 = 2;
 pub const CTX_TYPE_ANNOUNCE: u32 = 3;
 pub const CTX_TYPE_LINK: u32 = 4;
+pub const CTX_TYPE_BACKBONE_PEER: u32 = 5;
 
 /// Read the context type discriminant from an arena pointer.
 ///
@@ -64,4 +65,20 @@ pub struct LinkContext {
     _pad: u32,
     pub link_id: [u8; 16],
     pub interface_id: u64,
+}
+
+/// Backbone peer lifecycle context layout — matches host `ArenaBackbonePeer`.
+#[repr(C)]
+pub struct BackbonePeerContext {
+    pub context_type: u32,
+    pub peer_ip_family: u8,
+    pub peer_port: u16,
+    pub had_received_data: u8,
+    pub server_interface_id: u64,
+    pub peer_interface_id: u64,
+    pub connected_for_secs: u64,
+    pub penalty_level: u8,
+    _pad: [u8; 7],
+    pub blacklist_for_secs: u64,
+    pub peer_ip: [u8; 16],
 }

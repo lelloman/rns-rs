@@ -180,7 +180,7 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 - **Hot-reload** — hooks can be reloaded at runtime without restarting the node (`rns-ctl hook reload`)
 - **Zero overhead when disabled** — the entire system is behind the `rns-hooks` cargo feature flag; when disabled, no WASM runtime is compiled in
 
-**Hook points (16 total):**
+**Hook points (21 total):**
 
 | Category | Hook Points |
 |----------|------------|
@@ -188,6 +188,7 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 | Announce processing | `AnnounceReceived`, `PathUpdated`, `AnnounceRetransmit` |
 | Link lifecycle | `LinkRequestReceived`, `LinkEstablished`, `LinkClosed` |
 | Interface lifecycle | `InterfaceUp`, `InterfaceDown`, `InterfaceConfigChanged` |
+| Backbone peer lifecycle | `BackbonePeerConnected`, `BackbonePeerDisconnected`, `BackbonePeerIdleTimeout`, `BackbonePeerWriteStall`, `BackbonePeerPenalty` |
 | Per-action | `SendOnInterface`, `BroadcastOnAllInterfaces`, `DeliverLocal`, `TunnelSynthesize` |
 | Periodic | `Tick` |
 

@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -59,6 +59,8 @@ pub struct BackboneAbuseConfig {
     pub flap_max_connection_age: Option<Duration>,
     pub connect_rate_threshold: Option<usize>,
     pub connect_rate_window: Option<Duration>,
+    pub write_stall_threshold: Option<usize>,
+    pub write_stall_window: Option<Duration>,
     pub max_penalty_duration: Option<Duration>,
     pub penalty_decay_interval: Option<Duration>,
 }
@@ -135,6 +137,7 @@ struct BackboneWriter {
     pending: Vec<u8>,
     stall_started: Option<Instant>,
     disconnect_notified: bool,
+    write_stall_flag: Arc<AtomicBool>,
 }
 
 impl Writer for BackboneWriter {
@@ -220,6 +223,7 @@ impl BackboneWriter {
                 self.interface_id.0,
                 timeout
             );
+            self.write_stall_flag.store(true, Ordering::Relaxed);
             let _ = self.stream.shutdown(Shutdown::Both);
             let _ = self.event_tx.send(Event::InterfaceDown(self.interface_id));
             self.disconnect_notified = true;
@@ -244,12 +248,21 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     );
 
     let name = config.name.clone();
+    let server_interface_id = config.interface_id;
     let runtime = Arc::clone(&config.runtime);
     let peer_state = Arc::clone(&config.peer_state);
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = poll_loop(listener, name, tx, next_id, runtime, peer_state) {
+            if let Err(e) = poll_loop(
+                listener,
+                name,
+                server_interface_id,
+                tx,
+                next_id,
+                runtime,
+                peer_state,
+            ) {
                 log::error!("backbone poll loop error: {}", e);
             }
         })?;
@@ -261,10 +274,12 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 struct ClientState {
     id: InterfaceId,
     peer_ip: IpAddr,
+    peer_port: u16,
     stream: TcpStream,
     decoder: hdlc::Decoder,
     connected_at: Instant,
     has_received_data: bool,
+    write_stall_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +320,7 @@ struct PeerBehaviorState {
     idle_timeouts: PeerEventWindow,
     flaps: PeerEventWindow,
     connect_attempts: PeerEventWindow,
+    write_stalls: PeerEventWindow,
     blacklisted_until: Option<Instant>,
     blacklist_reason: Option<String>,
     reject_count: u64,
@@ -319,6 +335,7 @@ impl PeerBehaviorState {
             idle_timeouts: PeerEventWindow::new(),
             flaps: PeerEventWindow::new(),
             connect_attempts: PeerEventWindow::new(),
+            write_stalls: PeerEventWindow::new(),
             blacklisted_until: None,
             blacklist_reason: None,
             reject_count: 0,
@@ -356,6 +373,7 @@ impl BackbonePeerMonitor {
                 connected_count: state.connected_count,
                 idle_timeout_events: state.idle_timeouts.events.len(),
                 flap_events: state.flaps.events.len(),
+                write_stall_events: state.write_stalls.events.len(),
                 blacklisted_remaining_secs: state
                     .blacklisted_until
                     .and_then(|until| (until > now).then(|| (until - now).as_secs_f64())),
@@ -371,6 +389,13 @@ impl BackbonePeerMonitor {
 
     pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
         self.peers.remove(&peer_ip).is_some()
+    }
+
+    pub fn blacklist(&mut self, peer_ip: IpAddr, duration: Duration, reason: String) -> bool {
+        let state = self.peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
+        state.blacklisted_until = Some(Instant::now() + duration);
+        state.blacklist_reason = Some(reason);
+        true
     }
 
     #[cfg(test)]
@@ -389,6 +414,9 @@ impl BackbonePeerMonitor {
         state.flaps.events = std::iter::repeat_with(Instant::now)
             .take(entry.flap_events)
             .collect();
+        state.write_stalls.events = std::iter::repeat_with(Instant::now)
+            .take(entry.write_stall_events)
+            .collect();
         state.connect_attempts.events = std::iter::repeat_with(Instant::now)
             .take(entry.connect_rate_events)
             .collect();
@@ -400,12 +428,14 @@ impl BackbonePeerMonitor {
 enum DisconnectReason {
     RemoteClosed,
     IdleTimeout,
+    WriteStall,
 }
 
 /// Main poll event loop.
 fn poll_loop(
     listener: TcpListener,
     name: String,
+    server_interface_id: InterfaceId,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
@@ -441,6 +471,7 @@ fn poll_loop(
                     match listener.accept() {
                         Ok((stream, peer_addr)) => {
                             let peer_ip = peer_addr.ip();
+                            let peer_port = peer_addr.port();
 
                             if is_ip_blacklisted(&mut peers, peer_ip) {
                                 if let Some(state) = peers.get_mut(&peer_ip) {
@@ -461,11 +492,13 @@ fn poll_loop(
                                     peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
                                 if state.connect_attempts.record(now, window) >= threshold {
                                     apply_penalty(
+                                        server_interface_id,
                                         state,
                                         &abuse,
                                         &name,
                                         peer_ip,
                                         "connection rate exceeded",
+                                        &tx,
                                     );
                                     peer_state.lock().unwrap().upsert_snapshot(&peers);
                                     drop(stream);
@@ -525,6 +558,7 @@ fn poll_loop(
                                     continue; // stream drops
                                 }
                             };
+                            let write_stall_flag = Arc::new(AtomicBool::new(false));
                             let writer: Box<dyn Writer> = Box::new(BackboneWriter {
                                 stream: writer_stream,
                                 runtime: Arc::clone(&runtime),
@@ -534,6 +568,7 @@ fn poll_loop(
                                 pending: Vec::new(),
                                 stall_started: None,
                                 disconnect_notified: false,
+                                write_stall_flag: Arc::clone(&write_stall_flag),
                             });
 
                             clients.insert(
@@ -541,10 +576,12 @@ fn poll_loop(
                                 ClientState {
                                     id: client_id,
                                     peer_ip,
+                                    peer_port,
                                     stream,
                                     decoder: hdlc::Decoder::new(),
                                     connected_at: Instant::now(),
                                     has_received_data: false,
+                                    write_stall_flag,
                                 },
                             );
                             peers
@@ -552,6 +589,12 @@ fn poll_loop(
                                 .or_insert_with(PeerBehaviorState::new)
                                 .connected_count += 1;
                             peer_state.lock().unwrap().upsert_snapshot(&peers);
+                            let _ = tx.send(Event::BackbonePeerConnected {
+                                server_interface_id,
+                                peer_interface_id: client_id,
+                                peer_ip,
+                                peer_port,
+                            });
 
                             let info = InterfaceInfo {
                                 id: client_id,
@@ -629,17 +672,26 @@ fn poll_loop(
                 }
 
                 if should_remove {
+                    let reason = if clients
+                        .get(&key)
+                        .is_some_and(|c| c.write_stall_flag.load(Ordering::Relaxed))
+                    {
+                        DisconnectReason::WriteStall
+                    } else {
+                        DisconnectReason::RemoteClosed
+                    };
                     disconnect_client(
                         &poller,
                         &mut clients,
                         &mut peers,
                         &abuse,
                         &name,
+                        server_interface_id,
                         &tx,
                         &peer_state,
                         key,
                         client_id,
-                        DisconnectReason::RemoteClosed,
+                        reason,
                     );
                 } else if let Some(client) = clients.get(&key) {
                     // Re-arm client (oneshot semantics)
@@ -669,6 +721,7 @@ fn poll_loop(
                     &mut peers,
                     &abuse,
                     &name,
+                    server_interface_id,
                     &tx,
                     &peer_state,
                     key,
@@ -685,6 +738,7 @@ fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &Ba
     let idle_window = abuse.idle_timeout_window;
     let flap_window = abuse.flap_window;
     let connect_rate_window = abuse.connect_rate_window;
+    let write_stall_window = abuse.write_stall_window;
     let decay_interval = abuse.penalty_decay_interval;
     peers.retain(|_, state| {
         if let Some(window) = idle_window {
@@ -695,6 +749,9 @@ fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &Ba
         }
         if let Some(window) = connect_rate_window {
             state.connect_attempts.prune(now, window);
+        }
+        if let Some(window) = write_stall_window {
+            state.write_stalls.prune(now, window);
         }
         if matches!(state.blacklisted_until, Some(until) if now >= until) {
             state.blacklisted_until = None;
@@ -725,6 +782,7 @@ fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &Ba
             || !state.idle_timeouts.is_empty()
             || !state.flaps.is_empty()
             || !state.connect_attempts.is_empty()
+            || !state.write_stalls.is_empty()
             || state.penalty_level > 0
     });
 }
@@ -748,6 +806,7 @@ fn disconnect_client(
     peers: &mut HashMap<IpAddr, PeerBehaviorState>,
     abuse: &BackboneAbuseConfig,
     name: &str,
+    server_interface_id: InterfaceId,
     tx: &EventSender,
     peer_state: &Arc<Mutex<BackbonePeerMonitor>>,
     key: usize,
@@ -769,23 +828,61 @@ fn disconnect_client(
                 client_id.0
             );
         }
+        DisconnectReason::WriteStall => {
+            // Already logged by BackboneWriter::disconnect_for_write_stall
+        }
     }
 
     let _ = poller.delete(&client.stream);
     // client.stream closes on drop
+    let connected_for = client.connected_at.elapsed();
+    let _ = tx.send(Event::BackbonePeerDisconnected {
+        server_interface_id,
+        peer_interface_id: client.id,
+        peer_ip: client.peer_ip,
+        peer_port: client.peer_port,
+        connected_for,
+        had_received_data: client.has_received_data,
+    });
+    match reason {
+        DisconnectReason::IdleTimeout => {
+            let _ = tx.send(Event::BackbonePeerIdleTimeout {
+                server_interface_id,
+                peer_interface_id: client.id,
+                peer_ip: client.peer_ip,
+                peer_port: client.peer_port,
+                connected_for,
+            });
+        }
+        DisconnectReason::WriteStall => {
+            let _ = tx.send(Event::BackbonePeerWriteStall {
+                server_interface_id,
+                peer_interface_id: client.id,
+                peer_ip: client.peer_ip,
+                peer_port: client.peer_port,
+                connected_for,
+            });
+        }
+        DisconnectReason::RemoteClosed => {}
+    }
 
     if let Some(state) = peers.get_mut(&client.peer_ip) {
         state.connected_count = state.connected_count.saturating_sub(1);
     }
-    record_peer_behavior(peers, abuse, name, &client, reason);
+    record_peer_behavior(peers, abuse, name, server_interface_id, tx, &client, reason);
     peer_state.lock().unwrap().upsert_snapshot(peers);
-    let _ = tx.send(Event::InterfaceDown(client_id));
+    // Writer already sent InterfaceDown for write stalls; avoid duplicate.
+    if !matches!(reason, DisconnectReason::WriteStall) {
+        let _ = tx.send(Event::InterfaceDown(client_id));
+    }
 }
 
 fn record_peer_behavior(
     peers: &mut HashMap<IpAddr, PeerBehaviorState>,
     abuse: &BackboneAbuseConfig,
     name: &str,
+    server_interface_id: InterfaceId,
+    tx: &EventSender,
     client: &ClientState,
     reason: DisconnectReason,
 ) {
@@ -801,7 +898,15 @@ fn record_peer_behavior(
         abuse.blacklist_duration,
     ) {
         if state.idle_timeouts.record(now, window) >= threshold {
-            apply_penalty(state, abuse, name, client.peer_ip, "repeated idle timeouts");
+            apply_penalty(
+                server_interface_id,
+                state,
+                abuse,
+                name,
+                client.peer_ip,
+                "repeated idle timeouts",
+                tx,
+            );
         }
     }
 
@@ -817,22 +922,45 @@ fn record_peer_behavior(
         let window = abuse.flap_window.unwrap();
         if state.flaps.record(now, window) >= threshold {
             apply_penalty(
+                server_interface_id,
                 state,
                 abuse,
                 name,
                 client.peer_ip,
                 "rapid silent reconnect churn",
+                tx,
+            );
+        }
+    }
+
+    if let (DisconnectReason::WriteStall, Some(threshold), Some(window), Some(_)) = (
+        reason,
+        abuse.write_stall_threshold,
+        abuse.write_stall_window,
+        abuse.blacklist_duration,
+    ) {
+        if state.write_stalls.record(now, window) >= threshold {
+            apply_penalty(
+                server_interface_id,
+                state,
+                abuse,
+                name,
+                client.peer_ip,
+                "repeated write stalls",
+                tx,
             );
         }
     }
 }
 
 fn apply_penalty(
+    server_interface_id: InterfaceId,
     state: &mut PeerBehaviorState,
     abuse: &BackboneAbuseConfig,
     name: &str,
     peer_ip: IpAddr,
     reason: &str,
+    tx: &EventSender,
 ) {
     let base_duration = match abuse.blacklist_duration {
         Some(d) => d,
@@ -852,6 +980,7 @@ fn apply_penalty(
     state.idle_timeouts.events.clear();
     state.flaps.events.clear();
     state.connect_attempts.events.clear();
+    state.write_stalls.events.clear();
     log::warn!(
         "[{}] penalizing peer {} for {:.0}s (level {}) due to {}",
         name,
@@ -860,6 +989,12 @@ fn apply_penalty(
         state.penalty_level,
         reason
     );
+    let _ = tx.send(Event::BackbonePeerPenalty {
+        server_interface_id,
+        peer_ip,
+        penalty_level: state.penalty_level,
+        blacklist_for: duration,
+    });
 }
 
 fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
@@ -1233,6 +1368,13 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     .get("connect_rate_threshold")
                     .and_then(|v| v.parse().ok()),
                 connect_rate_window: parse_positive_duration_secs(params, "connect_rate_window"),
+                write_stall_threshold: params
+                    .get("write_stall_blacklist_threshold")
+                    .and_then(|v| v.parse().ok()),
+                write_stall_window: parse_positive_duration_secs(
+                    params,
+                    "write_stall_blacklist_window",
+                ),
                 max_penalty_duration: parse_positive_duration_secs(params, "max_penalty_duration"),
                 penalty_decay_interval: parse_positive_duration_secs(
                     params,
@@ -1361,6 +1503,28 @@ mod tests {
             .port()
     }
 
+    fn recv_non_peer_event(
+        rx: &mpsc::Receiver<Event>,
+        timeout: Duration,
+    ) -> Result<Event, mpsc::RecvTimeoutError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(mpsc::RecvTimeoutError::Timeout);
+            }
+            let event = rx.recv_timeout(remaining)?;
+            match event {
+                Event::BackbonePeerConnected { .. }
+                | Event::BackbonePeerDisconnected { .. }
+                | Event::BackbonePeerIdleTimeout { .. }
+                | Event::BackbonePeerWriteStall { .. }
+                | Event::BackbonePeerPenalty { .. } => continue,
+                other => return Ok(other),
+            }
+        }
+    }
+
     fn make_server_config(
         port: u16,
         interface_id: u64,
@@ -1404,7 +1568,7 @@ mod tests {
 
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
             Event::InterfaceUp(id, writer, info) => {
                 assert_eq!(id, InterfaceId(8000));
@@ -1432,13 +1596,13 @@ mod tests {
         let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
         // Drain InterfaceUp
-        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
 
         // Send HDLC frame (>= 19 bytes)
         let payload: Vec<u8> = (0..32).collect();
         client.write_all(&hdlc::frame(&payload)).unwrap();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
             Event::Frame { interface_id, data } => {
                 assert_eq!(interface_id, InterfaceId(8100));
@@ -1465,7 +1629,7 @@ mod tests {
             .unwrap();
 
         // Get writer from InterfaceUp
-        let event = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
         let mut writer = match event {
             Event::InterfaceUp(_, Some(w), _) => w,
             other => panic!("expected InterfaceUp with writer, got {:?}", other),
@@ -1498,7 +1662,7 @@ mod tests {
 
         let mut ids = Vec::new();
         for _ in 0..2 {
-            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
             match event {
                 Event::InterfaceUp(id, _, _) => ids.push(id),
                 other => panic!("expected InterfaceUp, got {:?}", other),
@@ -1523,13 +1687,13 @@ mod tests {
         let client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
         // Drain InterfaceUp
-        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
 
         // Disconnect
         drop(client);
 
         // Should receive InterfaceDown
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(
             matches!(event, Event::InterfaceDown(InterfaceId(8400))),
             "expected InterfaceDown(8400), got {:?}",
@@ -1552,8 +1716,8 @@ mod tests {
         let mut client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
         // Drain both InterfaceUp events
-        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
 
         // Both clients send data simultaneously
         let payload1: Vec<u8> = (0..24).collect();
@@ -1564,7 +1728,7 @@ mod tests {
         // Should receive both Frame events
         let mut received = Vec::new();
         for _ in 0..2 {
-            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
             match event {
                 Event::Frame { data, .. } => received.push(data),
                 other => panic!("expected Frame, got {:?}", other),
@@ -1601,7 +1765,7 @@ mod tests {
         client.set_nodelay(true).unwrap();
 
         // Drain InterfaceUp
-        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
 
         // Send HDLC frame in two fragments
         let payload: Vec<u8> = (0..32).collect();
@@ -1613,7 +1777,7 @@ mod tests {
         client.write_all(&framed[mid..]).unwrap();
 
         // Should receive reassembled frame
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
             Event::Frame { data, .. } => {
                 assert_eq!(data, payload);
@@ -1734,7 +1898,7 @@ mod tests {
 
         // Drain both InterfaceUp events
         for _ in 0..2 {
-            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
             assert!(matches!(event, Event::InterfaceUp(_, _, _)));
         }
 
@@ -1748,7 +1912,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
 
         // Should NOT receive a third InterfaceUp
-        let result = rx.recv_timeout(Duration::from_millis(500));
+        let result = recv_non_peer_event(&rx, Duration::from_millis(500));
         assert!(
             result.is_err(),
             "expected no InterfaceUp for rejected connection, got {:?}",
@@ -1776,19 +1940,19 @@ mod tests {
 
         // Connect first client
         let client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(_, _, _)));
 
         // Disconnect first client
         drop(client1);
 
         // Wait for InterfaceDown
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(_)));
 
         // Now a new connection should be accepted
         let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(
             matches!(event, Event::InterfaceUp(_, _, _)),
             "expected InterfaceUp after slot freed, got {:?}",
@@ -1815,14 +1979,14 @@ mod tests {
         drop(server_stream);
 
         // Should get InterfaceDown
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(InterfaceId(9300))));
 
         // Accept the reconnection
         let _server_stream2 = listener.accept().unwrap();
 
         // Should get InterfaceUp again
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(InterfaceId(9300), _, _)));
     }
 
@@ -1846,13 +2010,13 @@ mod tests {
 
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         let client_id = match event {
             Event::InterfaceUp(id, _, _) => id,
             other => panic!("expected InterfaceUp, got {:?}", other),
         };
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
     }
 
@@ -1876,7 +2040,7 @@ mod tests {
 
         let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         let client_id = match event {
             Event::InterfaceUp(id, _, _) => id,
             other => panic!("expected InterfaceUp, got {:?}", other),
@@ -1884,7 +2048,7 @@ mod tests {
 
         client.write_all(&hdlc::frame(&[1u8; 24])).unwrap();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
             Event::Frame { interface_id, data } => {
                 assert_eq!(interface_id, client_id);
@@ -1893,7 +2057,7 @@ mod tests {
             other => panic!("expected Frame, got {:?}", other),
         }
 
-        let result = rx.recv_timeout(Duration::from_millis(500));
+        let result = recv_non_peer_event(&rx, Duration::from_millis(500));
         assert!(
             result.is_err(),
             "expected no InterfaceDown after client sent data, got {:?}",
@@ -1926,14 +2090,14 @@ mod tests {
 
         for _ in 0..2 {
             let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
             assert!(matches!(event, Event::InterfaceUp(_, _, _)));
-            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
             assert!(matches!(event, Event::InterfaceDown(_)));
         }
 
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let result = rx.recv_timeout(Duration::from_millis(300));
+        let result = recv_non_peer_event(&rx, Duration::from_millis(300));
         assert!(
             result.is_err(),
             "expected blacklisted peer to be rejected without InterfaceUp, got {:?}",
@@ -1943,7 +2107,7 @@ mod tests {
         thread::sleep(Duration::from_millis(700));
 
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(_, _, _)));
     }
 
@@ -1960,7 +2124,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         let client_id = match event {
             Event::InterfaceUp(id, _, _) => id,
             other => panic!("expected InterfaceUp, got {:?}", other),
@@ -1971,7 +2135,7 @@ mod tests {
             runtime.idle_timeout = Some(Duration::from_millis(150));
         }
 
-        let event = rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(4)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
     }
 
@@ -2000,7 +2164,7 @@ mod tests {
         let sock = SockRef::from(&client);
         sock.set_recv_buffer_size(4096).ok();
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         let (client_id, mut writer) = match event {
             Event::InterfaceUp(id, Some(writer), _) => (id, writer),
             other => panic!("expected InterfaceUp with writer, got {:?}", other),
@@ -2024,8 +2188,158 @@ mod tests {
         }
 
         assert!(stalled, "expected writer to time out on persistent stall");
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
+    }
+
+    /// Drain events matching a predicate, return the first match.
+    fn wait_for<F>(rx: &mpsc::Receiver<Event>, timeout: Duration, mut pred: F) -> Option<Event>
+    where
+        F: FnMut(&Event) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(event) if pred(&event) => return Some(event),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+
+    #[test]
+    fn backbone_write_stall_emits_peer_events() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9700));
+
+        let config = make_server_config(
+            port,
+            97,
+            None,
+            None,
+            Some(Duration::from_millis(50)), // 50ms stall timeout
+            BackboneAbuseConfig {
+                blacklist_duration: Some(Duration::from_millis(600)),
+                write_stall_threshold: Some(1), // penalty after 1 stall
+                write_stall_window: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        );
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Connect a client that won't read (will cause write stall)
+        let client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let sock = SockRef::from(&client);
+        sock.set_recv_buffer_size(4096).ok();
+
+        // Wait for InterfaceUp and grab writer
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        let mut writer = match event {
+            Event::InterfaceUp(_, Some(w), _) => w,
+            other => panic!("expected InterfaceUp with writer, got {:?}", other),
+        };
+
+        // Flood until stall
+        let payload = vec![0x55; 512 * 1024];
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match writer.send_frame(&payload) {
+                Ok(()) | Err(_) => {
+                    if Instant::now() + Duration::from_millis(10) > deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+
+        // Should see BackbonePeerWriteStall event
+        let stall_event = wait_for(&rx, Duration::from_secs(3), |e| {
+            matches!(e, Event::BackbonePeerWriteStall { .. })
+        });
+        assert!(
+            stall_event.is_some(),
+            "expected BackbonePeerWriteStall event"
+        );
+
+        // Should see BackbonePeerPenalty event (threshold=1, so first stall triggers)
+        let penalty_event = wait_for(&rx, Duration::from_secs(2), |e| {
+            matches!(e, Event::BackbonePeerPenalty { .. })
+        });
+        assert!(
+            penalty_event.is_some(),
+            "expected BackbonePeerPenalty event after write stall"
+        );
+    }
+
+    #[test]
+    fn backbone_blacklisted_peer_rejected_on_connect() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9800));
+
+        let config = make_server_config(
+            port,
+            98,
+            None,
+            None,
+            None,
+            BackboneAbuseConfig {
+                blacklist_duration: Some(Duration::from_secs(60)),
+                ..Default::default()
+            },
+        );
+        let peer_state = config.peer_state.clone();
+
+        start(config, tx.clone(), next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // First connection should succeed
+        let client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        assert!(
+            matches!(event, Event::InterfaceUp(_, _, _)),
+            "first connection should succeed"
+        );
+        drop(client1);
+
+        // Drain disconnect events
+        thread::sleep(Duration::from_millis(100));
+        while rx.try_recv().is_ok() {}
+
+        // Blacklist 127.0.0.1 via the peer monitor
+        peer_state
+            .lock()
+            .unwrap()
+            .blacklist(
+                "127.0.0.1".parse().unwrap(),
+                Duration::from_secs(60),
+                "test blacklist".into(),
+            );
+
+        // Second connection from same IP should be rejected (no InterfaceUp)
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        // Give poll loop time to reject
+        thread::sleep(Duration::from_millis(200));
+
+        // Should NOT get an InterfaceUp — connection should have been rejected
+        let event = rx.try_recv();
+        match event {
+            Ok(Event::InterfaceUp(_, _, _)) => {
+                panic!("blacklisted peer should not get InterfaceUp")
+            }
+            _ => {} // Expected: no InterfaceUp
+        }
     }
 
     #[test]
@@ -2161,9 +2475,19 @@ mod tests {
 
         let mut state = PeerBehaviorState::new();
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let server_interface_id = InterfaceId(1);
 
         // First penalty: 20s
-        apply_penalty(&mut state, &abuse, "test", ip, "test reason");
+        apply_penalty(
+            server_interface_id,
+            &mut state,
+            &abuse,
+            "test",
+            ip,
+            "test reason",
+            &tx,
+        );
         assert_eq!(state.penalty_level, 1);
         let remaining1 = state
             .blacklisted_until
@@ -2172,7 +2496,15 @@ mod tests {
         assert!(remaining1.as_secs() <= 20 && remaining1.as_secs() >= 18);
 
         // Second penalty: 40s
-        apply_penalty(&mut state, &abuse, "test", ip, "test reason");
+        apply_penalty(
+            server_interface_id,
+            &mut state,
+            &abuse,
+            "test",
+            ip,
+            "test reason",
+            &tx,
+        );
         assert_eq!(state.penalty_level, 2);
         let remaining2 = state
             .blacklisted_until
@@ -2181,7 +2513,15 @@ mod tests {
         assert!(remaining2.as_secs() <= 40 && remaining2.as_secs() >= 38);
 
         // Third penalty: 80s
-        apply_penalty(&mut state, &abuse, "test", ip, "test reason");
+        apply_penalty(
+            server_interface_id,
+            &mut state,
+            &abuse,
+            "test",
+            ip,
+            "test reason",
+            &tx,
+        );
         assert_eq!(state.penalty_level, 3);
         let remaining3 = state
             .blacklisted_until
@@ -2200,10 +2540,20 @@ mod tests {
 
         let mut state = PeerBehaviorState::new();
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let server_interface_id = InterfaceId(1);
 
         // Level 1: 20s, Level 2: 40s, Level 3: 80s, Level 4: would be 160 but capped at 100
         for _ in 0..4 {
-            apply_penalty(&mut state, &abuse, "test", ip, "test");
+            apply_penalty(
+                server_interface_id,
+                &mut state,
+                &abuse,
+                "test",
+                ip,
+                "test",
+                &tx,
+            );
         }
         assert_eq!(state.penalty_level, 4);
         let remaining = state

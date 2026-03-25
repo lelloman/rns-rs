@@ -3,6 +3,7 @@
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
@@ -209,6 +210,45 @@ pub enum Event<W: Send> {
     },
     /// An interface's configuration changed (placeholder for future use).
     InterfaceConfigChanged(InterfaceId),
+    /// A backbone server accepted a new inbound peer connection.
+    BackbonePeerConnected {
+        server_interface_id: InterfaceId,
+        peer_interface_id: InterfaceId,
+        peer_ip: IpAddr,
+        peer_port: u16,
+    },
+    /// A backbone peer connection closed for any reason.
+    BackbonePeerDisconnected {
+        server_interface_id: InterfaceId,
+        peer_interface_id: InterfaceId,
+        peer_ip: IpAddr,
+        peer_port: u16,
+        connected_for: Duration,
+        had_received_data: bool,
+    },
+    /// A backbone peer was disconnected for idling without sending data.
+    BackbonePeerIdleTimeout {
+        server_interface_id: InterfaceId,
+        peer_interface_id: InterfaceId,
+        peer_ip: IpAddr,
+        peer_port: u16,
+        connected_for: Duration,
+    },
+    /// A backbone peer was disconnected because its writer stalled.
+    BackbonePeerWriteStall {
+        server_interface_id: InterfaceId,
+        peer_interface_id: InterfaceId,
+        peer_ip: IpAddr,
+        peer_port: u16,
+        connected_for: Duration,
+    },
+    /// A backbone peer IP was penalized due to abusive behavior.
+    BackbonePeerPenalty {
+        server_interface_id: InterfaceId,
+        peer_ip: IpAddr,
+        penalty_level: u8,
+        blacklist_for: Duration,
+    },
     /// Load a WASM hook at runtime.
     LoadHook {
         name: String,
@@ -268,11 +308,25 @@ pub struct BackbonePeerStateEntry {
     pub connected_count: usize,
     pub idle_timeout_events: usize,
     pub flap_events: usize,
+    pub write_stall_events: usize,
     pub blacklisted_remaining_secs: Option<f64>,
     pub blacklist_reason: Option<String>,
     pub reject_count: u64,
     pub penalty_level: u8,
     pub connect_rate_events: usize,
+}
+
+/// Hook-visible snapshot of a backbone peer lifecycle event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackbonePeerHookEvent {
+    pub server_interface_id: InterfaceId,
+    pub peer_interface_id: Option<InterfaceId>,
+    pub peer_ip: IpAddr,
+    pub peer_port: u16,
+    pub connected_for: Duration,
+    pub had_received_data: bool,
+    pub penalty_level: u8,
+    pub blacklist_for: Duration,
 }
 
 /// Queries that can be sent to the driver.
@@ -368,6 +422,12 @@ pub enum QueryRequest {
         interface_name: String,
         peer_ip: IpAddr,
     },
+    /// Blacklist a backbone peer IP for a duration.
+    BlacklistBackbonePeer {
+        interface_name: String,
+        peer_ip: IpAddr,
+        duration: Duration,
+    },
 }
 
 /// Responses to queries.
@@ -412,6 +472,8 @@ pub enum QueryResponse {
     BackbonePeerState(Vec<BackbonePeerStateEntry>),
     /// Result of clearing one backbone peer state entry.
     ClearBackbonePeerState(bool),
+    /// Result of blacklisting a backbone peer.
+    BlacklistBackbonePeer(bool),
 }
 
 /// Interface statistics response.
@@ -684,6 +746,74 @@ impl<W: Send> fmt::Debug for Event<W> {
             Event::InterfaceConfigChanged(id) => {
                 f.debug_tuple("InterfaceConfigChanged").field(id).finish()
             }
+            Event::BackbonePeerConnected {
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+            } => f
+                .debug_struct("BackbonePeerConnected")
+                .field("server_interface_id", server_interface_id)
+                .field("peer_interface_id", peer_interface_id)
+                .field("peer_ip", peer_ip)
+                .field("peer_port", peer_port)
+                .finish(),
+            Event::BackbonePeerDisconnected {
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+                connected_for,
+                had_received_data,
+            } => f
+                .debug_struct("BackbonePeerDisconnected")
+                .field("server_interface_id", server_interface_id)
+                .field("peer_interface_id", peer_interface_id)
+                .field("peer_ip", peer_ip)
+                .field("peer_port", peer_port)
+                .field("connected_for", connected_for)
+                .field("had_received_data", had_received_data)
+                .finish(),
+            Event::BackbonePeerIdleTimeout {
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+                connected_for,
+            } => f
+                .debug_struct("BackbonePeerIdleTimeout")
+                .field("server_interface_id", server_interface_id)
+                .field("peer_interface_id", peer_interface_id)
+                .field("peer_ip", peer_ip)
+                .field("peer_port", peer_port)
+                .field("connected_for", connected_for)
+                .finish(),
+            Event::BackbonePeerWriteStall {
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+                connected_for,
+            } => f
+                .debug_struct("BackbonePeerWriteStall")
+                .field("server_interface_id", server_interface_id)
+                .field("peer_interface_id", peer_interface_id)
+                .field("peer_ip", peer_ip)
+                .field("peer_port", peer_port)
+                .field("connected_for", connected_for)
+                .finish(),
+            Event::BackbonePeerPenalty {
+                server_interface_id,
+                peer_ip,
+                penalty_level,
+                blacklist_for,
+            } => f
+                .debug_struct("BackbonePeerPenalty")
+                .field("server_interface_id", server_interface_id)
+                .field("peer_ip", peer_ip)
+                .field("penalty_level", penalty_level)
+                .field("blacklist_for", blacklist_for)
+                .finish(),
             Event::LoadHook {
                 name,
                 attach_point,

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # chain.sh N — generate a chain of N nodes: node-a — node-b — ... — node-{N}
+# Set RNS_BACKBONE=1 to use BackboneInterface instead of TCP interfaces.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +11,8 @@ TOPO_NAME="chain-${N}"
 OUT_DIR="${SCRIPT_DIR}/configs/${TOPO_NAME}"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+USE_BACKBONE="${RNS_BACKBONE:-0}"
 
 # Node names: a, b, c, ...
 node_name() {
@@ -27,13 +30,21 @@ for (( i=0; i<N; i++ )); do
   host_port=$(( 8081 + i ))
   config_dir="${OUT_DIR}/${local_name}"
 
-  # Build interface specs
-  ifaces=("TCPServerInterface:listen_ip=0.0.0.0:listen_port=4965")
+  # Build interface specs — backbone or TCP
+  if [[ "$USE_BACKBONE" == "1" ]]; then
+    ifaces=("BackboneInterface:listen_ip=0.0.0.0:listen_port=4965:write_stall_timeout=30:blacklist_duration=120:idle_timeout_blacklist_threshold=4:idle_timeout_blacklist_window=300:write_stall_blacklist_threshold=2:write_stall_blacklist_window=300")
+  else
+    ifaces=("TCPServerInterface:listen_ip=0.0.0.0:listen_port=4965")
+  fi
 
-  # Connect to previous node (TCP client)
+  # Connect to previous node
   if (( i > 0 )); then
     prev_name="node-$(node_name $((i - 1)))"
-    ifaces+=("TCPClientInterface:target_host=${prev_name}:target_port=4965")
+    if [[ "$USE_BACKBONE" == "1" ]]; then
+      ifaces+=("BackboneInterface:target_host=${prev_name}:target_port=4965")
+    else
+      ifaces+=("TCPClientInterface:target_host=${prev_name}:target_port=4965")
+    fi
   fi
 
   # All chain nodes are transport-enabled

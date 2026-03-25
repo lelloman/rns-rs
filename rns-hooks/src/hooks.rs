@@ -24,19 +24,26 @@ pub enum HookPoint {
     InterfaceDown = 9,
     InterfaceConfigChanged = 10,
 
+    // Backbone peer lifecycle
+    BackbonePeerConnected = 11,
+    BackbonePeerDisconnected = 12,
+    BackbonePeerIdleTimeout = 13,
+    BackbonePeerWriteStall = 14,
+    BackbonePeerPenalty = 15,
+
     // Per-action hooks
-    SendOnInterface = 11,
-    BroadcastOnAllInterfaces = 12,
-    DeliverLocal = 13,
-    TunnelSynthesize = 14,
+    SendOnInterface = 16,
+    BroadcastOnAllInterfaces = 17,
+    DeliverLocal = 18,
+    TunnelSynthesize = 19,
 
     // Periodic
-    Tick = 15,
+    Tick = 20,
 }
 
 impl HookPoint {
     /// Total number of hook points.
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 21;
 }
 
 /// Context passed to hook functions (host-side only, NOT `repr(C)`).
@@ -60,6 +67,16 @@ pub enum HookContext<'a> {
     Link {
         link_id: [u8; 16],
         interface_id: u64,
+    },
+    BackbonePeer {
+        server_interface_id: u64,
+        peer_interface_id: Option<u64>,
+        peer_ip: std::net::IpAddr,
+        peer_port: u16,
+        connected_for: std::time::Duration,
+        had_received_data: bool,
+        penalty_level: u8,
+        blacklist_for: std::time::Duration,
     },
 }
 
@@ -153,9 +170,9 @@ mod tests {
 
     #[test]
     fn test_hook_point_count() {
-        assert_eq!(HookPoint::COUNT, 16);
+        assert_eq!(HookPoint::COUNT, 21);
         // Verify the last variant matches COUNT - 1
-        assert_eq!(HookPoint::Tick as usize, 15);
+        assert_eq!(HookPoint::Tick as usize, 20);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 pub mod context;
 pub mod result;
+pub mod sentinel;
 pub mod stats;
 pub mod wire;
 

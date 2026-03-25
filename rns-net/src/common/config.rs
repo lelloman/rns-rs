@@ -403,11 +403,16 @@ pub fn parse_hook_point(s: &str) -> Option<usize> {
         "InterfaceUp" => Some(8),
         "InterfaceDown" => Some(9),
         "InterfaceConfigChanged" => Some(10),
-        "SendOnInterface" => Some(11),
-        "BroadcastOnAllInterfaces" => Some(12),
-        "DeliverLocal" => Some(13),
-        "TunnelSynthesize" => Some(14),
-        "Tick" => Some(15),
+        "BackbonePeerConnected" => Some(11),
+        "BackbonePeerDisconnected" => Some(12),
+        "BackbonePeerIdleTimeout" => Some(13),
+        "BackbonePeerWriteStall" => Some(14),
+        "BackbonePeerPenalty" => Some(15),
+        "SendOnInterface" => Some(16),
+        "BroadcastOnAllInterfaces" => Some(17),
+        "DeliverLocal" => Some(18),
+        "TunnelSynthesize" => Some(19),
+        "Tick" => Some(20),
         _ => None,
     }
 }
@@ -1207,11 +1212,16 @@ publish_blackhole = Yes
         assert_eq!(parse_hook_point("InterfaceUp"), Some(8));
         assert_eq!(parse_hook_point("InterfaceDown"), Some(9));
         assert_eq!(parse_hook_point("InterfaceConfigChanged"), Some(10));
-        assert_eq!(parse_hook_point("SendOnInterface"), Some(11));
-        assert_eq!(parse_hook_point("BroadcastOnAllInterfaces"), Some(12));
-        assert_eq!(parse_hook_point("DeliverLocal"), Some(13));
-        assert_eq!(parse_hook_point("TunnelSynthesize"), Some(14));
-        assert_eq!(parse_hook_point("Tick"), Some(15));
+        assert_eq!(parse_hook_point("BackbonePeerConnected"), Some(11));
+        assert_eq!(parse_hook_point("BackbonePeerDisconnected"), Some(12));
+        assert_eq!(parse_hook_point("BackbonePeerIdleTimeout"), Some(13));
+        assert_eq!(parse_hook_point("BackbonePeerWriteStall"), Some(14));
+        assert_eq!(parse_hook_point("BackbonePeerPenalty"), Some(15));
+        assert_eq!(parse_hook_point("SendOnInterface"), Some(16));
+        assert_eq!(parse_hook_point("BroadcastOnAllInterfaces"), Some(17));
+        assert_eq!(parse_hook_point("DeliverLocal"), Some(18));
+        assert_eq!(parse_hook_point("TunnelSynthesize"), Some(19));
+        assert_eq!(parse_hook_point("Tick"), Some(20));
         assert_eq!(parse_hook_point("Unknown"), None);
     }
 

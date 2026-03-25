@@ -434,6 +434,49 @@ fn test_load_list_unload_hooks() {
 }
 
 #[test]
+fn test_load_list_unload_backbone_peer_hooks() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    let result = node
+        .load_hook(
+            "packet_logger".into(),
+            wasm_bytes("packet_logger"),
+            "BackbonePeerConnected".into(),
+            5,
+        )
+        .expect("send failed");
+    assert!(result.is_ok(), "load_hook failed: {:?}", result.err());
+
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].name, "packet_logger");
+    assert_eq!(hooks[0].attach_point, "BackbonePeerConnected");
+    assert_eq!(hooks[0].priority, 5);
+    assert!(hooks[0].enabled);
+
+    let result = node
+        .unload_hook("packet_logger".into(), "BackbonePeerConnected".into())
+        .expect("send failed");
+    assert!(result.is_ok(), "unload_hook failed: {:?}", result.err());
+
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert!(
+        hooks.is_empty(),
+        "Expected no hooks after unload, got {:?}",
+        hooks
+    );
+
+    node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
 fn test_reload_hook() {
     let port = find_free_port();
     let transport = start_transport_node(port);

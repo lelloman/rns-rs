@@ -16,6 +16,8 @@ use crate::provider_bridge::ProviderBridge;
 #[cfg(feature = "rns-hooks")]
 use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
+#[cfg(feature = "rns-hooks")]
+use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
     LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
@@ -218,6 +220,20 @@ fn run_hook_inner(
     }
     let mgr = hook_manager.as_ref()?;
     mgr.run_chain_with_provider_events(programs, ctx, engine_access, now, provider_events_enabled)
+}
+
+#[cfg(feature = "rns-hooks")]
+fn backbone_peer_hook_context(event: &BackbonePeerHookEvent) -> HookContext<'_> {
+    HookContext::BackbonePeer {
+        server_interface_id: event.server_interface_id.0,
+        peer_interface_id: event.peer_interface_id.map(|id| id.0),
+        peer_ip: event.peer_ip,
+        peer_port: event.peer_port,
+        connected_for: event.connected_for,
+        had_received_data: event.had_received_data,
+        penalty_level: event.penalty_level,
+        blacklist_for: event.blacklist_for,
+    }
 }
 
 /// Convert a Vec of ActionWire into TransportActions for dispatch.
@@ -649,6 +665,34 @@ impl Driver {
         self.provider_bridge.is_some()
     }
 
+    #[cfg(feature = "rns-hooks")]
+    fn run_backbone_peer_hook(
+        &mut self,
+        attach_point: &str,
+        point: HookPoint,
+        event: &BackbonePeerHookEvent,
+    ) {
+        let ctx = backbone_peer_hook_context(event);
+        let now = time::now();
+        let engine_ref = EngineRef {
+            engine: &self.engine,
+            interfaces: &self.interfaces,
+            link_manager: &self.link_manager,
+            now,
+        };
+        let provider_events_enabled = self.provider_events_enabled();
+        if let Some(ref e) = run_hook_inner(
+            &mut self.hook_slots[point as usize].programs,
+            &self.hook_manager,
+            &engine_ref,
+            &ctx,
+            now,
+            provider_events_enabled,
+        ) {
+            self.forward_hook_side_effects(attach_point, e);
+        }
+    }
+
     #[cfg(feature = "iface-backbone")]
     fn make_discoverable_interface(
         runtime: &BackboneDiscoveryRuntimeHandle,
@@ -943,6 +987,24 @@ impl Driver {
         self.backbone_peer_state
             .get(interface_name)
             .map(|handle| handle.peer_state.lock().unwrap().clear(peer_ip))
+            .unwrap_or(false)
+    }
+
+    fn blacklist_backbone_peer(
+        &mut self,
+        interface_name: &str,
+        peer_ip: std::net::IpAddr,
+        duration: std::time::Duration,
+    ) -> bool {
+        self.backbone_peer_state
+            .get(interface_name)
+            .map(|handle| {
+                handle.peer_state.lock().unwrap().blacklist(
+                    peer_ip,
+                    duration,
+                    "sentinel blacklist".to_string(),
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -4765,6 +4827,11 @@ impl Driver {
                             "InterfaceUp",
                             "InterfaceDown",
                             "InterfaceConfigChanged",
+                            "BackbonePeerConnected",
+                            "BackbonePeerDisconnected",
+                            "BackbonePeerIdleTimeout",
+                            "BackbonePeerWriteStall",
+                            "BackbonePeerPenalty",
                             "SendOnInterface",
                             "BroadcastOnAllInterfaces",
                             "DeliverLocal",
@@ -4817,6 +4884,159 @@ impl Driver {
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = id;
+                }
+                Event::BackbonePeerConnected {
+                    server_interface_id,
+                    peer_interface_id,
+                    peer_ip,
+                    peer_port,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        self.run_backbone_peer_hook(
+                            "BackbonePeerConnected",
+                            HookPoint::BackbonePeerConnected,
+                            &BackbonePeerHookEvent {
+                                server_interface_id,
+                                peer_interface_id: Some(peer_interface_id),
+                                peer_ip,
+                                peer_port,
+                                connected_for: Duration::ZERO,
+                                had_received_data: false,
+                                penalty_level: 0,
+                                blacklist_for: Duration::ZERO,
+                            },
+                        );
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = (server_interface_id, peer_interface_id, peer_ip, peer_port);
+                }
+                Event::BackbonePeerDisconnected {
+                    server_interface_id,
+                    peer_interface_id,
+                    peer_ip,
+                    peer_port,
+                    connected_for,
+                    had_received_data,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        self.run_backbone_peer_hook(
+                            "BackbonePeerDisconnected",
+                            HookPoint::BackbonePeerDisconnected,
+                            &BackbonePeerHookEvent {
+                                server_interface_id,
+                                peer_interface_id: Some(peer_interface_id),
+                                peer_ip,
+                                peer_port,
+                                connected_for,
+                                had_received_data,
+                                penalty_level: 0,
+                                blacklist_for: Duration::ZERO,
+                            },
+                        );
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = (
+                        server_interface_id,
+                        peer_interface_id,
+                        peer_ip,
+                        peer_port,
+                        connected_for,
+                        had_received_data,
+                    );
+                }
+                Event::BackbonePeerIdleTimeout {
+                    server_interface_id,
+                    peer_interface_id,
+                    peer_ip,
+                    peer_port,
+                    connected_for,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        self.run_backbone_peer_hook(
+                            "BackbonePeerIdleTimeout",
+                            HookPoint::BackbonePeerIdleTimeout,
+                            &BackbonePeerHookEvent {
+                                server_interface_id,
+                                peer_interface_id: Some(peer_interface_id),
+                                peer_ip,
+                                peer_port,
+                                connected_for,
+                                had_received_data: false,
+                                penalty_level: 0,
+                                blacklist_for: Duration::ZERO,
+                            },
+                        );
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = (
+                        server_interface_id,
+                        peer_interface_id,
+                        peer_ip,
+                        peer_port,
+                        connected_for,
+                    );
+                }
+                Event::BackbonePeerWriteStall {
+                    server_interface_id,
+                    peer_interface_id,
+                    peer_ip,
+                    peer_port,
+                    connected_for,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        self.run_backbone_peer_hook(
+                            "BackbonePeerWriteStall",
+                            HookPoint::BackbonePeerWriteStall,
+                            &BackbonePeerHookEvent {
+                                server_interface_id,
+                                peer_interface_id: Some(peer_interface_id),
+                                peer_ip,
+                                peer_port,
+                                connected_for,
+                                had_received_data: false,
+                                penalty_level: 0,
+                                blacklist_for: Duration::ZERO,
+                            },
+                        );
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = (
+                        server_interface_id,
+                        peer_interface_id,
+                        peer_ip,
+                        peer_port,
+                        connected_for,
+                    );
+                }
+                Event::BackbonePeerPenalty {
+                    server_interface_id,
+                    peer_ip,
+                    penalty_level,
+                    blacklist_for,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        self.run_backbone_peer_hook(
+                            "BackbonePeerPenalty",
+                            HookPoint::BackbonePeerPenalty,
+                            &BackbonePeerHookEvent {
+                                server_interface_id,
+                                peer_interface_id: None,
+                                peer_ip,
+                                peer_port: 0,
+                                connected_for: Duration::ZERO,
+                                had_received_data: false,
+                                penalty_level,
+                                blacklist_for,
+                            },
+                        );
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
                 Event::Shutdown => break,
             }
@@ -5029,6 +5249,9 @@ impl Driver {
             QueryRequest::ClearBackbonePeerState { .. } => {
                 QueryResponse::ClearBackbonePeerState(false)
             }
+            QueryRequest::BlacklistBackbonePeer { .. } => {
+                QueryResponse::BlacklistBackbonePeer(false)
+            }
         }
     }
 
@@ -5064,6 +5287,13 @@ impl Driver {
                 peer_ip,
             } => QueryResponse::ClearBackbonePeerState(
                 self.clear_backbone_peer_state(&interface_name, peer_ip),
+            ),
+            QueryRequest::BlacklistBackbonePeer {
+                interface_name,
+                peer_ip,
+                duration,
+            } => QueryResponse::BlacklistBackbonePeer(
+                self.blacklist_backbone_peer(&interface_name, peer_ip, duration),
             ),
             QueryRequest::InjectPath {
                 dest_hash,
@@ -7372,6 +7602,8 @@ mod tests {
                 flap_max_connection_age: Some(Duration::from_secs(5)),
                 connect_rate_threshold: Some(5),
                 connect_rate_window: Some(Duration::from_secs(3)),
+                write_stall_threshold: Some(2),
+                write_stall_window: Some(Duration::from_secs(300)),
                 max_penalty_duration: Some(Duration::from_secs(3600)),
                 penalty_decay_interval: Some(Duration::from_secs(300)),
             },
@@ -9783,6 +10015,7 @@ mod tests {
                 connected_count: 1,
                 idle_timeout_events: 3,
                 flap_events: 0,
+                write_stall_events: 0,
                 blacklisted_remaining_secs: Some(120.0),
                 blacklist_reason: Some("repeated idle timeouts".into()),
                 reject_count: 7,
@@ -9826,6 +10059,7 @@ mod tests {
                 connected_count: 0,
                 idle_timeout_events: 1,
                 flap_events: 0,
+                write_stall_events: 0,
                 blacklisted_remaining_secs: None,
                 blacklist_reason: None,
                 reject_count: 0,
@@ -9848,6 +10082,104 @@ mod tests {
             panic!("expected backbone peer state list");
         };
         assert!(entries.is_empty());
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_blacklist_sets_blacklist() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+        driver
+            .backbone_peer_state
+            .get("public")
+            .unwrap()
+            .peer_state
+            .lock()
+            .unwrap()
+            .seed_entry(BackbonePeerStateEntry {
+                interface_name: "public".into(),
+                peer_ip: "203.0.113.50".parse().unwrap(),
+                connected_count: 1,
+                idle_timeout_events: 0,
+                flap_events: 0,
+                write_stall_events: 0,
+                blacklisted_remaining_secs: None,
+                blacklist_reason: None,
+                reject_count: 0,
+                penalty_level: 0,
+                connect_rate_events: 0,
+            });
+
+        let response = driver.handle_query_mut(QueryRequest::BlacklistBackbonePeer {
+            interface_name: "public".into(),
+            peer_ip: "203.0.113.50".parse().unwrap(),
+            duration: Duration::from_secs(300),
+        });
+        let QueryResponse::BlacklistBackbonePeer(true) = response else {
+            panic!("expected successful blacklist");
+        };
+
+        // Verify the peer is now blacklisted
+        let response = driver.handle_query(QueryRequest::BackbonePeerState {
+            interface_name: Some("public".into()),
+        });
+        let QueryResponse::BackbonePeerState(entries) = response else {
+            panic!("expected backbone peer state list");
+        };
+        let entry = entries
+            .iter()
+            .find(|e| e.peer_ip == "203.0.113.50".parse::<std::net::IpAddr>().unwrap())
+            .expect("expected entry for blacklisted peer");
+        assert!(entry.blacklisted_remaining_secs.is_some());
+        let remaining = entry.blacklisted_remaining_secs.unwrap();
+        assert!(remaining > 290.0 && remaining <= 300.0);
+        assert_eq!(
+            entry.blacklist_reason.as_deref(),
+            Some("sentinel blacklist")
+        );
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_blacklist_unknown_interface_returns_false() {
+        let mut driver = new_test_driver();
+        let response = driver.handle_query_mut(QueryRequest::BlacklistBackbonePeer {
+            interface_name: "nonexistent".into(),
+            peer_ip: "203.0.113.50".parse().unwrap(),
+            duration: Duration::from_secs(60),
+        });
+        let QueryResponse::BlacklistBackbonePeer(false) = response else {
+            panic!("expected false for unknown interface");
+        };
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_blacklist_creates_entry_for_unknown_ip() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+
+        // Blacklist an IP that has no existing peer state
+        let response = driver.handle_query_mut(QueryRequest::BlacklistBackbonePeer {
+            interface_name: "public".into(),
+            peer_ip: "198.51.100.1".parse().unwrap(),
+            duration: Duration::from_secs(120),
+        });
+        let QueryResponse::BlacklistBackbonePeer(true) = response else {
+            panic!("expected successful blacklist for new IP");
+        };
+
+        let response = driver.handle_query(QueryRequest::BackbonePeerState {
+            interface_name: Some("public".into()),
+        });
+        let QueryResponse::BackbonePeerState(entries) = response else {
+            panic!("expected backbone peer state list");
+        };
+        let entry = entries
+            .iter()
+            .find(|e| e.peer_ip == "198.51.100.1".parse::<std::net::IpAddr>().unwrap())
+            .expect("expected entry for newly blacklisted IP");
+        assert!(entry.blacklisted_remaining_secs.is_some());
     }
 
     #[cfg(feature = "iface-tcp")]

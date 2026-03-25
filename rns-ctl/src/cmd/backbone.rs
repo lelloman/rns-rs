@@ -107,10 +107,20 @@ fn print_blacklist(response: &PickleValue) {
     }
 
     println!(
-        "{:<24} {:<40} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
-        "Interface", "IP", "Conn", "Idle", "Flap", "Lvl", "Rate", "BlkSecs", "Rejects", "Reason"
+        "{:<24} {:<40} {:>5} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+        "Interface",
+        "IP",
+        "Conn",
+        "Idle",
+        "Flap",
+        "Stall",
+        "Lvl",
+        "Rate",
+        "BlkSecs",
+        "Rejects",
+        "Reason"
     );
-    println!("{}", "-".repeat(128));
+    println!("{}", "-".repeat(134));
     for entry in entries {
         let interface = entry
             .get("interface")
@@ -127,6 +137,10 @@ fn print_blacklist(response: &PickleValue) {
             .unwrap_or(0);
         let flap = entry
             .get("flap_events")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0);
+        let stall = entry
+            .get("write_stall_events")
             .and_then(|v| v.as_int())
             .unwrap_or(0);
         let penalty_level = entry
@@ -151,8 +165,18 @@ fn print_blacklist(response: &PickleValue) {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         println!(
-            "{:<24} {:<40} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
-            interface, ip, connected, idle, flap, penalty_level, rate, blacklist, rejects, reason
+            "{:<24} {:<40} {:>5} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+            interface,
+            ip,
+            connected,
+            idle,
+            flap,
+            stall,
+            penalty_level,
+            rate,
+            blacklist,
+            rejects,
+            reason
         );
     }
 }
@@ -171,6 +195,7 @@ fn pickle_list_to_json(value: &PickleValue) -> Value {
                     "connected_count": entry.get("connected_count").and_then(|v| v.as_int()),
                     "idle_timeout_events": entry.get("idle_timeout_events").and_then(|v| v.as_int()),
                     "flap_events": entry.get("flap_events").and_then(|v| v.as_int()),
+                    "write_stall_events": entry.get("write_stall_events").and_then(|v| v.as_int()),
                     "blacklisted_remaining_secs": entry.get("blacklisted_remaining_secs").and_then(|v| v.as_float()),
                     "blacklist_reason": entry.get("blacklist_reason").and_then(|v| v.as_str()),
                     "reject_count": entry.get("reject_count").and_then(|v| v.as_int()),

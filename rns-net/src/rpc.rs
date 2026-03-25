@@ -9,7 +9,8 @@
 //! them through the driver event channel, and returns pickle responses.
 
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
+use std::time::Duration;
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -469,6 +470,35 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 },
             )?;
             return if let QueryResponse::ClearBackbonePeerState(ok) = resp {
+                Ok(PickleValue::Bool(ok))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
+    }
+
+    if let Some(set_val) = request.get("set").and_then(|v| v.as_str()) {
+        if set_val == "backbone_peer_blacklist" {
+            let interface_name = required_string(request, "interface")?;
+            let peer_ip = required_string(request, "ip")?;
+            let peer_ip: IpAddr = peer_ip
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid peer IP"))?;
+            let duration_secs = request
+                .get("duration_secs")
+                .and_then(|v| v.as_int())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "missing duration_secs")
+                })?;
+            let resp = send_query(
+                event_tx,
+                QueryRequest::BlacklistBackbonePeer {
+                    interface_name,
+                    peer_ip,
+                    duration: Duration::from_secs(duration_secs as u64),
+                },
+            )?;
+            return if let QueryResponse::BlacklistBackbonePeer(ok) = resp {
                 Ok(PickleValue::Bool(ok))
             } else {
                 Ok(PickleValue::None)
@@ -1255,6 +1285,10 @@ fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleVa
                         PickleValue::Int(entry.flap_events as i64),
                     ),
                     (
+                        PickleValue::String("write_stall_events".into()),
+                        PickleValue::Int(entry.write_stall_events as i64),
+                    ),
+                    (
                         PickleValue::String("blacklisted_remaining_secs".into()),
                         entry
                             .blacklisted_remaining_secs
@@ -1526,6 +1560,33 @@ impl RpcClient {
             ),
         ]))?;
         parse_hook_result(&response)
+    }
+
+    pub fn blacklist_backbone_peer(
+        &mut self,
+        interface: &str,
+        ip: &str,
+        duration_secs: u64,
+    ) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("backbone_peer_blacklist".into()),
+            ),
+            (
+                PickleValue::String("interface".into()),
+                PickleValue::String(interface.to_string()),
+            ),
+            (
+                PickleValue::String("ip".into()),
+                PickleValue::String(ip.to_string()),
+            ),
+            (
+                PickleValue::String("duration_secs".into()),
+                PickleValue::Int(duration_secs as i64),
+            ),
+        ]))?;
+        Ok(response.as_bool().unwrap_or(false))
     }
 }
 

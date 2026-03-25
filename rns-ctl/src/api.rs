@@ -76,6 +76,10 @@ pub fn handle_request(
         ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
         ("POST", "/api/announce_queues/clear") => handle_post_clear_announce_queues(node),
 
+        // Backbone peer state
+        ("GET", "/api/backbone/peers") => handle_backbone_peers(req, node),
+        ("POST", "/api/backbone/blacklist") => handle_backbone_blacklist(req, node),
+
         // Hook management
         ("GET", "/api/hooks") => handle_list_hooks(node),
         ("POST", "/api/hook/load") => handle_load_hook(req, node),
@@ -747,6 +751,76 @@ fn handle_post_clear_announce_queues(node: &NodeHandle) -> HttpResponse {
     with_node(node, |n| match n.query(QueryRequest::DropAnnounceQueues) {
         Ok(QueryResponse::DropAnnounceQueues) => HttpResponse::ok(json!({"status": "ok"})),
         _ => HttpResponse::internal_error("Query failed"),
+    })
+}
+
+// --- Backbone peer state handlers ---
+
+fn handle_backbone_peers(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let params = parse_query(&req.path);
+    let interface_name = params.get("interface").map(|s| s.to_string());
+    with_node(node, |n| {
+        match n.query(QueryRequest::BackbonePeerState { interface_name }) {
+            Ok(QueryResponse::BackbonePeerState(entries)) => {
+                let peers: Vec<Value> = entries
+                    .iter()
+                    .map(|e| {
+                        json!({
+                            "interface": e.interface_name,
+                            "ip": e.peer_ip.to_string(),
+                            "connected_count": e.connected_count,
+                            "idle_timeout_events": e.idle_timeout_events,
+                            "flap_events": e.flap_events,
+                            "write_stall_events": e.write_stall_events,
+                            "blacklisted_remaining_secs": e.blacklisted_remaining_secs,
+                            "blacklist_reason": e.blacklist_reason,
+                            "reject_count": e.reject_count,
+                            "penalty_level": e.penalty_level,
+                            "connect_rate_events": e.connect_rate_events,
+                        })
+                    })
+                    .collect();
+                HttpResponse::ok(json!({ "peers": peers }))
+            }
+            _ => HttpResponse::internal_error("Query failed"),
+        }
+    })
+}
+
+fn handle_backbone_blacklist(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body: Value = match serde_json::from_slice(&req.body) {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::bad_request("Invalid JSON body"),
+    };
+    let interface_name = match body.get("interface").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing 'interface' field"),
+    };
+    let ip = match body.get("ip").and_then(|v| v.as_str()) {
+        Some(s) => match s.parse::<std::net::IpAddr>() {
+            Ok(addr) => addr,
+            Err(_) => return HttpResponse::bad_request("Invalid IP address"),
+        },
+        None => return HttpResponse::bad_request("Missing 'ip' field"),
+    };
+    let duration_secs = match body.get("duration_secs").and_then(|v| v.as_u64()) {
+        Some(d) => d,
+        None => return HttpResponse::bad_request("Missing 'duration_secs' field"),
+    };
+    with_node(node, |n| {
+        match n.query(QueryRequest::BlacklistBackbonePeer {
+            interface_name,
+            peer_ip: ip,
+            duration: std::time::Duration::from_secs(duration_secs),
+        }) {
+            Ok(QueryResponse::BlacklistBackbonePeer(true)) => {
+                HttpResponse::ok(json!({"status": "ok"}))
+            }
+            Ok(QueryResponse::BlacklistBackbonePeer(false)) => {
+                HttpResponse::not_found()
+            }
+            _ => HttpResponse::internal_error("Query failed"),
+        }
     })
 }
 

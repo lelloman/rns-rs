@@ -2053,6 +2053,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-sentinel-hook"
+version = "0.1.0"
+dependencies = [
+ "rns-hooks-abi",
+ "rns-hooks-sdk",
+]
+
+[[package]]
 name = "rns-stats-hook"
 version = "0.1.0"
 dependencies = [
