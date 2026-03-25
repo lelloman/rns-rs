@@ -157,6 +157,12 @@ pub struct TransportConfig {
     pub announce_table_ttl_secs: f64,
     /// Maximum retained bytes across announce retransmission state maps.
     pub announce_table_max_bytes: usize,
+    /// Whether the announce signature verification cache is enabled.
+    pub announce_sig_cache_enabled: bool,
+    /// Maximum entries in the announce signature verification cache.
+    pub announce_sig_cache_max_entries: usize,
+    /// TTL for announce signature cache entries, in seconds.
+    pub announce_sig_cache_ttl_secs: f64,
 }
 
 #[cfg(test)]
@@ -185,6 +191,9 @@ mod tests {
             destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: crate::constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: crate::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: crate::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: crate::constants::ANNOUNCE_SIG_CACHE_TTL,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
@@ -208,6 +217,15 @@ mod tests {
         assert_eq!(
             cfg.announce_table_max_bytes,
             crate::constants::ANNOUNCE_TABLE_MAX_BYTES
+        );
+        assert!(cfg.announce_sig_cache_enabled);
+        assert_eq!(
+            cfg.announce_sig_cache_max_entries,
+            crate::constants::ANNOUNCE_SIG_CACHE_MAXSIZE
+        );
+        assert_eq!(
+            cfg.announce_sig_cache_ttl_secs,
+            crate::constants::ANNOUNCE_SIG_CACHE_TTL
         );
     }
 }

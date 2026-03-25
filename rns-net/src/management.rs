@@ -34,6 +34,9 @@ mod tests {
             destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
         })
     }
 

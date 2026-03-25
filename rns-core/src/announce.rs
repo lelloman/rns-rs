@@ -228,6 +228,22 @@ impl AnnounceData {
             app_data: self.app_data.clone(),
         })
     }
+
+    /// Reconstruct a `ValidatedAnnounce` without signature verification.
+    ///
+    /// Only call this when the signature has already been verified (e.g., via
+    /// the announce signature cache). No cryptographic checks are performed.
+    pub fn to_validated_unchecked(&self) -> ValidatedAnnounce {
+        let identity_hash = hash::truncated_hash(&self.public_key);
+        ValidatedAnnounce {
+            identity_hash,
+            public_key: self.public_key,
+            name_hash: self.name_hash,
+            random_hash: self.random_hash,
+            ratchet: self.ratchet,
+            app_data: self.app_data.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +358,29 @@ mod tests {
         let parsed = AnnounceData::unpack(&data, false).unwrap();
         let wrong_hash = [0x00; 16];
         assert!(parsed.validate(&wrong_hash).is_err());
+    }
+
+    #[test]
+    fn test_to_validated_unchecked_matches_validate() {
+        let identity = Identity::from_private_key(&[0x42; 64]);
+        let id_hash = *identity.hash();
+
+        let nh = destination::name_hash("testapp", &["aspect"]);
+        let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
+        let random = [0xAB; 10];
+
+        let (data, _) =
+            AnnounceData::pack(&identity, &dh, &nh, &random, None, Some(b"appdata")).unwrap();
+
+        let parsed = AnnounceData::unpack(&data, false).unwrap();
+        let validated = parsed.validate(&dh).unwrap();
+        let unchecked = parsed.to_validated_unchecked();
+
+        assert_eq!(validated.identity_hash, unchecked.identity_hash);
+        assert_eq!(validated.public_key, unchecked.public_key);
+        assert_eq!(validated.name_hash, unchecked.name_hash);
+        assert_eq!(validated.random_hash, unchecked.random_hash);
+        assert_eq!(validated.ratchet, unchecked.ratchet);
+        assert_eq!(validated.app_data, unchecked.app_data);
     }
 }

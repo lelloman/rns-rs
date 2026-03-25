@@ -152,6 +152,11 @@ fn main() {
         max_path_destinations: 256,
         max_tunnel_destinations_total: 128,
         destination_timeout_secs: 24.0 * 60.0 * 60.0,
+        announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+        announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+        announce_sig_cache_enabled: true,
+        announce_sig_cache_max_entries: 256,
+        announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
     };
 
     // Build driver and register interface (once, reused across mode switches)

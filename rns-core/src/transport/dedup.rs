@@ -1,3 +1,4 @@
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -52,6 +53,76 @@ impl PacketHashlist {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// Bounded TTL cache for announce signature verification results.
+///
+/// Stores hashes of recently verified (destination_hash, signature) pairs so
+/// that duplicate announces from multiple peers skip redundant Ed25519
+/// verification. Entries expire after `ttl_secs` and are culled periodically.
+/// When `max_entries` is 0 the cache is disabled and all methods are no-ops.
+pub struct AnnounceSignatureCache {
+    entries: BTreeMap<[u8; 32], f64>,
+    insertion_order: Vec<[u8; 32]>,
+    max_entries: usize,
+    ttl_secs: f64,
+}
+
+impl AnnounceSignatureCache {
+    pub fn new(max_entries: usize, ttl_secs: f64) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            insertion_order: Vec::new(),
+            max_entries,
+            ttl_secs,
+        }
+    }
+
+    /// Check if a cache key is present (i.e., already verified).
+    pub fn contains(&self, key: &[u8; 32]) -> bool {
+        if self.max_entries == 0 {
+            return false;
+        }
+        self.entries.contains_key(key)
+    }
+
+    /// Insert a verified cache key with the current timestamp.
+    pub fn insert(&mut self, key: [u8; 32], now: f64) {
+        if self.max_entries == 0 {
+            return;
+        }
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        // FIFO eviction if at capacity
+        while self.entries.len() >= self.max_entries {
+            if let Some(oldest) = self.insertion_order.first().copied() {
+                self.entries.remove(&oldest);
+                self.insertion_order.remove(0);
+            } else {
+                break;
+            }
+        }
+        self.entries.insert(key, now);
+        self.insertion_order.push(key);
+    }
+
+    /// Remove entries older than TTL. Returns the number of entries removed.
+    pub fn cull(&mut self, now: f64) -> usize {
+        if self.max_entries == 0 {
+            return 0;
+        }
+        let cutoff = now - self.ttl_secs;
+        let before = self.entries.len();
+        self.entries.retain(|_, ts| *ts > cutoff);
+        self.insertion_order
+            .retain(|key| self.entries.contains_key(key));
+        before - self.entries.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 }
 
@@ -311,5 +382,66 @@ mod tests {
 
         assert_eq!(hl.len(), 0);
         assert!(!hl.is_duplicate(&h));
+    }
+
+    // --- AnnounceSignatureCache tests ---
+
+    #[test]
+    fn test_sig_cache_insert_and_contains() {
+        let mut cache = AnnounceSignatureCache::new(100, 60.0);
+        let k = make_hash(1);
+        assert!(!cache.contains(&k));
+        cache.insert(k, 100.0);
+        assert!(cache.contains(&k));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_sig_cache_duplicate_insert_is_noop() {
+        let mut cache = AnnounceSignatureCache::new(100, 60.0);
+        let k = make_hash(1);
+        cache.insert(k, 100.0);
+        cache.insert(k, 200.0);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_sig_cache_ttl_expiry() {
+        let mut cache = AnnounceSignatureCache::new(100, 60.0);
+        cache.insert(make_hash(1), 100.0);
+        cache.insert(make_hash(2), 150.0);
+
+        // At t=155, entry 1 (age=55) is still within TTL, entry 2 (age=5) too
+        assert_eq!(cache.cull(155.0), 0);
+        assert_eq!(cache.len(), 2);
+
+        // At t=161, entry 1 (age=61) expired, entry 2 (age=11) still valid
+        assert_eq!(cache.cull(161.0), 1);
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.contains(&make_hash(1)));
+        assert!(cache.contains(&make_hash(2)));
+    }
+
+    #[test]
+    fn test_sig_cache_capacity_eviction() {
+        let mut cache = AnnounceSignatureCache::new(2, 600.0);
+        cache.insert(make_hash(1), 100.0);
+        cache.insert(make_hash(2), 101.0);
+        cache.insert(make_hash(3), 102.0); // should evict hash(1)
+
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.contains(&make_hash(1)));
+        assert!(cache.contains(&make_hash(2)));
+        assert!(cache.contains(&make_hash(3)));
+    }
+
+    #[test]
+    fn test_sig_cache_disabled_when_zero_capacity() {
+        let mut cache = AnnounceSignatureCache::new(0, 60.0);
+        let k = make_hash(1);
+        cache.insert(k, 100.0);
+        assert!(!cache.contains(&k));
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.cull(200.0), 0);
     }
 }

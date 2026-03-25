@@ -185,6 +185,12 @@ pub const MAX_RATE_TIMESTAMPS: usize = 16;
 /// Maximum packet hashlist size before rotation
 pub const HASHLIST_MAXSIZE: usize = 250_000;
 
+/// Maximum announce signature cache entries (dedup verified signatures)
+pub const ANNOUNCE_SIG_CACHE_MAXSIZE: usize = 2_000;
+
+/// TTL for announce signature cache entries (seconds)
+pub const ANNOUNCE_SIG_CACHE_TTL: f64 = 600.0;
+
 // --- Timeouts ---
 
 /// Reverse table entry timeout (8 minutes)

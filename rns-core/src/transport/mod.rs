@@ -25,7 +25,7 @@ use crate::packet::RawPacket;
 
 use self::announce_proc::compute_path_expires;
 use self::announce_queue::AnnounceQueues;
-use self::dedup::PacketHashlist;
+use self::dedup::{AnnounceSignatureCache, PacketHashlist};
 use self::inbound::{
     create_link_entry, create_reverse_entry, forward_transport_packet, route_proof_via_reverse,
     route_via_link_table,
@@ -55,6 +55,7 @@ pub struct TransportEngine {
     link_table: BTreeMap<[u8; 16], LinkEntry>,
     held_announces: BTreeMap<[u8; 16], AnnounceEntry>,
     packet_hashlist: PacketHashlist,
+    announce_sig_cache: AnnounceSignatureCache,
     rate_limiter: AnnounceRateLimiter,
     path_states: BTreeMap<[u8; 16], u8>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
@@ -73,6 +74,12 @@ pub struct TransportEngine {
 impl TransportEngine {
     pub fn new(config: TransportConfig) -> Self {
         let packet_hashlist_max_entries = config.packet_hashlist_max_entries;
+        let sig_cache_max = if config.announce_sig_cache_enabled {
+            config.announce_sig_cache_max_entries
+        } else {
+            0
+        };
+        let sig_cache_ttl = config.announce_sig_cache_ttl_secs;
         TransportEngine {
             config,
             path_table: BTreeMap::new(),
@@ -81,6 +88,7 @@ impl TransportEngine {
             link_table: BTreeMap::new(),
             held_announces: BTreeMap::new(),
             packet_hashlist: PacketHashlist::new(packet_hashlist_max_entries),
+            announce_sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
             interfaces: BTreeMap::new(),
@@ -834,9 +842,23 @@ impl TransportEngine {
             Err(_) => return,
         };
 
-        let validated = match announce.validate(&packet.destination_hash) {
-            Ok(v) => v,
-            Err(_) => return,
+        let sig_cache_key = {
+            let mut material = [0u8; 80]; // 16 + 64
+            material[..16].copy_from_slice(&packet.destination_hash);
+            material[16..].copy_from_slice(&announce.signature);
+            hash::full_hash(&material)
+        };
+
+        let validated = if self.announce_sig_cache.contains(&sig_cache_key) {
+            announce.to_validated_unchecked()
+        } else {
+            match announce.validate(&packet.destination_hash) {
+                Ok(v) => {
+                    self.announce_sig_cache.insert(sig_cache_key, now);
+                    v
+                }
+                Err(_) => return,
+            }
         };
 
         // Skip blackholed identities
@@ -1327,6 +1349,7 @@ impl TransportEngine {
             self.tunnel_table
                 .void_missing_interfaces(|id| self.interfaces.contains_key(id));
             self.tunnel_table.cull(now);
+            self.announce_sig_cache.cull(now);
             self.tables_last_culled = now;
         }
 
@@ -1646,6 +1669,11 @@ impl TransportEngine {
     /// Number of entries in the packet hashlist.
     pub fn packet_hashlist_len(&self) -> usize {
         self.packet_hashlist.len()
+    }
+
+    /// Number of entries in the announce signature verification cache.
+    pub fn announce_sig_cache_len(&self) -> usize {
+        self.announce_sig_cache.len()
     }
 
     /// Number of entries in the rate limiter.
@@ -1970,6 +1998,9 @@ mod tests {
             destination_timeout_secs: constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
         }
     }
 
@@ -3532,6 +3563,9 @@ mod tests {
             destination_timeout_secs: constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
         });
         engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
         engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob

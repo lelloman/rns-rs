@@ -160,6 +160,13 @@ Approach 1 and 2 are essentially the same idea at different layers. The key
 insight is that on a well-connected node, **the same announce arrives N times
 (once per peer) but only needs to be verified once**.
 
+**Status**: Implemented as `AnnounceSignatureCache` — a bounded TTL cache keyed
+on `SHA-256(destination_hash || signature)`. On cache hit, Ed25519 verification
+is skipped and `ValidatedAnnounce` is reconstructed cheaply. Configurable via:
+- `announce_signature_cache_enabled` (default: true)
+- `announce_signature_cache_max_entries` (default: 2,000)
+- `announce_signature_cache_ttl` (default: 600s)
+
 ---
 
 ## 7. Warning log noise

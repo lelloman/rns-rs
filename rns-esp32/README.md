@@ -187,6 +187,8 @@ The ESP32 firmware now uses an explicit constrained `TransportConfig` profile in
 - `max_tunnel_destinations_total = 128`
 - `known_destinations_ttl = 24h`
 - `max_paths_per_destination = 2`
+- `announce_signature_cache_max_entries = 256`
+- `announce_signature_cache_ttl = 600` (10 min)
 
 These caps bound the main transport tables that would otherwise grow only by TTL eviction. If you are operating an ESP32 node from another `rns-rs` platform, these are the limits the device is using unless you change the firmware profile.
 

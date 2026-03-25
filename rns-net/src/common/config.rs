@@ -74,6 +74,12 @@ pub struct ReticulumSection {
     pub announce_table_ttl: u64,
     /// Maximum retained bytes for announce retransmission state.
     pub announce_table_max_bytes: usize,
+    /// Whether the announce signature verification cache is enabled.
+    pub announce_sig_cache_enabled: bool,
+    /// Maximum entries in the announce signature verification cache.
+    pub announce_sig_cache_max_entries: usize,
+    /// TTL for announce signature cache entries, in seconds.
+    pub announce_sig_cache_ttl: u64,
     #[cfg(feature = "rns-hooks")]
     pub provider_bridge: bool,
     #[cfg(feature = "rns-hooks")]
@@ -116,6 +122,9 @@ impl Default for ReticulumSection {
             known_destinations_ttl: 48 * 60 * 60,
             announce_table_ttl: rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
             #[cfg(feature = "rns-hooks")]
@@ -587,6 +596,32 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.announce_table_max_bytes = max_bytes;
     }
+    if let Some(v) = kvs.get("announce_signature_cache_enabled") {
+        section.announce_sig_cache_enabled = match v.as_str() {
+            "true" | "yes" | "True" | "Yes" => true,
+            "false" | "no" | "False" | "No" => false,
+            _ => {
+                return Err(ConfigError::InvalidValue {
+                    key: "announce_signature_cache_enabled".into(),
+                    value: v.clone(),
+                })
+            }
+        };
+    }
+    if let Some(v) = kvs.get("announce_signature_cache_max_entries") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_signature_cache_max_entries".into(),
+            value: v.clone(),
+        })?;
+        section.announce_sig_cache_max_entries = n;
+    }
+    if let Some(v) = kvs.get("announce_signature_cache_ttl") {
+        let ttl = v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_signature_cache_ttl".into(),
+            value: v.clone(),
+        })?;
+        section.announce_sig_cache_ttl = ttl;
+    }
     #[cfg(feature = "rns-hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -742,6 +777,9 @@ packet_hashlist_max_entries = 321
 max_discovery_pr_tags = 222
 max_path_destinations = 111
 max_tunnel_destinations_total = 99
+announce_signature_cache_enabled = false
+announce_signature_cache_max_entries = 500
+announce_signature_cache_ttl = 300
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -763,6 +801,9 @@ max_tunnel_destinations_total = 99
         assert_eq!(config.reticulum.max_discovery_pr_tags, 222);
         assert_eq!(config.reticulum.max_path_destinations, 111);
         assert_eq!(config.reticulum.max_tunnel_destinations_total, 99);
+        assert!(!config.reticulum.announce_sig_cache_enabled);
+        assert_eq!(config.reticulum.announce_sig_cache_max_entries, 500);
+        assert_eq!(config.reticulum.announce_sig_cache_ttl, 300);
     }
 
     #[test]
