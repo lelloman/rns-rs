@@ -160,9 +160,7 @@ impl TransportEngine {
     }
 
     fn announce_entry_size_bytes(entry: &AnnounceEntry) -> usize {
-        size_of::<AnnounceEntry>()
-            + entry.packet_raw.capacity()
-            + entry.packet_data.capacity()
+        size_of::<AnnounceEntry>() + entry.packet_raw.capacity() + entry.packet_data.capacity()
     }
 
     fn announce_retained_bytes_total(&self) -> usize {
@@ -240,7 +238,12 @@ impl TransportEngine {
         }
     }
 
-    fn insert_announce_entry(&mut self, dest_hash: [u8; 16], entry: AnnounceEntry, now: f64) -> bool {
+    fn insert_announce_entry(
+        &mut self,
+        dest_hash: [u8; 16],
+        entry: AnnounceEntry,
+        now: f64,
+    ) -> bool {
         self.cull_expired_announce_entries(now);
         if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
             return false;
@@ -250,7 +253,12 @@ impl TransportEngine {
         self.announce_table.contains_key(&dest_hash)
     }
 
-    fn insert_held_announce(&mut self, dest_hash: [u8; 16], entry: AnnounceEntry, now: f64) -> bool {
+    fn insert_held_announce(
+        &mut self,
+        dest_hash: [u8; 16],
+        entry: AnnounceEntry,
+        now: f64,
+    ) -> bool {
         self.cull_expired_announce_entries(now);
         if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
             return false;
@@ -2412,9 +2420,9 @@ mod tests {
     fn test_announce_retention_cap_evicts_oldest_and_prefers_held_on_tie() {
         let sample_entry = make_announce_entry([0x70; 16], 100.0, 32);
         let mut config = make_config(true);
-        config.announce_table_max_bytes =
-            TransportEngine::announce_entry_size_bytes(&sample_entry) * 2
-                + TransportEngine::announce_entry_size_bytes(&sample_entry) / 2;
+        config.announce_table_max_bytes = TransportEngine::announce_entry_size_bytes(&sample_entry)
+            * 2
+            + TransportEngine::announce_entry_size_bytes(&sample_entry) / 2;
         let max_bytes = config.announce_table_max_bytes;
         let mut engine = TransportEngine::new(config);
 

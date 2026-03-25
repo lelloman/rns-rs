@@ -1121,7 +1121,11 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
                         continue;
                     }
                 };
-                log::info!("[{}] reconnected after {} attempt(s)", config.name, attempts);
+                log::info!(
+                    "[{}] reconnected after {} attempt(s)",
+                    config.name,
+                    attempts
+                );
                 let new_writer: Box<dyn Writer> = Box::new(BackboneClientWriter {
                     stream: writer_stream,
                 });

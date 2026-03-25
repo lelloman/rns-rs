@@ -614,7 +614,9 @@ fn start_transport_node_with_limits(
             announce_table_max_bytes,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -698,7 +700,9 @@ fn start_client_node_with_packet_hashlist(
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1066,7 +1070,9 @@ fn test_direct_link_no_transport() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1655,7 +1661,9 @@ fn test_plain_message_delivery() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1877,7 +1885,9 @@ fn test_group_message_delivery() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1981,7 +1991,9 @@ fn test_group_wrong_key_fails() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3075,7 +3087,9 @@ fn test_udp_announce_and_message() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3134,7 +3148,9 @@ fn test_udp_announce_and_message() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3297,7 +3313,9 @@ fn discovery_announce_received_by_client() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3361,7 +3379,9 @@ fn discovery_announce_received_by_client() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3484,7 +3504,9 @@ fn discovery_announce_through_relay() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3558,7 +3580,9 @@ fn discovery_announce_through_relay() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3620,7 +3644,9 @@ fn discovery_announce_through_relay() {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3724,7 +3750,9 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64),
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,

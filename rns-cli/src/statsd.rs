@@ -116,9 +116,7 @@ fn run() -> Result<(), String> {
                 log::warn!("waiting for provider bridge: {}", err);
                 for _ in 0..50 {
                     if SHOULD_STOP.load(Ordering::Relaxed) {
-                        return Err(
-                            "interrupted while waiting for provider bridge".to_string(),
-                        );
+                        return Err("interrupted while waiting for provider bridge".to_string());
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }

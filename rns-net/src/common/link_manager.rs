@@ -959,7 +959,8 @@ impl LinkManager {
                                     rns_core::channel::ChannelAction::MessageReceived { .. }
                                 )
                             })
-                            .count() as u64;
+                            .count()
+                            as u64;
                         // process_channel_actions needs immutable self, so collect first
                         let _ = link;
                         actions.extend(self.process_channel_actions(&link_id, chan_actions, rng));
@@ -3416,8 +3417,15 @@ mod tests {
                 destination_type: constants::DESTINATION_LINK,
                 packet_type: constants::PACKET_TYPE_PROOF,
             };
-            let proof = RawPacket::pack(flags, 0, &link_id, None, constants::CONTEXT_NONE, &proof_data)
-                .expect("proof packet should pack");
+            let proof = RawPacket::pack(
+                flags,
+                0,
+                &link_id,
+                None,
+                constants::CONTEXT_NONE,
+                &proof_data,
+            )
+            .expect("proof packet should pack");
             let ack_actions = init_mgr.handle_local_delivery(
                 link_id,
                 &proof.raw,
@@ -3425,7 +3433,10 @@ mod tests {
                 rns_core::transport::types::InterfaceId(0),
                 &mut rng,
             );
-            assert!(ack_actions.is_empty(), "proof delivery should only update channel state");
+            assert!(
+                ack_actions.is_empty(),
+                "proof delivery should only update channel state"
+            );
         }
 
         init_mgr
