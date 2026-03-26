@@ -182,7 +182,7 @@ impl Drop for ProviderBridge {
 }
 
 fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
-    let mut stream: Option<UnixStream> = None;
+    let mut consumers: Vec<UnixStream> = Vec::new();
 
     loop {
         {
@@ -192,36 +192,55 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
             }
         }
 
-        if stream.is_none() {
+        // Accept all pending connections.
+        loop {
             match listener.accept() {
                 Ok((accepted, _)) => {
                     let _ = accepted.set_write_timeout(Some(Duration::from_secs(1)));
-                    if let Ok(mut state) = shared.state.lock() {
-                        state.connected = true;
-                        shared.condvar.notify_all();
-                    }
-                    stream = Some(accepted);
+                    log::info!(
+                        "provider bridge consumer connected (total: {})",
+                        consumers.len() + 1
+                    );
+                    consumers.push(accepted);
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
                     log::warn!("provider bridge accept error: {}", err);
+                    break;
                 }
             }
-        } else if let Ok((accepted, _)) = listener.accept() {
-            log::debug!("provider bridge rejected additional consumer connection");
-            let _ = accepted.shutdown(std::net::Shutdown::Both);
         }
 
-        if let Some(active) = stream.as_mut() {
+        // Update connected state.
+        if let Ok(mut state) = shared.state.lock() {
+            let was_connected = state.connected;
+            state.connected = !consumers.is_empty();
+            if state.connected && !was_connected {
+                shared.condvar.notify_all();
+            }
+        }
+
+        if !consumers.is_empty() {
             match next_encoded_frame(&shared) {
                 Some(frame) => {
-                    if let Err(err) = write_frame(active, &frame) {
-                        log::debug!("provider bridge stream error: {}", err);
-                        account_failed_frame(&shared, frame);
-                        if let Ok(mut state) = shared.state.lock() {
-                            state.connected = false;
+                    let mut failed = Vec::new();
+                    for (i, consumer) in consumers.iter_mut().enumerate() {
+                        if let Err(err) = write_frame(consumer, &frame) {
+                            log::debug!("provider bridge consumer {} write error: {}", i, err);
+                            failed.push(i);
                         }
-                        stream = None;
+                    }
+                    // Remove failed consumers in reverse order to preserve indices.
+                    for &i in failed.iter().rev() {
+                        log::info!(
+                            "provider bridge consumer disconnected (remaining: {})",
+                            consumers.len() - 1
+                        );
+                        consumers.swap_remove(i);
+                    }
+                    if !failed.is_empty() && consumers.is_empty() {
+                        // All consumers gone — account for the failed frame.
+                        account_failed_frame(&shared, frame);
                     }
                     continue;
                 }
@@ -419,6 +438,44 @@ mod tests {
                 assert_eq!(evt.payload, vec![1, 2, 3]);
             }
             other => panic!("unexpected message: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bridge_fans_out_to_multiple_consumers() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = ProviderBridge::start(ProviderBridgeConfig {
+            enabled: true,
+            socket_path: socket_path.clone(),
+            queue_max_events: 64,
+            queue_max_bytes: 65536,
+            overflow_policy: OverflowPolicy::DropNewest,
+            node_instance: "node-b".into(),
+        })
+        .unwrap();
+
+        let mut stream_a = UnixStream::connect(&socket_path).unwrap();
+        wait_for_consumer(&bridge);
+        let mut stream_b = UnixStream::connect(&socket_path).unwrap();
+        // Give the bridge thread time to accept the second connection.
+        std::thread::sleep(Duration::from_millis(200));
+
+        bridge.emit_event(
+            "PreIngress",
+            "hook-x".into(),
+            "packet".into(),
+            vec![10, 20],
+        );
+
+        let env_a = read_frame(&mut stream_a);
+        let env_b = read_frame(&mut stream_b);
+        match (&env_a.message, &env_b.message) {
+            (ProviderMessage::Event(a), ProviderMessage::Event(b)) => {
+                assert_eq!(a.payload, vec![10, 20]);
+                assert_eq!(b.payload, vec![10, 20]);
+            }
+            other => panic!("unexpected messages: {:?}", other),
         }
     }
 }
