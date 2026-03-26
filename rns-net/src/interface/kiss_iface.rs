@@ -577,6 +577,8 @@ mod tests {
 
     #[test]
     fn kiss_config_commands() {
+        use std::time::Instant;
+
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
 
         let mut writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
@@ -592,11 +594,49 @@ mod tests {
 
         // Read all commands from master
         let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        assert!(poll_read(master_file.as_raw_fd(), 2000));
-
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut data = Vec::new();
         let mut buf = [0u8; 1024];
-        let n = master_file.read(&mut buf).unwrap();
-        let data = &buf[..n];
+        while Instant::now() < deadline {
+            let remaining_ms = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            if remaining_ms <= 0 || !poll_read(master_file.as_raw_fd(), remaining_ms) {
+                break;
+            }
+
+            let n = master_file.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n]);
+
+            let have_all = data.windows(4).any(|w| {
+                w[0] == kiss::FEND
+                    && w[1] == kiss::CMD_TXDELAY
+                    && w[2] == 35
+                    && w[3] == kiss::FEND
+            }) && data.windows(4).any(|w| {
+                w[0] == kiss::FEND
+                    && w[1] == kiss::CMD_TXTAIL
+                    && w[2] == 2
+                    && w[3] == kiss::FEND
+            }) && data.windows(4).any(|w| {
+                w[0] == kiss::FEND
+                    && w[1] == kiss::CMD_P
+                    && w[2] == 64
+                    && w[3] == kiss::FEND
+            }) && data.windows(4).any(|w| {
+                w[0] == kiss::FEND
+                    && w[1] == kiss::CMD_SLOTTIME
+                    && w[2] == 2
+                    && w[3] == kiss::FEND
+            });
+            if have_all {
+                break;
+            }
+        }
 
         // Should contain TXDELAY command: FEND, CMD_TXDELAY, value, FEND
         // preamble: 350/10 = 35
