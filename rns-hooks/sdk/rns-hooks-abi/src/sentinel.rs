@@ -45,7 +45,9 @@ impl BackbonePeerPayload {
         buf[44] = self.penalty_level;
         buf[45..53].copy_from_slice(&self.blacklist_for_secs.to_le_bytes());
         buf[53] = self.event_kind;
-        buf[54] = self.server_interface_name_len.min(BACKBONE_PEER_INTERFACE_NAME_MAX as u8);
+        buf[54] = self
+            .server_interface_name_len
+            .min(BACKBONE_PEER_INTERFACE_NAME_MAX as u8);
         buf[55..].copy_from_slice(&self.server_interface_name);
         buf
     }

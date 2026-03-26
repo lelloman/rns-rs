@@ -113,9 +113,7 @@ mod tests {
         write_u64(&mut raw, 24, 33);
         raw[32] = 4;
         write_u64(&mut raw, 40, 44);
-        raw[48..64].copy_from_slice(&[
-            172, 20, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ]);
+        raw[48..64].copy_from_slice(&[172, 20, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 
         let ctx = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const BackbonePeerContext) };
         let context_type = ctx.context_type;

@@ -47,12 +47,10 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
     if unsafe { context::context_type(ptr) } == CTX_TYPE_BACKBONE_PEER {
         let ctx = unsafe { core::ptr::read_unaligned(ptr as *const BackbonePeerContext) };
         let mut server_interface_name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
-        let server_interface_name_len = host::get_interface_name(
-            ctx.server_interface_id,
-            &mut server_interface_name,
-        )
-        .map(|len| len.min(BACKBONE_PEER_INTERFACE_NAME_MAX))
-        .unwrap_or(0) as u8;
+        let server_interface_name_len =
+            host::get_interface_name(ctx.server_interface_id, &mut server_interface_name)
+                .map(|len| len.min(BACKBONE_PEER_INTERFACE_NAME_MAX))
+                .unwrap_or(0) as u8;
         let payload = BackbonePeerPayload {
             peer_ip_family: ctx.peer_ip_family,
             peer_ip: ctx.peer_ip,

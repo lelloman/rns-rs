@@ -367,7 +367,10 @@ impl BackbonePeerMonitor {
     }
 
     pub fn blacklist(&mut self, peer_ip: IpAddr, duration: Duration, reason: String) -> bool {
-        let state = self.peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
+        let state = self
+            .peers
+            .entry(peer_ip)
+            .or_insert_with(PeerBehaviorState::new);
         state.blacklisted_until = Some(Instant::now() + duration);
         state.blacklist_reason = Some(reason);
         true
@@ -680,9 +683,7 @@ fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>) {
             state.blacklisted_until = None;
             state.blacklist_reason = None;
         }
-        state.blacklisted_until.is_some()
-            || state.connected_count > 0
-            || state.reject_count > 0
+        state.blacklisted_until.is_some() || state.connected_count > 0 || state.reject_count > 0
     });
 }
 
@@ -1967,7 +1968,6 @@ mod tests {
             stall_event.is_some(),
             "expected BackbonePeerWriteStall event"
         );
-
     }
 
     #[test]
@@ -1976,14 +1976,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(9800));
 
-        let config = make_server_config(
-            port,
-            98,
-            None,
-            None,
-            None,
-            BackboneAbuseConfig::default(),
-        );
+        let config = make_server_config(port, 98, None, None, None, BackboneAbuseConfig::default());
         let peer_state = config.peer_state.clone();
 
         start(config, tx.clone(), next_id).unwrap();
@@ -2003,14 +1996,11 @@ mod tests {
         while rx.try_recv().is_ok() {}
 
         // Blacklist 127.0.0.1 via the peer monitor
-        peer_state
-            .lock()
-            .unwrap()
-            .blacklist(
-                "127.0.0.1".parse().unwrap(),
-                Duration::from_secs(60),
-                "test blacklist".into(),
-            );
+        peer_state.lock().unwrap().blacklist(
+            "127.0.0.1".parse().unwrap(),
+            Duration::from_secs(60),
+            "test blacklist".into(),
+        );
 
         // Second connection from same IP should be rejected (no InterfaceUp)
         let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();

@@ -22,10 +22,7 @@ const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_SENTINEL_HOOK_WASM"))
 const HOOK_SPECS: [(&str, &str); 5] = [
     ("rns_sentinel_peer_connected", "BackbonePeerConnected"),
     ("rns_sentinel_peer_disconnected", "BackbonePeerDisconnected"),
-    (
-        "rns_sentinel_peer_idle_timeout",
-        "BackbonePeerIdleTimeout",
-    ),
+    ("rns_sentinel_peer_idle_timeout", "BackbonePeerIdleTimeout"),
     ("rns_sentinel_peer_write_stall", "BackbonePeerWriteStall"),
     ("rns_sentinel_peer_penalty", "BackbonePeerPenalty"),
 ];
@@ -186,9 +183,7 @@ fn run() -> Result<(), String> {
                 log::warn!("waiting for provider bridge: {}", err);
                 for _ in 0..50 {
                     if SHOULD_STOP.load(Ordering::Relaxed) {
-                        return Err(
-                            "interrupted while waiting for provider bridge".to_string(),
-                        );
+                        return Err("interrupted while waiting for provider bridge".to_string());
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
@@ -223,14 +218,9 @@ fn run() -> Result<(), String> {
             Ok(Some(envelope)) => {
                 if let ProviderMessage::Event(ref event) = envelope.message {
                     if let Some(action) = tracker.ingest(event) {
-                        if let Err(e) =
-                            execute_blacklist(&control, &action.interface_name, &action)
+                        if let Err(e) = execute_blacklist(&control, &action.interface_name, &action)
                         {
-                            log::warn!(
-                                "blacklist RPC failed for {}: {}",
-                                action.peer_ip,
-                                e
-                            );
+                            log::warn!("blacklist RPC failed for {}: {}", action.peer_ip, e);
                         }
                     }
                 }
@@ -337,7 +327,8 @@ impl RpcControl {
                 entries.iter().find_map(|entry| {
                     let id = entry.get("id").and_then(|v| v.as_int())?;
                     (id == interface_id as i64).then(|| {
-                        entry.get("name")
+                        entry
+                            .get("name")
                             .and_then(|v| v.as_str())
                             .map(str::to_string)
                     })?
@@ -579,7 +570,7 @@ impl PeerTracker {
                         && record.flap_events.len() as u32 >= self.policy.flap_threshold
                     {
                         return Some(
-                            self.apply_blacklist(&peer_key, "rapid silent reconnect churn")
+                            self.apply_blacklist(&peer_key, "rapid silent reconnect churn"),
                         );
                     }
                 }
@@ -756,17 +747,41 @@ fn print_usage() {
     println!("  --config PATH, -c PATH      Path to config directory");
     println!("  --socket PATH               Provider bridge socket override");
     println!("  --priority N                 Hook priority (default: 0)");
-    println!("  --write-stall-threshold N    Write stalls before blacklist (default: {})", DEFAULT_WRITE_STALL_THRESHOLD);
-    println!("  --idle-timeout-threshold N   Idle timeouts before blacklist (default: {})", DEFAULT_IDLE_TIMEOUT_THRESHOLD);
-    println!("  --event-window SECS          Sliding window for event counting (default: {})", DEFAULT_EVENT_WINDOW.as_secs());
-    println!("  --write-stall-window SECS    Sliding window for write stalls (default: event-window)");
-    println!("  --idle-timeout-window SECS   Sliding window for idle timeouts (default: event-window)");
-    println!("  --flap-threshold N           Silent reconnect flaps before blacklist (default: {})", DEFAULT_FLAP_THRESHOLD);
-    println!("  --flap-window SECS           Sliding window for flap detection (default: event-window)");
+    println!(
+        "  --write-stall-threshold N    Write stalls before blacklist (default: {})",
+        DEFAULT_WRITE_STALL_THRESHOLD
+    );
+    println!(
+        "  --idle-timeout-threshold N   Idle timeouts before blacklist (default: {})",
+        DEFAULT_IDLE_TIMEOUT_THRESHOLD
+    );
+    println!(
+        "  --event-window SECS          Sliding window for event counting (default: {})",
+        DEFAULT_EVENT_WINDOW.as_secs()
+    );
+    println!(
+        "  --write-stall-window SECS    Sliding window for write stalls (default: event-window)"
+    );
+    println!(
+        "  --idle-timeout-window SECS   Sliding window for idle timeouts (default: event-window)"
+    );
+    println!(
+        "  --flap-threshold N           Silent reconnect flaps before blacklist (default: {})",
+        DEFAULT_FLAP_THRESHOLD
+    );
+    println!(
+        "  --flap-window SECS           Sliding window for flap detection (default: event-window)"
+    );
     println!("  --flap-max-connection-age SECS  Max silent connection age counted as a flap (default: {})", DEFAULT_FLAP_MAX_CONNECTION_AGE.as_secs());
-    println!("  --connect-rate-threshold N   Connection attempts before blacklist (default: {})", DEFAULT_CONNECT_RATE_THRESHOLD);
+    println!(
+        "  --connect-rate-threshold N   Connection attempts before blacklist (default: {})",
+        DEFAULT_CONNECT_RATE_THRESHOLD
+    );
     println!("  --connect-rate-window SECS   Sliding window for connect-rate detection (default: event-window)");
-    println!("  --base-blacklist SECS        Base blacklist duration (default: {})", DEFAULT_BASE_BLACKLIST_SECS);
+    println!(
+        "  --base-blacklist SECS        Base blacklist duration (default: {})",
+        DEFAULT_BASE_BLACKLIST_SECS
+    );
     println!("  --penalty-decay-interval SECS  Idle time needed to decay blacklist level by 1 (default: 0)");
     println!("  --version                    Print version");
     println!("  --help, -h                   Print this help");
@@ -777,12 +792,34 @@ fn print_usage() {
 mod tests {
     use super::*;
 
-    fn make_event(attach_point: &str, ip_octets: [u8; 4], connected_for: u64) -> HookProviderEventEnvelope {
-        let mut server_interface_name = [0u8; rns_hooks_abi::sentinel::BACKBONE_PEER_INTERFACE_NAME_MAX];
+    fn make_event(
+        attach_point: &str,
+        ip_octets: [u8; 4],
+        connected_for: u64,
+    ) -> HookProviderEventEnvelope {
+        let mut server_interface_name =
+            [0u8; rns_hooks_abi::sentinel::BACKBONE_PEER_INTERFACE_NAME_MAX];
         server_interface_name[..6].copy_from_slice(b"public");
         let payload = BackbonePeerPayload {
             peer_ip_family: 4,
-            peer_ip: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ip_octets[0], ip_octets[1], ip_octets[2], ip_octets[3]],
+            peer_ip: [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0xff,
+                0xff,
+                ip_octets[0],
+                ip_octets[1],
+                ip_octets[2],
+                ip_octets[3],
+            ],
             peer_port: 4242,
             server_interface_id: 1,
             peer_interface_id: 100,
@@ -817,7 +854,9 @@ mod tests {
         let mut tracker = PeerTracker::new(DetectionPolicy::default());
         let event = make_event("BackbonePeerWriteStall", [192, 168, 1, 2], 30);
         assert!(tracker.ingest(&event).is_none());
-        let action = tracker.ingest(&event).expect("expected blacklist on 2nd stall");
+        let action = tracker
+            .ingest(&event)
+            .expect("expected blacklist on 2nd stall");
         assert_eq!(action.peer_ip, "192.168.1.2".parse::<IpAddr>().unwrap());
         assert_eq!(action.level, 1);
         assert_eq!(action.duration_secs, DEFAULT_BASE_BLACKLIST_SECS);
@@ -840,7 +879,9 @@ mod tests {
         for _ in 0..3 {
             assert!(tracker.ingest(&event).is_none());
         }
-        let action = tracker.ingest(&event).expect("expected blacklist on 4th idle timeout");
+        let action = tracker
+            .ingest(&event)
+            .expect("expected blacklist on 4th idle timeout");
         assert_eq!(action.peer_ip, "10.0.0.2".parse::<IpAddr>().unwrap());
         assert_eq!(action.level, 1);
         assert_eq!(action.reason, "repeated idle timeouts");
@@ -874,8 +915,12 @@ mod tests {
     fn connect_and_disconnect_do_not_trigger() {
         let mut tracker = PeerTracker::new(DetectionPolicy::default());
         for _ in 0..20 {
-            assert!(tracker.ingest(&make_event("BackbonePeerConnected", [1, 2, 3, 4], 0)).is_none());
-            assert!(tracker.ingest(&make_event("BackbonePeerDisconnected", [1, 2, 3, 4], 60)).is_none());
+            assert!(tracker
+                .ingest(&make_event("BackbonePeerConnected", [1, 2, 3, 4], 0))
+                .is_none());
+            assert!(tracker
+                .ingest(&make_event("BackbonePeerDisconnected", [1, 2, 3, 4], 60))
+                .is_none());
         }
     }
 
@@ -883,7 +928,9 @@ mod tests {
     fn penalty_event_does_not_trigger() {
         let mut tracker = PeerTracker::new(DetectionPolicy::default());
         for _ in 0..20 {
-            assert!(tracker.ingest(&make_event("BackbonePeerPenalty", [5, 6, 7, 8], 0)).is_none());
+            assert!(tracker
+                .ingest(&make_event("BackbonePeerPenalty", [5, 6, 7, 8], 0))
+                .is_none());
         }
     }
 

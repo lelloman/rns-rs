@@ -824,9 +824,7 @@ fn handle_backbone_blacklist(req: &HttpRequest, node: &NodeHandle) -> HttpRespon
             Ok(QueryResponse::BlacklistBackbonePeer(true)) => {
                 HttpResponse::ok(json!({"status": "ok"}))
             }
-            Ok(QueryResponse::BlacklistBackbonePeer(false)) => {
-                HttpResponse::not_found()
-            }
+            Ok(QueryResponse::BlacklistBackbonePeer(false)) => HttpResponse::not_found(),
             _ => HttpResponse::internal_error("Query failed"),
         }
     })

@@ -461,12 +461,7 @@ mod tests {
         // Give the bridge thread time to accept the second connection.
         std::thread::sleep(Duration::from_millis(200));
 
-        bridge.emit_event(
-            "PreIngress",
-            "hook-x".into(),
-            "packet".into(),
-            vec![10, 20],
-        );
+        bridge.emit_event("PreIngress", "hook-x".into(), "packet".into(), vec![10, 20]);
 
         let env_a = read_frame(&mut stream_a);
         let env_b = read_frame(&mut stream_b);

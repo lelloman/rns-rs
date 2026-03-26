@@ -10,13 +10,13 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::time::Duration;
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::thread;
+use std::time::Duration;
 
 use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
