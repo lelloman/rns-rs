@@ -5,6 +5,8 @@ use std::net::IpAddr;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use rns_core::announce::ValidatedAnnounce;
+use rns_core::transport::announce_verify_queue::AnnounceVerifyKey;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 /// Policy for handling incoming direct-connect proposals.
@@ -88,6 +90,17 @@ pub enum Event<W: Send> {
     Frame {
         interface_id: InterfaceId,
         data: Vec<u8>,
+    },
+    /// (Internal) An announce was verified off-thread and is ready for driver-side processing.
+    AnnounceVerified {
+        key: AnnounceVerifyKey,
+        validated: ValidatedAnnounce,
+        sig_cache_key: [u8; 32],
+    },
+    /// (Internal) An announce failed off-thread verification.
+    AnnounceVerifyFailed {
+        key: AnnounceVerifyKey,
+        sig_cache_key: [u8; 32],
     },
     /// An interface came online after (re)connecting.
     /// Carries a new writer if the connection was re-established.
@@ -604,6 +617,16 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("Frame")
                 .field("interface_id", interface_id)
                 .field("data_len", &data.len())
+                .finish(),
+            Event::AnnounceVerified { key, .. } => f
+                .debug_struct("AnnounceVerified")
+                .field("destination_hash", &key.destination_hash)
+                .field("received_from", &key.received_from)
+                .finish(),
+            Event::AnnounceVerifyFailed { key, .. } => f
+                .debug_struct("AnnounceVerifyFailed")
+                .field("destination_hash", &key.destination_hash)
+                .field("received_from", &key.received_from)
                 .finish(),
             Event::InterfaceUp(id, writer, info) => f
                 .debug_tuple("InterfaceUp")

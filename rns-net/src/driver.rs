@@ -2,10 +2,11 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rns_core::packet::RawPacket;
+use rns_core::transport::announce_verify_queue::{AnnounceVerifyQueue, OverflowPolicy};
 use rns_core::transport::tables::PathEntry;
 use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
@@ -488,6 +489,10 @@ pub struct Driver {
     pub(crate) discover_interfaces: bool,
     /// Announcer for discoverable interfaces (None if nothing to announce).
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
+    /// Shared async announce verification queue.
+    pub(crate) announce_verify_queue: Arc<Mutex<AnnounceVerifyQueue>>,
+    /// Whether inbound announces should be verified off the driver thread.
+    pub(crate) async_announce_verification: bool,
     /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) discovery_cleanup_counter: u32,
     /// Runtime-configurable discovery cleanup interval.
@@ -532,6 +537,7 @@ impl Driver {
         tx: crate::event::EventSender,
         callbacks: Box<dyn Callbacks>,
     ) -> Self {
+        let announce_queue_max_entries = config.announce_queue_max_entries;
         let tunnel_synth_dest = rns_core::destination::destination_hash(
             "rnstransport",
             &["tunnel", "synthesize"],
@@ -633,6 +639,10 @@ impl Driver {
             probe_responder_hash: None,
             discover_interfaces: false,
             interface_announcer: None,
+            announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(
+                announce_queue_max_entries,
+            ))),
+            async_announce_verification: false,
             discovery_cleanup_counter: 0,
             discovery_cleanup_interval_ticks: runtime_config_defaults
                 .discovery_cleanup_interval_ticks,
@@ -658,6 +668,21 @@ impl Driver {
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
         }
+    }
+
+    pub fn set_announce_verify_queue_config(
+        &mut self,
+        max_entries: usize,
+        max_bytes: usize,
+        max_stale_secs: f64,
+        overflow_policy: OverflowPolicy,
+    ) {
+        self.announce_verify_queue = Arc::new(Mutex::new(AnnounceVerifyQueue::with_limits(
+            max_entries,
+            max_bytes,
+            max_stale_secs,
+            overflow_policy,
+        )));
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -1015,7 +1040,13 @@ impl Driver {
         let capped_duration = self
             .backbone_runtime
             .get(interface_name)
-            .and_then(|handle| handle.runtime.lock().ok().map(|runtime| runtime.abuse.max_penalty_duration))
+            .and_then(|handle| {
+                handle
+                    .runtime
+                    .lock()
+                    .ok()
+                    .map(|runtime| runtime.abuse.max_penalty_duration)
+            })
             .flatten()
             .map(|max| duration.min(max))
             .unwrap_or(duration);
@@ -3880,12 +3911,26 @@ impl Driver {
                         );
                     }
 
-                    let actions = self.engine.handle_inbound(
-                        &packet,
-                        interface_id,
-                        time::now(),
-                        &mut self.rng,
-                    );
+                    let actions = if self.async_announce_verification {
+                        let mut announce_queue = self
+                            .announce_verify_queue
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        self.engine.handle_inbound_with_announce_queue(
+                            &packet,
+                            interface_id,
+                            time::now(),
+                            &mut self.rng,
+                            Some(&mut announce_queue),
+                        )
+                    } else {
+                        self.engine.handle_inbound(
+                            &packet,
+                            interface_id,
+                            time::now(),
+                            &mut self.rng,
+                        )
+                    };
 
                     // PreDispatch hook: after engine, before action dispatch
                     #[cfg(feature = "rns-hooks")]
@@ -3925,6 +3970,36 @@ impl Driver {
                     }
 
                     self.dispatch_all(actions);
+                }
+                Event::AnnounceVerified {
+                    key,
+                    validated,
+                    sig_cache_key,
+                } => {
+                    let pending = {
+                        let mut announce_queue = self
+                            .announce_verify_queue
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        announce_queue.complete_success(&key)
+                    };
+                    if let Some(pending) = pending {
+                        let actions = self.engine.complete_verified_announce(
+                            pending,
+                            validated,
+                            sig_cache_key,
+                            time::now(),
+                            &mut self.rng,
+                        );
+                        self.dispatch_all(actions);
+                    }
+                }
+                Event::AnnounceVerifyFailed { key, .. } => {
+                    let mut announce_queue = self
+                        .announce_verify_queue
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let _ = announce_queue.complete_failure(&key);
                 }
                 Event::Tick => {
                     // Tick hook
@@ -5220,15 +5295,13 @@ impl Driver {
                 duration,
                 reason,
                 penalty_level,
-            } => QueryResponse::BlacklistBackbonePeer(
-                self.blacklist_backbone_peer(
-                    &interface_name,
-                    peer_ip,
-                    duration,
-                    reason,
-                    penalty_level,
-                ),
-            ),
+            } => QueryResponse::BlacklistBackbonePeer(self.blacklist_backbone_peer(
+                &interface_name,
+                peer_ip,
+                duration,
+                reason,
+                penalty_level,
+            )),
             QueryRequest::InjectPath {
                 dest_hash,
                 next_hop,
@@ -7151,7 +7224,7 @@ impl Driver {
             .unwrap_or_else(|| "N/A".into());
         log::info!(
             "MEMSTATS rss_mb={} known_dest={} path={} announce={} reverse={} \
-             link={} held_ann={} hashlist={} sig_cache={} rate_lim={} blackhole={} tunnel={} \
+             link={} held_ann={} hashlist={} sig_cache={} ann_verify_q={} rate_lim={} blackhole={} tunnel={} \
              pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={} \
              shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
             rss,
@@ -7163,6 +7236,10 @@ impl Driver {
             self.engine.held_announces_count(),
             self.engine.packet_hashlist_len(),
             self.engine.announce_sig_cache_len(),
+            self.announce_verify_queue
+                .lock()
+                .map(|queue| queue.len())
+                .unwrap_or(0),
             self.engine.rate_limiter_count(),
             self.engine.blackholed_count(),
             self.engine.tunnel_count(),
@@ -7513,6 +7590,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let (callbacks, _, _, _, _, _) = MockCallbacks::new();
         let (tx, rx) = event::channel();
@@ -7962,6 +8040,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8009,6 +8088,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8050,6 +8130,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8096,6 +8177,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8142,6 +8224,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8181,6 +8264,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8211,6 +8295,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8263,6 +8348,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8316,6 +8402,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8376,6 +8463,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8434,6 +8522,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8491,6 +8580,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx,
@@ -8541,6 +8631,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8590,6 +8681,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8639,6 +8731,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8681,6 +8774,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8729,6 +8823,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8778,6 +8873,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8838,6 +8934,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8897,6 +8994,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -8954,6 +9052,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9016,6 +9115,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9056,6 +9156,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9094,6 +9195,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9132,6 +9234,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9174,6 +9277,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9216,6 +9320,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9260,6 +9365,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9302,6 +9408,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9354,6 +9461,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9414,6 +9522,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9469,6 +9578,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9529,6 +9639,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9585,6 +9696,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -9628,6 +9740,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10684,6 +10797,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10751,6 +10865,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10802,6 +10917,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10852,6 +10968,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10907,6 +11024,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -10971,6 +11089,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11044,6 +11163,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11100,6 +11220,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11180,6 +11301,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11235,6 +11357,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11301,6 +11424,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11339,6 +11463,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11384,6 +11509,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11426,6 +11552,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11486,6 +11613,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11569,6 +11697,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11641,6 +11770,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11727,6 +11857,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11828,6 +11959,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -11928,6 +12060,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12013,6 +12146,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12121,6 +12255,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12207,6 +12342,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12296,6 +12432,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -12336,6 +12473,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -12382,6 +12520,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -12430,6 +12569,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -12465,6 +12605,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
@@ -12533,6 +12674,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12584,6 +12726,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12678,6 +12821,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12721,6 +12865,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12795,6 +12940,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -12916,6 +13062,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx2,
             tx2.clone(),
@@ -12980,6 +13127,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13027,6 +13175,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13108,6 +13257,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13162,6 +13312,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13215,6 +13366,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13284,6 +13436,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),
@@ -13365,6 +13518,7 @@ mod tests {
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
             },
             rx,
             tx.clone(),

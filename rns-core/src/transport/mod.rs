@@ -1,5 +1,6 @@
 pub mod announce_proc;
 pub mod announce_queue;
+pub mod announce_verify_queue;
 pub mod dedup;
 pub mod inbound;
 pub mod ingress_control;
@@ -25,6 +26,7 @@ use crate::packet::RawPacket;
 
 use self::announce_proc::compute_path_expires;
 use self::announce_queue::AnnounceQueues;
+use self::announce_verify_queue::{AnnounceVerifyKey, AnnounceVerifyQueue, PendingAnnounce};
 use self::dedup::{AnnounceSignatureCache, PacketHashlist};
 use self::inbound::{
     create_link_entry, create_reverse_entry, forward_transport_packet, route_proof_via_reverse,
@@ -635,6 +637,17 @@ impl TransportEngine {
         now: f64,
         rng: &mut dyn Rng,
     ) -> Vec<TransportAction> {
+        self.handle_inbound_with_announce_queue(raw, iface, now, rng, None)
+    }
+
+    pub fn handle_inbound_with_announce_queue(
+        &mut self,
+        raw: &[u8],
+        iface: InterfaceId,
+        now: f64,
+        rng: &mut dyn Rng,
+        announce_queue: Option<&mut AnnounceVerifyQueue>,
+    ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
 
         // 1. Unpack
@@ -799,7 +812,26 @@ impl TransportEngine {
 
         // 7. Announce handling
         if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE {
-            self.process_inbound_announce(&packet, &original_raw, iface, now, rng, &mut actions);
+            if let Some(queue) = announce_queue {
+                self.try_enqueue_announce(
+                    &packet,
+                    &original_raw,
+                    iface,
+                    now,
+                    rng,
+                    queue,
+                    &mut actions,
+                );
+            } else {
+                self.process_inbound_announce(
+                    &packet,
+                    &original_raw,
+                    iface,
+                    now,
+                    rng,
+                    &mut actions,
+                );
+            }
         }
 
         // 8. Proof handling
@@ -850,12 +882,8 @@ impl TransportEngine {
             Err(_) => return,
         };
 
-        let sig_cache_key = {
-            let mut material = [0u8; 80]; // 16 + 64
-            material[..16].copy_from_slice(&packet.destination_hash);
-            material[16..].copy_from_slice(&announce.signature);
-            hash::full_hash(&material)
-        };
+        let sig_cache_key =
+            Self::announce_sig_cache_key(packet.destination_hash, &announce.signature);
 
         let validated = if self.announce_sig_cache.contains(&sig_cache_key) {
             announce.to_validated_unchecked()
@@ -869,56 +897,36 @@ impl TransportEngine {
             }
         };
 
-        // Skip blackholed identities
-        if self.is_blackholed(&validated.identity_hash, now) {
-            return;
-        }
+        let received_from = self.announce_received_from(packet, now);
+        let random_blob = match extract_random_blob(&packet.data) {
+            Some(b) => b,
+            None => return,
+        };
+        let announce_emitted = timebase_from_random_blob(&random_blob);
 
-        // Skip local destinations
-        if self
-            .local_destinations
-            .contains_key(&packet.destination_hash)
-        {
-            log::debug!(
-                "Announce:skipping local destination {:02x}{:02x}{:02x}{:02x}..",
-                packet.destination_hash[0],
-                packet.destination_hash[1],
-                packet.destination_hash[2],
-                packet.destination_hash[3],
-            );
-            return;
-        }
+        self.process_verified_announce(
+            packet,
+            original_raw,
+            iface,
+            now,
+            rng,
+            validated,
+            received_from,
+            random_blob,
+            announce_emitted,
+            actions,
+        );
+    }
 
-        // Ingress control: hold announces from unknown destinations during bursts
-        if !self.has_path(&packet.destination_hash) {
-            if let Some(info) = self.interfaces.get(&iface) {
-                if packet.context != constants::CONTEXT_PATH_RESPONSE
-                    && info.ingress_control
-                    && self.ingress_control.should_ingress_limit(
-                        iface,
-                        info.ia_freq,
-                        info.started,
-                        now,
-                    )
-                {
-                    self.ingress_control.hold_announce(
-                        iface,
-                        packet.destination_hash,
-                        ingress_control::HeldAnnounce {
-                            raw: original_raw.to_vec(),
-                            hops: packet.hops,
-                            receiving_interface: iface,
-                            timestamp: now,
-                        },
-                    );
-                    return;
-                }
-            }
-        }
+    fn announce_sig_cache_key(destination_hash: [u8; 16], signature: &[u8; 64]) -> [u8; 32] {
+        let mut material = [0u8; 80];
+        material[..16].copy_from_slice(&destination_hash);
+        material[16..].copy_from_slice(signature);
+        hash::full_hash(&material)
+    }
 
-        // Detect retransmit completion
-        let received_from = if let Some(transport_id) = packet.transport_id {
-            // Check if this is a retransmit we can stop
+    fn announce_received_from(&mut self, packet: &RawPacket, now: f64) -> [u8; 16] {
+        if let Some(transport_id) = packet.transport_id {
             if self.config.transport_enabled {
                 if let Some(announce_entry) = self.announce_table.get_mut(&packet.destination_hash)
                 {
@@ -931,7 +939,6 @@ impl TransportEngine {
                             self.announce_table.remove(&packet.destination_hash);
                         }
                     }
-                    // Check if our retransmit was passed on
                     if let Some(announce_entry) = self.announce_table.get(&packet.destination_hash)
                     {
                         if packet.hops.checked_sub(1) == Some(announce_entry.hops + 1)
@@ -946,20 +953,201 @@ impl TransportEngine {
             transport_id
         } else {
             packet.destination_hash
+        }
+    }
+
+    fn should_hold_announce(
+        &mut self,
+        packet: &RawPacket,
+        original_raw: &[u8],
+        iface: InterfaceId,
+        now: f64,
+    ) -> bool {
+        if self.has_path(&packet.destination_hash) {
+            return false;
+        }
+        let Some(info) = self.interfaces.get(&iface) else {
+            return false;
+        };
+        if packet.context == constants::CONTEXT_PATH_RESPONSE
+            || !info.ingress_control
+            || !self
+                .ingress_control
+                .should_ingress_limit(iface, info.ia_freq, info.started, now)
+        {
+            return false;
+        }
+        self.ingress_control.hold_announce(
+            iface,
+            packet.destination_hash,
+            ingress_control::HeldAnnounce {
+                raw: original_raw.to_vec(),
+                hops: packet.hops,
+                receiving_interface: iface,
+                timestamp: now,
+            },
+        );
+        true
+    }
+
+    fn try_enqueue_announce(
+        &mut self,
+        packet: &RawPacket,
+        original_raw: &[u8],
+        iface: InterfaceId,
+        now: f64,
+        rng: &mut dyn Rng,
+        announce_queue: &mut AnnounceVerifyQueue,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if packet.flags.destination_type != constants::DESTINATION_SINGLE {
+            return;
+        }
+
+        let has_ratchet = packet.flags.context_flag == constants::FLAG_SET;
+        let announce = match AnnounceData::unpack(&packet.data, has_ratchet) {
+            Ok(a) => a,
+            Err(_) => return,
         };
 
-        // Extract random blob
+        let received_from = self.announce_received_from(packet, now);
+
+        if self
+            .local_destinations
+            .contains_key(&packet.destination_hash)
+        {
+            log::debug!(
+                "Announce:skipping local destination {:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0],
+                packet.destination_hash[1],
+                packet.destination_hash[2],
+                packet.destination_hash[3],
+            );
+            return;
+        }
+
+        if self.should_hold_announce(packet, original_raw, iface, now) {
+            return;
+        }
+
+        let sig_cache_key =
+            Self::announce_sig_cache_key(packet.destination_hash, &announce.signature);
+        if self.announce_sig_cache.contains(&sig_cache_key) {
+            let validated = announce.to_validated_unchecked();
+            let random_blob = match extract_random_blob(&packet.data) {
+                Some(b) => b,
+                None => return,
+            };
+            let announce_emitted = timebase_from_random_blob(&random_blob);
+            self.process_verified_announce(
+                packet,
+                original_raw,
+                iface,
+                now,
+                rng,
+                validated,
+                received_from,
+                random_blob,
+                announce_emitted,
+                actions,
+            );
+            return;
+        }
+
+        if packet.context == constants::CONTEXT_PATH_RESPONSE {
+            let Ok(validated) = announce.validate(&packet.destination_hash) else {
+                return;
+            };
+            self.announce_sig_cache.insert(sig_cache_key, now);
+            let random_blob = match extract_random_blob(&packet.data) {
+                Some(b) => b,
+                None => return,
+            };
+            let announce_emitted = timebase_from_random_blob(&random_blob);
+            self.process_verified_announce(
+                packet,
+                original_raw,
+                iface,
+                now,
+                rng,
+                validated,
+                received_from,
+                random_blob,
+                announce_emitted,
+                actions,
+            );
+            return;
+        }
+
         let random_blob = match extract_random_blob(&packet.data) {
             Some(b) => b,
             None => return,
         };
+        let announce_emitted = timebase_from_random_blob(&random_blob);
+        let key = AnnounceVerifyKey {
+            destination_hash: packet.destination_hash,
+            random_blob,
+            received_from,
+        };
+        let pending = PendingAnnounce {
+            original_raw: original_raw.to_vec(),
+            packet: packet.clone(),
+            interface: iface,
+            received_from,
+            queued_at: now,
+            best_hops: packet.hops,
+            emission_ts: announce_emitted,
+            random_blob,
+        };
+        let _ = announce_queue.enqueue(key, pending);
+    }
 
-        // Check hop limit
+    pub fn complete_verified_announce(
+        &mut self,
+        pending: PendingAnnounce,
+        validated: crate::announce::ValidatedAnnounce,
+        sig_cache_key: [u8; 32],
+        now: f64,
+        rng: &mut dyn Rng,
+    ) -> Vec<TransportAction> {
+        self.announce_sig_cache.insert(sig_cache_key, now);
+        let mut actions = Vec::new();
+        self.process_verified_announce(
+            &pending.packet,
+            &pending.original_raw,
+            pending.interface,
+            now,
+            rng,
+            validated,
+            pending.received_from,
+            pending.random_blob,
+            pending.emission_ts,
+            &mut actions,
+        );
+        actions
+    }
+
+    pub fn clear_failed_verified_announce(&mut self, _sig_cache_key: [u8; 32], _now: f64) {}
+
+    fn process_verified_announce(
+        &mut self,
+        packet: &RawPacket,
+        original_raw: &[u8],
+        iface: InterfaceId,
+        now: f64,
+        rng: &mut dyn Rng,
+        validated: crate::announce::ValidatedAnnounce,
+        received_from: [u8; 16],
+        random_blob: [u8; 10],
+        announce_emitted: u64,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if self.is_blackholed(&validated.identity_hash, now) {
+            return;
+        }
         if packet.hops > constants::PATHFINDER_M {
             return;
         }
-
-        let announce_emitted = timebase_from_random_blob(&random_blob);
 
         // Multi-path aware decision
         let existing_set = self.path_table.get(&packet.destination_hash);
@@ -1136,6 +1324,10 @@ impl TransportEngine {
             };
             self.insert_announce_entry(packet.destination_hash, entry, now);
         }
+    }
+
+    pub fn announce_sig_cache_contains(&self, sig_cache_key: &[u8; 32]) -> bool {
+        self.announce_sig_cache.contains(sig_cache_key)
     }
 
     /// Check if there's a waiting discovery path request for a destination.
@@ -2009,6 +2201,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         }
     }
 
@@ -2557,6 +2750,150 @@ mod tests {
         assert!(actions
             .iter()
             .all(|a| !matches!(a, TransportAction::PathUpdated { .. })));
+    }
+
+    #[test]
+    fn test_async_announce_retransmit_cleanup_happens_before_queueing() {
+        use crate::announce::AnnounceData;
+        use crate::destination::{destination_hash, name_hash};
+        use crate::transport::announce_verify_queue::AnnounceVerifyQueue;
+
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x31; 32]));
+        let dest_hash = destination_hash("async", &["announce"], Some(identity.hash()));
+        let name_h = name_hash("async", &["announce"]);
+        let random_hash = [0x44u8; 10];
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_2,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_TRANSPORT,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            3,
+            &dest_hash,
+            Some(&[0xBB; 16]),
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
+
+        engine.announce_table.insert(
+            dest_hash,
+            AnnounceEntry {
+                timestamp: 1000.0,
+                retransmit_timeout: 2000.0,
+                retries: constants::PATHFINDER_R,
+                received_from: [0xBB; 16],
+                hops: 2,
+                packet_raw: packet.raw.clone(),
+                packet_data: packet.data.clone(),
+                destination_hash: dest_hash,
+                context_flag: constants::FLAG_UNSET,
+                local_rebroadcasts: 0,
+                block_rebroadcasts: false,
+                attached_interface: None,
+            },
+        );
+
+        let mut queue = AnnounceVerifyQueue::new(8);
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+        let actions = engine.handle_inbound_with_announce_queue(
+            &packet.raw,
+            InterfaceId(1),
+            1000.0,
+            &mut rng,
+            Some(&mut queue),
+        );
+
+        assert!(actions.is_empty());
+        assert_eq!(queue.len(), 1);
+        assert!(
+            !engine.announce_table.contains_key(&dest_hash),
+            "retransmit completion should clear announce_table before queueing"
+        );
+    }
+
+    #[test]
+    fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
+        use crate::announce::AnnounceData;
+        use crate::destination::{destination_hash, name_hash};
+        use crate::transport::announce_verify_queue::AnnounceVerifyQueue;
+
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x52; 32]));
+        let dest_hash = destination_hash("async", &["cache"], Some(identity.hash()));
+        let name_h = name_hash("async", &["cache"]);
+        let random_hash = [0x55u8; 10];
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
+
+        let mut queue = AnnounceVerifyQueue::new(8);
+        let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
+        let actions = engine.handle_inbound_with_announce_queue(
+            &packet.raw,
+            InterfaceId(1),
+            1000.0,
+            &mut rng,
+            Some(&mut queue),
+        );
+        assert!(actions.is_empty());
+        assert_eq!(queue.len(), 1);
+
+        let mut batch = queue.take_pending(1000.0);
+        assert_eq!(batch.len(), 1);
+        let (key, pending) = batch.pop().unwrap();
+
+        let announce = AnnounceData::unpack(&pending.packet.data, false).unwrap();
+        let validated = announce.validate(&pending.packet.destination_hash).unwrap();
+        let mut material = [0u8; 80];
+        material[..16].copy_from_slice(&pending.packet.destination_hash);
+        material[16..].copy_from_slice(&announce.signature);
+        let sig_cache_key = hash::full_hash(&material);
+
+        let pending = queue.complete_success(&key).unwrap();
+        let actions =
+            engine.complete_verified_announce(pending, validated, sig_cache_key, 1000.0, &mut rng);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, TransportAction::AnnounceReceived { .. })));
+        assert!(engine.announce_sig_cache_contains(&sig_cache_key));
+
+        let actions = engine.handle_inbound_with_announce_queue(
+            &packet.raw,
+            InterfaceId(1),
+            1001.0,
+            &mut rng,
+            Some(&mut queue),
+        );
+        assert!(actions.is_empty());
+        assert_eq!(queue.len(), 0);
     }
 
     #[test]
@@ -3574,6 +3911,7 @@ mod tests {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
         });
         engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
         engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob

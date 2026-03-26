@@ -4,11 +4,12 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use rns_core::transport::announce_verify_queue::OverflowPolicy as AnnounceQueueOverflowPolicy;
 use rns_core::transport::types::TransportConfig;
 use rns_crypto::identity::Identity;
 use rns_crypto::{OsRng, Rng};
@@ -380,6 +381,8 @@ impl std::error::Error for SendError {}
 pub struct RnsNode {
     tx: EventSender,
     driver_handle: Option<JoinHandle<()>>,
+    verify_handle: Option<JoinHandle<()>>,
+    verify_shutdown: Arc<AtomicBool>,
     rpc_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
     #[allow(dead_code)]
@@ -640,11 +643,40 @@ impl RnsNode {
             },
         };
 
-        Self::start(node_config, callbacks)
+        Self::start_with_announce_queue_max_entries(
+            node_config,
+            callbacks,
+            rns_config.reticulum.announce_queue_max_entries,
+            rns_config.reticulum.announce_queue_max_bytes,
+            rns_config.reticulum.announce_queue_ttl as f64,
+            match rns_config.reticulum.announce_queue_overflow_policy.as_str() {
+                "drop_newest" => AnnounceQueueOverflowPolicy::DropNewest,
+                "drop_oldest" => AnnounceQueueOverflowPolicy::DropOldest,
+                _ => AnnounceQueueOverflowPolicy::DropWorst,
+            },
+        )
     }
 
     /// Start the node. Connects all interfaces, starts driver and timer threads.
     pub fn start(config: NodeConfig, callbacks: Box<dyn Callbacks>) -> io::Result<Self> {
+        Self::start_with_announce_queue_max_entries(
+            config,
+            callbacks,
+            256,
+            256 * 1024,
+            30.0,
+            AnnounceQueueOverflowPolicy::DropWorst,
+        )
+    }
+
+    fn start_with_announce_queue_max_entries(
+        config: NodeConfig,
+        callbacks: Box<dyn Callbacks>,
+        announce_queue_max_entries: usize,
+        announce_queue_max_bytes: usize,
+        announce_queue_ttl_secs: f64,
+        announce_queue_overflow_policy: AnnounceQueueOverflowPolicy,
+    ) -> io::Result<Self> {
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
 
         let transport_config = TransportConfig {
@@ -662,11 +694,19 @@ impl RnsNode {
             announce_sig_cache_enabled: config.announce_sig_cache_enabled,
             announce_sig_cache_max_entries: config.announce_sig_cache_max_entries,
             announce_sig_cache_ttl_secs: config.announce_sig_cache_ttl.as_secs_f64(),
+            announce_queue_max_entries,
         };
 
         let (tx, rx) = event::channel();
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver.set_announce_verify_queue_config(
+            announce_queue_max_entries,
+            announce_queue_max_bytes,
+            announce_queue_ttl_secs,
+            announce_queue_overflow_policy,
+        );
+        driver.async_announce_verification = true;
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
         driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
@@ -1245,6 +1285,92 @@ impl RnsNode {
             None
         };
 
+        let announce_verify_queue = Arc::clone(&driver.announce_verify_queue);
+        let verify_shutdown = Arc::new(AtomicBool::new(false));
+        let verify_shutdown_thread = Arc::clone(&verify_shutdown);
+        let verify_tx = tx.clone();
+        let verify_handle = thread::Builder::new()
+            .name("rns-verify".into())
+            .spawn(move || {
+                #[cfg(target_family = "unix")]
+                {
+                    unsafe {
+                        libc::nice(5);
+                    }
+                }
+
+                while !verify_shutdown_thread.load(Ordering::Relaxed) {
+                    let batch = {
+                        let mut queue = announce_verify_queue
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        queue.take_pending(time::now())
+                    };
+
+                    if batch.is_empty() {
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+
+                    for (key, pending) in batch {
+                        if verify_shutdown_thread.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let has_ratchet =
+                            pending.packet.flags.context_flag == rns_core::constants::FLAG_SET;
+                        let announce = match rns_core::announce::AnnounceData::unpack(
+                            &pending.packet.data,
+                            has_ratchet,
+                        ) {
+                            Ok(announce) => announce,
+                            Err(_) => {
+                                let signature = [0u8; 64];
+                                let sig_cache_key = {
+                                    let mut material = [0u8; 80];
+                                    material[..16]
+                                        .copy_from_slice(&pending.packet.destination_hash);
+                                    material[16..].copy_from_slice(&signature);
+                                    rns_core::hash::full_hash(&material)
+                                };
+                                if verify_tx
+                                    .send(Event::AnnounceVerifyFailed { key, sig_cache_key })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                                continue;
+                            }
+                        };
+                        let mut material = [0u8; 80];
+                        material[..16].copy_from_slice(&pending.packet.destination_hash);
+                        material[16..].copy_from_slice(&announce.signature);
+                        let sig_cache_key = rns_core::hash::full_hash(&material);
+                        match announce.validate(&pending.packet.destination_hash) {
+                            Ok(validated) => {
+                                if verify_tx
+                                    .send(Event::AnnounceVerified {
+                                        key,
+                                        validated,
+                                        sig_cache_key,
+                                    })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            Err(_) => {
+                                if verify_tx
+                                    .send(Event::AnnounceVerifyFailed { key, sig_cache_key })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            })?;
+
         // Spawn driver thread
         let driver_handle = thread::Builder::new()
             .name("rns-driver".into())
@@ -1255,6 +1381,8 @@ impl RnsNode {
         Ok(RnsNode {
             tx,
             driver_handle: Some(driver_handle),
+            verify_handle: Some(verify_handle),
+            verify_shutdown,
             rpc_server,
             tick_interval_ms,
             probe_server,
@@ -1819,6 +1947,8 @@ impl RnsNode {
         RnsNode {
             tx,
             driver_handle: Some(driver_handle),
+            verify_handle: None,
+            verify_shutdown: Arc::new(AtomicBool::new(false)),
             rpc_server,
             tick_interval_ms,
             probe_server: None,
@@ -1858,8 +1988,12 @@ impl RnsNode {
         if let Some(mut rpc) = self.rpc_server.take() {
             rpc.stop();
         }
+        self.verify_shutdown.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Event::Shutdown);
         if let Some(handle) = self.driver_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.verify_handle.take() {
             let _ = handle.join();
         }
     }

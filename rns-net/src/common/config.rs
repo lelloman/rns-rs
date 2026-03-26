@@ -80,6 +80,14 @@ pub struct ReticulumSection {
     pub announce_sig_cache_max_entries: usize,
     /// TTL for announce signature cache entries, in seconds.
     pub announce_sig_cache_ttl: u64,
+    /// Maximum entries in the async announce verification queue.
+    pub announce_queue_max_entries: usize,
+    /// Maximum retained bytes in the async announce verification queue.
+    pub announce_queue_max_bytes: usize,
+    /// TTL for queued async announce verification entries, in seconds.
+    pub announce_queue_ttl: u64,
+    /// Overflow policy for the async announce verification queue.
+    pub announce_queue_overflow_policy: String,
     #[cfg(feature = "rns-hooks")]
     pub provider_bridge: bool,
     #[cfg(feature = "rns-hooks")]
@@ -125,6 +133,10 @@ impl Default for ReticulumSection {
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            announce_queue_max_entries: 256,
+            announce_queue_max_bytes: 256 * 1024,
+            announce_queue_ttl: 30,
+            announce_queue_overflow_policy: "drop_worst".into(),
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
             #[cfg(feature = "rns-hooks")]
@@ -627,6 +639,56 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.announce_sig_cache_ttl = ttl;
     }
+    if let Some(v) = kvs.get("announce_queue_max_entries") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_queue_max_entries".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "announce_queue_max_entries".into(),
+                value: v.clone(),
+            });
+        }
+        section.announce_queue_max_entries = n;
+    }
+    if let Some(v) = kvs.get("announce_queue_max_bytes") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_queue_max_bytes".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "announce_queue_max_bytes".into(),
+                value: v.clone(),
+            });
+        }
+        section.announce_queue_max_bytes = n;
+    }
+    if let Some(v) = kvs.get("announce_queue_ttl") {
+        let ttl = v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_queue_ttl".into(),
+            value: v.clone(),
+        })?;
+        if ttl == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "announce_queue_ttl".into(),
+                value: v.clone(),
+            });
+        }
+        section.announce_queue_ttl = ttl;
+    }
+    if let Some(v) = kvs.get("announce_queue_overflow_policy") {
+        let normalized = v.to_lowercase();
+        if normalized != "drop_newest" && normalized != "drop_oldest" && normalized != "drop_worst"
+        {
+            return Err(ConfigError::InvalidValue {
+                key: "announce_queue_overflow_policy".into(),
+                value: v.clone(),
+            });
+        }
+        section.announce_queue_overflow_policy = normalized;
+    }
     #[cfg(feature = "rns-hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -785,6 +847,10 @@ max_tunnel_destinations_total = 99
 announce_signature_cache_enabled = false
 announce_signature_cache_max_entries = 500
 announce_signature_cache_ttl = 300
+announce_queue_max_entries = 123
+announce_queue_max_bytes = 4567
+announce_queue_ttl = 89
+announce_queue_overflow_policy = drop_oldest
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -809,6 +875,13 @@ announce_signature_cache_ttl = 300
         assert!(!config.reticulum.announce_sig_cache_enabled);
         assert_eq!(config.reticulum.announce_sig_cache_max_entries, 500);
         assert_eq!(config.reticulum.announce_sig_cache_ttl, 300);
+        assert_eq!(config.reticulum.announce_queue_max_entries, 123);
+        assert_eq!(config.reticulum.announce_queue_max_bytes, 4567);
+        assert_eq!(config.reticulum.announce_queue_ttl, 89);
+        assert_eq!(
+            config.reticulum.announce_queue_overflow_policy,
+            "drop_oldest"
+        );
     }
 
     #[test]
@@ -835,6 +908,57 @@ announce_table_max_bytes = 0
         assert!(matches!(
             err,
             ConfigError::InvalidValue { key, .. } if key == "announce_table_max_bytes"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+announce_queue_max_entries = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "announce_queue_max_entries"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+announce_queue_max_bytes = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "announce_queue_max_bytes"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+announce_queue_ttl = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "announce_queue_ttl"
+        ));
+    }
+
+    #[test]
+    fn parse_announce_queue_overflow_policy_rejects_invalid() {
+        let err = parse(
+            r#"
+[reticulum]
+announce_queue_overflow_policy = keep_everything
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "announce_queue_overflow_policy"
         ));
     }
 
