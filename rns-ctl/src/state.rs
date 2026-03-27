@@ -27,6 +27,7 @@ pub struct CtlState {
     pub proofs: VecDeque<ProofRecord>,
     pub link_events: VecDeque<LinkEventRecord>,
     pub resource_events: VecDeque<ResourceEventRecord>,
+    pub process_events: VecDeque<ProcessEventRecord>,
     pub destinations: HashMap<[u8; 16], DestinationEntry>,
     pub processes: HashMap<String, ManagedProcessState>,
     pub control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
@@ -52,6 +53,7 @@ impl CtlState {
             proofs: VecDeque::new(),
             link_events: VecDeque::new(),
             resource_events: VecDeque::new(),
+            process_events: VecDeque::new(),
             destinations: HashMap::new(),
             processes: HashMap::new(),
             control_tx: None,
@@ -112,7 +114,11 @@ pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
     let name = name.into();
     s.processes
         .entry(name.clone())
-        .or_insert_with(|| ManagedProcessState::new(name));
+        .or_insert_with(|| ManagedProcessState::new(name.clone()));
+    push_capped(
+        &mut s.process_events,
+        ProcessEventRecord::new(name, "registered", Some("process registered".into())),
+    );
 }
 
 pub fn set_control_tx(state: &SharedState, tx: mpsc::Sender<ProcessControlCommand>) {
@@ -134,15 +140,30 @@ pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
     process.last_transition_at = Some(Instant::now());
     process.last_error = None;
     process.status_detail = Some("process spawned".into());
+    push_capped(
+        &mut s.process_events,
+        ProcessEventRecord::new(name.to_string(), "running", Some(format!("pid={}", pid))),
+    );
 }
 
 pub fn bump_process_restart_count(state: &SharedState, name: &str) {
     let mut s = state.write().unwrap();
-    let process = s
-        .processes
-        .entry(name.to_string())
-        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
-    process.restart_count = process.restart_count.saturating_add(1);
+    let restart_count = {
+        let process = s
+            .processes
+            .entry(name.to_string())
+            .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+        process.restart_count = process.restart_count.saturating_add(1);
+        process.restart_count
+    };
+    push_capped(
+        &mut s.process_events,
+        ProcessEventRecord::new(
+            name.to_string(),
+            "restart_requested",
+            Some(format!("restart_count={}", restart_count)),
+        ),
+    );
 }
 
 pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i32>) {
@@ -159,22 +180,37 @@ pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i
     process.started_at = None;
     process.last_transition_at = Some(Instant::now());
     process.status_detail = Some("process stopped".into());
+    push_capped(
+        &mut s.process_events,
+        ProcessEventRecord::new(
+            name.to_string(),
+            "stopped",
+            Some(format!("exit_code={}", exit_code.map(|v| v.to_string()).unwrap_or_else(|| "none".into()))),
+        ),
+    );
 }
 
 pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String) {
     let mut s = state.write().unwrap();
-    let process = s
-        .processes
-        .entry(name.to_string())
-        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
-    process.status = "failed".into();
-    process.ready = false;
-    process.ready_state = "failed".into();
-    process.pid = None;
-    process.last_error = Some(error);
-    process.started_at = None;
-    process.last_transition_at = Some(Instant::now());
-    process.status_detail = process.last_error.clone();
+    let detail = {
+        let process = s
+            .processes
+            .entry(name.to_string())
+            .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+        process.status = "failed".into();
+        process.ready = false;
+        process.ready_state = "failed".into();
+        process.pid = None;
+        process.last_error = Some(error);
+        process.started_at = None;
+        process.last_transition_at = Some(Instant::now());
+        process.status_detail = process.last_error.clone();
+        process.last_error.clone()
+    };
+    push_capped(
+        &mut s.process_events,
+        ProcessEventRecord::new(name.to_string(), "spawn_failed", detail),
+    );
 }
 
 pub fn set_process_readiness(
@@ -185,13 +221,30 @@ pub fn set_process_readiness(
     status_detail: Option<String>,
 ) {
     let mut s = state.write().unwrap();
-    let process = s
-        .processes
-        .entry(name.to_string())
-        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
-    process.ready = ready;
-    process.ready_state = ready_state.to_string();
-    process.status_detail = status_detail;
+    let detail_clone = {
+        let process = s
+            .processes
+            .entry(name.to_string())
+            .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+        process.ready = ready;
+        process.ready_state = ready_state.to_string();
+        process.status_detail = status_detail;
+        process.status_detail.clone()
+    };
+    let should_record = match s.process_events.back() {
+        Some(last) => last.process != name || last.event != ready_state || last.detail != detail_clone,
+        None => true,
+    };
+    if should_record {
+        push_capped(
+            &mut s.process_events,
+            ProcessEventRecord::new(
+                name.to_string(),
+                ready_state.to_string(),
+                detail_clone,
+            ),
+        );
+    }
 }
 
 // --- Record types ---
@@ -239,6 +292,25 @@ pub struct ResourceEventRecord {
     pub error: Option<String>,
     pub received: Option<usize>,
     pub total: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessEventRecord {
+    pub process: String,
+    pub event: String,
+    pub detail: Option<String>,
+    pub recorded_at: Instant,
+}
+
+impl ProcessEventRecord {
+    fn new(process: String, event: impl Into<String>, detail: Option<String>) -> Self {
+        Self {
+            process,
+            event: event.into(),
+            detail,
+            recorded_at: Instant::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

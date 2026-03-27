@@ -6,6 +6,7 @@ const uptimeEl = document.getElementById("uptime");
 const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
 const processRowsEl = document.getElementById("processRows");
+const processEventRowsEl = document.getElementById("processEventRows");
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -108,17 +109,33 @@ function renderProcesses(processes) {
   }
 }
 
+function renderProcessEvents(events) {
+  processEventRowsEl.innerHTML = "";
+  for (const event of events) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${event.process}</td>
+      <td>${event.event}</td>
+      <td>${fmtSeconds(event.age_seconds)}</td>
+      <td>${event.detail ?? ""}</td>
+    `;
+    processEventRowsEl.appendChild(tr);
+  }
+}
+
 async function refresh() {
   try {
-    const [node, processes] = await Promise.all([
+    const [node, processes, processEvents] = await Promise.all([
       fetchJson("/api/node"),
       fetchJson("/api/processes"),
+      fetchJson("/api/process_events"),
     ]);
     serverModeEl.textContent = node.server_mode || "-";
     uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
     runningEl.textContent = `${node.processes_running}/${node.process_count}`;
     readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
     renderProcesses(processes.processes || []);
+    renderProcessEvents(processEvents.events || []);
     statusEl.textContent = "Connected";
   } catch (error) {
     statusEl.textContent = error.message;

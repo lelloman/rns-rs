@@ -58,8 +58,23 @@
     </section>
 
     <section class="panel links" style="margin-top: 18px;">
+      <h2>Recent Process Events</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Process</th>
+            <th>Event</th>
+            <th>Age</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody id="processEventRows"></tbody>
+      </table>
+    </section>
+
+    <section class="panel links" style="margin-top: 18px;">
       <h2>JSON Endpoints</h2>
-      <p><a href="/api/node">/api/node</a> and <a href="/api/processes">/api/processes</a></p>
+      <p><a href="/api/node">/api/node</a>, <a href="/api/processes">/api/processes</a>, and <a href="/api/process_events">/api/process_events</a></p>
     </section>
   </main>
   <script src="/assets/app.js"></script>

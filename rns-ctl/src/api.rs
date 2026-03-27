@@ -67,6 +67,7 @@ pub fn handle_request(
         // Read endpoints
         ("GET", "/api/node") => handle_node(node, state),
         ("GET", "/api/processes") => handle_processes(state),
+        ("GET", "/api/process_events") => handle_process_events(state),
         ("GET", "/api/info") => handle_info(node, state),
         ("GET", "/api/interfaces") => handle_interfaces(node),
         ("GET", "/api/destinations") => handle_destinations(node, state),
@@ -196,6 +197,25 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
             }))
             .collect::<Vec<Value>>(),
     }))
+}
+
+fn handle_process_events(state: &SharedState) -> HttpResponse {
+    let s = state.read().unwrap();
+    let events: Vec<Value> = s
+        .process_events
+        .iter()
+        .rev()
+        .take(20)
+        .map(|event| {
+            json!({
+                "process": event.process,
+                "event": event.event,
+                "detail": event.detail,
+                "age_seconds": event.recorded_at.elapsed().as_secs_f64(),
+            })
+        })
+        .collect();
+    HttpResponse::ok(json!({ "events": events }))
 }
 
 fn handle_process_control(path: &str, state: &SharedState, action: &str) -> HttpResponse {
