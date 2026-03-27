@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -29,6 +29,7 @@ pub struct CtlState {
     pub resource_events: VecDeque<ResourceEventRecord>,
     pub destinations: HashMap<[u8; 16], DestinationEntry>,
     pub processes: HashMap<String, ManagedProcessState>,
+    pub control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
     pub node_handle: Option<Arc<Mutex<Option<RnsNode>>>>,
 }
 
@@ -53,6 +54,7 @@ impl CtlState {
             resource_events: VecDeque::new(),
             destinations: HashMap::new(),
             processes: HashMap::new(),
+            control_tx: None,
             node_handle: None,
         }
     }
@@ -113,6 +115,11 @@ pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
         .or_insert_with(|| ManagedProcessState::new(name));
 }
 
+pub fn set_control_tx(state: &SharedState, tx: mpsc::Sender<ProcessControlCommand>) {
+    let mut s = state.write().unwrap();
+    s.control_tx = Some(tx);
+}
+
 pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
     let mut s = state.write().unwrap();
     let process = s
@@ -123,6 +130,15 @@ pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
     process.pid = Some(pid);
     process.started_at = Some(Instant::now());
     process.last_error = None;
+}
+
+pub fn bump_process_restart_count(state: &SharedState, name: &str) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.restart_count = process.restart_count.saturating_add(1);
 }
 
 pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i32>) {
@@ -205,6 +221,11 @@ pub struct ManagedProcessState {
     pub restart_count: u32,
     pub last_error: Option<String>,
     pub started_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProcessControlCommand {
+    Restart(String),
 }
 
 impl ManagedProcessState {

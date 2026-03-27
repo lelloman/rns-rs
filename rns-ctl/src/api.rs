@@ -81,6 +81,9 @@ pub fn handle_request(
         ("POST", "/api/path/request") => handle_post_path_request(req, node),
         ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
         ("POST", "/api/announce_queues/clear") => handle_post_clear_announce_queues(node),
+        ("POST", path) if path.starts_with("/api/processes/") && path.ends_with("/restart") => {
+            handle_process_restart(path, state)
+        }
 
         // Backbone peer state
         ("GET", "/api/backbone/peers") => handle_backbone_peers(req, node),
@@ -174,6 +177,13 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
       font-weight: 700;
       cursor: pointer;
     }
+    button.secondary {
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
     table { width: 100%; border-collapse: collapse; }
     th, td {
       text-align: left;
@@ -234,6 +244,7 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
             <th>Uptime</th>
             <th>Last Exit</th>
             <th>Error</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="processRows"></tbody>
@@ -282,6 +293,15 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
       return response.json();
     }
 
+    async function postJson(path) {
+      const response = await fetch(path, { method: "POST", headers: authHeaders() });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${response.status} ${response.statusText}: ${body}`);
+      }
+      return response.json();
+    }
+
     function renderProcesses(processes) {
       processRowsEl.innerHTML = "";
       for (const process of processes) {
@@ -294,8 +314,23 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
           <td>${fmtSeconds(process.uptime_seconds)}</td>
           <td>${process.last_exit_code ?? "-"}</td>
           <td>${process.last_error ?? ""}</td>
+          <td><button class="secondary" data-restart="${process.name}">Restart</button></td>
         `;
         processRowsEl.appendChild(tr);
+      }
+
+      for (const button of processRowsEl.querySelectorAll("[data-restart]")) {
+        button.addEventListener("click", async () => {
+          const name = button.getAttribute("data-restart");
+          statusEl.textContent = `Restarting ${name}...`;
+          try {
+            await postJson(`/api/processes/${name}/restart`);
+            statusEl.textContent = `Restart queued for ${name}`;
+            refresh();
+          } catch (error) {
+            statusEl.textContent = error.message;
+          }
+        });
       }
     }
 
@@ -397,6 +432,33 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
             }))
             .collect::<Vec<Value>>(),
     }))
+}
+
+fn handle_process_restart(path: &str, state: &SharedState) -> HttpResponse {
+    let Some(name) = path
+        .strip_prefix("/api/processes/")
+        .and_then(|rest| rest.strip_suffix("/restart"))
+    else {
+        return HttpResponse::bad_request("Invalid process restart path");
+    };
+
+    let tx = {
+        let s = state.read().unwrap();
+        s.control_tx.clone()
+    };
+
+    match tx {
+        Some(tx) => match tx.send(crate::state::ProcessControlCommand::Restart(name.to_string())) {
+            Ok(()) => HttpResponse::ok(json!({
+                "ok": true,
+                "queued": true,
+                "action": "restart",
+                "process": name,
+            })),
+            Err(_) => HttpResponse::internal_error("Process control channel is unavailable"),
+        },
+        None => HttpResponse::internal_error("Process control is not enabled"),
+    }
 }
 
 fn handle_interfaces(node: &NodeHandle) -> HttpResponse {

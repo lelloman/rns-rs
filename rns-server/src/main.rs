@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
-use rns_ctl::state::{ensure_process, set_server_mode, CtlState, SharedState};
+use rns_ctl::state::{ensure_process, set_control_tx, set_server_mode, CtlState, SharedState};
 use rns_server::args::Args;
 use rns_server::supervisor::{Supervisor, SupervisorConfig};
 
@@ -35,7 +35,9 @@ fn main() {
 
 fn run_start(args: Args) {
     let shared_state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+    let (control_tx, control_rx) = mpsc::channel();
     set_server_mode(&shared_state, "supervised");
+    set_control_tx(&shared_state, control_tx);
     ensure_process(&shared_state, "rnsd");
     ensure_process(&shared_state, "rns-sentineld");
     ensure_process(&shared_state, "rns-statsd");
@@ -44,6 +46,7 @@ fn run_start(args: Args) {
     let config_dir = rns_net::storage::resolve_config_dir(args.config_path().map(std::path::Path::new));
     let default_stats_db = config_dir.join("stats.db");
 
+    let dry_run = args.has("dry-run");
     let config = SupervisorConfig {
         config_path,
         stats_db_path: args
@@ -63,11 +66,12 @@ fn run_start(args: Args) {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("rns-statsd")),
         shared_state: Some(shared_state.clone()),
-        dry_run: args.has("dry-run"),
+        control_rx: Some(control_rx),
+        dry_run,
     };
 
-    let supervisor = Supervisor::new(config.clone());
-    if config.dry_run {
+    if dry_run {
+        let supervisor = Supervisor::new(config);
         for spec in supervisor.specs() {
             println!("{}", spec.command_line());
         }
@@ -76,6 +80,8 @@ fn run_start(args: Args) {
         }
         return;
     }
+
+    let supervisor = Supervisor::new(config);
 
     let http_enabled = !args.has("no-http");
 

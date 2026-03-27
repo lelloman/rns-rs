@@ -5,7 +5,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use rns_ctl::state::{
-    mark_process_failed_spawn, mark_process_running, mark_process_stopped, SharedState,
+    bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
+    mark_process_stopped, ProcessControlCommand, SharedState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,7 +41,6 @@ impl ProcessSpec {
     }
 }
 
-#[derive(Clone)]
 pub struct SupervisorConfig {
     pub config_path: Option<PathBuf>,
     pub stats_db_path: PathBuf,
@@ -48,6 +48,7 @@ pub struct SupervisorConfig {
     pub sentineld_bin: PathBuf,
     pub statsd_bin: PathBuf,
     pub shared_state: Option<SharedState>,
+    pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     pub dry_run: bool,
 }
 
@@ -92,6 +93,7 @@ fn statsd_args(config_path: &Option<PathBuf>, stats_db_path: &Path) -> Vec<Strin
 pub struct Supervisor {
     specs: Vec<ProcessSpec>,
     shared_state: Option<SharedState>,
+    control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
 }
 
 impl Supervisor {
@@ -99,6 +101,7 @@ impl Supervisor {
         Self {
             specs: config.process_specs(),
             shared_state: config.shared_state,
+            control_rx: config.control_rx,
         }
     }
 
@@ -131,6 +134,10 @@ impl Supervisor {
                 return Ok(0);
             }
 
+            if let Some(command) = self.next_control_command() {
+                self.handle_control_command(command, &mut children)?;
+            }
+
             if let Some((role, status)) = check_exits(&mut children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
                 if let Some(state) = self.shared_state.as_ref() {
@@ -145,9 +152,60 @@ impl Supervisor {
     }
 }
 
+impl Supervisor {
+    fn next_control_command(&self) -> Option<ProcessControlCommand> {
+        self.control_rx.as_ref().and_then(|rx| rx.try_recv().ok())
+    }
+
+    fn handle_control_command(
+        &self,
+        command: ProcessControlCommand,
+        children: &mut Vec<ManagedChild>,
+    ) -> Result<(), String> {
+        match command {
+            ProcessControlCommand::Restart(name) => self.restart_process(&name, children),
+        }
+    }
+
+    fn restart_process(
+        &self,
+        name: &str,
+        children: &mut Vec<ManagedChild>,
+    ) -> Result<(), String> {
+        let Some(role) = role_from_name(name) else {
+            return Err(format!("unknown process '{}'", name));
+        };
+        let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
+            return Err(format!("missing process spec for '{}'", name));
+        };
+
+        if let Some(index) = children.iter().position(|child| child.role == role) {
+            terminate_child(&mut children[index]).map_err(|e| {
+                format!("failed to terminate {} during restart: {}", role.display_name(), e)
+            })?;
+            if let Some(state) = self.shared_state.as_ref() {
+                mark_process_stopped(state, role.display_name(), None);
+                bump_process_restart_count(state, role.display_name());
+            }
+            children[index] = spawn_child(spec, self.shared_state.as_ref())?;
+        }
+
+        Ok(())
+    }
+}
+
 struct ManagedChild {
     role: Role,
     child: Child,
+}
+
+fn role_from_name(name: &str) -> Option<Role> {
+    match name {
+        "rnsd" => Some(Role::Rnsd),
+        "rns-sentineld" => Some(Role::Sentineld),
+        "rns-statsd" => Some(Role::Statsd),
+        _ => None,
+    }
 }
 
 fn spawn_child(spec: &ProcessSpec, shared_state: Option<&SharedState>) -> Result<ManagedChild, String> {
@@ -259,6 +317,7 @@ mod tests {
             sentineld_bin: PathBuf::from("rns-sentineld"),
             statsd_bin: PathBuf::from("rns-statsd"),
             shared_state: None,
+            control_rx: None,
             dry_run: false,
         };
 
