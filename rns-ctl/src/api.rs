@@ -33,6 +33,10 @@ pub fn handle_request(
     state: &SharedState,
     config: &CtlConfig,
 ) -> HttpResponse {
+    if req.method == "GET" && (req.path == "/" || req.path == "/ui") {
+        return HttpResponse::html(index_html(config));
+    }
+
     // Health check — no auth required
     if req.method == "GET" && req.path == "/health" {
         return HttpResponse::ok(json!({"status": "healthy"}));
@@ -94,6 +98,249 @@ pub fn handle_request(
         _ => HttpResponse::not_found(),
     }
 }
+
+fn index_html(config: &CtlConfig) -> &'static str {
+    let auth_mode = if config.disable_auth {
+        "disabled"
+    } else {
+        "bearer-token"
+    };
+    match auth_mode {
+        "disabled" => INDEX_HTML_NOAUTH,
+        _ => INDEX_HTML_AUTH,
+    }
+}
+
+const INDEX_HTML_AUTH: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RNS Server</title>
+  <style>
+    :root {
+      --bg: #09111a;
+      --panel: #0f1a26;
+      --panel-2: #132234;
+      --text: #e6eef8;
+      --muted: #8ea1b5;
+      --accent: #7dd3fc;
+      --good: #34d399;
+      --bad: #fb7185;
+      --line: #223247;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background:
+        radial-gradient(circle at top left, rgba(125, 211, 252, 0.16), transparent 28rem),
+        linear-gradient(180deg, #081018 0%, #0b1420 100%);
+      color: var(--text);
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1, h2 { margin: 0 0 14px; font-weight: 700; }
+    p { color: var(--muted); line-height: 1.5; }
+    .hero, .panel {
+      background: rgba(15, 26, 38, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
+    }
+    .hero { padding: 24px; margin-bottom: 18px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .panel { padding: 18px; }
+    .stat { font-size: 28px; font-weight: 700; margin-top: 8px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .token {
+      width: min(420px, 100%);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    button {
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #052235;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .running { background: rgba(52, 211, 153, 0.18); color: var(--good); }
+    .stopped, .failed { background: rgba(251, 113, 133, 0.16); color: var(--bad); }
+    .muted { color: var(--muted); }
+    .links a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>RNS Server</h1>
+      <p>Minimal control surface for the supervised node. Enter a bearer token once, then this page polls <code>/api/node</code> and <code>/api/processes</code>.</p>
+      <div class="row">
+        <input id="token" class="token" placeholder="Bearer token" spellcheck="false" />
+        <button id="saveToken">Save Token</button>
+        <span id="status" class="muted">Waiting for token</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Server Mode</h2>
+        <div id="serverMode" class="stat">-</div>
+      </article>
+      <article class="panel">
+        <h2>Uptime</h2>
+        <div id="uptime" class="stat">-</div>
+      </article>
+      <article class="panel">
+        <h2>Running Processes</h2>
+        <div id="running" class="stat">-</div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Processes</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Status</th>
+            <th>PID</th>
+            <th>Uptime</th>
+            <th>Last Exit</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="processRows"></tbody>
+      </table>
+    </section>
+
+    <section class="panel links" style="margin-top: 18px;">
+      <h2>JSON Endpoints</h2>
+      <p><a href="/api/node">/api/node</a> and <a href="/api/processes">/api/processes</a></p>
+    </section>
+  </main>
+  <script>
+    const tokenInput = document.getElementById("token");
+    const saveButton = document.getElementById("saveToken");
+    const statusEl = document.getElementById("status");
+    const serverModeEl = document.getElementById("serverMode");
+    const uptimeEl = document.getElementById("uptime");
+    const runningEl = document.getElementById("running");
+    const processRowsEl = document.getElementById("processRows");
+
+    const params = new URLSearchParams(window.location.search);
+    const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
+    tokenInput.value = initialToken;
+
+    function fmtSeconds(value) {
+      if (value == null) return "-";
+      const total = Math.floor(value);
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+
+    function authHeaders() {
+      const token = tokenInput.value.trim();
+      if (!token) return {};
+      return { Authorization: `Bearer ${token}` };
+    }
+
+    async function fetchJson(path) {
+      const response = await fetch(path, { headers: authHeaders() });
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${response.status} ${response.statusText}: ${body}`);
+      }
+      return response.json();
+    }
+
+    function renderProcesses(processes) {
+      processRowsEl.innerHTML = "";
+      for (const process of processes) {
+        const tr = document.createElement("tr");
+        const statusClass = process.status === "running" ? "running" : (process.status || "stopped");
+        tr.innerHTML = `
+          <td>${process.name}</td>
+          <td><span class="pill ${statusClass}">${process.status}</span></td>
+          <td>${process.pid ?? "-"}</td>
+          <td>${fmtSeconds(process.uptime_seconds)}</td>
+          <td>${process.last_exit_code ?? "-"}</td>
+          <td>${process.last_error ?? ""}</td>
+        `;
+        processRowsEl.appendChild(tr);
+      }
+    }
+
+    async function refresh() {
+      try {
+        const [node, processes] = await Promise.all([
+          fetchJson("/api/node"),
+          fetchJson("/api/processes"),
+        ]);
+        serverModeEl.textContent = node.server_mode || "-";
+        uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
+        runningEl.textContent = `${node.processes_running}/${node.process_count}`;
+        renderProcesses(processes.processes || []);
+        statusEl.textContent = "Connected";
+      } catch (error) {
+        statusEl.textContent = error.message;
+      }
+    }
+
+    saveButton.addEventListener("click", () => {
+      localStorage.setItem("rnsctl_token", tokenInput.value.trim());
+      refresh();
+    });
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
+"#;
+
+const INDEX_HTML_NOAUTH: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RNS Server</title>
+</head>
+<body>
+  <script>
+    window.location.replace("/?token=");
+  </script>
+</body>
+</html>
+"#;
 
 // --- Read handlers ---
 

@@ -37,6 +37,10 @@ impl HttpResponse {
         Self::json(200, "OK", &body)
     }
 
+    pub fn html(body: &str) -> Self {
+        Self::bytes(200, "OK", "text/html; charset=utf-8", body.as_bytes().to_vec())
+    }
+
     pub fn created(body: serde_json::Value) -> Self {
         Self::json(201, "Created", &body)
     }
@@ -59,6 +63,24 @@ impl HttpResponse {
             "Internal Server Error",
             &serde_json::json!({"error": msg}),
         )
+    }
+
+    pub fn bytes(
+        status: u16,
+        status_text: &'static str,
+        content_type: &'static str,
+        body: Vec<u8>,
+    ) -> Self {
+        HttpResponse {
+            status,
+            status_text,
+            headers: vec![
+                ("Content-Type".into(), content_type.into()),
+                ("Content-Length".into(), body.len().to_string()),
+                ("Connection".into(), "close".into()),
+            ],
+            body,
+        }
     }
 }
 

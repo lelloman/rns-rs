@@ -127,7 +127,7 @@ impl Supervisor {
         loop {
             if stop_rx.try_recv().is_ok() {
                 log::info!("shutdown requested");
-                terminate_children(&mut children);
+                terminate_children(&mut children, self.shared_state.as_ref());
                 return Ok(0);
             }
 
@@ -136,7 +136,7 @@ impl Supervisor {
                 if let Some(state) = self.shared_state.as_ref() {
                     mark_process_stopped(state, role.display_name(), status.code());
                 }
-                terminate_children(&mut children);
+                terminate_children(&mut children, self.shared_state.as_ref());
                 return Ok(exit_code(status));
             }
 
@@ -186,10 +186,14 @@ fn check_exits(children: &mut [ManagedChild]) -> Result<Option<(Role, ExitStatus
     Ok(None)
 }
 
-fn terminate_children(children: &mut [ManagedChild]) {
+fn terminate_children(children: &mut [ManagedChild], shared_state: Option<&SharedState>) {
     for managed in children.iter_mut() {
         if let Err(e) = terminate_child(managed) {
             log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
+        }
+        if let Some(state) = shared_state {
+            let code = managed.child.try_wait().ok().flatten().and_then(|status| status.code());
+            mark_process_stopped(state, managed.role.display_name(), code);
         }
     }
 }
