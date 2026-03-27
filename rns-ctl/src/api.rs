@@ -36,6 +36,22 @@ pub fn handle_request(
     if req.method == "GET" && (req.path == "/" || req.path == "/ui") {
         return HttpResponse::html(index_html(config));
     }
+    if req.method == "GET" && req.path == "/assets/app.css" {
+        return HttpResponse::bytes(
+            200,
+            "OK",
+            "text/css; charset=utf-8",
+            include_str!("../assets/app.css").as_bytes().to_vec(),
+        );
+    }
+    if req.method == "GET" && req.path == "/assets/app.js" {
+        return HttpResponse::bytes(
+            200,
+            "OK",
+            "application/javascript; charset=utf-8",
+            include_str!("../assets/app.js").as_bytes().to_vec(),
+        );
+    }
 
     // Health check — no auth required
     if req.method == "GET" && req.path == "/health" {

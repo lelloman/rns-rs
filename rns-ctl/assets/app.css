@@ -1,0 +1,83 @@
+:root {
+  --bg: #09111a;
+  --panel: #0f1a26;
+  --panel-2: #132234;
+  --text: #e6eef8;
+  --muted: #8ea1b5;
+  --accent: #7dd3fc;
+  --good: #34d399;
+  --bad: #fb7185;
+  --line: #223247;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.16), transparent 28rem),
+    linear-gradient(180deg, #081018 0%, #0b1420 100%);
+  color: var(--text);
+}
+main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 48px; }
+h1, h2 { margin: 0 0 14px; font-weight: 700; }
+p { color: var(--muted); line-height: 1.5; }
+.hero, .panel {
+  background: rgba(15, 26, 38, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
+}
+.hero { padding: 24px; margin-bottom: 18px; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.panel { padding: 18px; }
+.stat { font-size: 28px; font-weight: 700; margin-top: 8px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.token {
+  width: min(420px, 100%);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+button {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #052235;
+  font-weight: 700;
+  cursor: pointer;
+}
+button.secondary {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.pill {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.running { background: rgba(52, 211, 153, 0.18); color: var(--good); }
+.stopped, .failed { background: rgba(251, 113, 133, 0.16); color: var(--bad); }
+.muted { color: var(--muted); }
+.links a { color: var(--accent); text-decoration: none; }
