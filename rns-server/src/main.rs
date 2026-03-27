@@ -1,8 +1,10 @@
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use rns_ctl::cmd::http::{run_embedded as run_ctl_http, HttpRunOptions};
+use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
+use rns_ctl::state::{ensure_process, set_server_mode, CtlState, SharedState};
 use rns_server::args::Args;
 use rns_server::supervisor::{Supervisor, SupervisorConfig};
 
@@ -32,6 +34,12 @@ fn main() {
 }
 
 fn run_start(args: Args) {
+    let shared_state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+    set_server_mode(&shared_state, "supervised");
+    ensure_process(&shared_state, "rnsd");
+    ensure_process(&shared_state, "rns-sentineld");
+    ensure_process(&shared_state, "rns-statsd");
+
     let config_path = args.config_path().map(PathBuf::from);
     let config_dir = rns_net::storage::resolve_config_dir(args.config_path().map(std::path::Path::new));
     let default_stats_db = config_dir.join("stats.db");
@@ -54,6 +62,7 @@ fn run_start(args: Args) {
             .get("statsd-bin")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("rns-statsd")),
+        shared_state: Some(shared_state.clone()),
         dry_run: args.has("dry-run"),
     };
 
@@ -72,7 +81,7 @@ fn run_start(args: Args) {
 
     match supervisor.run_with_started_hook(|| {
         if http_enabled {
-            start_control_http(&args)?;
+            start_control_http(&args, shared_state.clone())?;
         }
         Ok(())
     }) {
@@ -104,15 +113,24 @@ fn init_logging(args: &Args) {
         .init();
 }
 
-fn start_control_http(args: &Args) -> Result<(), String> {
+fn start_control_http(args: &Args, shared_state: SharedState) -> Result<(), String> {
     let ctl_args = build_ctl_http_args(args);
     log::info!("starting embedded control plane");
     thread::Builder::new()
         .name("rns-server-http".into())
         .spawn(move || {
             for attempt in 1..=50 {
-                match run_ctl_http(ctl_args(), HttpRunOptions::embedded()) {
-                    Ok(()) => return,
+                match prepare_embedded_with_state(
+                    ctl_args(),
+                    HttpRunOptions::embedded(),
+                    Some(shared_state.clone()),
+                ) {
+                    Ok(prepared) => {
+                        if let Err(err) = rns_ctl::server::run_server(prepared.addr, prepared.ctx) {
+                            log::error!("embedded control plane failed: {}", err);
+                        }
+                        return;
+                    }
                     Err(err) => {
                         if attempt == 50 {
                             log::error!("embedded control plane failed: {}", err);

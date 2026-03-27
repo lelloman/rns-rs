@@ -52,6 +52,20 @@ pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
         return Ok(());
     }
 
+    let prepared = prepare_embedded_with_state(args, options, None)?;
+    server::run_server(prepared.addr, prepared.ctx).map_err(|e| format!("server error: {}", e))
+}
+
+pub struct PreparedHttpServer {
+    pub addr: SocketAddr,
+    pub ctx: Arc<server::ServerContext>,
+}
+
+pub fn prepare_embedded_with_state(
+    args: Args,
+    options: HttpRunOptions,
+    shared_state_override: Option<state::SharedState>,
+) -> Result<PreparedHttpServer, String> {
     if options.init_logging {
         // Init logging
         let log_level = match args.verbosity {
@@ -84,7 +98,8 @@ pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     }
 
     // Create shared state and broadcast registry
-    let shared_state = Arc::new(std::sync::RwLock::new(state::CtlState::new()));
+    let shared_state =
+        shared_state_override.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(state::CtlState::new())));
     let ws_broadcast: state::WsBroadcast = Arc::new(Mutex::new(Vec::new()));
 
     // Create callbacks
@@ -204,12 +219,7 @@ pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
         .parse()
         .map_err(|_| "invalid bind address".to_string())?;
 
-    // Run server (blocks)
-    if let Err(e) = server::run_server(addr, ctx) {
-        return Err(format!("server error: {}", e));
-    }
-
-    Ok(())
+    Ok(PreparedHttpServer { addr, ctx })
 }
 
 /// Set up a ctrl-c signal handler.

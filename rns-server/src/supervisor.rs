@@ -4,6 +4,10 @@ use std::process::{Child, Command, ExitStatus};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use rns_ctl::state::{
+    mark_process_failed_spawn, mark_process_running, mark_process_stopped, SharedState,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Rnsd,
@@ -36,13 +40,14 @@ impl ProcessSpec {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SupervisorConfig {
     pub config_path: Option<PathBuf>,
     pub stats_db_path: PathBuf,
     pub rnsd_bin: PathBuf,
     pub sentineld_bin: PathBuf,
     pub statsd_bin: PathBuf,
+    pub shared_state: Option<SharedState>,
     pub dry_run: bool,
 }
 
@@ -86,12 +91,14 @@ fn statsd_args(config_path: &Option<PathBuf>, stats_db_path: &Path) -> Vec<Strin
 
 pub struct Supervisor {
     specs: Vec<ProcessSpec>,
+    shared_state: Option<SharedState>,
 }
 
 impl Supervisor {
     pub fn new(config: SupervisorConfig) -> Self {
         Self {
             specs: config.process_specs(),
+            shared_state: config.shared_state,
         }
     }
 
@@ -110,7 +117,7 @@ impl Supervisor {
         let mut children = self
             .specs
             .iter()
-            .map(spawn_child)
+            .map(|spec| spawn_child(spec, self.shared_state.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
 
         on_started()?;
@@ -126,6 +133,9 @@ impl Supervisor {
 
             if let Some((role, status)) = check_exits(&mut children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
+                if let Some(state) = self.shared_state.as_ref() {
+                    mark_process_stopped(state, role.display_name(), status.code());
+                }
                 terminate_children(&mut children);
                 return Ok(exit_code(status));
             }
@@ -140,13 +150,23 @@ struct ManagedChild {
     child: Child,
 }
 
-fn spawn_child(spec: &ProcessSpec) -> Result<ManagedChild, String> {
+fn spawn_child(spec: &ProcessSpec, shared_state: Option<&SharedState>) -> Result<ManagedChild, String> {
     log::info!("starting {}", spec.command_line());
     let mut command = Command::new(&spec.bin);
     command.args(&spec.args);
-    let child = command
-        .spawn()
-        .map_err(|e| format!("failed to start {}: {}", spec.role.display_name(), e))?;
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let err = format!("failed to start {}: {}", spec.role.display_name(), e);
+            if let Some(state) = shared_state {
+                mark_process_failed_spawn(state, spec.role.display_name(), err.clone());
+            }
+            return Err(err);
+        }
+    };
+    if let Some(state) = shared_state {
+        mark_process_running(state, spec.role.display_name(), child.id());
+    }
     Ok(ManagedChild {
         role: spec.role,
         child,
@@ -234,6 +254,7 @@ mod tests {
             rnsd_bin: PathBuf::from("rnsd"),
             sentineld_bin: PathBuf::from("rns-sentineld"),
             statsd_bin: PathBuf::from("rns-statsd"),
+            shared_state: None,
             dry_run: false,
         };
 

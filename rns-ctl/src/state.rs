@@ -19,6 +19,7 @@ pub type WsBroadcast = Arc<Mutex<Vec<std::sync::mpsc::Sender<WsEvent>>>>;
 
 pub struct CtlState {
     pub started_at: Instant,
+    pub server_mode: String,
     pub identity_hash: Option<[u8; 16]>,
     pub identity: Option<Identity>,
     pub announces: VecDeque<AnnounceRecord>,
@@ -27,6 +28,7 @@ pub struct CtlState {
     pub link_events: VecDeque<LinkEventRecord>,
     pub resource_events: VecDeque<ResourceEventRecord>,
     pub destinations: HashMap<[u8; 16], DestinationEntry>,
+    pub processes: HashMap<String, ManagedProcessState>,
     pub node_handle: Option<Arc<Mutex<Option<RnsNode>>>>,
 }
 
@@ -41,6 +43,7 @@ impl CtlState {
     pub fn new() -> Self {
         CtlState {
             started_at: Instant::now(),
+            server_mode: "standalone".into(),
             identity_hash: None,
             identity: None,
             announces: VecDeque::new(),
@@ -49,6 +52,7 @@ impl CtlState {
             link_events: VecDeque::new(),
             resource_events: VecDeque::new(),
             destinations: HashMap::new(),
+            processes: HashMap::new(),
             node_handle: None,
         }
     }
@@ -96,6 +100,55 @@ pub fn broadcast(ws: &WsBroadcast, event: WsEvent) {
     senders.retain(|tx| tx.send(event.clone()).is_ok());
 }
 
+pub fn set_server_mode(state: &SharedState, mode: impl Into<String>) {
+    let mut s = state.write().unwrap();
+    s.server_mode = mode.into();
+}
+
+pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
+    let mut s = state.write().unwrap();
+    let name = name.into();
+    s.processes
+        .entry(name.clone())
+        .or_insert_with(|| ManagedProcessState::new(name));
+}
+
+pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.status = "running".into();
+    process.pid = Some(pid);
+    process.started_at = Some(Instant::now());
+    process.last_error = None;
+}
+
+pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i32>) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.status = "stopped".into();
+    process.pid = None;
+    process.last_exit_code = exit_code;
+    process.started_at = None;
+}
+
+pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.status = "failed".into();
+    process.pid = None;
+    process.last_error = Some(error);
+    process.started_at = None;
+}
+
 // --- Record types ---
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +194,35 @@ pub struct ResourceEventRecord {
     pub error: Option<String>,
     pub received: Option<usize>,
     pub total: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedProcessState {
+    pub name: String,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub last_exit_code: Option<i32>,
+    pub restart_count: u32,
+    pub last_error: Option<String>,
+    pub started_at: Option<Instant>,
+}
+
+impl ManagedProcessState {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            status: "stopped".into(),
+            pid: None,
+            last_exit_code: None,
+            restart_count: 0,
+            last_error: None,
+            started_at: None,
+        }
+    }
+
+    pub fn uptime_seconds(&self) -> Option<f64> {
+        self.started_at.map(|started| started.elapsed().as_secs_f64())
+    }
 }
 
 // --- WebSocket events ---

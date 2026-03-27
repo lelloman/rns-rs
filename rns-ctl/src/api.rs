@@ -45,6 +45,8 @@ pub fn handle_request(
 
     match (req.method.as_str(), req.path.as_str()) {
         // Read endpoints
+        ("GET", "/api/node") => handle_node(node, state),
+        ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/info") => handle_info(node, state),
         ("GET", "/api/interfaces") => handle_interfaces(node),
         ("GET", "/api/destinations") => handle_destinations(node, state),
@@ -95,6 +97,26 @@ pub fn handle_request(
 
 // --- Read handlers ---
 
+fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
+    let transport_id = {
+        let guard = node.lock().unwrap();
+        guard.as_ref().and_then(|n| match n.query(QueryRequest::TransportIdentity) {
+            Ok(QueryResponse::TransportIdentity(id)) => id,
+            _ => None,
+        })
+    };
+
+    let s = state.read().unwrap();
+    HttpResponse::ok(json!({
+        "server_mode": s.server_mode,
+        "uptime_seconds": s.uptime_seconds(),
+        "transport_id": transport_id.map(|h| to_hex(&h)),
+        "identity_hash": s.identity_hash.map(|h| to_hex(&h)),
+        "process_count": s.processes.len(),
+        "processes_running": s.processes.values().filter(|p| p.status == "running").count(),
+    }))
+}
+
 fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
     with_node(node, |n| {
         let transport_id = match n.query(QueryRequest::TransportIdentity) {
@@ -108,6 +130,26 @@ fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
             "uptime_seconds": s.uptime_seconds(),
         }))
     })
+}
+
+fn handle_processes(state: &SharedState) -> HttpResponse {
+    let s = state.read().unwrap();
+    let mut processes: Vec<&crate::state::ManagedProcessState> = s.processes.values().collect();
+    processes.sort_by(|a, b| a.name.cmp(&b.name));
+    HttpResponse::ok(json!({
+        "processes": processes
+            .into_iter()
+            .map(|p| json!({
+                "name": p.name,
+                "status": p.status,
+                "pid": p.pid,
+                "last_exit_code": p.last_exit_code,
+                "restart_count": p.restart_count,
+                "last_error": p.last_error,
+                "uptime_seconds": p.uptime_seconds(),
+            }))
+            .collect::<Vec<Value>>(),
+    }))
 }
 
 fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
