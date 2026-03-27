@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rns_crypto::identity::Identity;
 use rns_crypto::Rng;
@@ -12,32 +13,63 @@ use crate::args::Args;
 use crate::{bridge, config, encode, server, state};
 
 pub fn run(args: Args) {
+    if let Err(err) = run_embedded(args, HttpRunOptions::standalone()) {
+        eprintln!("rns-ctl http: {}", err);
+        std::process::exit(1);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HttpRunOptions {
+    pub init_logging: bool,
+    pub install_signal_handler: bool,
+}
+
+impl HttpRunOptions {
+    pub fn standalone() -> Self {
+        Self {
+            init_logging: true,
+            install_signal_handler: true,
+        }
+    }
+
+    pub fn embedded() -> Self {
+        Self {
+            init_logging: false,
+            install_signal_handler: false,
+        }
+    }
+}
+
+pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     if args.has("help") {
         print_help();
-        return;
+        return Ok(());
     }
 
     if args.has("version") {
         println!("rns-ctl {}", env!("FULL_VERSION"));
-        return;
+        return Ok(());
     }
 
-    // Init logging
-    let log_level = match args.verbosity {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var(
-            "RUST_LOG",
-            format!(
-                "rns_ctl={},rns_net={},rns_hooks={}",
-                log_level, log_level, log_level
-            ),
-        );
+    if options.init_logging {
+        // Init logging
+        let log_level = match args.verbosity {
+            0 => "info",
+            1 => "debug",
+            _ => "trace",
+        };
+        if std::env::var("RUST_LOG").is_err() {
+            std::env::set_var(
+                "RUST_LOG",
+                format!(
+                    "rns_ctl={},rns_net={},rns_hooks={}",
+                    log_level, log_level, log_level
+                ),
+            );
+        }
+        let _ = env_logger::try_init();
     }
-    env_logger::init();
 
     let mut cfg = config::from_args_and_env(&args);
 
@@ -76,8 +108,7 @@ pub fn run(args: Args) {
     let node = match node {
         Ok(n) => n,
         Err(e) => {
-            log::error!("Failed to start node: {}", e);
-            std::process::exit(1);
+            return Err(format!("failed to start node: {}", e));
         }
     };
 
@@ -111,20 +142,23 @@ pub fn run(args: Args) {
     }
 
     // Set up ctrl-c handler
-    let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let shutdown_flag_handler = shutdown_flag.clone();
+    if options.install_signal_handler {
+        let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_flag_handler = shutdown_flag.clone();
 
-    ctrlc_handler(move || {
-        if shutdown_flag_handler.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            // Second ctrl-c: force exit
-            std::process::exit(1);
-        }
-        log::info!("Shutting down...");
-        if let Some(node) = node_for_shutdown.lock().unwrap().take() {
-            node.shutdown();
-        }
-        std::process::exit(0);
-    });
+        ctrlc_handler(move || {
+            if shutdown_flag_handler.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                std::process::exit(1);
+            }
+            log::info!("Shutting down...");
+            if let Some(node) = node_for_shutdown.lock().unwrap().take() {
+                node.shutdown();
+            }
+            std::process::exit(0);
+        });
+    } else {
+        let _ = node_for_shutdown;
+    }
 
     // Validate and load TLS config
     #[cfg(feature = "tls")]
@@ -136,13 +170,11 @@ pub fn run(args: Args) {
                     Some(config)
                 }
                 Err(e) => {
-                    log::error!("Failed to load TLS config: {}", e);
-                    std::process::exit(1);
+                    return Err(format!("failed to load TLS config: {}", e));
                 }
             },
             (Some(_), None) | (None, Some(_)) => {
-                log::error!("Both --tls-cert and --tls-key must be provided together");
-                std::process::exit(1);
+                return Err("both --tls-cert and --tls-key must be provided together".into());
             }
             (None, None) => None,
         }
@@ -151,10 +183,10 @@ pub fn run(args: Args) {
     #[cfg(not(feature = "tls"))]
     {
         if cfg.tls_cert.is_some() || cfg.tls_key.is_some() {
-            log::error!(
+            return Err(
                 "TLS options require the 'tls' feature. Rebuild with: cargo build --features tls"
+                    .into(),
             );
-            std::process::exit(1);
         }
     }
 
@@ -170,16 +202,14 @@ pub fn run(args: Args) {
 
     let addr: SocketAddr = format!("{}:{}", ctx.config.host, ctx.config.port)
         .parse()
-        .unwrap_or_else(|_| {
-            log::error!("Invalid bind address");
-            std::process::exit(1);
-        });
+        .map_err(|_| "invalid bind address".to_string())?;
 
     // Run server (blocks)
     if let Err(e) = server::run_server(addr, ctx) {
-        log::error!("Server error: {}", e);
-        std::process::exit(1);
+        return Err(format!("server error: {}", e));
     }
+
+    Ok(())
 }
 
 /// Set up a ctrl-c signal handler.
@@ -211,7 +241,7 @@ fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
             }
 
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(100));
                 if SIGNALED.swap(false, Ordering::SeqCst) {
                     callback();
                     break;
