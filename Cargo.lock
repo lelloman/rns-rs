@@ -2061,6 +2061,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-server"
+version = "0.1.0"
+dependencies = [
+ "env_logger 0.11.8",
+ "libc",
+ "log",
+ "rns-ctl",
+ "rns-net",
+]
+
+[[package]]
 name = "rns-stats-hook"
 version = "0.1.0"
 dependencies = [
