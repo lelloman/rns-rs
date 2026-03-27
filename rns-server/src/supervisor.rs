@@ -1,4 +1,6 @@
 use std::io;
+use std::net::{SocketAddr, TcpStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::mpsc;
@@ -6,7 +8,7 @@ use std::time::Duration;
 
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
-    mark_process_stopped, ProcessControlCommand, SharedState,
+    mark_process_stopped, set_process_readiness, ProcessControlCommand, SharedState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +51,7 @@ pub struct SupervisorConfig {
     pub statsd_bin: PathBuf,
     pub shared_state: Option<SharedState>,
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
+    pub readiness: Vec<ProcessReadiness>,
     pub dry_run: bool,
 }
 
@@ -94,6 +97,7 @@ pub struct Supervisor {
     specs: Vec<ProcessSpec>,
     shared_state: Option<SharedState>,
     control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
+    readiness: Vec<ProcessReadiness>,
 }
 
 impl Supervisor {
@@ -102,6 +106,7 @@ impl Supervisor {
             specs: config.process_specs(),
             shared_state: config.shared_state,
             control_rx: config.control_rx,
+            readiness: config.readiness,
         }
     }
 
@@ -137,6 +142,8 @@ impl Supervisor {
             if let Some(command) = self.next_control_command() {
                 self.handle_control_command(command, &mut children)?;
             }
+
+            self.refresh_readiness();
 
             if let Some((role, status)) = check_exits(&mut children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
@@ -192,6 +199,17 @@ impl Supervisor {
 
         Ok(())
     }
+
+    fn refresh_readiness(&self) {
+        let Some(state) = self.shared_state.as_ref() else {
+            return;
+        };
+
+        for readiness in &self.readiness {
+            let (ready, ready_state, detail) = readiness.probe(state);
+            set_process_readiness(state, readiness.name(), ready, ready_state, detail);
+        }
+    }
 }
 
 struct ManagedChild {
@@ -205,6 +223,66 @@ fn role_from_name(name: &str) -> Option<Role> {
         "rns-sentineld" => Some(Role::Sentineld),
         "rns-statsd" => Some(Role::Statsd),
         _ => None,
+    }
+}
+
+#[derive(Clone)]
+pub enum ReadinessTarget {
+    Tcp(SocketAddr),
+    UnixSocket(PathBuf),
+    ProcessAge(Duration),
+}
+
+#[derive(Clone)]
+pub struct ProcessReadiness {
+    pub role: Role,
+    pub target: ReadinessTarget,
+}
+
+impl ProcessReadiness {
+    pub fn name(&self) -> &'static str {
+        self.role.display_name()
+    }
+
+    fn probe(&self, state: &SharedState) -> (bool, &'static str, Option<String>) {
+        match &self.target {
+            ReadinessTarget::Tcp(addr) => match TcpStream::connect_timeout(addr, Duration::from_millis(150)) {
+                Ok(_) => (true, "ready", Some(format!("listening on {}", addr))),
+                Err(err) => (false, "waiting", Some(format!("waiting for {}", err))),
+            },
+            ReadinessTarget::UnixSocket(path) => match UnixStream::connect(path) {
+                Ok(_) => (true, "ready", Some(format!("socket available at {}", path.display()))),
+                Err(err) => (
+                    false,
+                    "waiting",
+                    Some(format!("waiting for socket {}: {}", path.display(), err)),
+                ),
+            },
+            ReadinessTarget::ProcessAge(min_age) => {
+                let started_at = {
+                    let s = state.read().unwrap();
+                    s.processes
+                        .get(self.name())
+                        .and_then(|process| process.started_at)
+                };
+                match started_at {
+                    Some(started_at) if started_at.elapsed() >= *min_age => (
+                        true,
+                        "ready",
+                        Some("process has stayed up past startup window".into()),
+                    ),
+                    Some(started_at) => (
+                        false,
+                        "warming",
+                        Some(format!(
+                            "startup grace period {:.1}s remaining",
+                            (min_age.as_secs_f64() - started_at.elapsed().as_secs_f64()).max(0.0)
+                        )),
+                    ),
+                    None => (false, "stopped", Some("process is not running".into())),
+                }
+            }
+        }
     }
 }
 
@@ -318,6 +396,7 @@ mod tests {
             statsd_bin: PathBuf::from("rns-statsd"),
             shared_state: None,
             control_rx: None,
+            readiness: Vec::new(),
             dry_run: false,
         };
 

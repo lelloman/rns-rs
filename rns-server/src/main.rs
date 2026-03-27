@@ -6,7 +6,9 @@ use std::time::Duration;
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::{ensure_process, set_control_tx, set_server_mode, CtlState, SharedState};
 use rns_server::args::Args;
-use rns_server::supervisor::{Supervisor, SupervisorConfig};
+use rns_server::supervisor::{
+    ProcessReadiness, ReadinessTarget, Role, Supervisor, SupervisorConfig,
+};
 
 fn main() {
     let args = Args::parse();
@@ -67,6 +69,7 @@ fn run_start(args: Args) {
             .unwrap_or_else(|| PathBuf::from("rns-statsd")),
         shared_state: Some(shared_state.clone()),
         control_rx: Some(control_rx),
+        readiness: build_readiness_checks(args.config_path()),
         dry_run,
     };
 
@@ -214,6 +217,42 @@ fn control_http_command_line(args: &Args) -> String {
         parts.push("--disable-auth".to_string());
     }
     parts.join(" ")
+}
+
+fn build_readiness_checks(config_path: Option<&str>) -> Vec<ProcessReadiness> {
+    let config_dir = rns_net::storage::resolve_config_dir(config_path.map(std::path::Path::new));
+    let config_file = config_dir.join("config");
+    let parsed = if config_file.exists() {
+        rns_net::config::parse_file(&config_file).ok()
+    } else {
+        rns_net::config::parse("").ok()
+    };
+
+    let rpc_addr = parsed
+        .as_ref()
+        .map(|cfg| cfg.reticulum.instance_control_port)
+        .unwrap_or(37429);
+
+    let mut readiness = vec![ProcessReadiness {
+        role: Role::Rnsd,
+        target: ReadinessTarget::Tcp(
+            format!("127.0.0.1:{}", rpc_addr)
+                .parse()
+                .unwrap_or_else(|_| "127.0.0.1:37429".parse().unwrap()),
+        ),
+    }];
+
+    let sidecar_target = ReadinessTarget::ProcessAge(Duration::from_secs(1));
+
+    readiness.push(ProcessReadiness {
+        role: Role::Sentineld,
+        target: sidecar_target.clone(),
+    });
+    readiness.push(ProcessReadiness {
+        role: Role::Statsd,
+        target: sidecar_target,
+    });
+    readiness
 }
 
 fn print_help() {

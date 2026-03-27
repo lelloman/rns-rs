@@ -231,6 +231,10 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
         <h2>Running Processes</h2>
         <div id="running" class="stat">-</div>
       </article>
+      <article class="panel">
+        <h2>Ready Processes</h2>
+        <div id="ready" class="stat">-</div>
+      </article>
     </section>
 
     <section class="panel">
@@ -240,10 +244,12 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
           <tr>
             <th>Name</th>
             <th>Status</th>
+            <th>Ready</th>
             <th>PID</th>
             <th>Uptime</th>
+            <th>Last Change</th>
             <th>Last Exit</th>
-            <th>Error</th>
+            <th>Detail</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -263,6 +269,7 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
     const serverModeEl = document.getElementById("serverMode");
     const uptimeEl = document.getElementById("uptime");
     const runningEl = document.getElementById("running");
+    const readyEl = document.getElementById("ready");
     const processRowsEl = document.getElementById("processRows");
 
     const params = new URLSearchParams(window.location.search);
@@ -310,10 +317,12 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
         tr.innerHTML = `
           <td>${process.name}</td>
           <td><span class="pill ${statusClass}">${process.status}</span></td>
+          <td>${process.ready ? "yes" : (process.ready_state ?? "no")}</td>
           <td>${process.pid ?? "-"}</td>
           <td>${fmtSeconds(process.uptime_seconds)}</td>
+          <td>${fmtSeconds(process.last_transition_seconds)}</td>
           <td>${process.last_exit_code ?? "-"}</td>
-          <td>${process.last_error ?? ""}</td>
+          <td>${process.status_detail ?? process.last_error ?? ""}</td>
           <td><button class="secondary" data-restart="${process.name}">Restart</button></td>
         `;
         processRowsEl.appendChild(tr);
@@ -343,6 +352,7 @@ const INDEX_HTML_AUTH: &str = r#"<!doctype html>
         serverModeEl.textContent = node.server_mode || "-";
         uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
         runningEl.textContent = `${node.processes_running}/${node.process_count}`;
+        readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
         renderProcesses(processes.processes || []);
         statusEl.textContent = "Connected";
       } catch (error) {
@@ -396,6 +406,7 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
         "identity_hash": s.identity_hash.map(|h| to_hex(&h)),
         "process_count": s.processes.len(),
         "processes_running": s.processes.values().filter(|p| p.status == "running").count(),
+        "processes_ready": s.processes.values().filter(|p| p.ready).count(),
     }))
 }
 
@@ -424,11 +435,15 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
             .map(|p| json!({
                 "name": p.name,
                 "status": p.status,
+                "ready": p.ready,
+                "ready_state": p.ready_state,
                 "pid": p.pid,
                 "last_exit_code": p.last_exit_code,
                 "restart_count": p.restart_count,
                 "last_error": p.last_error,
+                "status_detail": p.status_detail,
                 "uptime_seconds": p.uptime_seconds(),
+                "last_transition_seconds": p.last_transition_seconds(),
             }))
             .collect::<Vec<Value>>(),
     }))

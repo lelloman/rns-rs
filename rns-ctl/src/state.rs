@@ -127,9 +127,13 @@ pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
         .entry(name.to_string())
         .or_insert_with(|| ManagedProcessState::new(name.to_string()));
     process.status = "running".into();
+    process.ready = false;
+    process.ready_state = "starting".into();
     process.pid = Some(pid);
     process.started_at = Some(Instant::now());
+    process.last_transition_at = Some(Instant::now());
     process.last_error = None;
+    process.status_detail = Some("process spawned".into());
 }
 
 pub fn bump_process_restart_count(state: &SharedState, name: &str) {
@@ -148,9 +152,13 @@ pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i
         .entry(name.to_string())
         .or_insert_with(|| ManagedProcessState::new(name.to_string()));
     process.status = "stopped".into();
+    process.ready = false;
+    process.ready_state = "stopped".into();
     process.pid = None;
     process.last_exit_code = exit_code;
     process.started_at = None;
+    process.last_transition_at = Some(Instant::now());
+    process.status_detail = Some("process stopped".into());
 }
 
 pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String) {
@@ -160,9 +168,30 @@ pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String)
         .entry(name.to_string())
         .or_insert_with(|| ManagedProcessState::new(name.to_string()));
     process.status = "failed".into();
+    process.ready = false;
+    process.ready_state = "failed".into();
     process.pid = None;
     process.last_error = Some(error);
     process.started_at = None;
+    process.last_transition_at = Some(Instant::now());
+    process.status_detail = process.last_error.clone();
+}
+
+pub fn set_process_readiness(
+    state: &SharedState,
+    name: &str,
+    ready: bool,
+    ready_state: &str,
+    status_detail: Option<String>,
+) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.ready = ready;
+    process.ready_state = ready_state.to_string();
+    process.status_detail = status_detail;
 }
 
 // --- Record types ---
@@ -216,11 +245,15 @@ pub struct ResourceEventRecord {
 pub struct ManagedProcessState {
     pub name: String,
     pub status: String,
+    pub ready: bool,
+    pub ready_state: String,
     pub pid: Option<u32>,
     pub last_exit_code: Option<i32>,
     pub restart_count: u32,
     pub last_error: Option<String>,
+    pub status_detail: Option<String>,
     pub started_at: Option<Instant>,
+    pub last_transition_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,16 +266,25 @@ impl ManagedProcessState {
         Self {
             name,
             status: "stopped".into(),
+            ready: false,
+            ready_state: "stopped".into(),
             pid: None,
             last_exit_code: None,
             restart_count: 0,
             last_error: None,
+            status_detail: None,
             started_at: None,
+            last_transition_at: None,
         }
     }
 
     pub fn uptime_seconds(&self) -> Option<f64> {
         self.started_at.map(|started| started.elapsed().as_secs_f64())
+    }
+
+    pub fn last_transition_seconds(&self) -> Option<f64> {
+        self.last_transition_at
+            .map(|transition| transition.elapsed().as_secs_f64())
     }
 }
 
