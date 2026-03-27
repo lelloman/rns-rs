@@ -82,7 +82,13 @@ pub fn handle_request(
         ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
         ("POST", "/api/announce_queues/clear") => handle_post_clear_announce_queues(node),
         ("POST", path) if path.starts_with("/api/processes/") && path.ends_with("/restart") => {
-            handle_process_restart(path, state)
+            handle_process_control(path, state, "restart")
+        }
+        ("POST", path) if path.starts_with("/api/processes/") && path.ends_with("/start") => {
+            handle_process_control(path, state, "start")
+        }
+        ("POST", path) if path.starts_with("/api/processes/") && path.ends_with("/stop") => {
+            handle_process_control(path, state, "stop")
         }
 
         // Backbone peer state
@@ -109,283 +115,10 @@ fn index_html(config: &CtlConfig) -> &'static str {
         "bearer-token"
     };
     match auth_mode {
-        "disabled" => INDEX_HTML_NOAUTH,
-        _ => INDEX_HTML_AUTH,
+        "disabled" => include_str!("../assets/index_noauth.html"),
+        _ => include_str!("../assets/index_auth.html"),
     }
 }
-
-const INDEX_HTML_AUTH: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RNS Server</title>
-  <style>
-    :root {
-      --bg: #09111a;
-      --panel: #0f1a26;
-      --panel-2: #132234;
-      --text: #e6eef8;
-      --muted: #8ea1b5;
-      --accent: #7dd3fc;
-      --good: #34d399;
-      --bad: #fb7185;
-      --line: #223247;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      background:
-        radial-gradient(circle at top left, rgba(125, 211, 252, 0.16), transparent 28rem),
-        linear-gradient(180deg, #081018 0%, #0b1420 100%);
-      color: var(--text);
-    }
-    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 48px; }
-    h1, h2 { margin: 0 0 14px; font-weight: 700; }
-    p { color: var(--muted); line-height: 1.5; }
-    .hero, .panel {
-      background: rgba(15, 26, 38, 0.92);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
-    }
-    .hero { padding: 24px; margin-bottom: 18px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 18px;
-      margin-bottom: 18px;
-    }
-    .panel { padding: 18px; }
-    .stat { font-size: 28px; font-weight: 700; margin-top: 8px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .token {
-      width: min(420px, 100%);
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: var(--panel-2);
-      color: var(--text);
-    }
-    button {
-      padding: 10px 14px;
-      border: 0;
-      border-radius: 12px;
-      background: var(--accent);
-      color: #052235;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    button.secondary {
-      padding: 6px 10px;
-      border-radius: 10px;
-      background: var(--panel-2);
-      color: var(--text);
-      border: 1px solid var(--line);
-    }
-    table { width: 100%; border-collapse: collapse; }
-    th, td {
-      text-align: left;
-      padding: 10px 8px;
-      border-bottom: 1px solid var(--line);
-      font-size: 14px;
-    }
-    .pill {
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .running { background: rgba(52, 211, 153, 0.18); color: var(--good); }
-    .stopped, .failed { background: rgba(251, 113, 133, 0.16); color: var(--bad); }
-    .muted { color: var(--muted); }
-    .links a { color: var(--accent); text-decoration: none; }
-  </style>
-</head>
-<body>
-  <main>
-    <section class="hero">
-      <h1>RNS Server</h1>
-      <p>Minimal control surface for the supervised node. Enter a bearer token once, then this page polls <code>/api/node</code> and <code>/api/processes</code>.</p>
-      <div class="row">
-        <input id="token" class="token" placeholder="Bearer token" spellcheck="false" />
-        <button id="saveToken">Save Token</button>
-        <span id="status" class="muted">Waiting for token</span>
-      </div>
-    </section>
-
-    <section class="grid">
-      <article class="panel">
-        <h2>Server Mode</h2>
-        <div id="serverMode" class="stat">-</div>
-      </article>
-      <article class="panel">
-        <h2>Uptime</h2>
-        <div id="uptime" class="stat">-</div>
-      </article>
-      <article class="panel">
-        <h2>Running Processes</h2>
-        <div id="running" class="stat">-</div>
-      </article>
-      <article class="panel">
-        <h2>Ready Processes</h2>
-        <div id="ready" class="stat">-</div>
-      </article>
-    </section>
-
-    <section class="panel">
-      <h2>Processes</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Ready</th>
-            <th>PID</th>
-            <th>Uptime</th>
-            <th>Last Change</th>
-            <th>Last Exit</th>
-            <th>Detail</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody id="processRows"></tbody>
-      </table>
-    </section>
-
-    <section class="panel links" style="margin-top: 18px;">
-      <h2>JSON Endpoints</h2>
-      <p><a href="/api/node">/api/node</a> and <a href="/api/processes">/api/processes</a></p>
-    </section>
-  </main>
-  <script>
-    const tokenInput = document.getElementById("token");
-    const saveButton = document.getElementById("saveToken");
-    const statusEl = document.getElementById("status");
-    const serverModeEl = document.getElementById("serverMode");
-    const uptimeEl = document.getElementById("uptime");
-    const runningEl = document.getElementById("running");
-    const readyEl = document.getElementById("ready");
-    const processRowsEl = document.getElementById("processRows");
-
-    const params = new URLSearchParams(window.location.search);
-    const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
-    tokenInput.value = initialToken;
-
-    function fmtSeconds(value) {
-      if (value == null) return "-";
-      const total = Math.floor(value);
-      const hours = Math.floor(total / 3600);
-      const minutes = Math.floor((total % 3600) / 60);
-      const seconds = total % 60;
-      return `${hours}h ${minutes}m ${seconds}s`;
-    }
-
-    function authHeaders() {
-      const token = tokenInput.value.trim();
-      if (!token) return {};
-      return { Authorization: `Bearer ${token}` };
-    }
-
-    async function fetchJson(path) {
-      const response = await fetch(path, { headers: authHeaders() });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`${response.status} ${response.statusText}: ${body}`);
-      }
-      return response.json();
-    }
-
-    async function postJson(path) {
-      const response = await fetch(path, { method: "POST", headers: authHeaders() });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`${response.status} ${response.statusText}: ${body}`);
-      }
-      return response.json();
-    }
-
-    function renderProcesses(processes) {
-      processRowsEl.innerHTML = "";
-      for (const process of processes) {
-        const tr = document.createElement("tr");
-        const statusClass = process.status === "running" ? "running" : (process.status || "stopped");
-        tr.innerHTML = `
-          <td>${process.name}</td>
-          <td><span class="pill ${statusClass}">${process.status}</span></td>
-          <td>${process.ready ? "yes" : (process.ready_state ?? "no")}</td>
-          <td>${process.pid ?? "-"}</td>
-          <td>${fmtSeconds(process.uptime_seconds)}</td>
-          <td>${fmtSeconds(process.last_transition_seconds)}</td>
-          <td>${process.last_exit_code ?? "-"}</td>
-          <td>${process.status_detail ?? process.last_error ?? ""}</td>
-          <td><button class="secondary" data-restart="${process.name}">Restart</button></td>
-        `;
-        processRowsEl.appendChild(tr);
-      }
-
-      for (const button of processRowsEl.querySelectorAll("[data-restart]")) {
-        button.addEventListener("click", async () => {
-          const name = button.getAttribute("data-restart");
-          statusEl.textContent = `Restarting ${name}...`;
-          try {
-            await postJson(`/api/processes/${name}/restart`);
-            statusEl.textContent = `Restart queued for ${name}`;
-            refresh();
-          } catch (error) {
-            statusEl.textContent = error.message;
-          }
-        });
-      }
-    }
-
-    async function refresh() {
-      try {
-        const [node, processes] = await Promise.all([
-          fetchJson("/api/node"),
-          fetchJson("/api/processes"),
-        ]);
-        serverModeEl.textContent = node.server_mode || "-";
-        uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
-        runningEl.textContent = `${node.processes_running}/${node.process_count}`;
-        readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
-        renderProcesses(processes.processes || []);
-        statusEl.textContent = "Connected";
-      } catch (error) {
-        statusEl.textContent = error.message;
-      }
-    }
-
-    saveButton.addEventListener("click", () => {
-      localStorage.setItem("rnsctl_token", tokenInput.value.trim());
-      refresh();
-    });
-
-    refresh();
-    setInterval(refresh, 2000);
-  </script>
-</body>
-</html>
-"#;
-
-const INDEX_HTML_NOAUTH: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RNS Server</title>
-</head>
-<body>
-  <script>
-    window.location.replace("/?token=");
-  </script>
-</body>
-</html>
-"#;
 
 // --- Read handlers ---
 
@@ -449,12 +182,16 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
     }))
 }
 
-fn handle_process_restart(path: &str, state: &SharedState) -> HttpResponse {
+fn handle_process_control(path: &str, state: &SharedState, action: &str) -> HttpResponse {
     let Some(name) = path
         .strip_prefix("/api/processes/")
-        .and_then(|rest| rest.strip_suffix("/restart"))
+        .and_then(|rest| {
+            rest.strip_suffix("/restart")
+                .or_else(|| rest.strip_suffix("/start"))
+                .or_else(|| rest.strip_suffix("/stop"))
+        })
     else {
-        return HttpResponse::bad_request("Invalid process restart path");
+        return HttpResponse::bad_request("Invalid process control path");
     };
 
     let tx = {
@@ -463,15 +200,24 @@ fn handle_process_restart(path: &str, state: &SharedState) -> HttpResponse {
     };
 
     match tx {
-        Some(tx) => match tx.send(crate::state::ProcessControlCommand::Restart(name.to_string())) {
+        Some(tx) => {
+            let process_name = name.to_string();
+            let command = match action {
+                "restart" => crate::state::ProcessControlCommand::Restart(process_name.clone()),
+                "start" => crate::state::ProcessControlCommand::Start(process_name.clone()),
+                "stop" => crate::state::ProcessControlCommand::Stop(process_name.clone()),
+                _ => return HttpResponse::bad_request("Unknown process action"),
+            };
+            match tx.send(command) {
             Ok(()) => HttpResponse::ok(json!({
                 "ok": true,
                 "queued": true,
-                "action": "restart",
-                "process": name,
+                "action": action,
+                "process": process_name,
             })),
             Err(_) => HttpResponse::internal_error("Process control channel is unavailable"),
-        },
+        }
+        }
         None => HttpResponse::internal_error("Process control is not enabled"),
     }
 }

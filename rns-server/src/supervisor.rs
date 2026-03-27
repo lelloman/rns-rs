@@ -171,6 +171,8 @@ impl Supervisor {
     ) -> Result<(), String> {
         match command {
             ProcessControlCommand::Restart(name) => self.restart_process(&name, children),
+            ProcessControlCommand::Start(name) => self.start_process(&name, children),
+            ProcessControlCommand::Stop(name) => self.stop_process(&name, children),
         }
     }
 
@@ -197,6 +199,43 @@ impl Supervisor {
             children[index] = spawn_child(spec, self.shared_state.as_ref())?;
         }
 
+        Ok(())
+    }
+
+    fn start_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
+        let Some(role) = role_from_name(name) else {
+            return Err(format!("unknown process '{}'", name));
+        };
+        if children.iter().any(|child| child.role == role) {
+            return Ok(());
+        }
+        let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
+            return Err(format!("missing process spec for '{}'", name));
+        };
+        children.push(spawn_child(spec, self.shared_state.as_ref())?);
+        Ok(())
+    }
+
+    fn stop_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
+        let Some(role) = role_from_name(name) else {
+            return Err(format!("unknown process '{}'", name));
+        };
+        let Some(index) = children.iter().position(|child| child.role == role) else {
+            return Ok(());
+        };
+        terminate_child(&mut children[index]).map_err(|e| {
+            format!("failed to terminate {} during stop: {}", role.display_name(), e)
+        })?;
+        if let Some(state) = self.shared_state.as_ref() {
+            let code = children[index]
+                .child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.code());
+            mark_process_stopped(state, role.display_name(), code);
+        }
+        children.remove(index);
         Ok(())
     }
 

@@ -259,6 +259,8 @@ pub struct ManagedProcessState {
 #[derive(Debug, Clone)]
 pub enum ProcessControlCommand {
     Restart(String),
+    Start(String),
+    Stop(String),
 }
 
 impl ManagedProcessState {
