@@ -1,7 +1,7 @@
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -44,53 +44,10 @@ impl ProcessSpec {
 }
 
 pub struct SupervisorConfig {
-    pub config_path: Option<PathBuf>,
-    pub stats_db_path: PathBuf,
-    pub rnsd_bin: PathBuf,
-    pub sentineld_bin: PathBuf,
-    pub statsd_bin: PathBuf,
+    pub specs: Vec<ProcessSpec>,
     pub shared_state: Option<SharedState>,
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     pub readiness: Vec<ProcessReadiness>,
-    pub dry_run: bool,
-}
-
-impl SupervisorConfig {
-    pub fn process_specs(&self) -> Vec<ProcessSpec> {
-        vec![
-            ProcessSpec {
-                role: Role::Rnsd,
-                bin: self.rnsd_bin.clone(),
-                args: config_args(&self.config_path),
-            },
-            ProcessSpec {
-                role: Role::Sentineld,
-                bin: self.sentineld_bin.clone(),
-                args: config_args(&self.config_path),
-            },
-            ProcessSpec {
-                role: Role::Statsd,
-                bin: self.statsd_bin.clone(),
-                args: statsd_args(&self.config_path, &self.stats_db_path),
-            },
-        ]
-    }
-}
-
-fn config_args(config_path: &Option<PathBuf>) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(path) = config_path {
-        args.push("--config".into());
-        args.push(path.display().to_string());
-    }
-    args
-}
-
-fn statsd_args(config_path: &Option<PathBuf>, stats_db_path: &Path) -> Vec<String> {
-    let mut args = config_args(config_path);
-    args.push("--db".into());
-    args.push(stats_db_path.display().to_string());
-    args
 }
 
 pub struct Supervisor {
@@ -103,7 +60,7 @@ pub struct Supervisor {
 impl Supervisor {
     pub fn new(config: SupervisorConfig) -> Self {
         Self {
-            specs: config.process_specs(),
+            specs: config.specs,
             shared_state: config.shared_state,
             control_rx: config.control_rx,
             readiness: config.readiness,
@@ -176,11 +133,7 @@ impl Supervisor {
         }
     }
 
-    fn restart_process(
-        &self,
-        name: &str,
-        children: &mut Vec<ManagedChild>,
-    ) -> Result<(), String> {
+    fn restart_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
         let Some(role) = role_from_name(name) else {
             return Err(format!("unknown process '{}'", name));
         };
@@ -190,7 +143,11 @@ impl Supervisor {
 
         if let Some(index) = children.iter().position(|child| child.role == role) {
             terminate_child(&mut children[index]).map_err(|e| {
-                format!("failed to terminate {} during restart: {}", role.display_name(), e)
+                format!(
+                    "failed to terminate {} during restart: {}",
+                    role.display_name(),
+                    e
+                )
             })?;
             if let Some(state) = self.shared_state.as_ref() {
                 mark_process_stopped(state, role.display_name(), None);
@@ -224,7 +181,11 @@ impl Supervisor {
             return Ok(());
         };
         terminate_child(&mut children[index]).map_err(|e| {
-            format!("failed to terminate {} during stop: {}", role.display_name(), e)
+            format!(
+                "failed to terminate {} during stop: {}",
+                role.display_name(),
+                e
+            )
         })?;
         if let Some(state) = self.shared_state.as_ref() {
             let code = children[index]
@@ -285,12 +246,18 @@ impl ProcessReadiness {
 
     fn probe(&self, state: &SharedState) -> (bool, &'static str, Option<String>) {
         match &self.target {
-            ReadinessTarget::Tcp(addr) => match TcpStream::connect_timeout(addr, Duration::from_millis(150)) {
-                Ok(_) => (true, "ready", Some(format!("listening on {}", addr))),
-                Err(err) => (false, "waiting", Some(format!("waiting for {}", err))),
-            },
+            ReadinessTarget::Tcp(addr) => {
+                match TcpStream::connect_timeout(addr, Duration::from_millis(150)) {
+                    Ok(_) => (true, "ready", Some(format!("listening on {}", addr))),
+                    Err(err) => (false, "waiting", Some(format!("waiting for {}", err))),
+                }
+            }
             ReadinessTarget::UnixSocket(path) => match UnixStream::connect(path) {
-                Ok(_) => (true, "ready", Some(format!("socket available at {}", path.display()))),
+                Ok(_) => (
+                    true,
+                    "ready",
+                    Some(format!("socket available at {}", path.display())),
+                ),
                 Err(err) => (
                     false,
                     "waiting",
@@ -325,7 +292,10 @@ impl ProcessReadiness {
     }
 }
 
-fn spawn_child(spec: &ProcessSpec, shared_state: Option<&SharedState>) -> Result<ManagedChild, String> {
+fn spawn_child(
+    spec: &ProcessSpec,
+    shared_state: Option<&SharedState>,
+) -> Result<ManagedChild, String> {
     log::info!("starting {}", spec.command_line());
     let mut command = Command::new(&spec.bin);
     command.args(&spec.args);
@@ -367,7 +337,12 @@ fn terminate_children(children: &mut [ManagedChild], shared_state: Option<&Share
             log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
         }
         if let Some(state) = shared_state {
-            let code = managed.child.try_wait().ok().flatten().and_then(|status| status.code());
+            let code = managed
+                .child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.code());
             mark_process_stopped(state, managed.role.display_name(), code);
         }
     }

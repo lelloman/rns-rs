@@ -57,6 +57,29 @@
       </table>
     </section>
 
+    <section class="panel" style="margin-top: 18px;">
+      <h2>Config</h2>
+      <table>
+        <tbody>
+          <tr><th>Config Path</th><td id="configPath">-</td></tr>
+          <tr><th>Resolved Config Dir</th><td id="configDir">-</td></tr>
+          <tr><th>Stats DB</th><td id="statsDb">-</td></tr>
+          <tr><th>HTTP Bind</th><td id="httpBind">-</td></tr>
+          <tr><th>HTTP Auth</th><td id="httpAuth">-</td></tr>
+        </tbody>
+      </table>
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>Process</th>
+            <th>Executable</th>
+            <th>Args</th>
+          </tr>
+        </thead>
+        <tbody id="launchPlanRows"></tbody>
+      </table>
+    </section>
+
     <section class="panel links" style="margin-top: 18px;">
       <h2>Recent Process Events</h2>
       <table>
@@ -74,7 +97,7 @@
 
     <section class="panel links" style="margin-top: 18px;">
       <h2>JSON Endpoints</h2>
-      <p><a href="/api/node">/api/node</a>, <a href="/api/processes">/api/processes</a>, and <a href="/api/process_events">/api/process_events</a></p>
+      <p><a href="/api/node">/api/node</a>, <a href="/api/config">/api/config</a>, <a href="/api/processes">/api/processes</a>, and <a href="/api/process_events">/api/process_events</a></p>
     </section>
   </main>
   <script src="/assets/app.js"></script>

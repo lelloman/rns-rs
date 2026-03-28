@@ -66,6 +66,7 @@ pub fn handle_request(
     match (req.method.as_str(), req.path.as_str()) {
         // Read endpoints
         ("GET", "/api/node") => handle_node(node, state),
+        ("GET", "/api/config") => handle_config(state),
         ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/process_events") => handle_process_events(state),
         ("GET", "/api/info") => handle_info(node, state),
@@ -142,10 +143,12 @@ fn index_html(config: &CtlConfig) -> &'static str {
 fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
     let transport_id = {
         let guard = node.lock().unwrap();
-        guard.as_ref().and_then(|n| match n.query(QueryRequest::TransportIdentity) {
-            Ok(QueryResponse::TransportIdentity(id)) => id,
-            _ => None,
-        })
+        guard
+            .as_ref()
+            .and_then(|n| match n.query(QueryRequest::TransportIdentity) {
+                Ok(QueryResponse::TransportIdentity(id)) => id,
+                _ => None,
+            })
     };
 
     let s = state.read().unwrap();
@@ -158,6 +161,14 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
         "processes_running": s.processes.values().filter(|p| p.status == "running").count(),
         "processes_ready": s.processes.values().filter(|p| p.ready).count(),
     }))
+}
+
+fn handle_config(state: &SharedState) -> HttpResponse {
+    let s = state.read().unwrap();
+    match &s.server_config {
+        Some(config) => HttpResponse::ok(json!({ "config": config })),
+        None => HttpResponse::ok(json!({ "config": null })),
+    }
 }
 
 fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
@@ -219,14 +230,11 @@ fn handle_process_events(state: &SharedState) -> HttpResponse {
 }
 
 fn handle_process_control(path: &str, state: &SharedState, action: &str) -> HttpResponse {
-    let Some(name) = path
-        .strip_prefix("/api/processes/")
-        .and_then(|rest| {
-            rest.strip_suffix("/restart")
-                .or_else(|| rest.strip_suffix("/start"))
-                .or_else(|| rest.strip_suffix("/stop"))
-        })
-    else {
+    let Some(name) = path.strip_prefix("/api/processes/").and_then(|rest| {
+        rest.strip_suffix("/restart")
+            .or_else(|| rest.strip_suffix("/start"))
+            .or_else(|| rest.strip_suffix("/stop"))
+    }) else {
         return HttpResponse::bad_request("Invalid process control path");
     };
 
@@ -245,14 +253,14 @@ fn handle_process_control(path: &str, state: &SharedState, action: &str) -> Http
                 _ => return HttpResponse::bad_request("Unknown process action"),
             };
             match tx.send(command) {
-            Ok(()) => HttpResponse::ok(json!({
-                "ok": true,
-                "queued": true,
-                "action": action,
-                "process": process_name,
-            })),
-            Err(_) => HttpResponse::internal_error("Process control channel is unavailable"),
-        }
+                Ok(()) => HttpResponse::ok(json!({
+                    "ok": true,
+                    "queued": true,
+                    "action": action,
+                    "process": process_name,
+                })),
+                Err(_) => HttpResponse::internal_error("Process control channel is unavailable"),
+            }
         }
         None => HttpResponse::internal_error("Process control is not enabled"),
     }

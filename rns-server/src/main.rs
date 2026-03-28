@@ -1,14 +1,14 @@
-use std::path::PathBuf;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
-use rns_ctl::state::{ensure_process, set_control_tx, set_server_mode, CtlState, SharedState};
-use rns_server::args::Args;
-use rns_server::supervisor::{
-    ProcessReadiness, ReadinessTarget, Role, Supervisor, SupervisorConfig,
+use rns_ctl::state::{
+    ensure_process, set_control_tx, set_server_config, set_server_mode, CtlState, SharedState,
 };
+use rns_server::args::Args;
+use rns_server::config::ServerConfig;
+use rns_server::supervisor::Supervisor;
 
 fn main() {
     let args = Args::parse();
@@ -43,54 +43,27 @@ fn run_start(args: Args) {
     ensure_process(&shared_state, "rnsd");
     ensure_process(&shared_state, "rns-sentineld");
     ensure_process(&shared_state, "rns-statsd");
-
-    let config_path = args.config_path().map(PathBuf::from);
-    let config_dir = rns_net::storage::resolve_config_dir(args.config_path().map(std::path::Path::new));
-    let default_stats_db = config_dir.join("stats.db");
-
+    let config = ServerConfig::from_args(&args);
+    set_server_config(&shared_state, config.snapshot());
     let dry_run = args.has("dry-run");
-    let config = SupervisorConfig {
-        config_path,
-        stats_db_path: args
-            .get("stats-db")
-            .map(PathBuf::from)
-            .unwrap_or(default_stats_db),
-        rnsd_bin: args
-            .get("rnsd-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rnsd")),
-        sentineld_bin: args
-            .get("sentineld-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rns-sentineld")),
-        statsd_bin: args
-            .get("statsd-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rns-statsd")),
-        shared_state: Some(shared_state.clone()),
-        control_rx: Some(control_rx),
-        readiness: build_readiness_checks(args.config_path()),
-        dry_run,
-    };
 
     if dry_run {
-        let supervisor = Supervisor::new(config);
+        let supervisor = Supervisor::new(config.supervisor_config(None, None));
         for spec in supervisor.specs() {
             println!("{}", spec.command_line());
         }
-        if !args.has("no-http") {
-            println!("{}", control_http_command_line(&args));
+        if config.http_enabled() {
+            println!("{}", config.control_http_command_line());
         }
         return;
     }
 
-    let supervisor = Supervisor::new(config);
-
-    let http_enabled = !args.has("no-http");
+    let supervisor =
+        Supervisor::new(config.supervisor_config(Some(shared_state.clone()), Some(control_rx)));
 
     match supervisor.run_with_started_hook(|| {
-        if http_enabled {
-            start_control_http(&args, shared_state.clone())?;
+        if config.http_enabled() {
+            start_control_http(&config, args.verbosity, shared_state.clone())?;
         }
         Ok(())
     }) {
@@ -122,15 +95,19 @@ fn init_logging(args: &Args) {
         .init();
 }
 
-fn start_control_http(args: &Args, shared_state: SharedState) -> Result<(), String> {
-    let ctl_args = build_ctl_http_args(args);
+fn start_control_http(
+    config: &ServerConfig,
+    verbosity: u8,
+    shared_state: SharedState,
+) -> Result<(), String> {
+    let config = config.clone();
     log::info!("starting embedded control plane");
     thread::Builder::new()
         .name("rns-server-http".into())
         .spawn(move || {
             for attempt in 1..=50 {
                 match prepare_embedded_with_state(
-                    ctl_args(),
+                    config.ctl_args(verbosity),
                     HttpRunOptions::embedded(),
                     Some(shared_state.clone()),
                 ) {
@@ -157,102 +134,6 @@ fn start_control_http(args: &Args, shared_state: SharedState) -> Result<(), Stri
         })
         .map_err(|e| format!("failed to spawn control plane thread: {}", e))?;
     Ok(())
-}
-
-fn build_ctl_http_args(args: &Args) -> impl Fn() -> rns_ctl::args::Args + Send + 'static {
-    let config_path = args.config_path().map(ToOwned::to_owned);
-    let host = args.get("http-host").map(ToOwned::to_owned);
-    let port = args.get("http-port").map(ToOwned::to_owned);
-    let token = args.get("http-token").map(ToOwned::to_owned);
-    let disable_auth = args.has("disable-auth");
-    let verbosity = args.verbosity;
-
-    move || {
-        let mut argv = vec!["--daemon".to_string()];
-        if let Some(config_path) = &config_path {
-            argv.push("--config".into());
-            argv.push(config_path.clone());
-        }
-        if let Some(host) = &host {
-            argv.push("--host".into());
-            argv.push(host.clone());
-        }
-        if let Some(port) = &port {
-            argv.push("--port".into());
-            argv.push(port.clone());
-        }
-        if let Some(token) = &token {
-            argv.push("--token".into());
-            argv.push(token.clone());
-        }
-        if disable_auth {
-            argv.push("--disable-auth".into());
-        }
-        if verbosity > 0 {
-            argv.push(format!("-{}", "v".repeat(verbosity as usize)));
-        }
-        rns_ctl::args::Args::parse_from(argv)
-    }
-}
-
-fn control_http_command_line(args: &Args) -> String {
-    let mut parts = vec!["embedded rns-ctl http".to_string(), "--daemon".to_string()];
-    if let Some(config) = args.config_path() {
-        parts.push("--config".to_string());
-        parts.push(config.to_string());
-    }
-    if let Some(host) = args.get("http-host") {
-        parts.push("--host".to_string());
-        parts.push(host.to_string());
-    }
-    if let Some(port) = args.get("http-port") {
-        parts.push("--port".to_string());
-        parts.push(port.to_string());
-    }
-    if let Some(token) = args.get("http-token") {
-        parts.push("--token".to_string());
-        parts.push(token.to_string());
-    }
-    if args.has("disable-auth") {
-        parts.push("--disable-auth".to_string());
-    }
-    parts.join(" ")
-}
-
-fn build_readiness_checks(config_path: Option<&str>) -> Vec<ProcessReadiness> {
-    let config_dir = rns_net::storage::resolve_config_dir(config_path.map(std::path::Path::new));
-    let config_file = config_dir.join("config");
-    let parsed = if config_file.exists() {
-        rns_net::config::parse_file(&config_file).ok()
-    } else {
-        rns_net::config::parse("").ok()
-    };
-
-    let rpc_addr = parsed
-        .as_ref()
-        .map(|cfg| cfg.reticulum.instance_control_port)
-        .unwrap_or(37429);
-
-    let mut readiness = vec![ProcessReadiness {
-        role: Role::Rnsd,
-        target: ReadinessTarget::Tcp(
-            format!("127.0.0.1:{}", rpc_addr)
-                .parse()
-                .unwrap_or_else(|_| "127.0.0.1:37429".parse().unwrap()),
-        ),
-    }];
-
-    let sidecar_target = ReadinessTarget::ProcessAge(Duration::from_secs(1));
-
-    readiness.push(ProcessReadiness {
-        role: Role::Sentineld,
-        target: sidecar_target.clone(),
-    });
-    readiness.push(ProcessReadiness {
-        role: Role::Statsd,
-        target: sidecar_target,
-    });
-    readiness
 }
 
 fn print_help() {

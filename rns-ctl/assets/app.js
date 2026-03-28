@@ -5,6 +5,12 @@ const serverModeEl = document.getElementById("serverMode");
 const uptimeEl = document.getElementById("uptime");
 const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
+const configPathEl = document.getElementById("configPath");
+const configDirEl = document.getElementById("configDir");
+const statsDbEl = document.getElementById("statsDb");
+const httpBindEl = document.getElementById("httpBind");
+const httpAuthEl = document.getElementById("httpAuth");
+const launchPlanRowsEl = document.getElementById("launchPlanRows");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
 
@@ -123,10 +129,37 @@ function renderProcessEvents(events) {
   }
 }
 
+function renderConfig(config) {
+  configPathEl.textContent = config?.config_path ?? "(default)";
+  configDirEl.textContent = config?.resolved_config_dir ?? "-";
+  statsDbEl.textContent = config?.stats_db_path ?? "-";
+
+  if (config?.http?.enabled) {
+    httpBindEl.textContent = `${config.http.host}:${config.http.port}`;
+    const tokenMode = config.http.token_configured ? "token set" : "token generated at startup";
+    httpAuthEl.textContent = `${config.http.auth_mode}, ${tokenMode}, daemon=${config.http.daemon_mode ? "yes" : "no"}`;
+  } else {
+    httpBindEl.textContent = "disabled";
+    httpAuthEl.textContent = "disabled";
+  }
+
+  launchPlanRowsEl.innerHTML = "";
+  for (const process of config?.launch_plan || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${process.name}</td>
+      <td>${process.bin}</td>
+      <td>${process.args && process.args.length ? process.args.join(" ") : "-"}</td>
+    `;
+    launchPlanRowsEl.appendChild(tr);
+  }
+}
+
 async function refresh() {
   try {
-    const [node, processes, processEvents] = await Promise.all([
+    const [node, config, processes, processEvents] = await Promise.all([
       fetchJson("/api/node"),
+      fetchJson("/api/config"),
       fetchJson("/api/processes"),
       fetchJson("/api/process_events"),
     ]);
@@ -134,6 +167,7 @@ async function refresh() {
     uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
     runningEl.textContent = `${node.processes_running}/${node.process_count}`;
     readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
+    renderConfig(config.config);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
     statusEl.textContent = "Connected";

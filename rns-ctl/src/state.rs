@@ -20,6 +20,7 @@ pub type WsBroadcast = Arc<Mutex<Vec<std::sync::mpsc::Sender<WsEvent>>>>;
 pub struct CtlState {
     pub started_at: Instant,
     pub server_mode: String,
+    pub server_config: Option<ServerConfigSnapshot>,
     pub identity_hash: Option<[u8; 16]>,
     pub identity: Option<Identity>,
     pub announces: VecDeque<AnnounceRecord>,
@@ -46,6 +47,7 @@ impl CtlState {
         CtlState {
             started_at: Instant::now(),
             server_mode: "standalone".into(),
+            server_config: None,
             identity_hash: None,
             identity: None,
             announces: VecDeque::new(),
@@ -107,6 +109,11 @@ pub fn broadcast(ws: &WsBroadcast, event: WsEvent) {
 pub fn set_server_mode(state: &SharedState, mode: impl Into<String>) {
     let mut s = state.write().unwrap();
     s.server_mode = mode.into();
+}
+
+pub fn set_server_config(state: &SharedState, config: ServerConfigSnapshot) {
+    let mut s = state.write().unwrap();
+    s.server_config = Some(config);
 }
 
 pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
@@ -185,7 +192,12 @@ pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i
         ProcessEventRecord::new(
             name.to_string(),
             "stopped",
-            Some(format!("exit_code={}", exit_code.map(|v| v.to_string()).unwrap_or_else(|| "none".into()))),
+            Some(format!(
+                "exit_code={}",
+                exit_code
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "none".into())
+            )),
         ),
     );
 }
@@ -232,17 +244,15 @@ pub fn set_process_readiness(
         process.status_detail.clone()
     };
     let should_record = match s.process_events.back() {
-        Some(last) => last.process != name || last.event != ready_state || last.detail != detail_clone,
+        Some(last) => {
+            last.process != name || last.event != ready_state || last.detail != detail_clone
+        }
         None => true,
     };
     if should_record {
         push_capped(
             &mut s.process_events,
-            ProcessEventRecord::new(
-                name.to_string(),
-                ready_state.to_string(),
-                detail_clone,
-            ),
+            ProcessEventRecord::new(name.to_string(), ready_state.to_string(), detail_clone),
         );
     }
 }
@@ -313,6 +323,33 @@ impl ProcessEventRecord {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigSnapshot {
+    pub config_path: Option<String>,
+    pub resolved_config_dir: String,
+    pub stats_db_path: String,
+    pub http: ServerHttpConfigSnapshot,
+    pub launch_plan: Vec<LaunchProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerHttpConfigSnapshot {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub auth_mode: String,
+    pub token_configured: bool,
+    pub daemon_mode: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LaunchProcessSnapshot {
+    pub name: String,
+    pub bin: String,
+    pub args: Vec<String>,
+    pub command_line: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ManagedProcessState {
     pub name: String,
@@ -353,7 +390,8 @@ impl ManagedProcessState {
     }
 
     pub fn uptime_seconds(&self) -> Option<f64> {
-        self.started_at.map(|started| started.elapsed().as_secs_f64())
+        self.started_at
+            .map(|started| started.elapsed().as_secs_f64())
     }
 
     pub fn last_transition_seconds(&self) -> Option<f64> {

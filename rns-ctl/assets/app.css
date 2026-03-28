@@ -67,6 +67,7 @@ th, td {
   padding: 10px 8px;
   border-bottom: 1px solid var(--line);
   font-size: 14px;
+  vertical-align: top;
 }
 .pill {
   display: inline-block;
