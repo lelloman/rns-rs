@@ -22,7 +22,11 @@ const configChangeRowsEl = document.getElementById("configChangeRows");
 const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
+const logProcessNameEl = document.getElementById("logProcessName");
+const logStatusEl = document.getElementById("logStatus");
+const processLogOutputEl = document.getElementById("processLogOutput");
 let configEditorDirty = false;
+let selectedLogProcess = null;
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -80,8 +84,13 @@ function renderProcesses(processes) {
         <button class="secondary" data-stop="${process.name}">Stop</button>
         <button class="secondary" data-restart="${process.name}">Restart</button>
       </td>
+      <td><button class="secondary" data-logs="${process.name}">View Logs</button></td>
     `;
     processRowsEl.appendChild(tr);
+  }
+
+  if (!selectedLogProcess && processes.length > 0) {
+    selectedLogProcess = processes[0].name;
   }
 
   for (const button of processRowsEl.querySelectorAll("[data-restart]")) {
@@ -121,6 +130,12 @@ function renderProcesses(processes) {
       } catch (error) {
         statusEl.textContent = error.message;
       }
+    });
+  }
+  for (const button of processRowsEl.querySelectorAll("[data-logs]")) {
+    button.addEventListener("click", async () => {
+      selectedLogProcess = button.getAttribute("data-logs");
+      await refreshLogs();
     });
   }
 }
@@ -239,6 +254,36 @@ function renderConfigPlan(plan) {
   }
 }
 
+function renderProcessLogs(process, lines) {
+  logProcessNameEl.textContent = process || "No process selected";
+  if (!process) {
+    logStatusEl.textContent = "Choose a process log stream";
+    processLogOutputEl.textContent = "";
+    return;
+  }
+  logStatusEl.textContent = `${lines.length} recent lines`;
+  processLogOutputEl.textContent = lines
+    .slice()
+    .reverse()
+    .map((entry) => `[${entry.stream}] ${entry.line}`)
+    .join("\n");
+}
+
+async function refreshLogs() {
+  if (!selectedLogProcess) {
+    renderProcessLogs(null, []);
+    return;
+  }
+  try {
+    const payload = await fetchJson(`/api/processes/${selectedLogProcess}/logs?limit=200`);
+    renderProcessLogs(payload.process, payload.lines || []);
+  } catch (error) {
+    logProcessNameEl.textContent = selectedLogProcess;
+    logStatusEl.textContent = error.message;
+    processLogOutputEl.textContent = "";
+  }
+}
+
 async function refresh() {
   try {
     const [node, config, processes, processEvents] = await Promise.all([
@@ -254,6 +299,7 @@ async function refresh() {
     renderConfig(config.config);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
+    await refreshLogs();
     statusEl.textContent = "Connected";
   } catch (error) {
     statusEl.textContent = error.message;

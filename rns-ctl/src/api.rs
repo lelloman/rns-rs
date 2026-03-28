@@ -69,6 +69,9 @@ pub fn handle_request(
         ("GET", "/api/config") => handle_config(state),
         ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/process_events") => handle_process_events(state),
+        ("GET", path) if path.starts_with("/api/processes/") && path.ends_with("/logs") => {
+            handle_process_logs(path, req, state)
+        }
         ("GET", "/api/info") => handle_info(node, state),
         ("GET", "/api/interfaces") => handle_interfaces(node),
         ("GET", "/api/destinations") => handle_destinations(node, state),
@@ -268,6 +271,45 @@ fn handle_process_events(state: &SharedState) -> HttpResponse {
         })
         .collect();
     HttpResponse::ok(json!({ "events": events }))
+}
+
+fn handle_process_logs(path: &str, req: &HttpRequest, state: &SharedState) -> HttpResponse {
+    let Some(name) = path
+        .strip_prefix("/api/processes/")
+        .and_then(|rest| rest.strip_suffix("/logs"))
+    else {
+        return HttpResponse::bad_request("Invalid process logs path");
+    };
+
+    let limit = parse_query(&req.query)
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.min(500))
+        .unwrap_or(200);
+
+    let s = state.read().unwrap();
+    let Some(logs) = s.process_logs.get(name) else {
+        return HttpResponse::not_found();
+    };
+
+    let lines: Vec<Value> = logs
+        .iter()
+        .rev()
+        .take(limit)
+        .map(|entry| {
+            json!({
+                "process": entry.process,
+                "stream": entry.stream,
+                "line": entry.line,
+                "age_seconds": entry.recorded_at.elapsed().as_secs_f64(),
+            })
+        })
+        .collect();
+
+    HttpResponse::ok(json!({
+        "process": name,
+        "lines": lines,
+    }))
 }
 
 fn handle_process_control(path: &str, state: &SharedState, action: &str) -> HttpResponse {

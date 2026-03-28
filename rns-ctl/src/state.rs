@@ -38,6 +38,7 @@ pub struct CtlState {
     pub link_events: VecDeque<LinkEventRecord>,
     pub resource_events: VecDeque<ResourceEventRecord>,
     pub process_events: VecDeque<ProcessEventRecord>,
+    pub process_logs: HashMap<String, VecDeque<ProcessLogRecord>>,
     pub destinations: HashMap<[u8; 16], DestinationEntry>,
     pub processes: HashMap<String, ManagedProcessState>,
     pub control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
@@ -67,6 +68,7 @@ impl CtlState {
             link_events: VecDeque::new(),
             resource_events: VecDeque::new(),
             process_events: VecDeque::new(),
+            process_logs: HashMap::new(),
             destinations: HashMap::new(),
             processes: HashMap::new(),
             control_tx: None,
@@ -143,10 +145,25 @@ pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
     s.processes
         .entry(name.clone())
         .or_insert_with(|| ManagedProcessState::new(name.clone()));
+    s.process_logs.entry(name.clone()).or_default();
     push_capped(
         &mut s.process_events,
         ProcessEventRecord::new(name, "registered", Some("process registered".into())),
     );
+}
+
+pub fn push_process_log(state: &SharedState, name: &str, stream: &str, line: impl Into<String>) {
+    let mut s = state.write().unwrap();
+    let logs = s.process_logs.entry(name.to_string()).or_default();
+    if logs.len() >= MAX_RECORDS {
+        logs.pop_front();
+    }
+    logs.push_back(ProcessLogRecord {
+        process: name.to_string(),
+        stream: stream.to_string(),
+        line: line.into(),
+        recorded_at: Instant::now(),
+    });
 }
 
 pub fn set_control_tx(state: &SharedState, tx: mpsc::Sender<ProcessControlCommand>) {
@@ -330,6 +347,14 @@ pub struct ProcessEventRecord {
     pub process: String,
     pub event: String,
     pub detail: Option<String>,
+    pub recorded_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessLogRecord {
+    pub process: String,
+    pub stream: String,
+    pub line: String,
     pub recorded_at: Instant,
 }
 

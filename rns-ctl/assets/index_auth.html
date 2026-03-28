@@ -51,10 +51,20 @@
             <th>Last Exit</th>
             <th>Detail</th>
             <th>Action</th>
+            <th>Logs</th>
           </tr>
         </thead>
         <tbody id="processRows"></tbody>
       </table>
+    </section>
+
+    <section class="panel" style="margin-top: 18px;">
+      <h2>Process Logs</h2>
+      <div class="row" style="margin-bottom: 12px;">
+        <strong id="logProcessName">No process selected</strong>
+        <span id="logStatus" class="muted">Choose a process log stream</span>
+      </div>
+      <pre id="processLogOutput" class="json-block"></pre>
     </section>
 
     <section class="panel" style="margin-top: 18px;">

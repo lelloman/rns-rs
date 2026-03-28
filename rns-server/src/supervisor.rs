@@ -1,14 +1,16 @@
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
-    mark_process_stopped, set_process_readiness, ProcessControlCommand, SharedState,
+    mark_process_stopped, push_process_log, set_process_readiness, ProcessControlCommand,
+    SharedState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +301,8 @@ fn spawn_child(
     log::info!("starting {}", spec.command_line());
     let mut command = Command::new(&spec.bin);
     command.args(&spec.args);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
     let child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
@@ -310,12 +314,60 @@ fn spawn_child(
         }
     };
     if let Some(state) = shared_state {
+        if let Some(stdout) = child.stdout.as_ref() {
+            let _ = stdout;
+        }
         mark_process_running(state, spec.role.display_name(), child.id());
     }
-    Ok(ManagedChild {
+    let mut managed = ManagedChild {
         role: spec.role,
         child,
-    })
+    };
+    if let Some(state) = shared_state {
+        attach_log_streams(&mut managed, state.clone());
+    }
+    Ok(managed)
+}
+
+fn attach_log_streams(child: &mut ManagedChild, state: SharedState) {
+    let process_name = child.role.display_name().to_string();
+
+    if let Some(stdout) = child.child.stdout.take() {
+        let state = state.clone();
+        let process_name = process_name.clone();
+        let _ = thread::Builder::new()
+            .name(format!("{}-stdout", process_name))
+            .spawn(move || read_log_stream(stdout, state, process_name, "stdout"));
+    }
+
+    if let Some(stderr) = child.child.stderr.take() {
+        let _ = thread::Builder::new()
+            .name(format!("{}-stderr", process_name))
+            .spawn(move || read_log_stream(stderr, state, process_name, "stderr"));
+    }
+}
+
+fn read_log_stream<R: io::Read + Send + 'static>(
+    stream: R,
+    state: SharedState,
+    process_name: String,
+    stream_name: &'static str,
+) {
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        match line {
+            Ok(line) => push_process_log(&state, &process_name, stream_name, line),
+            Err(err) => {
+                push_process_log(
+                    &state,
+                    &process_name,
+                    stream_name,
+                    format!("log stream read error: {}", err),
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn check_exits(children: &mut [ManagedChild]) -> Result<Option<(Role, ExitStatus)>, String> {
