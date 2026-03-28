@@ -98,8 +98,8 @@ pub fn prepare_embedded_with_state(
     }
 
     // Create shared state and broadcast registry
-    let shared_state =
-        shared_state_override.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(state::CtlState::new())));
+    let shared_state = shared_state_override
+        .unwrap_or_else(|| Arc::new(std::sync::RwLock::new(state::CtlState::new())));
     let ws_broadcast: state::WsBroadcast = Arc::new(Mutex::new(Vec::new()));
 
     // Create callbacks

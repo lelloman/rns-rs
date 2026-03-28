@@ -28,4 +28,3 @@ fn main() {
     let version = format!("{}.{}.{}-{}", major, minor, commit_count, commit_hash);
     println!("cargo:rustc-env=FULL_VERSION={}", version);
 }
-

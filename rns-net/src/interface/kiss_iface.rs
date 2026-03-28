@@ -613,25 +613,13 @@ mod tests {
             data.extend_from_slice(&buf[..n]);
 
             let have_all = data.windows(4).any(|w| {
-                w[0] == kiss::FEND
-                    && w[1] == kiss::CMD_TXDELAY
-                    && w[2] == 35
-                    && w[3] == kiss::FEND
+                w[0] == kiss::FEND && w[1] == kiss::CMD_TXDELAY && w[2] == 35 && w[3] == kiss::FEND
             }) && data.windows(4).any(|w| {
-                w[0] == kiss::FEND
-                    && w[1] == kiss::CMD_TXTAIL
-                    && w[2] == 2
-                    && w[3] == kiss::FEND
+                w[0] == kiss::FEND && w[1] == kiss::CMD_TXTAIL && w[2] == 2 && w[3] == kiss::FEND
             }) && data.windows(4).any(|w| {
-                w[0] == kiss::FEND
-                    && w[1] == kiss::CMD_P
-                    && w[2] == 64
-                    && w[3] == kiss::FEND
+                w[0] == kiss::FEND && w[1] == kiss::CMD_P && w[2] == 64 && w[3] == kiss::FEND
             }) && data.windows(4).any(|w| {
-                w[0] == kiss::FEND
-                    && w[1] == kiss::CMD_SLOTTIME
-                    && w[2] == 2
-                    && w[3] == kiss::FEND
+                w[0] == kiss::FEND && w[1] == kiss::CMD_SLOTTIME && w[2] == 2 && w[3] == kiss::FEND
             });
             if have_all {
                 break;

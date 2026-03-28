@@ -38,7 +38,12 @@ impl HttpResponse {
     }
 
     pub fn html(body: &str) -> Self {
-        Self::bytes(200, "OK", "text/html; charset=utf-8", body.as_bytes().to_vec())
+        Self::bytes(
+            200,
+            "OK",
+            "text/html; charset=utf-8",
+            body.as_bytes().to_vec(),
+        )
     }
 
     pub fn created(body: serde_json::Value) -> Self {
