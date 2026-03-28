@@ -17,9 +17,12 @@ const validateConfigButton = document.getElementById("validateConfig");
 const saveConfigButton = document.getElementById("saveConfig");
 const applyConfigButton = document.getElementById("applyConfig");
 const configValidationStatusEl = document.getElementById("configValidationStatus");
+const configPlanSummaryEl = document.getElementById("configPlanSummary");
+const configChangeRowsEl = document.getElementById("configChangeRows");
 const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
+let configEditorDirty = false;
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -163,6 +166,10 @@ function renderConfig(config) {
     `;
     launchPlanRowsEl.appendChild(tr);
   }
+
+  if (!configEditorDirty) {
+    configCandidateEl.value = config?.server_config_file_json ?? "";
+  }
 }
 
 async function validateConfigCandidate() {
@@ -178,7 +185,7 @@ async function applyConfigCandidate() {
 }
 
 async function runConfigAction(path, pendingMessage, actionLabel) {
-  configValidationStatusEl.textContent = "Validating...";
+  configValidationStatusEl.textContent = pendingMessage;
   configValidationResultEl.textContent = "";
   try {
     const response = await fetch(path, {
@@ -195,10 +202,40 @@ async function runConfigAction(path, pendingMessage, actionLabel) {
     }
     configValidationStatusEl.textContent = `${actionLabel} succeeded`;
     configValidationResultEl.textContent = JSON.stringify(payload.result, null, 2);
+    renderConfigPlan(payload.result?.apply_plan);
+    if (path !== "/api/config/validate") {
+      configEditorDirty = false;
+    }
     await refresh();
   } catch (error) {
     configValidationStatusEl.textContent = `${actionLabel} failed`;
     configValidationResultEl.textContent = error.message;
+  }
+}
+
+function renderConfigPlan(plan) {
+  if (!plan) {
+    configPlanSummaryEl.textContent = "No plan yet";
+    configChangeRowsEl.innerHTML = "";
+    return;
+  }
+
+  const restartList = plan.processes_to_restart?.length
+    ? plan.processes_to_restart.join(", ")
+    : "none";
+  const controlPlane = plan.control_plane_restart_required ? "yes" : "no";
+  configPlanSummaryEl.textContent = `Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.`;
+
+  configChangeRowsEl.innerHTML = "";
+  for (const change of plan.changes || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${change.field}</td>
+      <td>${change.before}</td>
+      <td>${change.after}</td>
+      <td>${change.effect}</td>
+    `;
+    configChangeRowsEl.appendChild(tr);
   }
 }
 
@@ -226,6 +263,9 @@ async function refresh() {
 saveButton.addEventListener("click", () => {
   localStorage.setItem("rnsctl_token", tokenInput.value.trim());
   refresh();
+});
+configCandidateEl.addEventListener("input", () => {
+  configEditorDirty = true;
 });
 
 validateConfigButton.addEventListener("click", () => {

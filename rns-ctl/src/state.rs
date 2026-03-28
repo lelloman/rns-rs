@@ -350,6 +350,7 @@ pub struct ServerConfigSnapshot {
     pub resolved_config_dir: String,
     pub server_config_file_path: String,
     pub server_config_file_present: bool,
+    pub server_config_file_json: String,
     pub stats_db_path: String,
     pub http: ServerHttpConfigSnapshot,
     pub launch_plan: Vec<LaunchProcessSnapshot>,
@@ -392,6 +393,15 @@ pub struct ServerConfigApplyPlan {
     pub processes_to_restart: Vec<String>,
     pub control_plane_restart_required: bool,
     pub notes: Vec<String>,
+    pub changes: Vec<ServerConfigChange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigChange {
+    pub field: String,
+    pub before: String,
+    pub after: String,
+    pub effect: String,
 }
 
 #[derive(Debug, Clone, Copy)]

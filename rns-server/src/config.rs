@@ -3,9 +3,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use rns_ctl::state::{
-    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigApplyPlan, ServerConfigMutationMode,
-    ServerConfigMutationResult, ServerConfigSnapshot, ServerConfigValidationSnapshot,
-    ServerHttpConfigSnapshot, SharedState,
+    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigApplyPlan, ServerConfigChange,
+    ServerConfigMutationMode, ServerConfigMutationResult, ServerConfigSnapshot,
+    ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +18,7 @@ pub struct ServerConfig {
     pub resolved_config_dir: PathBuf,
     pub server_config_file_path: PathBuf,
     pub server_config_file_present: bool,
+    pub file_config: ServerConfigFile,
     pub stats_db_path: PathBuf,
     pub rnsd_bin: PathBuf,
     pub sentineld_bin: PathBuf,
@@ -199,6 +200,7 @@ impl ServerConfig {
             resolved_config_dir: self.resolved_config_dir.display().to_string(),
             server_config_file_path: self.server_config_file_path.display().to_string(),
             server_config_file_present: self.server_config_file_present,
+            server_config_file_json: self.editable_file_json(),
             stats_db_path: self.stats_db_path.display().to_string(),
             http: ServerHttpConfigSnapshot {
                 enabled: self.http.enabled,
@@ -424,6 +426,7 @@ impl ServerConfig {
             resolved_config_dir,
             server_config_file_path,
             server_config_file_present,
+            file_config: file_cfg.clone(),
             stats_db_path,
             rnsd_bin,
             sentineld_bin,
@@ -471,13 +474,39 @@ impl ServerConfig {
         let current_specs = self.process_specs();
         let next_specs = next.process_specs();
         let mut processes_to_restart = Vec::new();
+        let mut changes = Vec::new();
 
         for current in &current_specs {
             let Some(next_spec) = next_specs.iter().find(|spec| spec.role == current.role) else {
                 continue;
             };
             if current.bin != next_spec.bin || current.args != next_spec.args {
-                processes_to_restart.push(current.role.display_name().to_string());
+                let name = current.role.display_name().to_string();
+                processes_to_restart.push(name.clone());
+                if current.bin != next_spec.bin {
+                    changes.push(ServerConfigChange {
+                        field: format!("{name}.bin"),
+                        before: current.bin.display().to_string(),
+                        after: next_spec.bin.display().to_string(),
+                        effect: format!("restart {name}"),
+                    });
+                }
+                if current.args != next_spec.args {
+                    changes.push(ServerConfigChange {
+                        field: format!("{name}.args"),
+                        before: if current.args.is_empty() {
+                            "(none)".into()
+                        } else {
+                            current.args.join(" ")
+                        },
+                        after: if next_spec.args.is_empty() {
+                            "(none)".into()
+                        } else {
+                            next_spec.args.join(" ")
+                        },
+                        effect: format!("restart {name}"),
+                    });
+                }
             }
         }
 
@@ -486,6 +515,55 @@ impl ServerConfig {
             || self.http.port != next.http.port
             || self.http.auth_token != next.http.auth_token
             || self.http.disable_auth != next.http.disable_auth;
+
+        if self.stats_db_path != next.stats_db_path {
+            changes.push(ServerConfigChange {
+                field: "stats_db_path".into(),
+                before: self.stats_db_path.display().to_string(),
+                after: next.stats_db_path.display().to_string(),
+                effect: "restart rns-statsd".into(),
+            });
+        }
+        if self.http.enabled != next.http.enabled {
+            changes.push(ServerConfigChange {
+                field: "http.enabled".into(),
+                before: self.http.enabled.to_string(),
+                after: next.http.enabled.to_string(),
+                effect: "restart rns-server".into(),
+            });
+        }
+        if self.http.host != next.http.host {
+            changes.push(ServerConfigChange {
+                field: "http.host".into(),
+                before: self.http.host.clone(),
+                after: next.http.host.clone(),
+                effect: "restart rns-server".into(),
+            });
+        }
+        if self.http.port != next.http.port {
+            changes.push(ServerConfigChange {
+                field: "http.port".into(),
+                before: self.http.port.to_string(),
+                after: next.http.port.to_string(),
+                effect: "restart rns-server".into(),
+            });
+        }
+        if self.http.disable_auth != next.http.disable_auth {
+            changes.push(ServerConfigChange {
+                field: "http.disable_auth".into(),
+                before: self.http.disable_auth.to_string(),
+                after: next.http.disable_auth.to_string(),
+                effect: "restart rns-server".into(),
+            });
+        }
+        if self.http.auth_token != next.http.auth_token {
+            changes.push(ServerConfigChange {
+                field: "http.auth_token".into(),
+                before: mask_token(&self.http.auth_token),
+                after: mask_token(&next.http.auth_token),
+                effect: "restart rns-server".into(),
+            });
+        }
 
         let mut notes = Vec::new();
         if processes_to_restart.is_empty() {
@@ -507,7 +585,13 @@ impl ServerConfig {
             processes_to_restart,
             control_plane_restart_required,
             notes,
+            changes,
         }
+    }
+
+    fn editable_file_json(&self) -> String {
+        serde_json::to_string_pretty(&self.file_config)
+            .unwrap_or_else(|_| "{\n  \"http\": {}\n}".into())
     }
 }
 
@@ -519,4 +603,11 @@ fn env_true(name: &str) -> bool {
     std::env::var(name)
         .map(|value| value == "true" || value == "1")
         .unwrap_or(false)
+}
+
+fn mask_token(token: &Option<String>) -> String {
+    match token {
+        Some(value) if !value.is_empty() => format!("set({} chars)", value.len()),
+        _ => "unset".into(),
+    }
 }

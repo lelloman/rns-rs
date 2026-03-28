@@ -89,6 +89,21 @@
           <button id="applyConfig" class="secondary">Save + Apply</button>
           <span id="configValidationStatus" class="muted">No validation run yet</span>
         </div>
+        <div style="margin-top: 12px;">
+          <strong>Plan Summary</strong>
+          <div id="configPlanSummary" class="muted" style="margin-top: 6px;">No plan yet</div>
+        </div>
+        <table style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Before</th>
+              <th>After</th>
+              <th>Effect</th>
+            </tr>
+          </thead>
+          <tbody id="configChangeRows"></tbody>
+        </table>
         <pre id="configValidationResult" class="json-block"></pre>
       </div>
     </section>
