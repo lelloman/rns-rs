@@ -9,6 +9,7 @@ COPY rns-ctl rns-ctl
 COPY rns-hooks rns-hooks
 COPY rns-stats-hook rns-stats-hook
 COPY rns-sentinel-hook rns-sentinel-hook
+COPY rns-server rns-server
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo build --release --bin rns-ctl --bin rns-sentineld --features rns-hooks
 

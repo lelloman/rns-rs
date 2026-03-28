@@ -37,7 +37,6 @@ jobs:
 
   docker-e2e:
     name: Docker E2E
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
