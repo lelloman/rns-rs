@@ -12,7 +12,7 @@ use rns_ctl::state::{
     mark_process_stopped, push_process_log, set_process_readiness, ProcessControlCommand,
     SharedState,
 };
-use rns_net::{RpcAddr, RpcClient};
+use rns_net::{HookInfo, RpcAddr, RpcClient};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -324,15 +324,7 @@ fn probe_hook_set(
         .list_hooks()
         .map_err(|err| format!("list_hooks failed: {}", err))?;
 
-    let missing: Vec<String> = required_hooks
-        .iter()
-        .filter(|(name, attach_point)| {
-            !hooks.iter().any(|hook| {
-                hook.name == *name && hook.attach_point == *attach_point && hook.enabled
-            })
-        })
-        .map(|(name, attach_point)| format!("{name}@{attach_point}"))
-        .collect();
+    let missing = missing_required_hooks(&hooks, required_hooks);
 
     if missing.is_empty() {
         Ok((
@@ -342,6 +334,18 @@ fn probe_hook_set(
     } else {
         Ok((false, format!("missing hooks: {}", missing.join(", "))))
     }
+}
+
+fn missing_required_hooks(hooks: &[HookInfo], required_hooks: &[(String, String)]) -> Vec<String> {
+    required_hooks
+        .iter()
+        .filter(|(name, attach_point)| {
+            !hooks.iter().any(|hook| {
+                hook.name == *name && hook.attach_point == *attach_point && hook.enabled
+            })
+        })
+        .map(|(name, attach_point)| format!("{name}@{attach_point}"))
+        .collect()
 }
 
 fn spawn_child(
@@ -499,7 +503,8 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessSpec, Role, SupervisorConfig};
+    use super::{missing_required_hooks, role_from_name, ProcessSpec, Role, SupervisorConfig};
+    use rns_net::HookInfo;
     use std::path::PathBuf;
 
     #[test]
@@ -549,5 +554,45 @@ mod tests {
             args: vec!["--config".into(), "/data".into()],
         };
         assert_eq!(spec.command_line(), "rnsd --config /data");
+    }
+
+    #[test]
+    fn role_from_name_maps_known_processes() {
+        assert_eq!(role_from_name("rnsd"), Some(Role::Rnsd));
+        assert_eq!(role_from_name("rns-sentineld"), Some(Role::Sentineld));
+        assert_eq!(role_from_name("rns-statsd"), Some(Role::Statsd));
+        assert_eq!(role_from_name("unknown"), None);
+    }
+
+    #[test]
+    fn missing_required_hooks_requires_enabled_hook_match() {
+        let hooks = vec![
+            HookInfo {
+                name: "hook-a".into(),
+                attach_point: "AttachA".into(),
+                priority: 0,
+                enabled: true,
+                consecutive_traps: 0,
+            },
+            HookInfo {
+                name: "hook-b".into(),
+                attach_point: "AttachB".into(),
+                priority: 0,
+                enabled: false,
+                consecutive_traps: 0,
+            },
+        ];
+        let required = vec![
+            ("hook-a".to_string(), "AttachA".to_string()),
+            ("hook-b".to_string(), "AttachB".to_string()),
+            ("hook-c".to_string(), "AttachC".to_string()),
+        ];
+
+        let missing = missing_required_hooks(&hooks, &required);
+
+        assert_eq!(
+            missing,
+            vec!["hook-b@AttachB".to_string(), "hook-c@AttachC".to_string()]
+        );
     }
 }

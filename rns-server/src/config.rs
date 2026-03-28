@@ -646,3 +646,76 @@ fn mask_token(token: &Option<String>) -> String {
         _ => "unset".into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{HttpConfig, ServerConfig, ServerConfigFile, ServerHttpConfigFile};
+    use std::path::PathBuf;
+
+    fn test_config() -> ServerConfig {
+        ServerConfig {
+            config_path: Some(PathBuf::from("/tmp/rns")),
+            resolved_config_dir: PathBuf::from("/tmp/rns"),
+            server_config_file_path: PathBuf::from("/tmp/rns/rns-server.json"),
+            server_config_file_present: true,
+            file_config: ServerConfigFile::default(),
+            stats_db_path: PathBuf::from("/tmp/rns/stats.db"),
+            rnsd_bin: PathBuf::from("rnsd"),
+            sentineld_bin: PathBuf::from("rns-sentineld"),
+            statsd_bin: PathBuf::from("rns-statsd"),
+            http: HttpConfig {
+                enabled: true,
+                host: "127.0.0.1".into(),
+                port: 8080,
+                auth_token: None,
+                disable_auth: false,
+                daemon_mode: true,
+            },
+            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn apply_plan_restarts_statsd_when_db_changes() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                stats_db_path: Some("/tmp/rns/other-stats.db".into()),
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.processes_to_restart, vec!["rns-statsd".to_string()]);
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.field == "stats_db_path"));
+    }
+
+    #[test]
+    fn apply_plan_requires_server_restart_for_http_port_change() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                http: ServerHttpConfigFile {
+                    port: Some(9090),
+                    ..ServerHttpConfigFile::default()
+                },
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert!(plan.control_plane_restart_required);
+        assert!(plan.processes_to_restart.is_empty());
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.field == "http.port" && change.after == "9090"));
+    }
+}
