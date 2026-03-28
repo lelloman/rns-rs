@@ -499,28 +499,55 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Role, SupervisorConfig};
+    use super::{ProcessSpec, Role, SupervisorConfig};
     use std::path::PathBuf;
 
     #[test]
-    fn builds_expected_specs() {
-        let config = SupervisorConfig {
-            config_path: Some(PathBuf::from("/tmp/rns")),
-            stats_db_path: PathBuf::from("/tmp/rns/stats.db"),
-            rnsd_bin: PathBuf::from("rnsd"),
-            sentineld_bin: PathBuf::from("rns-sentineld"),
-            statsd_bin: PathBuf::from("rns-statsd"),
+    fn supervisor_holds_expected_specs() {
+        let specs = vec![
+            ProcessSpec {
+                role: Role::Rnsd,
+                bin: PathBuf::from("rnsd"),
+                args: vec!["--config".into(), "/tmp/rns".into()],
+            },
+            ProcessSpec {
+                role: Role::Sentineld,
+                bin: PathBuf::from("rns-sentineld"),
+                args: vec!["--config".into(), "/tmp/rns".into()],
+            },
+            ProcessSpec {
+                role: Role::Statsd,
+                bin: PathBuf::from("rns-statsd"),
+                args: vec![
+                    "--config".into(),
+                    "/tmp/rns".into(),
+                    "--db".into(),
+                    "/tmp/rns/stats.db".into(),
+                ],
+            },
+        ];
+
+        let supervisor = SupervisorConfig {
+            specs,
             shared_state: None,
             control_rx: None,
             readiness: Vec::new(),
-            dry_run: false,
         };
 
-        let specs = config.process_specs();
-        assert_eq!(specs.len(), 3);
-        assert_eq!(specs[0].role, Role::Rnsd);
-        assert_eq!(specs[1].role, Role::Sentineld);
-        assert_eq!(specs[2].role, Role::Statsd);
-        assert!(specs[2].args.iter().any(|arg| arg == "--db"));
+        assert_eq!(supervisor.specs.len(), 3);
+        assert_eq!(supervisor.specs[0].role, Role::Rnsd);
+        assert_eq!(supervisor.specs[1].role, Role::Sentineld);
+        assert_eq!(supervisor.specs[2].role, Role::Statsd);
+        assert!(supervisor.specs[2].args.iter().any(|arg| arg == "--db"));
+    }
+
+    #[test]
+    fn process_spec_command_line() {
+        let spec = ProcessSpec {
+            role: Role::Rnsd,
+            bin: PathBuf::from("rnsd"),
+            args: vec!["--config".into(), "/data".into()],
+        };
+        assert_eq!(spec.command_line(), "rnsd --config /data");
     }
 }

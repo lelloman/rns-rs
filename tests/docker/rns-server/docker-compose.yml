@@ -1,0 +1,19 @@
+networks:
+  rns-server-test:
+    driver: bridge
+
+services:
+  rns-server:
+    image: rns-server-test
+    container_name: rns-server-test
+    volumes:
+      - ./configs/node:/etc/rns:ro
+    ports:
+      - "8090:8080"
+    networks:
+      - rns-server-test
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

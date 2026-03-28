@@ -244,6 +244,9 @@ run_standalone() {
 run_standalone "${SCRIPT_DIR}/shared-client-reconnect" \
   "Shared client reconnection (issue #3)"
 
+run_standalone "${SCRIPT_DIR}/rns-server" \
+  "rns-server process supervision"
+
 ELAPSED=$(( SECONDS - START_TIME ))
 
 # ── Summary ───────────────────────────────────────────────────────────────────
