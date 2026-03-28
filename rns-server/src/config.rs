@@ -3,9 +3,10 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use rns_ctl::state::{
-    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigSnapshot, ServerHttpConfigSnapshot,
-    SharedState,
+    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigSnapshot,
+    ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::args::Args;
 use crate::supervisor::{ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig};
@@ -14,6 +15,8 @@ use crate::supervisor::{ProcessReadiness, ProcessSpec, ReadinessTarget, Role, Su
 pub struct ServerConfig {
     pub config_path: Option<PathBuf>,
     pub resolved_config_dir: PathBuf,
+    pub server_config_file_path: PathBuf,
+    pub server_config_file_present: bool,
     pub stats_db_path: PathBuf,
     pub rnsd_bin: PathBuf,
     pub sentineld_bin: PathBuf,
@@ -32,50 +35,84 @@ pub struct HttpConfig {
     pub daemon_mode: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerConfigFile {
+    #[serde(default)]
+    pub stats_db_path: Option<String>,
+    #[serde(default)]
+    pub rnsd_bin: Option<String>,
+    #[serde(default)]
+    pub sentineld_bin: Option<String>,
+    #[serde(default)]
+    pub statsd_bin: Option<String>,
+    #[serde(default)]
+    pub http: ServerHttpConfigFile,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerHttpConfigFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    #[serde(default)]
+    pub disable_auth: Option<bool>,
+}
+
 impl ServerConfig {
     pub fn from_args(args: &Args) -> Self {
         let config_path = args.config_path().map(PathBuf::from);
         let resolved_config_dir =
             rns_net::storage::resolve_config_dir(args.config_path().map(Path::new));
-        let stats_db_path = args
-            .get("stats-db")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| resolved_config_dir.join("stats.db"));
-        let rnsd_bin = args
-            .get("rnsd-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rnsd"));
-        let sentineld_bin = args
-            .get("sentineld-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rns-sentineld"));
-        let statsd_bin = args
-            .get("statsd-bin")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("rns-statsd"));
-
-        let ctl_cfg = rns_ctl::config::from_args_and_env(&Self::ctl_args_from_server_args(args));
-        let rpc_port = Self::resolve_rpc_port(&resolved_config_dir);
-
-        Self {
+        let server_config_file_path = resolved_config_dir.join("rns-server.json");
+        let (file_cfg, file_present) = Self::load_config_file(&server_config_file_path)
+            .unwrap_or_else(|err| {
+                log::warn!(
+                    "failed to load server config file {}: {}",
+                    server_config_file_path.display(),
+                    err
+                );
+                (ServerConfigFile::default(), false)
+            });
+        Self::build(
             config_path,
             resolved_config_dir,
-            stats_db_path,
-            rnsd_bin,
-            sentineld_bin,
-            statsd_bin,
-            http: HttpConfig {
-                enabled: !args.has("no-http"),
-                host: ctl_cfg.host,
-                port: ctl_cfg.port,
-                auth_token: ctl_cfg.auth_token,
-                disable_auth: ctl_cfg.disable_auth,
-                daemon_mode: ctl_cfg.daemon_mode,
-            },
-            rnsd_rpc_addr: format!("127.0.0.1:{rpc_port}")
-                .parse()
-                .unwrap_or_else(|_| "127.0.0.1:37429".parse().unwrap()),
-        }
+            server_config_file_path,
+            file_present,
+            &file_cfg,
+            Some(args),
+        )
+    }
+
+    pub fn validate_json_with_current_context(
+        &self,
+        body: &[u8],
+    ) -> Result<ServerConfigValidationSnapshot, String> {
+        let candidate = Self::parse_config_json(body)?;
+        let validated = Self::build(
+            self.config_path.clone(),
+            self.resolved_config_dir.clone(),
+            self.server_config_file_path.clone(),
+            self.server_config_file_present,
+            &candidate,
+            None,
+        );
+
+        let mut warnings = Vec::new();
+        warnings.push(format!(
+            "Validation used config dir {} and did not write any files.",
+            self.resolved_config_dir.display()
+        ));
+
+        Ok(ServerConfigValidationSnapshot {
+            valid: true,
+            config: validated.snapshot(),
+            warnings,
+        })
     }
 
     pub fn supervisor_config(
@@ -118,6 +155,8 @@ impl ServerConfig {
                 .as_ref()
                 .map(|path| path.display().to_string()),
             resolved_config_dir: self.resolved_config_dir.display().to_string(),
+            server_config_file_path: self.server_config_file_path.display().to_string(),
+            server_config_file_present: self.server_config_file_present,
             stats_db_path: self.stats_db_path.display().to_string(),
             http: ServerHttpConfigSnapshot {
                 enabled: self.http.enabled,
@@ -263,4 +302,125 @@ impl ServerConfig {
             .map(|cfg| cfg.reticulum.instance_control_port)
             .unwrap_or(37429)
     }
+
+    fn build(
+        config_path: Option<PathBuf>,
+        resolved_config_dir: PathBuf,
+        server_config_file_path: PathBuf,
+        server_config_file_present: bool,
+        file_cfg: &ServerConfigFile,
+        args: Option<&Args>,
+    ) -> Self {
+        let ctl_cfg = args
+            .map(Self::ctl_args_from_server_args)
+            .map(|ctl_args| rns_ctl::config::from_args_and_env(&ctl_args));
+
+        let stats_db_path = args
+            .and_then(|args| args.get("stats-db"))
+            .map(PathBuf::from)
+            .or_else(|| file_cfg.stats_db_path.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| resolved_config_dir.join("stats.db"));
+        let rnsd_bin = args
+            .and_then(|args| args.get("rnsd-bin"))
+            .map(PathBuf::from)
+            .or_else(|| file_cfg.rnsd_bin.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("rnsd"));
+        let sentineld_bin = args
+            .and_then(|args| args.get("sentineld-bin"))
+            .map(PathBuf::from)
+            .or_else(|| file_cfg.sentineld_bin.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("rns-sentineld"));
+        let statsd_bin = args
+            .and_then(|args| args.get("statsd-bin"))
+            .map(PathBuf::from)
+            .or_else(|| file_cfg.statsd_bin.as_ref().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("rns-statsd"));
+
+        let http_enabled = if args.is_some_and(|args| args.has("no-http")) {
+            false
+        } else {
+            file_cfg.http.enabled.unwrap_or(true)
+        };
+        let http_host = ctl_cfg
+            .as_ref()
+            .map(|cfg| cfg.host.clone())
+            .filter(|_| {
+                args.is_some_and(|args| args.get("http-host").is_some())
+                    || env_present("RNSCTL_HOST")
+            })
+            .or_else(|| file_cfg.http.host.clone())
+            .unwrap_or_else(|| "127.0.0.1".into());
+        let http_port = ctl_cfg
+            .as_ref()
+            .map(|cfg| cfg.port)
+            .filter(|_| {
+                args.is_some_and(|args| args.get("http-port").is_some())
+                    || env_present("RNSCTL_HTTP_PORT")
+            })
+            .or(file_cfg.http.port)
+            .unwrap_or(8080);
+        let http_auth_token = ctl_cfg
+            .as_ref()
+            .and_then(|cfg| cfg.auth_token.clone())
+            .filter(|_| {
+                args.is_some_and(|args| args.get("http-token").is_some())
+                    || env_present("RNSCTL_AUTH_TOKEN")
+            })
+            .or_else(|| file_cfg.http.auth_token.clone());
+        let http_disable_auth = if args.is_some_and(|args| args.has("disable-auth"))
+            || env_true("RNSCTL_DISABLE_AUTH")
+        {
+            true
+        } else {
+            file_cfg.http.disable_auth.unwrap_or(false)
+        };
+
+        let rpc_port = Self::resolve_rpc_port(&resolved_config_dir);
+
+        Self {
+            config_path,
+            resolved_config_dir,
+            server_config_file_path,
+            server_config_file_present,
+            stats_db_path,
+            rnsd_bin,
+            sentineld_bin,
+            statsd_bin,
+            http: HttpConfig {
+                enabled: http_enabled,
+                host: http_host,
+                port: http_port,
+                auth_token: http_auth_token,
+                disable_auth: http_disable_auth,
+                daemon_mode: true,
+            },
+            rnsd_rpc_addr: format!("127.0.0.1:{rpc_port}")
+                .parse()
+                .unwrap_or_else(|_| "127.0.0.1:37429".parse().unwrap()),
+        }
+    }
+
+    fn load_config_file(path: &Path) -> Result<(ServerConfigFile, bool), String> {
+        if !path.exists() {
+            return Ok((ServerConfigFile::default(), false));
+        }
+        let body = std::fs::read(path)
+            .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+        let cfg = Self::parse_config_json(&body)?;
+        Ok((cfg, true))
+    }
+
+    fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, String> {
+        serde_json::from_slice(body).map_err(|err| format!("invalid server config JSON: {}", err))
+    }
+}
+
+fn env_present(name: &str) -> bool {
+    std::env::var_os(name).is_some()
+}
+
+fn env_true(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false)
 }

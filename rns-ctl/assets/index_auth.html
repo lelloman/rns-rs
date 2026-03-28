@@ -63,6 +63,7 @@
         <tbody>
           <tr><th>Config Path</th><td id="configPath">-</td></tr>
           <tr><th>Resolved Config Dir</th><td id="configDir">-</td></tr>
+          <tr><th>Server Config File</th><td id="serverConfigFile">-</td></tr>
           <tr><th>Stats DB</th><td id="statsDb">-</td></tr>
           <tr><th>HTTP Bind</th><td id="httpBind">-</td></tr>
           <tr><th>HTTP Auth</th><td id="httpAuth">-</td></tr>
@@ -78,6 +79,16 @@
         </thead>
         <tbody id="launchPlanRows"></tbody>
       </table>
+      <div style="margin-top: 18px;">
+        <h3>Validate Candidate Config</h3>
+        <p>Paste a candidate <code>rns-server.json</code> payload and validate it without writing any files.</p>
+        <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
+        <div class="row" style="margin-top: 12px;">
+          <button id="validateConfig" class="secondary">Validate Config</button>
+          <span id="configValidationStatus" class="muted">No validation run yet</span>
+        </div>
+        <pre id="configValidationResult" class="json-block"></pre>
+      </div>
     </section>
 
     <section class="panel links" style="margin-top: 18px;">

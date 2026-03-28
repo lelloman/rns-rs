@@ -45,6 +45,20 @@ p { color: var(--muted); line-height: 1.5; }
   background: var(--panel-2);
   color: var(--text);
 }
+.candidate, .json-block {
+  width: 100%;
+  min-height: 180px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+.json-block {
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
 button {
   padding: 10px 14px;
   border: 0;

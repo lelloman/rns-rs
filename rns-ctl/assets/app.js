@@ -7,10 +7,15 @@ const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
 const configPathEl = document.getElementById("configPath");
 const configDirEl = document.getElementById("configDir");
+const serverConfigFileEl = document.getElementById("serverConfigFile");
 const statsDbEl = document.getElementById("statsDb");
 const httpBindEl = document.getElementById("httpBind");
 const httpAuthEl = document.getElementById("httpAuth");
 const launchPlanRowsEl = document.getElementById("launchPlanRows");
+const configCandidateEl = document.getElementById("configCandidate");
+const validateConfigButton = document.getElementById("validateConfig");
+const configValidationStatusEl = document.getElementById("configValidationStatus");
+const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
 
@@ -132,6 +137,9 @@ function renderProcessEvents(events) {
 function renderConfig(config) {
   configPathEl.textContent = config?.config_path ?? "(default)";
   configDirEl.textContent = config?.resolved_config_dir ?? "-";
+  serverConfigFileEl.textContent = config?.server_config_file_path
+    ? `${config.server_config_file_path}${config.server_config_file_present ? "" : " (not present)"}`
+    : "-";
   statsDbEl.textContent = config?.stats_db_path ?? "-";
 
   if (config?.http?.enabled) {
@@ -152,6 +160,30 @@ function renderConfig(config) {
       <td>${process.args && process.args.length ? process.args.join(" ") : "-"}</td>
     `;
     launchPlanRowsEl.appendChild(tr);
+  }
+}
+
+async function validateConfigCandidate() {
+  configValidationStatusEl.textContent = "Validating...";
+  configValidationResultEl.textContent = "";
+  try {
+    const response = await fetch("/api/config/validate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: configCandidateEl.value.trim(),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `${response.status} ${response.statusText}`);
+    }
+    configValidationStatusEl.textContent = payload.result?.valid ? "Validation succeeded" : "Validation failed";
+    configValidationResultEl.textContent = JSON.stringify(payload.result, null, 2);
+  } catch (error) {
+    configValidationStatusEl.textContent = "Validation failed";
+    configValidationResultEl.textContent = error.message;
   }
 }
 
@@ -179,6 +211,10 @@ async function refresh() {
 saveButton.addEventListener("click", () => {
   localStorage.setItem("rnsctl_token", tokenInput.value.trim());
   refresh();
+});
+
+validateConfigButton.addEventListener("click", () => {
+  validateConfigCandidate();
 });
 
 refresh();

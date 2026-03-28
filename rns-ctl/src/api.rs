@@ -91,6 +91,7 @@ pub fn handle_request(
         ("POST", "/api/destination") => handle_post_destination(req, node, state),
         ("POST", "/api/announce") => handle_post_announce(req, node, state),
         ("POST", "/api/send") => handle_post_send(req, node, state),
+        ("POST", "/api/config/validate") => handle_config_validate(req, state),
         ("POST", "/api/link") => handle_post_link(req, node),
         ("POST", "/api/link/send") => handle_post_link_send(req, node),
         ("POST", "/api/link/close") => handle_post_link_close(req, node),
@@ -168,6 +169,21 @@ fn handle_config(state: &SharedState) -> HttpResponse {
     match &s.server_config {
         Some(config) => HttpResponse::ok(json!({ "config": config })),
         None => HttpResponse::ok(json!({ "config": null })),
+    }
+}
+
+fn handle_config_validate(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+    let validator = {
+        let s = state.read().unwrap();
+        s.server_config_validator.clone()
+    };
+
+    match validator {
+        Some(validator) => match validator(&req.body) {
+            Ok(result) => HttpResponse::ok(json!({ "result": result })),
+            Err(err) => HttpResponse::bad_request(&err),
+        },
+        None => HttpResponse::internal_error("Server config validation is not enabled"),
     }
 }
 
