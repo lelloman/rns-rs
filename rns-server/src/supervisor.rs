@@ -12,6 +12,7 @@ use rns_ctl::state::{
     mark_process_stopped, push_process_log, set_process_readiness, ProcessControlCommand,
     SharedState,
 };
+use rns_net::{RpcAddr, RpcClient};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -232,6 +233,11 @@ fn role_from_name(name: &str) -> Option<Role> {
 pub enum ReadinessTarget {
     Tcp(SocketAddr),
     UnixSocket(PathBuf),
+    HookSet {
+        rpc_addr: RpcAddr,
+        auth_key: [u8; 32],
+        required_hooks: Vec<(String, String)>,
+    },
     ProcessAge(Duration),
 }
 
@@ -266,6 +272,19 @@ impl ProcessReadiness {
                     Some(format!("waiting for socket {}: {}", path.display(), err)),
                 ),
             },
+            ReadinessTarget::HookSet {
+                rpc_addr,
+                auth_key,
+                required_hooks,
+            } => match probe_hook_set(rpc_addr, auth_key, required_hooks) {
+                Ok((true, detail)) => (true, "ready", Some(detail)),
+                Ok((false, detail)) => (false, "warming", Some(detail)),
+                Err(err) => (
+                    false,
+                    "waiting",
+                    Some(format!("waiting for hook load: {}", err)),
+                ),
+            },
             ReadinessTarget::ProcessAge(min_age) => {
                 let started_at = {
                     let s = state.read().unwrap();
@@ -291,6 +310,37 @@ impl ProcessReadiness {
                 }
             }
         }
+    }
+}
+
+fn probe_hook_set(
+    rpc_addr: &RpcAddr,
+    auth_key: &[u8; 32],
+    required_hooks: &[(String, String)],
+) -> Result<(bool, String), String> {
+    let mut client = RpcClient::connect(rpc_addr, auth_key)
+        .map_err(|err| format!("rpc connect failed: {}", err))?;
+    let hooks = client
+        .list_hooks()
+        .map_err(|err| format!("list_hooks failed: {}", err))?;
+
+    let missing: Vec<String> = required_hooks
+        .iter()
+        .filter(|(name, attach_point)| {
+            !hooks.iter().any(|hook| {
+                hook.name == *name && hook.attach_point == *attach_point && hook.enabled
+            })
+        })
+        .map(|(name, attach_point)| format!("{name}@{attach_point}"))
+        .collect();
+
+    if missing.is_empty() {
+        Ok((
+            true,
+            format!("all {} required hooks loaded", required_hooks.len()),
+        ))
+    } else {
+        Ok((false, format!("missing hooks: {}", missing.join(", "))))
     }
 }
 

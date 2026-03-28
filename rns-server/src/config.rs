@@ -12,6 +12,20 @@ use serde::{Deserialize, Serialize};
 use crate::args::Args;
 use crate::supervisor::{ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig};
 
+const SENTINEL_HOOK_SPECS: [(&str, &str); 5] = [
+    ("rns_sentinel_peer_connected", "BackbonePeerConnected"),
+    ("rns_sentinel_peer_disconnected", "BackbonePeerDisconnected"),
+    ("rns_sentinel_peer_idle_timeout", "BackbonePeerIdleTimeout"),
+    ("rns_sentinel_peer_write_stall", "BackbonePeerWriteStall"),
+    ("rns_sentinel_peer_penalty", "BackbonePeerPenalty"),
+];
+
+const STATSD_HOOK_SPECS: [(&str, &str); 3] = [
+    ("rns_statsd_pre_ingress", "PreIngress"),
+    ("rns_statsd_send_on_interface", "SendOnInterface"),
+    ("rns_statsd_broadcast_all", "BroadcastOnAllInterfaces"),
+];
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub config_path: Option<PathBuf>,
@@ -280,15 +294,20 @@ impl ServerConfig {
             target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
         }];
 
-        let sidecar_target = ReadinessTarget::ProcessAge(Duration::from_secs(1));
+        let sentinel_target = self
+            .hook_readiness_target(&SENTINEL_HOOK_SPECS)
+            .unwrap_or_else(|| ReadinessTarget::ProcessAge(Duration::from_secs(1)));
+        let statsd_target = self
+            .hook_readiness_target(&STATSD_HOOK_SPECS)
+            .unwrap_or_else(|| ReadinessTarget::ProcessAge(Duration::from_secs(1)));
 
         readiness.push(ProcessReadiness {
             role: Role::Sentineld,
-            target: sidecar_target.clone(),
+            target: sentinel_target,
         });
         readiness.push(ProcessReadiness {
             role: Role::Statsd,
-            target: sidecar_target,
+            target: statsd_target,
         });
         readiness
     }
@@ -457,6 +476,22 @@ impl ServerConfig {
 
     fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, String> {
         serde_json::from_slice(body).map_err(|err| format!("invalid server config JSON: {}", err))
+    }
+
+    fn hook_readiness_target(&self, specs: &[(&str, &str)]) -> Option<ReadinessTarget> {
+        let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
+        let identity = rns_net::storage::load_or_create_identity(&paths.identities).ok()?;
+        let private_key = identity.get_private_key()?;
+        let auth_key = rns_net::rpc::derive_auth_key(&private_key);
+        let required_hooks = specs
+            .iter()
+            .map(|(name, attach_point)| ((*name).to_string(), (*attach_point).to_string()))
+            .collect();
+        Some(ReadinessTarget::HookSet {
+            rpc_addr: rns_net::RpcAddr::Tcp("127.0.0.1".into(), self.rnsd_rpc_addr.port()),
+            auth_key,
+            required_hooks,
+        })
     }
 
     fn with_file_config(&self, file_cfg: &ServerConfigFile, file_present: bool) -> Self {
