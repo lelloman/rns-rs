@@ -67,6 +67,7 @@ pub fn handle_request(
         // Read endpoints
         ("GET", "/api/node") => handle_node(node, state),
         ("GET", "/api/config") => handle_config(state),
+        ("GET", "/api/config/status") => handle_config_status(state),
         ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/process_events") => handle_process_events(state),
         ("GET", path) if path.starts_with("/api/processes/") && path.ends_with("/logs") => {
@@ -179,6 +180,13 @@ fn handle_config(state: &SharedState) -> HttpResponse {
         Some(config) => HttpResponse::ok(json!({ "config": config })),
         None => HttpResponse::ok(json!({ "config": null })),
     }
+}
+
+fn handle_config_status(state: &SharedState) -> HttpResponse {
+    let s = state.read().unwrap();
+    HttpResponse::ok(json!({
+        "status": s.server_config_status.snapshot(),
+    }))
 }
 
 fn handle_config_validate(req: &HttpRequest, state: &SharedState) -> HttpResponse {

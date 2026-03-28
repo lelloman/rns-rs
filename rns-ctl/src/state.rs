@@ -28,6 +28,7 @@ pub struct CtlState {
     pub started_at: Instant,
     pub server_mode: String,
     pub server_config: Option<ServerConfigSnapshot>,
+    pub server_config_status: ServerConfigStatusState,
     pub server_config_validator: Option<ServerConfigValidator>,
     pub server_config_mutator: Option<ServerConfigMutator>,
     pub identity_hash: Option<[u8; 16]>,
@@ -58,6 +59,7 @@ impl CtlState {
             started_at: Instant::now(),
             server_mode: "standalone".into(),
             server_config: None,
+            server_config_status: ServerConfigStatusState::default(),
             server_config_validator: None,
             server_config_mutator: None,
             identity_hash: None,
@@ -129,6 +131,56 @@ pub fn set_server_config(state: &SharedState, config: ServerConfigSnapshot) {
     s.server_config = Some(config);
 }
 
+pub fn note_server_config_saved(state: &SharedState, apply_plan: &ServerConfigApplyPlan) {
+    let mut s = state.write().unwrap();
+    s.server_config_status.last_saved_at = Some(Instant::now());
+    s.server_config_status.last_action = Some("save".into());
+    s.server_config_status.last_action_at = Some(Instant::now());
+    s.server_config_status.pending_process_restarts.clear();
+    s.server_config_status.control_plane_restart_required =
+        apply_plan.control_plane_restart_required;
+    s.server_config_status.runtime_differs_from_saved =
+        !apply_plan.processes_to_restart.is_empty() || apply_plan.control_plane_restart_required;
+    s.server_config_status.last_apply_plan = Some(apply_plan.clone());
+}
+
+pub fn note_server_config_applied(state: &SharedState, apply_plan: &ServerConfigApplyPlan) {
+    let mut s = state.write().unwrap();
+    let now = Instant::now();
+    s.server_config_status.last_saved_at = Some(now);
+    s.server_config_status.last_apply_at = Some(now);
+    s.server_config_status.last_action = Some("apply".into());
+    s.server_config_status.last_action_at = Some(now);
+    s.server_config_status.pending_process_restarts = apply_plan.processes_to_restart.clone();
+    s.server_config_status.control_plane_restart_required =
+        apply_plan.control_plane_restart_required;
+    s.server_config_status.runtime_differs_from_saved =
+        !s.server_config_status.pending_process_restarts.is_empty()
+            || s.server_config_status.control_plane_restart_required;
+    s.server_config_status.last_apply_plan = Some(apply_plan.clone());
+}
+
+pub fn reconcile_config_status_for_process(
+    state: &SharedState,
+    name: &str,
+    ready: bool,
+    status: &str,
+) {
+    let mut s = state.write().unwrap();
+    if ready {
+        s.server_config_status
+            .pending_process_restarts
+            .retain(|process| process != name);
+    }
+    if status == "failed" {
+        s.server_config_status.runtime_differs_from_saved = true;
+    } else if s.server_config_status.pending_process_restarts.is_empty()
+        && !s.server_config_status.control_plane_restart_required
+    {
+        s.server_config_status.runtime_differs_from_saved = false;
+    }
+}
+
 pub fn set_server_config_validator(state: &SharedState, validator: ServerConfigValidator) {
     let mut s = state.write().unwrap();
     s.server_config_validator = Some(validator);
@@ -189,6 +241,8 @@ pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
         &mut s.process_events,
         ProcessEventRecord::new(name.to_string(), "running", Some(format!("pid={}", pid))),
     );
+    drop(s);
+    reconcile_config_status_for_process(state, name, false, "running");
 }
 
 pub fn bump_process_restart_count(state: &SharedState, name: &str) {
@@ -238,6 +292,8 @@ pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i
             )),
         ),
     );
+    drop(s);
+    reconcile_config_status_for_process(state, name, false, "stopped");
 }
 
 pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String) {
@@ -261,6 +317,8 @@ pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String)
         &mut s.process_events,
         ProcessEventRecord::new(name.to_string(), "spawn_failed", detail),
     );
+    drop(s);
+    reconcile_config_status_for_process(state, name, false, "failed");
 }
 
 pub fn set_process_readiness(
@@ -293,6 +351,8 @@ pub fn set_process_readiness(
             ProcessEventRecord::new(name.to_string(), ready_state.to_string(), detail_clone),
         );
     }
+    drop(s);
+    reconcile_config_status_for_process(state, name, ready, ready_state);
 }
 
 // --- Record types ---
@@ -382,6 +442,20 @@ pub struct ServerConfigSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigStatusSnapshot {
+    pub last_saved_age_seconds: Option<f64>,
+    pub last_apply_age_seconds: Option<f64>,
+    pub last_action: Option<String>,
+    pub last_action_age_seconds: Option<f64>,
+    pub pending_process_restarts: Vec<String>,
+    pub control_plane_restart_required: bool,
+    pub runtime_differs_from_saved: bool,
+    pub converged: bool,
+    pub summary: String,
+    pub last_apply_plan: Option<ServerConfigApplyPlan>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ServerHttpConfigSnapshot {
     pub enabled: bool,
     pub host: String,
@@ -433,6 +507,58 @@ pub struct ServerConfigChange {
 pub enum ServerConfigMutationMode {
     Save,
     Apply,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ServerConfigStatusState {
+    pub last_saved_at: Option<Instant>,
+    pub last_apply_at: Option<Instant>,
+    pub last_action: Option<String>,
+    pub last_action_at: Option<Instant>,
+    pub pending_process_restarts: Vec<String>,
+    pub control_plane_restart_required: bool,
+    pub runtime_differs_from_saved: bool,
+    pub last_apply_plan: Option<ServerConfigApplyPlan>,
+}
+
+impl ServerConfigStatusState {
+    pub fn snapshot(&self) -> ServerConfigStatusSnapshot {
+        let converged =
+            self.pending_process_restarts.is_empty() && !self.control_plane_restart_required;
+        let summary = if self.runtime_differs_from_saved {
+            if self.control_plane_restart_required {
+                "Saved config is not fully active; rns-server restart is still required.".into()
+            } else if self.pending_process_restarts.is_empty() {
+                "Saved config differs from runtime state.".into()
+            } else {
+                format!(
+                    "Waiting for restarted processes to converge: {}.",
+                    self.pending_process_restarts.join(", ")
+                )
+            }
+        } else {
+            "Running state is converged with the saved config.".into()
+        };
+
+        ServerConfigStatusSnapshot {
+            last_saved_age_seconds: self
+                .last_saved_at
+                .map(|instant| instant.elapsed().as_secs_f64()),
+            last_apply_age_seconds: self
+                .last_apply_at
+                .map(|instant| instant.elapsed().as_secs_f64()),
+            last_action: self.last_action.clone(),
+            last_action_age_seconds: self
+                .last_action_at
+                .map(|instant| instant.elapsed().as_secs_f64()),
+            pending_process_restarts: self.pending_process_restarts.clone(),
+            control_plane_restart_required: self.control_plane_restart_required,
+            runtime_differs_from_saved: self.runtime_differs_from_saved,
+            converged,
+            summary,
+            last_apply_plan: self.last_apply_plan.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

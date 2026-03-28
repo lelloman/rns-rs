@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::{
-    ensure_process, set_control_tx, set_server_config, set_server_config_mutator,
-    set_server_config_validator, set_server_mode, CtlState, SharedState,
+    ensure_process, note_server_config_applied, note_server_config_saved, set_control_tx,
+    set_server_config, set_server_config_mutator, set_server_config_validator, set_server_mode,
+    CtlState, SharedState,
 };
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
@@ -65,6 +66,14 @@ fn run_start(args: Args) {
                     s.control_tx.clone()
                 };
                 let result = config.mutate_json_with_current_context(mode, body, control_tx)?;
+                match mode {
+                    rns_ctl::state::ServerConfigMutationMode::Save => {
+                        note_server_config_saved(&shared_state, &result.apply_plan);
+                    }
+                    rns_ctl::state::ServerConfigMutationMode::Apply => {
+                        note_server_config_applied(&shared_state, &result.apply_plan);
+                    }
+                }
                 let refreshed = ServerConfig::from_args(&args);
                 set_server_config(&shared_state, refreshed.snapshot());
                 Ok(result)

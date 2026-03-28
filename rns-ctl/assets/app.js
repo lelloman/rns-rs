@@ -5,6 +5,8 @@ const serverModeEl = document.getElementById("serverMode");
 const uptimeEl = document.getElementById("uptime");
 const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
+const configConvergedEl = document.getElementById("configConverged");
+const configStatusSummaryEl = document.getElementById("configStatusSummary");
 const configPathEl = document.getElementById("configPath");
 const configDirEl = document.getElementById("configDir");
 const serverConfigFileEl = document.getElementById("serverConfigFile");
@@ -187,6 +189,23 @@ function renderConfig(config) {
   }
 }
 
+function renderConfigStatus(status) {
+  if (!status) {
+    configConvergedEl.textContent = "-";
+    configStatusSummaryEl.textContent = "No config status yet.";
+    return;
+  }
+
+  configConvergedEl.textContent = status.converged ? "yes" : "no";
+  const pending = status.pending_process_restarts?.length
+    ? ` Pending restarts: ${status.pending_process_restarts.join(", ")}.`
+    : "";
+  const action = status.last_action
+    ? ` Last action: ${status.last_action}.`
+    : "";
+  configStatusSummaryEl.textContent = `${status.summary}${action}${pending}`;
+}
+
 async function validateConfigCandidate() {
   await runConfigAction("/api/config/validate", "Validating...", "Validation");
 }
@@ -286,9 +305,10 @@ async function refreshLogs() {
 
 async function refresh() {
   try {
-    const [node, config, processes, processEvents] = await Promise.all([
+    const [node, config, configStatus, processes, processEvents] = await Promise.all([
       fetchJson("/api/node"),
       fetchJson("/api/config"),
+      fetchJson("/api/config/status"),
       fetchJson("/api/processes"),
       fetchJson("/api/process_events"),
     ]);
@@ -297,6 +317,7 @@ async function refresh() {
     runningEl.textContent = `${node.processes_running}/${node.process_count}`;
     readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
     renderConfig(config.config);
+    renderConfigStatus(configStatus.status);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
     await refreshLogs();
