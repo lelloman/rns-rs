@@ -85,6 +85,8 @@
         <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
         <div class="row" style="margin-top: 12px;">
           <button id="validateConfig" class="secondary">Validate Config</button>
+          <button id="saveConfig" class="secondary">Save Config</button>
+          <button id="applyConfig" class="secondary">Save + Apply</button>
           <span id="configValidationStatus" class="muted">No validation run yet</span>
         </div>
         <pre id="configValidationResult" class="json-block"></pre>
@@ -108,7 +110,7 @@
 
     <section class="panel links" style="margin-top: 18px;">
       <h2>JSON Endpoints</h2>
-      <p><a href="/api/node">/api/node</a>, <a href="/api/config">/api/config</a>, <a href="/api/processes">/api/processes</a>, and <a href="/api/process_events">/api/process_events</a></p>
+      <p><a href="/api/node">/api/node</a>, <a href="/api/config">/api/config</a>, <a href="/api/processes">/api/processes</a>, <a href="/api/process_events">/api/process_events</a>, <code>POST /api/config</code>, <code>POST /api/config/apply</code>, and <code>POST /api/config/validate</code></p>
     </section>
   </main>
   <script src="/assets/app.js"></script>

@@ -14,6 +14,8 @@ const httpAuthEl = document.getElementById("httpAuth");
 const launchPlanRowsEl = document.getElementById("launchPlanRows");
 const configCandidateEl = document.getElementById("configCandidate");
 const validateConfigButton = document.getElementById("validateConfig");
+const saveConfigButton = document.getElementById("saveConfig");
+const applyConfigButton = document.getElementById("applyConfig");
 const configValidationStatusEl = document.getElementById("configValidationStatus");
 const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
@@ -164,10 +166,22 @@ function renderConfig(config) {
 }
 
 async function validateConfigCandidate() {
+  await runConfigAction("/api/config/validate", "Validating...", "Validation");
+}
+
+async function saveConfigCandidate() {
+  await runConfigAction("/api/config", "Saving...", "Save");
+}
+
+async function applyConfigCandidate() {
+  await runConfigAction("/api/config/apply", "Saving and applying...", "Apply");
+}
+
+async function runConfigAction(path, pendingMessage, actionLabel) {
   configValidationStatusEl.textContent = "Validating...";
   configValidationResultEl.textContent = "";
   try {
-    const response = await fetch("/api/config/validate", {
+    const response = await fetch(path, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -179,10 +193,11 @@ async function validateConfigCandidate() {
     if (!response.ok) {
       throw new Error(payload.error || `${response.status} ${response.statusText}`);
     }
-    configValidationStatusEl.textContent = payload.result?.valid ? "Validation succeeded" : "Validation failed";
+    configValidationStatusEl.textContent = `${actionLabel} succeeded`;
     configValidationResultEl.textContent = JSON.stringify(payload.result, null, 2);
+    await refresh();
   } catch (error) {
-    configValidationStatusEl.textContent = "Validation failed";
+    configValidationStatusEl.textContent = `${actionLabel} failed`;
     configValidationResultEl.textContent = error.message;
   }
 }
@@ -215,6 +230,12 @@ saveButton.addEventListener("click", () => {
 
 validateConfigButton.addEventListener("click", () => {
   validateConfigCandidate();
+});
+saveConfigButton.addEventListener("click", () => {
+  saveConfigCandidate();
+});
+applyConfigButton.addEventListener("click", () => {
+  applyConfigCandidate();
 });
 
 refresh();

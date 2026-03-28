@@ -3,8 +3,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use rns_ctl::state::{
-    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigSnapshot,
-    ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState,
+    LaunchProcessSnapshot, ProcessControlCommand, ServerConfigApplyPlan, ServerConfigMutationMode,
+    ServerConfigMutationResult, ServerConfigSnapshot, ServerConfigValidationSnapshot,
+    ServerHttpConfigSnapshot, SharedState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -93,14 +94,7 @@ impl ServerConfig {
         body: &[u8],
     ) -> Result<ServerConfigValidationSnapshot, String> {
         let candidate = Self::parse_config_json(body)?;
-        let validated = Self::build(
-            self.config_path.clone(),
-            self.resolved_config_dir.clone(),
-            self.server_config_file_path.clone(),
-            self.server_config_file_present,
-            &candidate,
-            None,
-        );
+        let validated = self.with_file_config(&candidate, self.server_config_file_present);
 
         let mut warnings = Vec::new();
         warnings.push(format!(
@@ -112,6 +106,54 @@ impl ServerConfig {
             valid: true,
             config: validated.snapshot(),
             warnings,
+        })
+    }
+
+    pub fn mutate_json_with_current_context(
+        &self,
+        mode: ServerConfigMutationMode,
+        body: &[u8],
+        control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
+    ) -> Result<ServerConfigMutationResult, String> {
+        let candidate = Self::parse_config_json(body)?;
+        let next = self.with_file_config(&candidate, true);
+        let apply_plan = self.apply_plan(&next);
+
+        std::fs::create_dir_all(&self.resolved_config_dir).map_err(|err| {
+            format!(
+                "failed to create config dir {}: {}",
+                self.resolved_config_dir.display(),
+                err
+            )
+        })?;
+        let serialized = serde_json::to_vec_pretty(&candidate)
+            .map_err(|err| format!("failed to serialize server config JSON: {}", err))?;
+        std::fs::write(&self.server_config_file_path, serialized).map_err(|err| {
+            format!(
+                "failed to write {}: {}",
+                self.server_config_file_path.display(),
+                err
+            )
+        })?;
+
+        if matches!(mode, ServerConfigMutationMode::Apply) {
+            if let Some(tx) = control_tx {
+                for process in &apply_plan.processes_to_restart {
+                    tx.send(ProcessControlCommand::Restart(process.clone()))
+                        .map_err(|_| {
+                            format!("failed to queue restart for process '{}'", process)
+                        })?;
+                }
+            }
+        }
+
+        Ok(ServerConfigMutationResult {
+            action: match mode {
+                ServerConfigMutationMode::Save => "save".into(),
+                ServerConfigMutationMode::Apply => "apply".into(),
+            },
+            config: next.snapshot(),
+            apply_plan,
         })
     }
 
@@ -412,6 +454,60 @@ impl ServerConfig {
 
     fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, String> {
         serde_json::from_slice(body).map_err(|err| format!("invalid server config JSON: {}", err))
+    }
+
+    fn with_file_config(&self, file_cfg: &ServerConfigFile, file_present: bool) -> Self {
+        Self::build(
+            self.config_path.clone(),
+            self.resolved_config_dir.clone(),
+            self.server_config_file_path.clone(),
+            file_present,
+            file_cfg,
+            None,
+        )
+    }
+
+    fn apply_plan(&self, next: &Self) -> ServerConfigApplyPlan {
+        let current_specs = self.process_specs();
+        let next_specs = next.process_specs();
+        let mut processes_to_restart = Vec::new();
+
+        for current in &current_specs {
+            let Some(next_spec) = next_specs.iter().find(|spec| spec.role == current.role) else {
+                continue;
+            };
+            if current.bin != next_spec.bin || current.args != next_spec.args {
+                processes_to_restart.push(current.role.display_name().to_string());
+            }
+        }
+
+        let control_plane_restart_required = self.http.enabled != next.http.enabled
+            || self.http.host != next.http.host
+            || self.http.port != next.http.port
+            || self.http.auth_token != next.http.auth_token
+            || self.http.disable_auth != next.http.disable_auth;
+
+        let mut notes = Vec::new();
+        if processes_to_restart.is_empty() {
+            notes.push("No supervised child restart is required for this config.".into());
+        } else {
+            notes.push(format!(
+                "Restart required for: {}.",
+                processes_to_restart.join(", ")
+            ));
+        }
+        if control_plane_restart_required {
+            notes.push(
+                "Embedded control-plane HTTP settings changed and will only take effect after restarting rns-server."
+                    .into(),
+            );
+        }
+
+        ServerConfigApplyPlan {
+            processes_to_restart,
+            control_plane_restart_required,
+            notes,
+        }
     }
 }
 

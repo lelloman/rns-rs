@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct Args {
     pub flags: HashMap<String, String>,
     pub positional: Vec<String>,

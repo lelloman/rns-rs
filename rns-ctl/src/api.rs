@@ -92,6 +92,12 @@ pub fn handle_request(
         ("POST", "/api/announce") => handle_post_announce(req, node, state),
         ("POST", "/api/send") => handle_post_send(req, node, state),
         ("POST", "/api/config/validate") => handle_config_validate(req, state),
+        ("POST", "/api/config") => {
+            handle_config_mutation(req, state, crate::state::ServerConfigMutationMode::Save)
+        }
+        ("POST", "/api/config/apply") => {
+            handle_config_mutation(req, state, crate::state::ServerConfigMutationMode::Apply)
+        }
         ("POST", "/api/link") => handle_post_link(req, node),
         ("POST", "/api/link/send") => handle_post_link_send(req, node),
         ("POST", "/api/link/close") => handle_post_link_close(req, node),
@@ -184,6 +190,25 @@ fn handle_config_validate(req: &HttpRequest, state: &SharedState) -> HttpRespons
             Err(err) => HttpResponse::bad_request(&err),
         },
         None => HttpResponse::internal_error("Server config validation is not enabled"),
+    }
+}
+
+fn handle_config_mutation(
+    req: &HttpRequest,
+    state: &SharedState,
+    mode: crate::state::ServerConfigMutationMode,
+) -> HttpResponse {
+    let mutator = {
+        let s = state.read().unwrap();
+        s.server_config_mutator.clone()
+    };
+
+    match mutator {
+        Some(mutator) => match mutator(mode, &req.body) {
+            Ok(result) => HttpResponse::ok(json!({ "result": result })),
+            Err(err) => HttpResponse::bad_request(&err),
+        },
+        None => HttpResponse::internal_error("Server config mutation is not enabled"),
     }
 }
 

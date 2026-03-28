@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::{
-    ensure_process, set_control_tx, set_server_config, set_server_config_validator,
-    set_server_mode, CtlState, SharedState,
+    ensure_process, set_control_tx, set_server_config, set_server_config_mutator,
+    set_server_config_validator, set_server_mode, CtlState, SharedState,
 };
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
@@ -51,6 +51,24 @@ fn run_start(args: Args) {
         std::sync::Arc::new({
             let config = config.clone();
             move |body| config.validate_json_with_current_context(body)
+        }),
+    );
+    set_server_config_mutator(
+        &shared_state,
+        std::sync::Arc::new({
+            let config = config.clone();
+            let args = args.clone();
+            let shared_state = shared_state.clone();
+            move |mode, body| {
+                let control_tx = {
+                    let s = shared_state.read().unwrap();
+                    s.control_tx.clone()
+                };
+                let result = config.mutate_json_with_current_context(mode, body, control_tx)?;
+                let refreshed = ServerConfig::from_args(&args);
+                set_server_config(&shared_state, refreshed.snapshot());
+                Ok(result)
+            }
         }),
     );
     let dry_run = args.has("dry-run");

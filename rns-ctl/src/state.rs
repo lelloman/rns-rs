@@ -15,6 +15,11 @@ const MAX_RECORDS: usize = 1000;
 pub type SharedState = Arc<RwLock<CtlState>>;
 pub type ServerConfigValidator =
     Arc<dyn Fn(&[u8]) -> Result<ServerConfigValidationSnapshot, String> + Send + Sync>;
+pub type ServerConfigMutator = Arc<
+    dyn Fn(ServerConfigMutationMode, &[u8]) -> Result<ServerConfigMutationResult, String>
+        + Send
+        + Sync,
+>;
 
 /// Registry of WebSocket broadcast senders.
 pub type WsBroadcast = Arc<Mutex<Vec<std::sync::mpsc::Sender<WsEvent>>>>;
@@ -24,6 +29,7 @@ pub struct CtlState {
     pub server_mode: String,
     pub server_config: Option<ServerConfigSnapshot>,
     pub server_config_validator: Option<ServerConfigValidator>,
+    pub server_config_mutator: Option<ServerConfigMutator>,
     pub identity_hash: Option<[u8; 16]>,
     pub identity: Option<Identity>,
     pub announces: VecDeque<AnnounceRecord>,
@@ -52,6 +58,7 @@ impl CtlState {
             server_mode: "standalone".into(),
             server_config: None,
             server_config_validator: None,
+            server_config_mutator: None,
             identity_hash: None,
             identity: None,
             announces: VecDeque::new(),
@@ -123,6 +130,11 @@ pub fn set_server_config(state: &SharedState, config: ServerConfigSnapshot) {
 pub fn set_server_config_validator(state: &SharedState, validator: ServerConfigValidator) {
     let mut s = state.write().unwrap();
     s.server_config_validator = Some(validator);
+}
+
+pub fn set_server_config_mutator(state: &SharedState, mutator: ServerConfigMutator) {
+    let mut s = state.write().unwrap();
+    s.server_config_mutator = Some(mutator);
 }
 
 pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
@@ -366,6 +378,26 @@ pub struct ServerConfigValidationSnapshot {
     pub valid: bool,
     pub config: ServerConfigSnapshot,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigMutationResult {
+    pub action: String,
+    pub config: ServerConfigSnapshot,
+    pub apply_plan: ServerConfigApplyPlan,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigApplyPlan {
+    pub processes_to_restart: Vec<String>,
+    pub control_plane_restart_required: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ServerConfigMutationMode {
+    Save,
+    Apply,
 }
 
 #[derive(Debug, Clone)]
