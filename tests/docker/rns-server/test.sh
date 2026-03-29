@@ -200,12 +200,19 @@ echo ""
 echo "--- Section 8: Config read ---"
 
 CONFIG_RESP=$(ctl_get "$PORT" "/api/config" 2>/dev/null || echo "{}")
+SCHEMA_RESP=$(ctl_get "$PORT" "/api/config/schema" 2>/dev/null || echo "{}")
 
 LAUNCH_PLAN_LEN=$(echo "$CONFIG_RESP" | jq '.config.launch_plan | length' 2>/dev/null || echo "0")
 assert_eq "$LAUNCH_PLAN_LEN" "3" "launch_plan has 3 entries"
 
 HTTP_ENABLED=$(echo "$CONFIG_RESP" | jq -r '.config.http.enabled' 2>/dev/null || echo "")
 assert_eq "$HTTP_ENABLED" "true" "http.enabled is true"
+
+SCHEMA_FIELDS=$(echo "$SCHEMA_RESP" | jq '.schema.fields | length' 2>/dev/null || echo "0")
+assert_gt "$SCHEMA_FIELDS" "0" "config schema exposes fields"
+
+EXAMPLE_JSON_PRESENT=$(echo "$SCHEMA_RESP" | jq -r '.schema.example_config_json | length > 0' 2>/dev/null || echo "false")
+assert_eq "$EXAMPLE_JSON_PRESENT" "true" "config schema includes example JSON"
 
 # ── Section 9: Config validate ───────────────────────────────────────────────
 
@@ -216,12 +223,25 @@ VALIDATE_RESP=$(ctl_post "$PORT" "/api/config/validate" '{"http": {"port": 9090}
 VALID=$(echo "$VALIDATE_RESP" | jq -r '.result.valid' 2>/dev/null || echo "")
 assert_eq "$VALID" "true" "valid config validates successfully"
 
+WARNING_VALIDATE_RESP=$(ctl_post "$PORT" "/api/config/validate" \
+  '{"http": {"enabled": false, "disable_auth": true, "auth_token": "ignored-token"}}' \
+  2>/dev/null || echo "{}")
+WARNING_COUNT=$(echo "$WARNING_VALIDATE_RESP" | jq -r '.result.warnings | length' 2>/dev/null || echo "0")
+assert_gt "$WARNING_COUNT" "0" "config validation returns warnings for inactive HTTP fields"
+
 # Invalid JSON should return error (curl -sf fails on non-2xx, so we check exit code)
 if curl -sf -X POST -H "Content-Type: application/json" \
   -d 'not valid json' "http://localhost:${PORT}/api/config/validate" > /dev/null 2>&1; then
   fail_test "invalid JSON rejected" "server accepted invalid JSON"
 else
   pass_test "invalid JSON rejected"
+fi
+
+if curl -sf -X POST -H "Content-Type: application/json" \
+  -d '{"unknown_field":true}' "http://localhost:${PORT}/api/config/validate" > /dev/null 2>&1; then
+  fail_test "unknown config fields rejected" "server accepted unknown config field"
+else
+  pass_test "unknown config fields rejected"
 fi
 
 # ── Section 10: Config save ──────────────────────────────────────────────────
@@ -236,6 +256,9 @@ SAVE_RESP=$(ctl_post "$PORT" "/api/config" \
   '{"http": {"host": "0.0.0.0", "port": 8080, "disable_auth": true}}' 2>/dev/null || echo "{}")
 SAVE_ACTION=$(echo "$SAVE_RESP" | jq -r '.result.action' 2>/dev/null || echo "")
 assert_eq "$SAVE_ACTION" "save" "config save returns action=save"
+
+SAVE_WARNINGS=$(echo "$SAVE_RESP" | jq -r '.result.warnings | length' 2>/dev/null || echo "0")
+assert_eq "$SAVE_WARNINGS" "0" "config save returns no warnings for active HTTP config"
 
 # Server still responsive after save (no restart)
 if poll_until "$PORT" "/health" ".status" "healthy" 5; then

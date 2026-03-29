@@ -20,7 +20,12 @@ use rns_ctl::api::NodeHandle;
 use rns_ctl::bridge::CtlCallbacks;
 use rns_ctl::config::CtlConfig;
 use rns_ctl::server::{self, ServerContext};
-use rns_ctl::state::{CtlState, SharedState, WsBroadcast};
+use rns_ctl::state::{
+    CtlState, LaunchProcessSnapshot, ServerConfigApplyPlan, ServerConfigChange,
+    ServerConfigFieldSchema, ServerConfigMutationResult, ServerConfigSchemaSnapshot,
+    ServerConfigSnapshot, ServerConfigStatusState, ServerConfigValidationSnapshot,
+    ServerHttpConfigSnapshot, SharedState, WsBroadcast,
+};
 
 // ─── Test Server Harness ────────────────────────────────────────────────────
 
@@ -269,6 +274,64 @@ fn http_request(
     HttpResult { status, body }
 }
 
+fn sample_server_config_snapshot() -> ServerConfigSnapshot {
+    ServerConfigSnapshot {
+        config_path: Some("/tmp/rns".into()),
+        resolved_config_dir: "/tmp/rns".into(),
+        server_config_file_path: "/tmp/rns/rns-server.json".into(),
+        server_config_file_present: true,
+        server_config_file_json: "{\n  \"http\": {\n    \"port\": 8080\n  }\n}".into(),
+        stats_db_path: "/tmp/rns/stats.db".into(),
+        rnsd_bin: "rnsd".into(),
+        sentineld_bin: "rns-sentineld".into(),
+        statsd_bin: "rns-statsd".into(),
+        http: ServerHttpConfigSnapshot {
+            enabled: true,
+            host: "127.0.0.1".into(),
+            port: 8080,
+            auth_mode: "disabled".into(),
+            token_configured: false,
+            daemon_mode: true,
+        },
+        launch_plan: vec![LaunchProcessSnapshot {
+            name: "rnsd".into(),
+            bin: "rnsd".into(),
+            args: vec!["--config".into(), "/tmp/rns".into()],
+            command_line: "rnsd --config /tmp/rns".into(),
+        }],
+    }
+}
+
+fn sample_server_config_schema() -> ServerConfigSchemaSnapshot {
+    ServerConfigSchemaSnapshot {
+        format: "rns-server.json".into(),
+        example_config_json: "{\n  \"http\": {\n    \"port\": 8080\n  }\n}".into(),
+        notes: vec!["Config note".into()],
+        fields: vec![ServerConfigFieldSchema {
+            field: "http.port".into(),
+            field_type: "u16".into(),
+            required: false,
+            default_value: "8080".into(),
+            description: "HTTP port".into(),
+            effect: "restart rns-server".into(),
+        }],
+    }
+}
+
+fn sample_apply_plan() -> ServerConfigApplyPlan {
+    ServerConfigApplyPlan {
+        processes_to_restart: vec!["rns-statsd".into()],
+        control_plane_restart_required: false,
+        notes: vec!["Restart required for: rns-statsd.".into()],
+        changes: vec![ServerConfigChange {
+            field: "stats_db_path".into(),
+            before: "/tmp/rns/stats.db".into(),
+            after: "/tmp/rns/other.db".into(),
+            effect: "restart rns-statsd".into(),
+        }],
+    }
+}
+
 // ─── Step 3a: Basic Server Lifecycle ────────────────────────────────────────
 
 #[test]
@@ -429,6 +492,147 @@ fn test_get_proofs_empty() {
     let json = res.json();
     let proofs = json["proofs"].as_array().unwrap();
     assert!(proofs.is_empty());
+    server.shutdown();
+}
+
+#[test]
+fn test_get_config_snapshot() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config = Some(sample_server_config_snapshot());
+    }
+
+    let res = http_get(server.port, "/api/config");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["config"]["stats_db_path"], "/tmp/rns/stats.db");
+    assert_eq!(json["config"]["rnsd_bin"], "rnsd");
+    assert_eq!(json["config"]["launch_plan"][0]["name"], "rnsd");
+    server.shutdown();
+}
+
+#[test]
+fn test_get_config_schema() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_schema = Some(sample_server_config_schema());
+    }
+
+    let res = http_get(server.port, "/api/config/schema");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["schema"]["format"], "rns-server.json");
+    assert_eq!(json["schema"]["fields"][0]["field"], "http.port");
+    server.shutdown();
+}
+
+#[test]
+fn test_get_config_status() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_status = ServerConfigStatusState {
+            last_action: Some("save".into()),
+            runtime_differs_from_saved: true,
+            control_plane_restart_required: true,
+            ..ServerConfigStatusState::default()
+        };
+    }
+
+    let res = http_get(server.port, "/api/config/status");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["status"]["last_action"], "save");
+    assert_eq!(json["status"]["converged"], false);
+    server.shutdown();
+}
+
+#[test]
+fn test_config_validate_endpoint_uses_validator() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_validator = Some(Arc::new(|body| {
+            let parsed: serde_json::Value = serde_json::from_slice(body).unwrap();
+            assert_eq!(parsed["http"]["port"], 9090);
+            Ok(ServerConfigValidationSnapshot {
+                valid: true,
+                config: sample_server_config_snapshot(),
+                warnings: vec!["validation warning".into()],
+            })
+        }));
+    }
+
+    let res = http_post(server.port, "/api/config/validate", r#"{"http":{"port":9090}}"#);
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["result"]["valid"], true);
+    assert_eq!(json["result"]["warnings"][0], "validation warning");
+    server.shutdown();
+}
+
+#[test]
+fn test_config_save_endpoint_uses_mutator() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_mutator = Some(Arc::new(|mode, body| {
+            match mode {
+                rns_ctl::state::ServerConfigMutationMode::Save => {}
+                _ => panic!("expected save mode"),
+            }
+            let parsed: serde_json::Value = serde_json::from_slice(body).unwrap();
+            assert_eq!(parsed["stats_db_path"], "/tmp/rns/other.db");
+            Ok(ServerConfigMutationResult {
+                action: "save".into(),
+                config: sample_server_config_snapshot(),
+                apply_plan: sample_apply_plan(),
+                warnings: vec!["save warning".into()],
+            })
+        }));
+    }
+
+    let res = http_post(server.port, "/api/config", r#"{"stats_db_path":"/tmp/rns/other.db"}"#);
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["result"]["action"], "save");
+    assert_eq!(json["result"]["warnings"][0], "save warning");
+    assert_eq!(
+        json["result"]["apply_plan"]["processes_to_restart"][0],
+        "rns-statsd"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn test_config_apply_endpoint_uses_mutator() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_mutator = Some(Arc::new(|mode, _body| {
+            match mode {
+                rns_ctl::state::ServerConfigMutationMode::Apply => {}
+                _ => panic!("expected apply mode"),
+            }
+            Ok(ServerConfigMutationResult {
+                action: "apply".into(),
+                config: sample_server_config_snapshot(),
+                apply_plan: sample_apply_plan(),
+                warnings: Vec::new(),
+            })
+        }));
+    }
+
+    let res = http_post(server.port, "/api/config/apply", r#"{"stats_db_path":"/tmp/rns/other.db"}"#);
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["result"]["action"], "apply");
+    assert_eq!(
+        json["result"]["apply_plan"]["changes"][0]["field"],
+        "stats_db_path"
+    );
     server.shutdown();
 }
 
