@@ -96,3 +96,72 @@ th, td {
 .stopped, .failed { background: rgba(251, 113, 133, 0.16); color: var(--bad); }
 .muted { color: var(--muted); }
 .links a { color: var(--accent); text-decoration: none; }
+.config-builder {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.config-group {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(125, 211, 252, 0.06), transparent 60%),
+    rgba(19, 34, 52, 0.68);
+}
+.group-title {
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.field span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.field-input {
+  width: 100%;
+}
+.toggle {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+.toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.callout {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  background: rgba(125, 211, 252, 0.08);
+  color: var(--muted);
+}
+.warning-list {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: #fcd34d;
+}
+.warning-list:empty {
+  display: none;
+}
+@media (max-width: 640px) {
+  main {
+    padding: 24px 14px 36px;
+  }
+  .stat {
+    font-size: 24px;
+  }
+}

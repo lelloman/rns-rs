@@ -98,12 +98,70 @@
         <tbody id="launchPlanRows"></tbody>
       </table>
       <div style="margin-top: 18px;">
-        <h3>Validate Candidate Config</h3>
-        <p>Load the current saved config, reset to the example template, or paste a candidate <code>rns-server.json</code> payload and validate it without writing any files.</p>
-        <div class="row" style="margin-bottom: 12px;">
+        <h3>Config Builder</h3>
+        <p>Use the guided editor for common <code>rns-server.json</code> fields, then validate, save, or apply the generated config. The raw JSON editor remains available for advanced cases.</p>
+        <div class="config-builder">
+          <div class="config-group">
+            <div class="group-title">Process Paths</div>
+            <label class="field">
+              <span>Stats DB Path</span>
+              <input id="builderStatsDbPath" class="token field-input" spellcheck="false" placeholder="stats.db" />
+            </label>
+            <label class="field">
+              <span>rnsd Bin</span>
+              <input id="builderRnsdBin" class="token field-input" spellcheck="false" placeholder="rnsd" />
+            </label>
+            <label class="field">
+              <span>rns-sentineld Bin</span>
+              <input id="builderSentineldBin" class="token field-input" spellcheck="false" placeholder="rns-sentineld" />
+            </label>
+            <label class="field">
+              <span>rns-statsd Bin</span>
+              <input id="builderStatsdBin" class="token field-input" spellcheck="false" placeholder="rns-statsd" />
+            </label>
+          </div>
+          <div class="config-group">
+            <div class="group-title">HTTP Control Plane</div>
+            <label class="toggle">
+              <input id="builderHttpEnabled" type="checkbox" />
+              <span>Enable embedded HTTP control plane</span>
+            </label>
+            <label class="field">
+              <span>HTTP Host</span>
+              <input id="builderHttpHost" class="token field-input" spellcheck="false" placeholder="127.0.0.1" />
+            </label>
+            <label class="field">
+              <span>HTTP Port</span>
+              <input id="builderHttpPort" class="token field-input" type="number" min="1" max="65535" placeholder="8080" />
+            </label>
+            <label class="toggle">
+              <input id="builderHttpDisableAuth" type="checkbox" />
+              <span>Disable bearer token auth</span>
+            </label>
+            <label class="field">
+              <span>HTTP Auth Token</span>
+              <input id="builderHttpAuthToken" class="token field-input" spellcheck="false" placeholder="optional fixed token" />
+            </label>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px;">
           <button id="loadCurrentConfig" class="secondary">Load Current</button>
           <button id="loadExampleConfig" class="secondary">Load Example</button>
+          <button id="syncBuilderFromJson" class="secondary">Sync Builder From JSON</button>
+          <button id="syncJsonFromBuilder" class="secondary">Write Builder To JSON</button>
           <button id="formatConfig" class="secondary">Format JSON</button>
+        </div>
+        <div class="callout" style="margin-top: 12px;">
+          Blank text fields are omitted so runtime defaults still apply. The builder writes explicit booleans for HTTP enablement and auth mode.
+        </div>
+        <div style="margin-top: 16px;">
+          <strong>Result Summary</strong>
+          <div id="configActionSummary" class="muted" style="margin-top: 6px;">No config action run yet</div>
+        </div>
+        <ul id="configWarningList" class="warning-list"></ul>
+        <div style="margin-top: 16px;">
+          <strong>Advanced JSON Editor</strong>
+          <p>Paste or edit a candidate <code>rns-server.json</code> payload directly if you need a field the builder does not expose yet.</p>
         </div>
         <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
         <div class="row" style="margin-top: 12px;">

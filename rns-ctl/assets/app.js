@@ -18,13 +18,26 @@ const httpBindEl = document.getElementById("httpBind");
 const httpAuthEl = document.getElementById("httpAuth");
 const launchPlanRowsEl = document.getElementById("launchPlanRows");
 const configCandidateEl = document.getElementById("configCandidate");
+const builderStatsDbPathEl = document.getElementById("builderStatsDbPath");
+const builderRnsdBinEl = document.getElementById("builderRnsdBin");
+const builderSentineldBinEl = document.getElementById("builderSentineldBin");
+const builderStatsdBinEl = document.getElementById("builderStatsdBin");
+const builderHttpEnabledEl = document.getElementById("builderHttpEnabled");
+const builderHttpHostEl = document.getElementById("builderHttpHost");
+const builderHttpPortEl = document.getElementById("builderHttpPort");
+const builderHttpDisableAuthEl = document.getElementById("builderHttpDisableAuth");
+const builderHttpAuthTokenEl = document.getElementById("builderHttpAuthToken");
 const loadCurrentConfigButton = document.getElementById("loadCurrentConfig");
 const loadExampleConfigButton = document.getElementById("loadExampleConfig");
+const syncBuilderFromJsonButton = document.getElementById("syncBuilderFromJson");
+const syncJsonFromBuilderButton = document.getElementById("syncJsonFromBuilder");
 const formatConfigButton = document.getElementById("formatConfig");
 const validateConfigButton = document.getElementById("validateConfig");
 const saveConfigButton = document.getElementById("saveConfig");
 const applyConfigButton = document.getElementById("applyConfig");
 const configValidationStatusEl = document.getElementById("configValidationStatus");
+const configActionSummaryEl = document.getElementById("configActionSummary");
+const configWarningListEl = document.getElementById("configWarningList");
 const configPlanSummaryEl = document.getElementById("configPlanSummary");
 const configChangeRowsEl = document.getElementById("configChangeRows");
 const configSchemaNotesEl = document.getElementById("configSchemaNotes");
@@ -36,6 +49,7 @@ const logProcessNameEl = document.getElementById("logProcessName");
 const logStatusEl = document.getElementById("logStatus");
 const processLogOutputEl = document.getElementById("processLogOutput");
 let configEditorDirty = false;
+let configBuilderDirty = false;
 let selectedLogProcess = null;
 let currentConfigJson = "";
 let schemaExampleJson = "";
@@ -200,6 +214,9 @@ function renderConfig(config) {
   if (!configEditorDirty) {
     configCandidateEl.value = config?.server_config_file_json ?? "";
   }
+  if (!configBuilderDirty) {
+    populateBuilder(configFromSnapshot(config));
+  }
   currentConfigJson = config?.server_config_file_json ?? "";
 }
 
@@ -233,9 +250,12 @@ async function applyConfigCandidate() {
 }
 
 async function runConfigAction(path, pendingMessage, actionLabel) {
-  configValidationStatusEl.textContent = pendingMessage;
-  configValidationResultEl.textContent = "";
   try {
+    syncJsonFromBuilder({ silent: true });
+    configValidationStatusEl.textContent = pendingMessage;
+    configActionSummaryEl.textContent = pendingMessage;
+    configValidationResultEl.textContent = "";
+    renderWarnings([]);
     const response = await fetch(path, {
       method: "POST",
       headers: {
@@ -251,12 +271,16 @@ async function runConfigAction(path, pendingMessage, actionLabel) {
     configValidationStatusEl.textContent = `${actionLabel} succeeded`;
     configValidationResultEl.textContent = JSON.stringify(payload.result, null, 2);
     renderConfigPlan(payload.result?.apply_plan);
+    renderActionSummary(payload.result, actionLabel);
+    renderWarnings(payload.result?.warnings || []);
     if (path !== "/api/config/validate") {
       configEditorDirty = false;
+      configBuilderDirty = false;
     }
     await refresh();
   } catch (error) {
     configValidationStatusEl.textContent = `${actionLabel} failed`;
+    configActionSummaryEl.textContent = error.message;
     configValidationResultEl.textContent = error.message;
   }
 }
@@ -305,10 +329,69 @@ function renderConfigSchema(schema) {
       <td>${field.field}</td>
       <td>${field.field_type}</td>
       <td>${field.default_value}</td>
-      <td>${field.effect}</td>
+      <td>${field.effect}<div class="muted">${field.description ?? ""}</div></td>
     `;
     configSchemaRowsEl.appendChild(tr);
   }
+}
+
+function parseConfigText(text) {
+  return JSON.parse((text || "").trim() || "{}");
+}
+
+function normalizeOptionalText(value) {
+  const trimmed = (value || "").trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function configFromSnapshot(config) {
+  return parseConfigText(config?.server_config_file_json ?? "{}");
+}
+
+function populateBuilder(config) {
+  const http = config?.http || {};
+  builderStatsDbPathEl.value = config?.stats_db_path || "";
+  builderRnsdBinEl.value = config?.rnsd_bin || "";
+  builderSentineldBinEl.value = config?.sentineld_bin || "";
+  builderStatsdBinEl.value = config?.statsd_bin || "";
+  builderHttpEnabledEl.checked = http.enabled !== false;
+  builderHttpHostEl.value = http.host || "";
+  builderHttpPortEl.value = http.port != null ? String(http.port) : "";
+  builderHttpDisableAuthEl.checked = http.disable_auth === true;
+  builderHttpAuthTokenEl.value = http.auth_token || "";
+  configBuilderDirty = false;
+}
+
+function buildConfigFromBuilder() {
+  const config = {};
+  const http = {
+    enabled: builderHttpEnabledEl.checked,
+    disable_auth: builderHttpDisableAuthEl.checked,
+  };
+  const statsDbPath = normalizeOptionalText(builderStatsDbPathEl.value);
+  const rnsdBin = normalizeOptionalText(builderRnsdBinEl.value);
+  const sentineldBin = normalizeOptionalText(builderSentineldBinEl.value);
+  const statsdBin = normalizeOptionalText(builderStatsdBinEl.value);
+  const httpHost = normalizeOptionalText(builderHttpHostEl.value);
+  const httpAuthToken = normalizeOptionalText(builderHttpAuthTokenEl.value);
+  const httpPortValue = builderHttpPortEl.value.trim();
+
+  if (statsDbPath) config.stats_db_path = statsDbPath;
+  if (rnsdBin) config.rnsd_bin = rnsdBin;
+  if (sentineldBin) config.sentineld_bin = sentineldBin;
+  if (statsdBin) config.statsd_bin = statsdBin;
+  if (httpHost) http.host = httpHost;
+  if (httpAuthToken) http.auth_token = httpAuthToken;
+  if (httpPortValue) {
+    const parsedPort = Number.parseInt(httpPortValue, 10);
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      throw new Error("HTTP port must be an integer between 1 and 65535");
+    }
+    http.port = parsedPort;
+  }
+
+  config.http = http;
+  return config;
 }
 
 function loadConfigEditor(text, statusMessage) {
@@ -317,15 +400,53 @@ function loadConfigEditor(text, statusMessage) {
   configValidationStatusEl.textContent = statusMessage;
 }
 
+function syncBuilderFromJson(options = {}) {
+  const parsed = parseConfigText(configCandidateEl.value);
+  populateBuilder(parsed);
+  if (!options.silent) {
+    configValidationStatusEl.textContent = "Builder updated from JSON";
+  }
+}
+
+function syncJsonFromBuilder(options = {}) {
+  configCandidateEl.value = JSON.stringify(buildConfigFromBuilder(), null, 2);
+  configEditorDirty = false;
+  if (!options.silent) {
+    configValidationStatusEl.textContent = "Builder exported to JSON";
+  }
+}
+
 function formatConfigEditor() {
   try {
-    const parsed = JSON.parse(configCandidateEl.value.trim() || "{}");
+    const parsed = parseConfigText(configCandidateEl.value);
     configCandidateEl.value = JSON.stringify(parsed, null, 2);
-    configEditorDirty = true;
+    configEditorDirty = false;
     configValidationStatusEl.textContent = "Candidate JSON formatted";
   } catch (error) {
     configValidationStatusEl.textContent = `Format failed: ${error.message}`;
   }
+}
+
+function renderWarnings(warnings) {
+  configWarningListEl.innerHTML = "";
+  for (const warning of warnings || []) {
+    const li = document.createElement("li");
+    li.textContent = warning;
+    configWarningListEl.appendChild(li);
+  }
+}
+
+function renderActionSummary(result, actionLabel) {
+  if (!result) {
+    configActionSummaryEl.textContent = "No config action run yet";
+    return;
+  }
+  const childRestarts = result.apply_plan?.processes_to_restart?.length
+    ? result.apply_plan.processes_to_restart.join(", ")
+    : "none";
+  const serverRestart = result.apply_plan?.control_plane_restart_required ? "yes" : "no";
+  const warningCount = result.warnings?.length || 0;
+  configActionSummaryEl.textContent = `${actionLabel}: child restarts ${childRestarts}; rns-server restart required ${serverRestart}; warnings ${warningCount}.`;
 }
 
 function renderProcessLogs(process, lines) {
@@ -391,15 +512,53 @@ saveButton.addEventListener("click", () => {
 configCandidateEl.addEventListener("input", () => {
   configEditorDirty = true;
 });
+for (const input of [
+  builderStatsDbPathEl,
+  builderRnsdBinEl,
+  builderSentineldBinEl,
+  builderStatsdBinEl,
+  builderHttpEnabledEl,
+  builderHttpHostEl,
+  builderHttpPortEl,
+  builderHttpDisableAuthEl,
+  builderHttpAuthTokenEl,
+]) {
+  input.addEventListener("input", () => {
+    configBuilderDirty = true;
+  });
+  input.addEventListener("change", () => {
+    configBuilderDirty = true;
+  });
+}
 
 loadCurrentConfigButton.addEventListener("click", () => {
   loadConfigEditor(currentConfigJson, "Loaded current saved config");
+  syncBuilderFromJson({ silent: true });
 });
 loadExampleConfigButton.addEventListener("click", () => {
   loadConfigEditor(schemaExampleJson, "Loaded example config");
+  syncBuilderFromJson({ silent: true });
+});
+syncBuilderFromJsonButton.addEventListener("click", () => {
+  try {
+    syncBuilderFromJson();
+  } catch (error) {
+    configValidationStatusEl.textContent = `Builder sync failed: ${error.message}`;
+  }
+});
+syncJsonFromBuilderButton.addEventListener("click", () => {
+  try {
+    syncJsonFromBuilder();
+  } catch (error) {
+    configValidationStatusEl.textContent = `Builder export failed: ${error.message}`;
+  }
 });
 formatConfigButton.addEventListener("click", () => {
   formatConfigEditor();
+  try {
+    syncBuilderFromJson({ silent: true });
+  } catch (_error) {
+  }
 });
 validateConfigButton.addEventListener("click", () => {
   validateConfigCandidate();
