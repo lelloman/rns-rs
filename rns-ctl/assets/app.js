@@ -7,6 +7,15 @@ const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
 const configConvergedEl = document.getElementById("configConverged");
 const configStatusSummaryEl = document.getElementById("configStatusSummary");
+const configRuntimeBadgeEl = document.getElementById("configRuntimeBadge");
+const configRuntimeDetailEl = document.getElementById("configRuntimeDetail");
+const configRestartBadgeEl = document.getElementById("configRestartBadge");
+const configRestartDetailEl = document.getElementById("configRestartDetail");
+const configControlPlaneBadgeEl = document.getElementById("configControlPlaneBadge");
+const configControlPlaneDetailEl = document.getElementById("configControlPlaneDetail");
+const configLastActionEl = document.getElementById("configLastAction");
+const configLastSavedEl = document.getElementById("configLastSaved");
+const configLastAppliedEl = document.getElementById("configLastApplied");
 const configPathEl = document.getElementById("configPath");
 const configDirEl = document.getElementById("configDir");
 const serverConfigFileEl = document.getElementById("serverConfigFile");
@@ -65,6 +74,17 @@ function fmtSeconds(value) {
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
   return `${hours}h ${minutes}m ${seconds}s`;
+}
+
+function fmtAge(value) {
+  if (value == null) return "-";
+  if (value < 1) return "<1s ago";
+  return `${fmtSeconds(value)} ago`;
+}
+
+function setBadge(el, label, className) {
+  el.textContent = label;
+  el.className = `pill ${className}`;
 }
 
 function authHeaders() {
@@ -224,6 +244,15 @@ function renderConfigStatus(status) {
   if (!status) {
     configConvergedEl.textContent = "-";
     configStatusSummaryEl.textContent = "No config status yet.";
+    setBadge(configRuntimeBadgeEl, "unknown", "info");
+    setBadge(configRestartBadgeEl, "unknown", "info");
+    setBadge(configControlPlaneBadgeEl, "unknown", "info");
+    configRuntimeDetailEl.textContent = "No config status yet.";
+    configRestartDetailEl.textContent = "No process restart information yet.";
+    configControlPlaneDetailEl.textContent = "No control-plane restart information yet.";
+    configLastActionEl.textContent = "-";
+    configLastSavedEl.textContent = "-";
+    configLastAppliedEl.textContent = "-";
     return;
   }
 
@@ -235,6 +264,36 @@ function renderConfigStatus(status) {
     ? ` Last action: ${status.last_action}.`
     : "";
   configStatusSummaryEl.textContent = `${status.summary}${action}${pending}`;
+
+  if (status.runtime_differs_from_saved) {
+    setBadge(configRuntimeBadgeEl, "drifted", "warn");
+    configRuntimeDetailEl.textContent = "Saved config is not fully active in the current runtime state.";
+  } else {
+    setBadge(configRuntimeBadgeEl, "aligned", "ok");
+    configRuntimeDetailEl.textContent = "Runtime state matches the saved config.";
+  }
+
+  if (status.pending_process_restarts?.length) {
+    setBadge(configRestartBadgeEl, "pending", "warn");
+    configRestartDetailEl.textContent = `Waiting on: ${status.pending_process_restarts.join(", ")}.`;
+  } else {
+    setBadge(configRestartBadgeEl, "clear", "ok");
+    configRestartDetailEl.textContent = "No supervised child process restart is pending.";
+  }
+
+  if (status.control_plane_restart_required) {
+    setBadge(configControlPlaneBadgeEl, "restart required", "warn");
+    configControlPlaneDetailEl.textContent = "Restart rns-server to apply embedded HTTP control-plane changes.";
+  } else {
+    setBadge(configControlPlaneBadgeEl, "active", "ok");
+    configControlPlaneDetailEl.textContent = "Embedded HTTP control-plane settings are active.";
+  }
+
+  configLastActionEl.textContent = status.last_action
+    ? `${status.last_action} (${fmtAge(status.last_action_age_seconds)})`
+    : "-";
+  configLastSavedEl.textContent = fmtAge(status.last_saved_age_seconds);
+  configLastAppliedEl.textContent = fmtAge(status.last_apply_age_seconds);
 }
 
 async function validateConfigCandidate() {

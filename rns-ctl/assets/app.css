@@ -34,6 +34,27 @@ p { color: var(--muted); line-height: 1.5; }
   gap: 18px;
   margin-bottom: 18px;
 }
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.status-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 10rem),
+    rgba(19, 34, 52, 0.72);
+}
+.status-label {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 .panel { padding: 18px; }
 .stat { font-size: 28px; font-weight: 700; margin-top: 8px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -94,6 +115,9 @@ th, td {
 }
 .running { background: rgba(52, 211, 153, 0.18); color: var(--good); }
 .stopped, .failed { background: rgba(251, 113, 133, 0.16); color: var(--bad); }
+.ok { background: rgba(52, 211, 153, 0.18); color: var(--good); }
+.warn { background: rgba(252, 211, 77, 0.16); color: #fcd34d; }
+.info { background: rgba(125, 211, 252, 0.16); color: var(--accent); }
 .muted { color: var(--muted); }
 .links a { color: var(--accent); text-decoration: none; }
 .config-builder {

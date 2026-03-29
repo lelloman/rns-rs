@@ -42,6 +42,34 @@
       </article>
     </section>
 
+    <section class="panel" style="margin-top: 18px;">
+      <h2>Config Runtime Status</h2>
+      <div class="status-grid">
+        <article class="status-card">
+          <div class="status-label">Saved Vs Runtime</div>
+          <div id="configRuntimeBadge" class="pill">unknown</div>
+          <p id="configRuntimeDetail" class="muted">No config status yet.</p>
+        </article>
+        <article class="status-card">
+          <div class="status-label">Child Restarts</div>
+          <div id="configRestartBadge" class="pill">unknown</div>
+          <p id="configRestartDetail" class="muted">No process restart information yet.</p>
+        </article>
+        <article class="status-card">
+          <div class="status-label">Control Plane</div>
+          <div id="configControlPlaneBadge" class="pill">unknown</div>
+          <p id="configControlPlaneDetail" class="muted">No control-plane restart information yet.</p>
+        </article>
+      </div>
+      <table style="margin-top: 16px;">
+        <tbody>
+          <tr><th>Last Action</th><td id="configLastAction">-</td></tr>
+          <tr><th>Last Save</th><td id="configLastSaved">-</td></tr>
+          <tr><th>Last Apply</th><td id="configLastApplied">-</td></tr>
+        </tbody>
+      </table>
+    </section>
+
     <section class="panel">
       <h2>Processes</h2>
       <table>
