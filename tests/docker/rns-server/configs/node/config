@@ -1,0 +1,5 @@
+[reticulum]
+enable_transport = True
+share_instance = Yes
+provider_bridge = Yes
+provider_socket_path = /data/provider.sock
