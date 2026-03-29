@@ -5,8 +5,8 @@ use std::time::Duration;
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::{
     ensure_process, note_server_config_applied, note_server_config_saved, set_control_tx,
-    set_server_config, set_server_config_mutator, set_server_config_validator, set_server_mode,
-    CtlState, SharedState,
+    set_server_config, set_server_config_mutator, set_server_config_schema,
+    set_server_config_validator, set_server_mode, CtlState, SharedState,
 };
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
@@ -47,6 +47,7 @@ fn run_start(args: Args) {
     ensure_process(&shared_state, "rns-statsd");
     let config = ServerConfig::from_args(&args);
     set_server_config(&shared_state, config.snapshot());
+    set_server_config_schema(&shared_state, config.schema_snapshot());
     set_server_config_validator(
         &shared_state,
         std::sync::Arc::new({

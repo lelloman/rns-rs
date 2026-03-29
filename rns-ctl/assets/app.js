@@ -11,16 +11,24 @@ const configPathEl = document.getElementById("configPath");
 const configDirEl = document.getElementById("configDir");
 const serverConfigFileEl = document.getElementById("serverConfigFile");
 const statsDbEl = document.getElementById("statsDb");
+const rnsdBinEl = document.getElementById("rnsdBin");
+const sentineldBinEl = document.getElementById("sentineldBin");
+const statsdBinEl = document.getElementById("statsdBin");
 const httpBindEl = document.getElementById("httpBind");
 const httpAuthEl = document.getElementById("httpAuth");
 const launchPlanRowsEl = document.getElementById("launchPlanRows");
 const configCandidateEl = document.getElementById("configCandidate");
+const loadCurrentConfigButton = document.getElementById("loadCurrentConfig");
+const loadExampleConfigButton = document.getElementById("loadExampleConfig");
+const formatConfigButton = document.getElementById("formatConfig");
 const validateConfigButton = document.getElementById("validateConfig");
 const saveConfigButton = document.getElementById("saveConfig");
 const applyConfigButton = document.getElementById("applyConfig");
 const configValidationStatusEl = document.getElementById("configValidationStatus");
 const configPlanSummaryEl = document.getElementById("configPlanSummary");
 const configChangeRowsEl = document.getElementById("configChangeRows");
+const configSchemaNotesEl = document.getElementById("configSchemaNotes");
+const configSchemaRowsEl = document.getElementById("configSchemaRows");
 const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
@@ -29,6 +37,8 @@ const logStatusEl = document.getElementById("logStatus");
 const processLogOutputEl = document.getElementById("processLogOutput");
 let configEditorDirty = false;
 let selectedLogProcess = null;
+let currentConfigJson = "";
+let schemaExampleJson = "";
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -163,6 +173,9 @@ function renderConfig(config) {
     ? `${config.server_config_file_path}${config.server_config_file_present ? "" : " (not present)"}`
     : "-";
   statsDbEl.textContent = config?.stats_db_path ?? "-";
+  rnsdBinEl.textContent = config?.rnsd_bin ?? "-";
+  sentineldBinEl.textContent = config?.sentineld_bin ?? "-";
+  statsdBinEl.textContent = config?.statsd_bin ?? "-";
 
   if (config?.http?.enabled) {
     httpBindEl.textContent = `${config.http.host}:${config.http.port}`;
@@ -187,6 +200,7 @@ function renderConfig(config) {
   if (!configEditorDirty) {
     configCandidateEl.value = config?.server_config_file_json ?? "";
   }
+  currentConfigJson = config?.server_config_file_json ?? "";
 }
 
 function renderConfigStatus(status) {
@@ -258,7 +272,8 @@ function renderConfigPlan(plan) {
     ? plan.processes_to_restart.join(", ")
     : "none";
   const controlPlane = plan.control_plane_restart_required ? "yes" : "no";
-  configPlanSummaryEl.textContent = `Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.`;
+  const notes = plan.notes?.length ? ` ${plan.notes.join(" ")}` : "";
+  configPlanSummaryEl.textContent = `Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.${notes}`;
 
   configChangeRowsEl.innerHTML = "";
   for (const change of plan.changes || []) {
@@ -270,6 +285,46 @@ function renderConfigPlan(plan) {
       <td>${change.effect}</td>
     `;
     configChangeRowsEl.appendChild(tr);
+  }
+}
+
+function renderConfigSchema(schema) {
+  if (!schema) {
+    schemaExampleJson = "";
+    configSchemaNotesEl.textContent = "No schema loaded yet";
+    configSchemaRowsEl.innerHTML = "";
+    return;
+  }
+
+  schemaExampleJson = schema.example_config_json || "";
+  configSchemaNotesEl.textContent = (schema.notes || []).join(" ");
+  configSchemaRowsEl.innerHTML = "";
+  for (const field of schema.fields || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${field.field}</td>
+      <td>${field.field_type}</td>
+      <td>${field.default_value}</td>
+      <td>${field.effect}</td>
+    `;
+    configSchemaRowsEl.appendChild(tr);
+  }
+}
+
+function loadConfigEditor(text, statusMessage) {
+  configCandidateEl.value = text || "";
+  configEditorDirty = false;
+  configValidationStatusEl.textContent = statusMessage;
+}
+
+function formatConfigEditor() {
+  try {
+    const parsed = JSON.parse(configCandidateEl.value.trim() || "{}");
+    configCandidateEl.value = JSON.stringify(parsed, null, 2);
+    configEditorDirty = true;
+    configValidationStatusEl.textContent = "Candidate JSON formatted";
+  } catch (error) {
+    configValidationStatusEl.textContent = `Format failed: ${error.message}`;
   }
 }
 
@@ -305,9 +360,10 @@ async function refreshLogs() {
 
 async function refresh() {
   try {
-    const [node, config, configStatus, processes, processEvents] = await Promise.all([
+    const [node, config, configSchema, configStatus, processes, processEvents] = await Promise.all([
       fetchJson("/api/node"),
       fetchJson("/api/config"),
+      fetchJson("/api/config/schema"),
       fetchJson("/api/config/status"),
       fetchJson("/api/processes"),
       fetchJson("/api/process_events"),
@@ -317,6 +373,7 @@ async function refresh() {
     runningEl.textContent = `${node.processes_running}/${node.process_count}`;
     readyEl.textContent = `${node.processes_ready}/${node.process_count}`;
     renderConfig(config.config);
+    renderConfigSchema(configSchema.schema);
     renderConfigStatus(configStatus.status);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
@@ -335,6 +392,15 @@ configCandidateEl.addEventListener("input", () => {
   configEditorDirty = true;
 });
 
+loadCurrentConfigButton.addEventListener("click", () => {
+  loadConfigEditor(currentConfigJson, "Loaded current saved config");
+});
+loadExampleConfigButton.addEventListener("click", () => {
+  loadConfigEditor(schemaExampleJson, "Loaded example config");
+});
+formatConfigButton.addEventListener("click", () => {
+  formatConfigEditor();
+});
 validateConfigButton.addEventListener("click", () => {
   validateConfigCandidate();
 });

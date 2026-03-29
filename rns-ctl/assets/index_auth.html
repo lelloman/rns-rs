@@ -80,6 +80,9 @@
           <tr><th>Resolved Config Dir</th><td id="configDir">-</td></tr>
           <tr><th>Server Config File</th><td id="serverConfigFile">-</td></tr>
           <tr><th>Stats DB</th><td id="statsDb">-</td></tr>
+          <tr><th>rnsd Bin</th><td id="rnsdBin">-</td></tr>
+          <tr><th>rns-sentineld Bin</th><td id="sentineldBin">-</td></tr>
+          <tr><th>rns-statsd Bin</th><td id="statsdBin">-</td></tr>
           <tr><th>HTTP Bind</th><td id="httpBind">-</td></tr>
           <tr><th>HTTP Auth</th><td id="httpAuth">-</td></tr>
         </tbody>
@@ -96,7 +99,12 @@
       </table>
       <div style="margin-top: 18px;">
         <h3>Validate Candidate Config</h3>
-        <p>Paste a candidate <code>rns-server.json</code> payload and validate it without writing any files.</p>
+        <p>Load the current saved config, reset to the example template, or paste a candidate <code>rns-server.json</code> payload and validate it without writing any files.</p>
+        <div class="row" style="margin-bottom: 12px;">
+          <button id="loadCurrentConfig" class="secondary">Load Current</button>
+          <button id="loadExampleConfig" class="secondary">Load Example</button>
+          <button id="formatConfig" class="secondary">Format JSON</button>
+        </div>
         <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
         <div class="row" style="margin-top: 12px;">
           <button id="validateConfig" class="secondary">Validate Config</button>
@@ -119,6 +127,21 @@
           </thead>
           <tbody id="configChangeRows"></tbody>
         </table>
+        <div style="margin-top: 16px;">
+          <strong>Schema Notes</strong>
+          <div id="configSchemaNotes" class="muted" style="margin-top: 6px;">No schema loaded yet</div>
+        </div>
+        <table style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Type</th>
+              <th>Default</th>
+              <th>Effect</th>
+            </tr>
+          </thead>
+          <tbody id="configSchemaRows"></tbody>
+        </table>
         <pre id="configValidationResult" class="json-block"></pre>
       </div>
     </section>
@@ -140,7 +163,7 @@
 
     <section class="panel links" style="margin-top: 18px;">
       <h2>JSON Endpoints</h2>
-      <p><a href="/api/node">/api/node</a>, <a href="/api/config">/api/config</a>, <a href="/api/processes">/api/processes</a>, <a href="/api/process_events">/api/process_events</a>, <code>POST /api/config</code>, <code>POST /api/config/apply</code>, and <code>POST /api/config/validate</code></p>
+      <p><a href="/api/node">/api/node</a>, <a href="/api/config">/api/config</a>, <a href="/api/config/schema">/api/config/schema</a>, <a href="/api/processes">/api/processes</a>, <a href="/api/process_events">/api/process_events</a>, <code>POST /api/config</code>, <code>POST /api/config/apply</code>, and <code>POST /api/config/validate</code></p>
     </section>
   </main>
   <script src="/assets/app.js"></script>

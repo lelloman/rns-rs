@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use rns_ctl::state::{
     LaunchProcessSnapshot, ProcessControlCommand, ServerConfigApplyPlan, ServerConfigChange,
-    ServerConfigMutationMode, ServerConfigMutationResult, ServerConfigSnapshot,
-    ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState,
+    ServerConfigFieldSchema, ServerConfigMutationMode, ServerConfigMutationResult,
+    ServerConfigSchemaSnapshot, ServerConfigSnapshot, ServerConfigValidationSnapshot,
+    ServerHttpConfigSnapshot, SharedState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,7 @@ pub struct HttpConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfigFile {
     #[serde(default)]
     pub stats_db_path: Option<String>,
@@ -66,6 +68,7 @@ pub struct ServerConfigFile {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerHttpConfigFile {
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -109,9 +112,8 @@ impl ServerConfig {
         body: &[u8],
     ) -> Result<ServerConfigValidationSnapshot, String> {
         let candidate = Self::parse_config_json(body)?;
+        let mut warnings = Self::validate_file_config(&candidate)?;
         let validated = self.with_file_config(&candidate, self.server_config_file_present);
-
-        let mut warnings = Vec::new();
         warnings.push(format!(
             "Validation used config dir {} and did not write any files.",
             self.resolved_config_dir.display()
@@ -131,6 +133,7 @@ impl ServerConfig {
         control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
     ) -> Result<ServerConfigMutationResult, String> {
         let candidate = Self::parse_config_json(body)?;
+        let warnings = Self::validate_file_config(&candidate)?;
         let next = self.with_file_config(&candidate, true);
         let apply_plan = self.apply_plan(&next);
 
@@ -169,6 +172,7 @@ impl ServerConfig {
             },
             config: next.snapshot(),
             apply_plan,
+            warnings,
         })
     }
 
@@ -216,6 +220,9 @@ impl ServerConfig {
             server_config_file_present: self.server_config_file_present,
             server_config_file_json: self.editable_file_json(),
             stats_db_path: self.stats_db_path.display().to_string(),
+            rnsd_bin: self.rnsd_bin.display().to_string(),
+            sentineld_bin: self.sentineld_bin.display().to_string(),
+            statsd_bin: self.statsd_bin.display().to_string(),
             http: ServerHttpConfigSnapshot {
                 enabled: self.http.enabled,
                 host: self.http.host.clone(),
@@ -238,6 +245,95 @@ impl ServerConfig {
                     command_line: spec.command_line(),
                 })
                 .collect(),
+        }
+    }
+
+    pub fn schema_snapshot(&self) -> ServerConfigSchemaSnapshot {
+        ServerConfigSchemaSnapshot {
+            format: "rns-server.json".into(),
+            example_config_json: Self::example_config_json(),
+            notes: vec![
+                format!(
+                    "The config file is loaded from {}.",
+                    self.server_config_file_path.display()
+                ),
+                "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
+                "Changing process launch settings restarts only the affected child processes. Changing embedded HTTP settings requires restarting rns-server.".into(),
+            ],
+            fields: vec![
+                ServerConfigFieldSchema {
+                    field: "stats_db_path".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: self.resolved_config_dir.join("stats.db").display().to_string(),
+                    description: "SQLite database path used by rns-statsd.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "rnsd_bin".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: "rnsd".into(),
+                    description: "Executable used for the Reticulum daemon.".into(),
+                    effect: "Restarts rnsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "sentineld_bin".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: "rns-sentineld".into(),
+                    description: "Executable used for the sentinel sidecar.".into(),
+                    effect: "Restarts rns-sentineld when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "statsd_bin".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: "rns-statsd".into(),
+                    description: "Executable used for the stats sidecar.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "http.enabled".into(),
+                    field_type: "boolean".into(),
+                    required: false,
+                    default_value: "true".into(),
+                    description: "Enable or disable the embedded HTTP control plane.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "http.host".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: "127.0.0.1".into(),
+                    description: "Bind host for the embedded HTTP control plane.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "http.port".into(),
+                    field_type: "u16".into(),
+                    required: false,
+                    default_value: "8080".into(),
+                    description: "Bind port for the embedded HTTP control plane.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "http.auth_token".into(),
+                    field_type: "string".into(),
+                    required: false,
+                    default_value: "(generated if auth is enabled and no token is configured)".into(),
+                    description: "Optional fixed bearer token for the embedded HTTP control plane.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "http.disable_auth".into(),
+                    field_type: "boolean".into(),
+                    required: false,
+                    default_value: "false".into(),
+                    description: "Disable bearer-token authentication on the embedded HTTP control plane.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+            ],
         }
     }
 
@@ -471,11 +567,48 @@ impl ServerConfig {
         let body = std::fs::read(path)
             .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
         let cfg = Self::parse_config_json(&body)?;
+        Self::validate_file_config(&cfg)?;
         Ok((cfg, true))
     }
 
     fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, String> {
         serde_json::from_slice(body).map_err(|err| format!("invalid server config JSON: {}", err))
+    }
+
+    fn validate_file_config(file_cfg: &ServerConfigFile) -> Result<Vec<String>, String> {
+        let mut warnings = Vec::new();
+
+        validate_optional_nonempty("stats_db_path", file_cfg.stats_db_path.as_deref())?;
+        validate_optional_nonempty("rnsd_bin", file_cfg.rnsd_bin.as_deref())?;
+        validate_optional_nonempty("sentineld_bin", file_cfg.sentineld_bin.as_deref())?;
+        validate_optional_nonempty("statsd_bin", file_cfg.statsd_bin.as_deref())?;
+        validate_optional_nonempty("http.host", file_cfg.http.host.as_deref())?;
+        validate_optional_nonempty("http.auth_token", file_cfg.http.auth_token.as_deref())?;
+
+        if matches!(file_cfg.http.enabled, Some(true)) && matches!(file_cfg.http.port, Some(0)) {
+            return Err("http.port must be greater than 0 when HTTP is enabled".into());
+        }
+
+        if matches!(file_cfg.http.enabled, Some(false))
+            && (file_cfg.http.host.is_some()
+                || file_cfg.http.port.is_some()
+                || file_cfg.http.auth_token.is_some()
+                || file_cfg.http.disable_auth.is_some())
+        {
+            warnings.push(
+                "HTTP config fields are present while http.enabled=false; they will be saved but remain inactive until HTTP is re-enabled."
+                    .into(),
+            );
+        }
+
+        if matches!(file_cfg.http.disable_auth, Some(true)) && file_cfg.http.auth_token.is_some() {
+            warnings.push(
+                "http.auth_token is set but disable_auth=true, so the token will be ignored until auth is enabled again."
+                    .into(),
+            );
+        }
+
+        Ok(warnings)
     }
 
     fn hook_readiness_target(&self, specs: &[(&str, &str)]) -> Option<ReadinessTarget> {
@@ -628,6 +761,30 @@ impl ServerConfig {
         serde_json::to_string_pretty(&self.file_config)
             .unwrap_or_else(|_| "{\n  \"http\": {}\n}".into())
     }
+
+    fn example_config_json() -> String {
+        serde_json::to_string_pretty(&ServerConfigFile {
+            stats_db_path: Some("stats.db".into()),
+            rnsd_bin: Some("rnsd".into()),
+            sentineld_bin: Some("rns-sentineld".into()),
+            statsd_bin: Some("rns-statsd".into()),
+            http: ServerHttpConfigFile {
+                enabled: Some(true),
+                host: Some("127.0.0.1".into()),
+                port: Some(8080),
+                auth_token: None,
+                disable_auth: Some(false),
+            },
+        })
+        .unwrap_or_else(|_| "{\n  \"http\": {}\n}".into())
+    }
+}
+
+fn validate_optional_nonempty(field: &str, value: Option<&str>) -> Result<(), String> {
+    if value.is_some_and(|raw| raw.trim().is_empty()) {
+        return Err(format!("{field} cannot be empty"));
+    }
+    Ok(())
 }
 
 fn env_present(name: &str) -> bool {
@@ -717,5 +874,36 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.field == "http.port" && change.after == "9090"));
+    }
+
+    #[test]
+    fn validation_rejects_unknown_fields() {
+        let err = ServerConfig::parse_config_json(br#"{"unknown":true}"#).unwrap_err();
+        assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn validation_rejects_empty_strings() {
+        let err = ServerConfig::validate_file_config(&ServerConfigFile {
+            stats_db_path: Some("   ".into()),
+            ..ServerConfigFile::default()
+        })
+        .unwrap_err();
+        assert_eq!(err, "stats_db_path cannot be empty");
+    }
+
+    #[test]
+    fn validation_warns_when_http_fields_are_disabled() {
+        let warnings = ServerConfig::validate_file_config(&ServerConfigFile {
+            http: ServerHttpConfigFile {
+                enabled: Some(false),
+                port: Some(8080),
+                ..ServerHttpConfigFile::default()
+            },
+            ..ServerConfigFile::default()
+        })
+        .unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("http.enabled=false"));
     }
 }

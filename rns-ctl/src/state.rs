@@ -28,6 +28,7 @@ pub struct CtlState {
     pub started_at: Instant,
     pub server_mode: String,
     pub server_config: Option<ServerConfigSnapshot>,
+    pub server_config_schema: Option<ServerConfigSchemaSnapshot>,
     pub server_config_status: ServerConfigStatusState,
     pub server_config_validator: Option<ServerConfigValidator>,
     pub server_config_mutator: Option<ServerConfigMutator>,
@@ -59,6 +60,7 @@ impl CtlState {
             started_at: Instant::now(),
             server_mode: "standalone".into(),
             server_config: None,
+            server_config_schema: None,
             server_config_status: ServerConfigStatusState::default(),
             server_config_validator: None,
             server_config_mutator: None,
@@ -129,6 +131,11 @@ pub fn set_server_mode(state: &SharedState, mode: impl Into<String>) {
 pub fn set_server_config(state: &SharedState, config: ServerConfigSnapshot) {
     let mut s = state.write().unwrap();
     s.server_config = Some(config);
+}
+
+pub fn set_server_config_schema(state: &SharedState, schema: ServerConfigSchemaSnapshot) {
+    let mut s = state.write().unwrap();
+    s.server_config_schema = Some(schema);
 }
 
 pub fn note_server_config_saved(state: &SharedState, apply_plan: &ServerConfigApplyPlan) {
@@ -437,8 +444,29 @@ pub struct ServerConfigSnapshot {
     pub server_config_file_present: bool,
     pub server_config_file_json: String,
     pub stats_db_path: String,
+    pub rnsd_bin: String,
+    pub sentineld_bin: String,
+    pub statsd_bin: String,
     pub http: ServerHttpConfigSnapshot,
     pub launch_plan: Vec<LaunchProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigSchemaSnapshot {
+    pub format: String,
+    pub example_config_json: String,
+    pub notes: Vec<String>,
+    pub fields: Vec<ServerConfigFieldSchema>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerConfigFieldSchema {
+    pub field: String,
+    pub field_type: String,
+    pub required: bool,
+    pub default_value: String,
+    pub description: String,
+    pub effect: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -485,6 +513,7 @@ pub struct ServerConfigMutationResult {
     pub action: String,
     pub config: ServerConfigSnapshot,
     pub apply_plan: ServerConfigApplyPlan,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

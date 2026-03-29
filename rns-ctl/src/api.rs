@@ -67,6 +67,7 @@ pub fn handle_request(
         // Read endpoints
         ("GET", "/api/node") => handle_node(node, state),
         ("GET", "/api/config") => handle_config(state),
+        ("GET", "/api/config/schema") => handle_config_schema(state),
         ("GET", "/api/config/status") => handle_config_status(state),
         ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/process_events") => handle_process_events(state),
@@ -179,6 +180,14 @@ fn handle_config(state: &SharedState) -> HttpResponse {
     match &s.server_config {
         Some(config) => HttpResponse::ok(json!({ "config": config })),
         None => HttpResponse::ok(json!({ "config": null })),
+    }
+}
+
+fn handle_config_schema(state: &SharedState) -> HttpResponse {
+    let s = state.read().unwrap();
+    match &s.server_config_schema {
+        Some(schema) => HttpResponse::ok(json!({ "schema": schema })),
+        None => HttpResponse::ok(json!({ "schema": null })),
     }
 }
 
