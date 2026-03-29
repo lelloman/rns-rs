@@ -63,18 +63,31 @@ export TOPOLOGY="rns-server"
 
 echo ""
 echo "=== Starting rns-server test container ==="
-docker compose -f "$COMPOSE_FILE" up -d --wait
+COMPOSE_EXIT=0
+docker compose -f "$COMPOSE_FILE" up -d --wait || COMPOSE_EXIT=$?
+
+if [[ $COMPOSE_EXIT -ne 0 ]]; then
+  echo ""
+  echo "=== Container failed to start (exit $COMPOSE_EXIT) ==="
+  echo "=== Container logs ==="
+  docker compose -f "$COMPOSE_FILE" logs --tail=200
+  echo "=== End logs ==="
+fi
 
 # ── Run test ────────────────────────────────────────────────────────────────
 
-echo ""
-echo "=== Running rns-server E2E tests ==="
 TEST_EXIT=0
-bash "${SCRIPT_DIR}/test.sh" || TEST_EXIT=$?
+if [[ $COMPOSE_EXIT -eq 0 ]]; then
+  echo ""
+  echo "=== Running rns-server E2E tests ==="
+  bash "${SCRIPT_DIR}/test.sh" || TEST_EXIT=$?
+else
+  TEST_EXIT=$COMPOSE_EXIT
+fi
 
 # ── Dump logs on failure ────────────────────────────────────────────────────
 
-if [[ $TEST_EXIT -ne 0 ]]; then
+if [[ $TEST_EXIT -ne 0 && $COMPOSE_EXIT -eq 0 ]]; then
   echo ""
   echo "=== Container logs (last 200 lines) ==="
   docker compose -f "$COMPOSE_FILE" logs --tail=200
