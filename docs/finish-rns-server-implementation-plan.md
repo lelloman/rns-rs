@@ -4,6 +4,10 @@
 
 Finish `rns-server` as the single-node product entrypoint with trustworthy health state, operator-grade config flows, durable observability, direct UI/API coverage, and a release-ready distribution/documentation story.
 
+## Progress
+
+All 15 finish tasks in this plan are now implemented, verified, and committed.
+
 ## Working Rules
 
 The remaining work should follow these rules:
