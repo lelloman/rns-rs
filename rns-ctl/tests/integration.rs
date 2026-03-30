@@ -5,6 +5,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -613,6 +614,50 @@ fn test_get_processes_exposes_log_metadata() {
 }
 
 #[test]
+fn test_get_processes_exposes_readiness_and_failure_detail() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.processes.insert(
+            "rns-sentineld".into(),
+            ManagedProcessState {
+                name: "rns-sentineld".into(),
+                status: "failed".into(),
+                ready: false,
+                ready_state: "not-ready".into(),
+                pid: None,
+                last_exit_code: Some(17),
+                restart_count: 4,
+                last_error: Some("hook registration timed out".into()),
+                status_detail: Some("waiting for provider bridge".into()),
+                durable_log_path: Some("/tmp/rns/logs/rns-sentineld.log".into()),
+                last_log_at: Some(std::time::Instant::now()),
+                recent_log_lines: 12,
+                started_at: None,
+                last_transition_at: Some(std::time::Instant::now()),
+            },
+        );
+    }
+
+    let res = http_get(server.port, "/api/processes");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["processes"][0]["name"], "rns-sentineld");
+    assert_eq!(json["processes"][0]["ready_state"], "not-ready");
+    assert_eq!(json["processes"][0]["restart_count"], 4);
+    assert_eq!(json["processes"][0]["last_exit_code"], 17);
+    assert_eq!(
+        json["processes"][0]["last_error"],
+        "hook registration timed out"
+    );
+    assert_eq!(
+        json["processes"][0]["status_detail"],
+        "waiting for provider bridge"
+    );
+    server.shutdown();
+}
+
+#[test]
 fn test_get_process_logs_exposes_log_metadata() {
     let server = start_test_server();
     ensure_process(&server.ctx.state, "rns-statsd");
@@ -631,6 +676,27 @@ fn test_get_process_logs_exposes_log_metadata() {
     assert_eq!(json["recent_log_lines"], 1);
     assert_eq!(json["lines"][0]["line"], "statsd started");
     assert!(json["last_log_age_seconds"].as_f64().is_some());
+    server.shutdown();
+}
+
+#[test]
+fn test_get_process_logs_limit_and_missing_process() {
+    let server = start_test_server();
+    ensure_process(&server.ctx.state, "rns-statsd");
+    push_process_log(&server.ctx.state, "rns-statsd", "stdout", "line one");
+    push_process_log(&server.ctx.state, "rns-statsd", "stdout", "line two");
+    push_process_log(&server.ctx.state, "rns-statsd", "stderr", "line three");
+
+    let limited = http_get(server.port, "/api/processes/rns-statsd/logs?limit=2");
+    assert_eq!(limited.status, 200);
+    let limited_json = limited.json();
+    let lines = limited_json["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["line"], "line three");
+    assert_eq!(lines[1]["line"], "line two");
+
+    let missing = http_get(server.port, "/api/processes/missing/logs");
+    assert_eq!(missing.status, 404);
     server.shutdown();
 }
 
@@ -738,6 +804,108 @@ fn test_config_apply_endpoint_uses_mutator() {
         json["result"]["apply_plan"]["changes"][0]["field"],
         "stats_db_path"
     );
+    server.shutdown();
+}
+
+#[test]
+fn test_config_validate_endpoint_returns_bad_request_on_validation_error() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_validator = Some(Arc::new(|_body| {
+            Err("stats_db_path must be absolute".into())
+        }));
+    }
+
+    let res = http_post(server.port, "/api/config/validate", r#"{"stats_db_path":"relative.db"}"#);
+    assert_eq!(res.status, 400);
+    assert_eq!(
+        res.json()["error"],
+        "stats_db_path must be absolute"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn test_get_config_status_reports_restart_pending_targets() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.server_config_status = ServerConfigStatusState {
+            last_action: Some("apply".into()),
+            runtime_differs_from_saved: true,
+            pending_process_restarts: vec!["rns-statsd".into()],
+            control_plane_restart_required: true,
+            last_apply_plan: Some(ServerConfigApplyPlan {
+                overall_action: "restart_children_and_server".into(),
+                processes_to_restart: vec!["rns-statsd".into()],
+                control_plane_reload_required: false,
+                control_plane_restart_required: true,
+                notes: vec!["Restart required for: rns-statsd and embedded HTTP bind.".into()],
+                changes: vec![
+                    ServerConfigChange {
+                        field: "stats_db_path".into(),
+                        before: "/tmp/rns/stats.db".into(),
+                        after: "/tmp/rns/other.db".into(),
+                        effect: "restart rns-statsd".into(),
+                    },
+                    ServerConfigChange {
+                        field: "http.port".into(),
+                        before: "8080".into(),
+                        after: "9090".into(),
+                        effect: "restart rns-server".into(),
+                    },
+                ],
+            }),
+            ..ServerConfigStatusState::default()
+        };
+    }
+
+    let res = http_get(server.port, "/api/config/status");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(
+        json["status"]["pending_action"],
+        "restart_children_and_server"
+    );
+    assert_eq!(json["status"]["pending_targets"][0], "rns-statsd");
+    assert_eq!(json["status"]["pending_targets"][1], "rns-server");
+    assert!(json["status"]["blocking_reason"]
+        .as_str()
+        .unwrap()
+        .contains("Restart rns-server"));
+    server.shutdown();
+}
+
+#[test]
+fn test_process_control_returns_internal_error_without_supervisor() {
+    let server = start_test_server();
+    let res = http_post(server.port, "/api/processes/rns-statsd/restart", "{}");
+    assert_eq!(res.status, 500);
+    assert_eq!(res.json()["error"], "Process control is not enabled");
+    server.shutdown();
+}
+
+#[test]
+fn test_process_control_queues_commands_when_supervision_enabled() {
+    let server = start_test_server();
+    let (tx, rx) = mpsc::channel();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.control_tx = Some(tx);
+    }
+
+    let res = http_post(server.port, "/api/processes/rns-statsd/restart", "{}");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json()["queued"], true);
+    assert_eq!(res.json()["action"], "restart");
+    assert_eq!(res.json()["process"], "rns-statsd");
+    match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+        rns_ctl::state::ProcessControlCommand::Restart(name) => {
+            assert_eq!(name, "rns-statsd");
+        }
+        _ => panic!("unexpected command variant"),
+    }
     server.shutdown();
 }
 
