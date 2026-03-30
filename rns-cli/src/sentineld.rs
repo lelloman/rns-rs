@@ -16,6 +16,7 @@ use rns_net::storage;
 use rns_net::{HookInfo, RpcAddr, RpcClient};
 
 use crate::args::Args;
+use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
 const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_SENTINEL_HOOK_WASM"));
@@ -84,6 +85,7 @@ fn run() -> Result<(), String> {
         .init();
 
     install_signal_handlers();
+    let ready_file = ReadyFile::new(args.get("ready-file"))?;
 
     let priority = args
         .get("priority")
@@ -210,6 +212,16 @@ fn run() -> Result<(), String> {
             .map(|d| d.as_secs())
             .unwrap_or(0),
     );
+    if let Some(ready_file) = ready_file.as_ref() {
+        ready_file.mark_ready(
+            "rns-sentineld",
+            "hooks loaded and provider bridge connected",
+        )?;
+        log::info!(
+            "rns-sentineld readiness file written to {}",
+            ready_file.path().display()
+        );
+    }
 
     let mut tracker = PeerTracker::new(policy);
 
@@ -746,6 +758,7 @@ fn print_usage() {
     println!("Options:");
     println!("  --config PATH, -c PATH      Path to config directory");
     println!("  --socket PATH               Provider bridge socket override");
+    println!("  --ready-file PATH           Write readiness contract file once operational");
     println!("  --priority N                 Hook priority (default: 0)");
     println!(
         "  --write-stall-threshold N    Write stalls before blacklist (default: {})",

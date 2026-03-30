@@ -19,6 +19,7 @@ use rns_net::{HookInfo, RpcAddr, RpcClient};
 use rusqlite::{params, Connection};
 
 use crate::args::Args;
+use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
 const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_STATSD_HOOK_WASM"));
@@ -70,6 +71,7 @@ fn run() -> Result<(), String> {
         .init();
 
     install_signal_handlers();
+    let ready_file = ReadyFile::new(args.get("ready-file"))?;
 
     let db_path = args
         .get("db")
@@ -126,6 +128,16 @@ fn run() -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
         .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+    if let Some(ready_file) = ready_file.as_ref() {
+        ready_file.mark_ready(
+            "rns-statsd",
+            "hooks loaded, provider bridge connected, and stats database opened",
+        )?;
+        log::info!(
+            "rns-statsd readiness file written to {}",
+            ready_file.path().display()
+        );
+    }
 
     let mut aggregator = StatsAggregator::default();
     let mut next_flush = Instant::now() + flush_interval;
@@ -729,6 +741,7 @@ fn print_usage() {
     println!("  --db PATH                   SQLite database path");
     println!("  --flush-interval SECONDS    Flush interval (default: 5)");
     println!("  --socket PATH               Override provider bridge socket path");
+    println!("  --ready-file PATH           Write readiness contract file once operational");
     println!("  --priority N                Hook priority (default: 0)");
     println!("  --version                   Show version");
 }
