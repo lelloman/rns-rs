@@ -170,6 +170,7 @@ impl ServerConfig {
             shared_state,
             control_rx,
             readiness: self.readiness_checks(),
+            log_dir: Some(self.resolved_config_dir.join("logs")),
         }
     }
 

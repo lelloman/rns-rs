@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::logs::LogStore;
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
     mark_process_stopped, push_process_log, set_process_readiness, ProcessControlCommand,
@@ -51,6 +52,7 @@ pub struct SupervisorConfig {
     pub shared_state: Option<SharedState>,
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     pub readiness: Vec<ProcessReadiness>,
+    pub log_dir: Option<PathBuf>,
 }
 
 pub struct Supervisor {
@@ -58,6 +60,7 @@ pub struct Supervisor {
     shared_state: Option<SharedState>,
     control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     readiness: Vec<ProcessReadiness>,
+    log_store: Option<LogStore>,
 }
 
 impl Supervisor {
@@ -67,6 +70,7 @@ impl Supervisor {
             shared_state: config.shared_state,
             control_rx: config.control_rx,
             readiness: config.readiness,
+            log_store: config.log_dir.map(LogStore::new),
         }
     }
 
@@ -85,7 +89,7 @@ impl Supervisor {
         let mut children = self
             .specs
             .iter()
-            .map(|spec| spawn_child(spec, self.shared_state.as_ref()))
+            .map(|spec| spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone()))
             .collect::<Result<Vec<_>, _>>()?;
 
         on_started()?;
@@ -156,7 +160,8 @@ impl Supervisor {
                 mark_process_stopped(state, role.display_name(), None);
                 bump_process_restart_count(state, role.display_name());
             }
-            children[index] = spawn_child(spec, self.shared_state.as_ref())?;
+            children[index] =
+                spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
         }
 
         Ok(())
@@ -172,7 +177,11 @@ impl Supervisor {
         let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
             return Err(format!("missing process spec for '{}'", name));
         };
-        children.push(spawn_child(spec, self.shared_state.as_ref())?);
+        children.push(spawn_child(
+            spec,
+            self.shared_state.as_ref(),
+            self.log_store.clone(),
+        )?);
         Ok(())
     }
 
@@ -469,6 +478,7 @@ fn missing_required_hooks(hooks: &[HookInfo], required_hooks: &[(String, String)
 fn spawn_child(
     spec: &ProcessSpec,
     shared_state: Option<&SharedState>,
+    log_store: Option<LogStore>,
 ) -> Result<ManagedChild, String> {
     log::info!("starting {}", spec.command_line());
     let mut command = Command::new(&spec.bin);
@@ -496,26 +506,28 @@ fn spawn_child(
         child,
     };
     if let Some(state) = shared_state {
-        attach_log_streams(&mut managed, state.clone());
+        attach_log_streams(&mut managed, state.clone(), log_store);
     }
     Ok(managed)
 }
 
-fn attach_log_streams(child: &mut ManagedChild, state: SharedState) {
+fn attach_log_streams(child: &mut ManagedChild, state: SharedState, log_store: Option<LogStore>) {
     let process_name = child.role.display_name().to_string();
 
     if let Some(stdout) = child.child.stdout.take() {
         let state = state.clone();
         let process_name = process_name.clone();
+        let log_store = log_store.clone();
         let _ = thread::Builder::new()
             .name(format!("{}-stdout", process_name))
-            .spawn(move || read_log_stream(stdout, state, process_name, "stdout"));
+            .spawn(move || read_log_stream(stdout, state, process_name, "stdout", log_store));
     }
 
     if let Some(stderr) = child.child.stderr.take() {
+        let log_store = log_store.clone();
         let _ = thread::Builder::new()
             .name(format!("{}-stderr", process_name))
-            .spawn(move || read_log_stream(stderr, state, process_name, "stderr"));
+            .spawn(move || read_log_stream(stderr, state, process_name, "stderr", log_store));
     }
 }
 
@@ -524,11 +536,24 @@ fn read_log_stream<R: io::Read + Send + 'static>(
     state: SharedState,
     process_name: String,
     stream_name: &'static str,
+    log_store: Option<LogStore>,
 ) {
     let reader = BufReader::new(stream);
     for line in reader.lines() {
         match line {
-            Ok(line) => push_process_log(&state, &process_name, stream_name, line),
+            Ok(line) => {
+                push_process_log(&state, &process_name, stream_name, line.clone());
+                if let Some(store) = log_store.as_ref() {
+                    if let Err(err) = store.append_line(&process_name, stream_name, &line) {
+                        push_process_log(
+                            &state,
+                            &process_name,
+                            "supervisor",
+                            format!("durable log write failed: {}", err),
+                        );
+                    }
+                }
+            }
             Err(err) => {
                 push_process_log(
                     &state,
@@ -661,6 +686,7 @@ mod tests {
             shared_state: None,
             control_rx: None,
             readiness: Vec::new(),
+            log_dir: None,
         };
 
         assert_eq!(supervisor.specs.len(), 3);
