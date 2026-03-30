@@ -1,7 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
-
 use rns_ctl::state::{
     LaunchProcessSnapshot, ProcessControlCommand, ServerConfigApplyPlan, ServerConfigChange,
     ServerConfigFieldSchema, ServerConfigMutationMode, ServerConfigMutationResult,
@@ -9,23 +5,11 @@ use rns_ctl::state::{
     ServerHttpConfigSnapshot, SharedState,
 };
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use crate::args::Args;
 use crate::supervisor::{ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig};
-
-const SENTINEL_HOOK_SPECS: [(&str, &str); 5] = [
-    ("rns_sentinel_peer_connected", "BackbonePeerConnected"),
-    ("rns_sentinel_peer_disconnected", "BackbonePeerDisconnected"),
-    ("rns_sentinel_peer_idle_timeout", "BackbonePeerIdleTimeout"),
-    ("rns_sentinel_peer_write_stall", "BackbonePeerWriteStall"),
-    ("rns_sentinel_peer_penalty", "BackbonePeerPenalty"),
-];
-
-const STATSD_HOOK_SPECS: [(&str, &str); 3] = [
-    ("rns_statsd_pre_ingress", "PreIngress"),
-    ("rns_statsd_send_on_interface", "SendOnInterface"),
-    ("rns_statsd_broadcast_all", "BroadcastOnAllInterfaces"),
-];
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -194,12 +178,12 @@ impl ServerConfig {
             ProcessSpec {
                 role: Role::Rnsd,
                 bin: self.rnsd_bin.clone(),
-                args: self.config_args(),
+                args: self.rnsd_args(),
             },
             ProcessSpec {
                 role: Role::Sentineld,
                 bin: self.sentineld_bin.clone(),
-                args: self.config_args(),
+                args: self.sentineld_args(),
             },
             ProcessSpec {
                 role: Role::Statsd,
@@ -385,30 +369,23 @@ impl ServerConfig {
     }
 
     fn readiness_checks(&self) -> Vec<ProcessReadiness> {
-        let mut readiness = vec![ProcessReadiness {
-            role: Role::Rnsd,
-            target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
-        }];
-
-        let sentinel_target = self
-            .hook_readiness_target(&SENTINEL_HOOK_SPECS)
-            .unwrap_or_else(|| ReadinessTarget::ProcessAge(Duration::from_secs(1)));
-        let statsd_target = self
-            .hook_readiness_target(&STATSD_HOOK_SPECS)
-            .unwrap_or_else(|| ReadinessTarget::ProcessAge(Duration::from_secs(1)));
-
-        readiness.push(ProcessReadiness {
-            role: Role::Sentineld,
-            target: sentinel_target,
-        });
-        readiness.push(ProcessReadiness {
-            role: Role::Statsd,
-            target: statsd_target,
-        });
-        readiness
+        vec![
+            ProcessReadiness {
+                role: Role::Rnsd,
+                target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
+            },
+            ProcessReadiness {
+                role: Role::Sentineld,
+                target: ReadinessTarget::ReadyFile(self.sentineld_ready_file_path()),
+            },
+            ProcessReadiness {
+                role: Role::Statsd,
+                target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
+            },
+        ]
     }
 
-    fn config_args(&self) -> Vec<String> {
+    fn rnsd_args(&self) -> Vec<String> {
         let mut args = Vec::new();
         if let Some(path) = &self.config_path {
             args.push("--config".into());
@@ -417,11 +394,28 @@ impl ServerConfig {
         args
     }
 
+    fn sentineld_args(&self) -> Vec<String> {
+        let mut args = self.rnsd_args();
+        args.push("--ready-file".into());
+        args.push(self.sentineld_ready_file_path().display().to_string());
+        args
+    }
+
     fn statsd_args(&self) -> Vec<String> {
-        let mut args = self.config_args();
+        let mut args = self.rnsd_args();
         args.push("--db".into());
         args.push(self.stats_db_path.display().to_string());
+        args.push("--ready-file".into());
+        args.push(self.statsd_ready_file_path().display().to_string());
         args
+    }
+
+    fn sentineld_ready_file_path(&self) -> PathBuf {
+        self.resolved_config_dir.join("rns-sentineld.ready")
+    }
+
+    fn statsd_ready_file_path(&self) -> PathBuf {
+        self.resolved_config_dir.join("rns-statsd.ready")
     }
 
     fn ctl_args_from_server_args(args: &Args) -> rns_ctl::args::Args {
@@ -611,22 +605,6 @@ impl ServerConfig {
         Ok(warnings)
     }
 
-    fn hook_readiness_target(&self, specs: &[(&str, &str)]) -> Option<ReadinessTarget> {
-        let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
-        let identity = rns_net::storage::load_or_create_identity(&paths.identities).ok()?;
-        let private_key = identity.get_private_key()?;
-        let auth_key = rns_net::rpc::derive_auth_key(&private_key);
-        let required_hooks = specs
-            .iter()
-            .map(|(name, attach_point)| ((*name).to_string(), (*attach_point).to_string()))
-            .collect();
-        Some(ReadinessTarget::HookSet {
-            rpc_addr: rns_net::RpcAddr::Tcp("127.0.0.1".into(), self.rnsd_rpc_addr.port()),
-            auth_key,
-            required_hooks,
-        })
-    }
-
     fn with_file_config(&self, file_cfg: &ServerConfigFile, file_present: bool) -> Self {
         Self::build(
             self.config_path.clone(),
@@ -807,6 +785,7 @@ fn mask_token(token: &Option<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{HttpConfig, ServerConfig, ServerConfigFile, ServerHttpConfigFile};
+    use crate::supervisor::{ReadinessTarget, Role};
     use std::path::PathBuf;
 
     fn test_config() -> ServerConfig {
@@ -905,5 +884,53 @@ mod tests {
         .unwrap();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("http.enabled=false"));
+    }
+
+    #[test]
+    fn process_specs_include_sidecar_ready_file_args() {
+        let config = test_config();
+        let specs = config.process_specs();
+
+        let sentineld = specs
+            .iter()
+            .find(|spec| spec.role == Role::Sentineld)
+            .unwrap();
+        assert!(sentineld.args.windows(2).any(|pair| {
+            pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-sentineld.ready"
+        }));
+
+        let statsd = specs.iter().find(|spec| spec.role == Role::Statsd).unwrap();
+        assert!(statsd
+            .args
+            .windows(2)
+            .any(|pair| { pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-statsd.ready" }));
+    }
+
+    #[test]
+    fn readiness_checks_use_ready_files_for_sidecars() {
+        let config = test_config();
+        let readiness = config.readiness_checks();
+
+        let sentineld = readiness
+            .iter()
+            .find(|entry| entry.role == Role::Sentineld)
+            .unwrap();
+        match &sentineld.target {
+            ReadinessTarget::ReadyFile(path) => {
+                assert_eq!(path, &PathBuf::from("/tmp/rns/rns-sentineld.ready"));
+            }
+            _ => panic!("unexpected sentineld readiness target"),
+        }
+
+        let statsd = readiness
+            .iter()
+            .find(|entry| entry.role == Role::Statsd)
+            .unwrap();
+        match &statsd.target {
+            ReadinessTarget::ReadyFile(path) => {
+                assert_eq!(path, &PathBuf::from("/tmp/rns/rns-statsd.ready"));
+            }
+            _ => panic!("unexpected statsd readiness target"),
+        }
     }
 }

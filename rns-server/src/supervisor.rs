@@ -233,6 +233,7 @@ fn role_from_name(name: &str) -> Option<Role> {
 pub enum ReadinessTarget {
     Tcp(SocketAddr),
     UnixSocket(PathBuf),
+    ReadyFile(PathBuf),
     HookSet {
         rpc_addr: RpcAddr,
         auth_key: [u8; 32],
@@ -271,6 +272,10 @@ impl ProcessReadiness {
                     "waiting",
                     Some(format!("waiting for socket {}: {}", path.display(), err)),
                 ),
+            },
+            ReadinessTarget::ReadyFile(path) => match probe_ready_file(path, self.name(), state) {
+                Ok(detail) => (true, "ready", Some(detail)),
+                Err(err) => (false, "waiting", Some(err)),
             },
             ReadinessTarget::HookSet {
                 rpc_addr,
@@ -311,6 +316,119 @@ impl ProcessReadiness {
             }
         }
     }
+}
+
+fn probe_ready_file(
+    path: &PathBuf,
+    process_name: &str,
+    state: &SharedState,
+) -> Result<String, String> {
+    let body = std::fs::read_to_string(path)
+        .map_err(|err| format!("waiting for readiness file {}: {}", path.display(), err))?;
+    let contract = ReadyFileContract::parse(&body)?;
+
+    if contract.status != "ready" {
+        return Err(format!(
+            "readiness file {} reports status={}",
+            path.display(),
+            contract.status
+        ));
+    }
+    if contract.process != process_name {
+        return Err(format!(
+            "readiness file {} belongs to {}",
+            path.display(),
+            contract.process
+        ));
+    }
+
+    let expected_pid = {
+        let s = state.read().unwrap();
+        s.processes
+            .get(process_name)
+            .and_then(|process| process.pid)
+    };
+    if let Some(expected_pid) = expected_pid {
+        if contract.pid != expected_pid {
+            return Err(format!(
+                "readiness file {} is stale for pid {} (expected {})",
+                path.display(),
+                contract.pid,
+                expected_pid
+            ));
+        }
+    }
+
+    Ok(format!(
+        "{} (pid {}, file {})",
+        contract.detail,
+        contract.pid,
+        path.display()
+    ))
+}
+
+struct ReadyFileContract {
+    status: String,
+    process: String,
+    pid: u32,
+    detail: String,
+}
+
+impl ReadyFileContract {
+    fn parse(body: &str) -> Result<Self, String> {
+        let mut status = None;
+        let mut process = None;
+        let mut pid = None;
+        let mut detail = None;
+
+        for line in body.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = unescape_ready_value(value);
+            match key {
+                "status" => status = Some(value),
+                "process" => process = Some(value),
+                "pid" => {
+                    pid = Some(
+                        value
+                            .parse::<u32>()
+                            .map_err(|err| format!("invalid readiness pid '{}': {}", value, err))?,
+                    )
+                }
+                "detail" => detail = Some(value),
+                _ => {}
+            }
+        }
+
+        Ok(Self {
+            status: status.ok_or_else(|| "readiness file missing status".to_string())?,
+            process: process.ok_or_else(|| "readiness file missing process".to_string())?,
+            pid: pid.ok_or_else(|| "readiness file missing pid".to_string())?,
+            detail: detail.unwrap_or_else(|| "ready".into()),
+        })
+    }
+}
+
+fn unescape_ready_value(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn probe_hook_set(
@@ -503,9 +621,15 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{missing_required_hooks, role_from_name, ProcessSpec, Role, SupervisorConfig};
+    use super::{
+        missing_required_hooks, probe_ready_file, role_from_name, ProcessSpec, ReadinessTarget,
+        Role, SupervisorConfig,
+    };
+    use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;
     use std::path::PathBuf;
+    use std::sync::{Arc, RwLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn supervisor_holds_expected_specs() {
@@ -594,5 +718,56 @@ mod tests {
             missing,
             vec!["hook-b@AttachB".to_string(), "hook-c@AttachC".to_string()]
         );
+    }
+
+    #[test]
+    fn ready_file_probe_requires_matching_process_and_pid() {
+        let path = unique_temp_path("rns-sentineld");
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-sentineld");
+        mark_process_running(&state, "rns-sentineld", 4242);
+        std::fs::write(
+            &path,
+            "version=1\nstatus=ready\nprocess=rns-sentineld\npid=4242\ndetail=provider ready\n",
+        )
+        .unwrap();
+
+        let detail = probe_ready_file(&path, "rns-sentineld", &state).unwrap();
+        assert!(detail.contains("provider ready"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ready_file_probe_rejects_stale_pid() {
+        let path = unique_temp_path("rns-statsd");
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-statsd");
+        mark_process_running(&state, "rns-statsd", 99);
+        std::fs::write(
+            &path,
+            "version=1\nstatus=ready\nprocess=rns-statsd\npid=77\ndetail=stats ready\n",
+        )
+        .unwrap();
+
+        let err = probe_ready_file(&path, "rns-statsd", &state).unwrap_err();
+        assert!(err.contains("stale"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ready_file_target_is_constructible() {
+        let target = ReadinessTarget::ReadyFile(PathBuf::from("/tmp/rns.ready"));
+        match target {
+            ReadinessTarget::ReadyFile(path) => assert_eq!(path, PathBuf::from("/tmp/rns.ready")),
+            _ => panic!("unexpected target"),
+        }
+    }
+
+    fn unique_temp_path(prefix: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{now}.ready", std::process::id()))
     }
 }
