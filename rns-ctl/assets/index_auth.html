@@ -126,8 +126,8 @@
         <tbody id="launchPlanRows"></tbody>
       </table>
       <div style="margin-top: 18px;">
-        <h3>Config Builder</h3>
-        <p>Use the guided editor for common <code>rns-server.json</code> fields, then validate, save, or apply the generated config. The raw JSON editor remains available for advanced cases.</p>
+        <h3>Guided Config Workflow</h3>
+        <p>The guided editor is the primary workflow for common <code>rns-server.json</code> changes. It keeps the generated JSON in sync automatically, so the raw editor is only needed for advanced cases.</p>
         <div class="config-builder">
           <div class="config-group">
             <div class="group-title">Process Paths</div>
@@ -175,28 +175,41 @@
         <div class="row" style="margin-top: 12px;">
           <button id="loadCurrentConfig" class="secondary">Load Current</button>
           <button id="loadExampleConfig" class="secondary">Load Example</button>
-          <button id="syncBuilderFromJson" class="secondary">Sync Builder From JSON</button>
-          <button id="syncJsonFromBuilder" class="secondary">Write Builder To JSON</button>
+          <button id="syncBuilderFromJson" class="secondary">Import JSON Into Builder</button>
+          <button id="syncJsonFromBuilder" class="secondary">Export Builder To JSON</button>
           <button id="formatConfig" class="secondary">Format JSON</button>
         </div>
         <div class="callout" style="margin-top: 12px;">
-          Blank text fields are omitted so runtime defaults still apply. The builder writes explicit booleans for HTTP enablement and auth mode.
+          Blank text fields are omitted so runtime defaults still apply. The builder writes explicit booleans for HTTP enablement and auth mode, and updates the candidate JSON automatically as you edit.
+        </div>
+        <div class="workflow-strip" style="margin-top: 12px;">
+          <div class="workflow-step"><strong>1.</strong> Edit guided fields</div>
+          <div class="workflow-step"><strong>2.</strong> Validate the generated plan</div>
+          <div class="workflow-step"><strong>3.</strong> Save draft or apply</div>
         </div>
         <div style="margin-top: 16px;">
           <strong>Result Summary</strong>
           <div id="configActionSummary" class="muted" style="margin-top: 6px;">No config action run yet</div>
         </div>
         <ul id="configWarningList" class="warning-list"></ul>
-        <div style="margin-top: 16px;">
-          <strong>Advanced JSON Editor</strong>
-          <p>Paste or edit a candidate <code>rns-server.json</code> payload directly if you need a field the builder does not expose yet.</p>
+        <div class="advanced-toggle" style="margin-top: 16px;">
+          <button id="toggleAdvancedConfig" class="secondary" type="button">Show Advanced JSON</button>
+          <span class="muted">Use this only if you need fields the guided workflow does not cover yet.</span>
         </div>
-        <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
+        <div id="advancedConfigSection" class="advanced-section hidden" style="margin-top: 16px;">
+          <strong>Advanced JSON Editor</strong>
+          <p>Paste or edit a candidate <code>rns-server.json</code> payload directly for advanced cases. You can import it back into the builder when the fields overlap.</p>
+          <textarea id="configCandidate" class="candidate" spellcheck="false" placeholder='{"http":{"port":8080},"stats_db_path":"stats.db"}'></textarea>
+          <div class="row" style="margin-top: 12px;">
+            <button id="formatConfig" class="secondary">Format JSON</button>
+            <span id="configValidationStatus" class="muted">Builder is the primary workflow</span>
+          </div>
+        </div>
         <div class="row" style="margin-top: 12px;">
-          <button id="validateConfig" class="secondary">Validate Config</button>
-          <button id="saveConfig" class="secondary">Save Config</button>
+          <button id="validateConfig">Validate Plan</button>
+          <button id="saveConfig" class="secondary">Save Draft</button>
           <button id="applyConfig" class="secondary">Save + Apply</button>
-          <span id="configValidationStatus" class="muted">No validation run yet</span>
+          <span id="builderDirtyState" class="muted">Builder is in sync</span>
         </div>
         <div style="margin-top: 12px;">
           <strong>Plan Summary</strong>

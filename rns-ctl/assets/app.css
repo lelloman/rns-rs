@@ -173,6 +173,27 @@ th, td {
   background: rgba(125, 211, 252, 0.08);
   color: var(--muted);
 }
+.workflow-strip {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.workflow-step {
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(19, 34, 52, 0.88);
+  color: var(--text);
+}
+.advanced-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.advanced-section.hidden {
+  display: none;
+}
 .warning-list {
   margin: 12px 0 0;
   padding-left: 18px;

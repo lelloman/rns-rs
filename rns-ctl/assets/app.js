@@ -45,6 +45,7 @@ const validateConfigButton = document.getElementById("validateConfig");
 const saveConfigButton = document.getElementById("saveConfig");
 const applyConfigButton = document.getElementById("applyConfig");
 const configValidationStatusEl = document.getElementById("configValidationStatus");
+const builderDirtyStateEl = document.getElementById("builderDirtyState");
 const configActionSummaryEl = document.getElementById("configActionSummary");
 const configWarningListEl = document.getElementById("configWarningList");
 const configPlanSummaryEl = document.getElementById("configPlanSummary");
@@ -57,8 +58,11 @@ const processEventRowsEl = document.getElementById("processEventRows");
 const logProcessNameEl = document.getElementById("logProcessName");
 const logStatusEl = document.getElementById("logStatus");
 const processLogOutputEl = document.getElementById("processLogOutput");
+const toggleAdvancedConfigButton = document.getElementById("toggleAdvancedConfig");
+const advancedConfigSectionEl = document.getElementById("advancedConfigSection");
 let configEditorDirty = false;
 let configBuilderDirty = false;
+let advancedConfigVisible = false;
 let selectedLogProcess = null;
 let currentConfigJson = "";
 let schemaExampleJson = "";
@@ -243,6 +247,7 @@ function renderConfig(config) {
     populateBuilder(configFromSnapshot(config));
   }
   currentConfigJson = config?.server_config_file_json ?? "";
+  updateBuilderDirtyState();
 }
 
 function renderConfigStatus(status) {
@@ -472,6 +477,7 @@ function loadConfigEditor(text, statusMessage) {
   configCandidateEl.value = text || "";
   configEditorDirty = false;
   configValidationStatusEl.textContent = statusMessage;
+  updateBuilderDirtyState();
 }
 
 function syncBuilderFromJson(options = {}) {
@@ -480,14 +486,17 @@ function syncBuilderFromJson(options = {}) {
   if (!options.silent) {
     configValidationStatusEl.textContent = "Builder updated from JSON";
   }
+  updateBuilderDirtyState();
 }
 
 function syncJsonFromBuilder(options = {}) {
   configCandidateEl.value = JSON.stringify(buildConfigFromBuilder(), null, 2);
   configEditorDirty = false;
+  configBuilderDirty = false;
   if (!options.silent) {
-    configValidationStatusEl.textContent = "Builder exported to JSON";
+    configValidationStatusEl.textContent = "Generated JSON updated from builder";
   }
+  updateBuilderDirtyState();
 }
 
 function formatConfigEditor() {
@@ -496,8 +505,30 @@ function formatConfigEditor() {
     configCandidateEl.value = JSON.stringify(parsed, null, 2);
     configEditorDirty = false;
     configValidationStatusEl.textContent = "Candidate JSON formatted";
+    updateBuilderDirtyState();
   } catch (error) {
     configValidationStatusEl.textContent = `Format failed: ${error.message}`;
+  }
+}
+
+function updateBuilderDirtyState() {
+  if (!builderDirtyStateEl) return;
+  builderDirtyStateEl.textContent = configBuilderDirty
+    ? "Builder changes are waiting to be generated into JSON"
+    : "Builder is in sync";
+}
+
+function setAdvancedConfigVisible(visible) {
+  advancedConfigVisible = visible;
+  advancedConfigSectionEl.classList.toggle("hidden", !visible);
+  toggleAdvancedConfigButton.textContent = visible ? "Hide Advanced JSON" : "Show Advanced JSON";
+}
+
+function syncJsonFromBuilderOnInput() {
+  try {
+    syncJsonFromBuilder({ silent: true });
+  } catch (error) {
+    configValidationStatusEl.textContent = `Builder export failed: ${error.message}`;
   }
 }
 
@@ -598,6 +629,7 @@ saveButton.addEventListener("click", () => {
 });
 configCandidateEl.addEventListener("input", () => {
   configEditorDirty = true;
+  updateBuilderDirtyState();
 });
 for (const input of [
   builderStatsDbPathEl,
@@ -612,11 +644,18 @@ for (const input of [
 ]) {
   input.addEventListener("input", () => {
     configBuilderDirty = true;
+    updateBuilderDirtyState();
+    syncJsonFromBuilderOnInput();
   });
   input.addEventListener("change", () => {
     configBuilderDirty = true;
+    updateBuilderDirtyState();
+    syncJsonFromBuilderOnInput();
   });
 }
+toggleAdvancedConfigButton.addEventListener("click", () => {
+  setAdvancedConfigVisible(!advancedConfigVisible);
+});
 
 loadCurrentConfigButton.addEventListener("click", () => {
   loadConfigEditor(currentConfigJson, "Loaded current saved config");
@@ -657,5 +696,7 @@ applyConfigButton.addEventListener("click", () => {
   applyConfigCandidate();
 });
 
+setAdvancedConfigVisible(false);
+updateBuilderDirtyState();
 refresh();
 setInterval(refresh, 2000);
