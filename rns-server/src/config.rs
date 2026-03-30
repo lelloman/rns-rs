@@ -243,7 +243,7 @@ impl ServerConfig {
                     self.server_config_file_path.display()
                 ),
                 "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
-                "Changing process launch settings restarts only the affected child processes. Changing embedded HTTP settings requires restarting rns-server.".into(),
+                "Changing process launch settings restarts only the affected child processes. Embedded HTTP auth settings reload in place; bind host, port, and enablement changes still require restarting rns-server.".into(),
             ],
             fields: vec![
                 ServerConfigFieldSchema {
@@ -308,7 +308,7 @@ impl ServerConfig {
                     required: false,
                     default_value: "(generated if auth is enabled and no token is configured)".into(),
                     description: "Optional fixed bearer token for the embedded HTTP control plane.".into(),
-                    effect: "Requires restarting rns-server.".into(),
+                    effect: "Reloads embedded HTTP auth in place.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "http.disable_auth".into(),
@@ -316,7 +316,7 @@ impl ServerConfig {
                     required: false,
                     default_value: "false".into(),
                     description: "Disable bearer-token authentication on the embedded HTTP control plane.".into(),
-                    effect: "Requires restarting rns-server.".into(),
+                    effect: "Reloads embedded HTTP auth in place.".into(),
                 },
             ],
         }
@@ -657,11 +657,11 @@ impl ServerConfig {
             }
         }
 
+        let control_plane_reload_required = self.http.auth_token != next.http.auth_token
+            || self.http.disable_auth != next.http.disable_auth;
         let control_plane_restart_required = self.http.enabled != next.http.enabled
             || self.http.host != next.http.host
-            || self.http.port != next.http.port
-            || self.http.auth_token != next.http.auth_token
-            || self.http.disable_auth != next.http.disable_auth;
+            || self.http.port != next.http.port;
 
         if self.stats_db_path != next.stats_db_path {
             changes.push(ServerConfigChange {
@@ -700,7 +700,7 @@ impl ServerConfig {
                 field: "http.disable_auth".into(),
                 before: self.http.disable_auth.to_string(),
                 after: next.http.disable_auth.to_string(),
-                effect: "restart rns-server".into(),
+                effect: "reload embedded HTTP auth".into(),
             });
         }
         if self.http.auth_token != next.http.auth_token {
@@ -708,7 +708,7 @@ impl ServerConfig {
                 field: "http.auth_token".into(),
                 before: mask_token(&self.http.auth_token),
                 after: mask_token(&next.http.auth_token),
-                effect: "restart rns-server".into(),
+                effect: "reload embedded HTTP auth".into(),
             });
         }
 
@@ -727,19 +727,26 @@ impl ServerConfig {
                     .into(),
             );
         }
+        if control_plane_reload_required && !control_plane_restart_required {
+            notes.push("Embedded control-plane auth settings will be reloaded in place.".into());
+        }
         let overall_action = match (
             processes_to_restart.is_empty(),
+            control_plane_reload_required,
             control_plane_restart_required,
         ) {
-            (true, false) => "none",
-            (false, false) => "restart_children",
-            (true, true) => "restart_server",
-            (false, true) => "restart_children_and_server",
+            (true, false, false) => "none",
+            (false, false, false) => "restart_children",
+            (true, true, false) => "reload_control_plane",
+            (false, true, false) => "restart_children_and_reload_control_plane",
+            (true, _, true) => "restart_server",
+            (false, _, true) => "restart_children_and_server",
         };
 
         ServerConfigApplyPlan {
             overall_action: overall_action.into(),
             processes_to_restart,
+            control_plane_reload_required,
             control_plane_restart_required,
             notes,
             changes,
@@ -860,6 +867,7 @@ mod tests {
         let plan = current.apply_plan(&next);
 
         assert_eq!(plan.overall_action, "restart_server");
+        assert!(!plan.control_plane_reload_required);
         assert!(plan.control_plane_restart_required);
         assert!(plan.processes_to_restart.is_empty());
         assert!(plan
@@ -877,6 +885,28 @@ mod tests {
 
         assert_eq!(plan.overall_action, "none");
         assert!(plan.processes_to_restart.is_empty());
+        assert!(!plan.control_plane_reload_required);
+        assert!(!plan.control_plane_restart_required);
+    }
+
+    #[test]
+    fn apply_plan_reloads_auth_when_token_changes() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                http: ServerHttpConfigFile {
+                    auth_token: Some("new-token".into()),
+                    ..ServerHttpConfigFile::default()
+                },
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.overall_action, "reload_control_plane");
+        assert!(plan.control_plane_reload_required);
         assert!(!plan.control_plane_restart_required);
     }
 

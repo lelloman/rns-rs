@@ -206,16 +206,19 @@ pub fn prepare_embedded_with_state(
     }
 
     // Build server context
+    let config_handle = Arc::new(std::sync::RwLock::new(cfg));
+    state::set_control_plane_config(&shared_state, config_handle.clone());
     let ctx = Arc::new(server::ServerContext {
         node: node_handle,
         state: shared_state,
         ws_broadcast,
-        config: cfg,
+        config: config_handle.clone(),
         #[cfg(feature = "tls")]
         tls_config,
     });
 
-    let addr: SocketAddr = format!("{}:{}", ctx.config.host, ctx.config.port)
+    let cfg = config_handle.read().unwrap();
+    let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .map_err(|_| "invalid bind address".to_string())?;
 

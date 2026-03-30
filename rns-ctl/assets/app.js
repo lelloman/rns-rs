@@ -289,6 +289,9 @@ function renderConfigStatus(status) {
   if (status.control_plane_restart_required) {
     setBadge(configControlPlaneBadgeEl, "restart required", "warn");
     configControlPlaneDetailEl.textContent = "Restart rns-server to apply embedded HTTP control-plane changes.";
+  } else if (status.control_plane_reload_required) {
+    setBadge(configControlPlaneBadgeEl, "reload pending", "warn");
+    configControlPlaneDetailEl.textContent = "Embedded HTTP auth settings were saved but are not active in runtime yet.";
   } else {
     setBadge(configControlPlaneBadgeEl, "active", "ok");
     configControlPlaneDetailEl.textContent = "Embedded HTTP control-plane settings are active.";

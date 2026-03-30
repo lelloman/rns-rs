@@ -72,7 +72,16 @@ fn run_start(args: Args) {
                         note_server_config_saved(&shared_state, &result.apply_plan);
                     }
                     rns_ctl::state::ServerConfigMutationMode::Apply => {
+                        let refreshed = ServerConfig::from_args(&args);
+                        maybe_reload_embedded_http_auth(
+                            &shared_state,
+                            &config,
+                            &refreshed,
+                            &result.apply_plan,
+                        );
                         note_server_config_applied(&shared_state, &result.apply_plan);
+                        set_server_config(&shared_state, refreshed.snapshot());
+                        return Ok(result);
                     }
                 }
                 let refreshed = ServerConfig::from_args(&args);
@@ -109,6 +118,35 @@ fn run_start(args: Args) {
             std::process::exit(1);
         }
     }
+}
+
+fn maybe_reload_embedded_http_auth(
+    shared_state: &SharedState,
+    current: &ServerConfig,
+    next: &ServerConfig,
+    apply_plan: &rns_ctl::state::ServerConfigApplyPlan,
+) {
+    if !apply_plan.control_plane_reload_required || apply_plan.control_plane_restart_required {
+        return;
+    }
+    if current.http.auth_token == next.http.auth_token
+        && current.http.disable_auth == next.http.disable_auth
+    {
+        return;
+    }
+
+    let config_handle = {
+        let s = shared_state.read().unwrap();
+        s.control_plane_config.clone()
+    };
+    let Some(config_handle) = config_handle else {
+        return;
+    };
+
+    let mut config = config_handle.write().unwrap();
+    config.auth_token = next.http.auth_token.clone();
+    config.disable_auth = next.http.disable_auth;
+    log::info!("reloaded embedded control-plane auth settings in place");
 }
 
 fn init_logging(args: &Args) {

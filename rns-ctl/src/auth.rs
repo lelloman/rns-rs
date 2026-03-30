@@ -1,9 +1,13 @@
-use crate::config::CtlConfig;
 use crate::http::{HttpRequest, HttpResponse};
+use crate::state::ControlPlaneConfigHandle;
 
 /// Check authentication on an HTTP request.
 /// Returns Ok(()) if authenticated, Err(response) with 401 if not.
-pub fn check_auth(req: &HttpRequest, config: &CtlConfig) -> Result<(), HttpResponse> {
+pub fn check_auth(
+    req: &HttpRequest,
+    config: &ControlPlaneConfigHandle,
+) -> Result<(), HttpResponse> {
+    let config = config.read().unwrap();
     if config.disable_auth {
         return Ok(());
     }
@@ -31,7 +35,8 @@ pub fn check_auth(req: &HttpRequest, config: &CtlConfig) -> Result<(), HttpRespo
 }
 
 /// Check WebSocket auth via query parameter `?token=...`.
-pub fn check_ws_auth(query: &str, config: &CtlConfig) -> Result<(), HttpResponse> {
+pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(), HttpResponse> {
+    let config = config.read().unwrap();
     if config.disable_auth {
         return Ok(());
     }
@@ -53,12 +58,12 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn make_config(token: Option<&str>, disable: bool) -> CtlConfig {
-        CtlConfig {
+    fn make_config(token: Option<&str>, disable: bool) -> crate::state::ControlPlaneConfigHandle {
+        std::sync::Arc::new(std::sync::RwLock::new(crate::config::CtlConfig {
             auth_token: token.map(String::from),
             disable_auth: disable,
-            ..CtlConfig::default()
-        }
+            ..crate::config::CtlConfig::default()
+        }))
     }
 
     fn make_req(auth_header: Option<&str>) -> HttpRequest {

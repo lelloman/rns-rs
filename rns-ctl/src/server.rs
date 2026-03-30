@@ -6,9 +6,8 @@ use std::time::Duration;
 
 use crate::api::{handle_request, NodeHandle};
 use crate::auth::check_ws_auth;
-use crate::config::CtlConfig;
 use crate::http::{parse_request, write_response};
-use crate::state::{SharedState, WsBroadcast, WsEvent};
+use crate::state::{ControlPlaneConfigHandle, SharedState, WsBroadcast, WsEvent};
 use crate::ws;
 
 /// A connection stream that is either plain TCP or TLS-wrapped.
@@ -61,7 +60,7 @@ pub struct ServerContext {
     pub node: NodeHandle,
     pub state: SharedState,
     pub ws_broadcast: WsBroadcast,
-    pub config: CtlConfig,
+    pub config: ControlPlaneConfigHandle,
     #[cfg(feature = "tls")]
     pub tls_config: Option<std::sync::Arc<rustls::ServerConfig>>,
 }

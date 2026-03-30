@@ -6,10 +6,9 @@ use rns_net::{
 };
 
 use crate::auth::check_auth;
-use crate::config::CtlConfig;
 use crate::encode::{from_base64, hex_to_array, to_base64, to_hex};
 use crate::http::{parse_query, HttpRequest, HttpResponse};
-use crate::state::{DestinationEntry, SharedState};
+use crate::state::{ControlPlaneConfigHandle, DestinationEntry, SharedState};
 
 /// Handle for the node, wrapped so shutdown() can consume it.
 pub type NodeHandle = std::sync::Arc<std::sync::Mutex<Option<RnsNode>>>;
@@ -31,7 +30,7 @@ pub fn handle_request(
     req: &HttpRequest,
     node: &NodeHandle,
     state: &SharedState,
-    config: &CtlConfig,
+    config: &ControlPlaneConfigHandle,
 ) -> HttpResponse {
     if req.method == "GET" && (req.path == "/" || req.path == "/ui") {
         return HttpResponse::html(index_html(config));
@@ -138,7 +137,8 @@ pub fn handle_request(
     }
 }
 
-fn index_html(config: &CtlConfig) -> &'static str {
+fn index_html(config: &ControlPlaneConfigHandle) -> &'static str {
+    let config = config.read().unwrap();
     let auth_mode = if config.disable_auth {
         "disabled"
     } else {

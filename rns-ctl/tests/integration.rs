@@ -141,7 +141,7 @@ fn start_test_server_with_config(
         node: node_handle,
         state: shared_state,
         ws_broadcast,
-        config: cfg,
+        config: Arc::new(RwLock::new(cfg)),
         #[cfg(feature = "tls")]
         tls_config: None,
     });
@@ -322,6 +322,7 @@ fn sample_apply_plan() -> ServerConfigApplyPlan {
     ServerConfigApplyPlan {
         overall_action: "restart_children".into(),
         processes_to_restart: vec!["rns-statsd".into()],
+        control_plane_reload_required: false,
         control_plane_restart_required: false,
         notes: vec!["Restart required for: rns-statsd.".into()],
         changes: vec![ServerConfigChange {
