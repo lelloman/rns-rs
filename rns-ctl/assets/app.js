@@ -49,6 +49,10 @@ const builderDirtyStateEl = document.getElementById("builderDirtyState");
 const configActionSummaryEl = document.getElementById("configActionSummary");
 const configWarningListEl = document.getElementById("configWarningList");
 const configPlanSummaryEl = document.getElementById("configPlanSummary");
+const configPlanActionEl = document.getElementById("configPlanAction");
+const configPlanImpactEl = document.getElementById("configPlanImpact");
+const configPlanTargetsEl = document.getElementById("configPlanTargets");
+const configPlanChangeCountEl = document.getElementById("configPlanChangeCount");
 const configChangeRowsEl = document.getElementById("configChangeRows");
 const configSchemaNotesEl = document.getElementById("configSchemaNotes");
 const configSchemaRowsEl = document.getElementById("configSchemaRows");
@@ -366,6 +370,10 @@ async function runConfigAction(path, pendingMessage, actionLabel) {
 function renderConfigPlan(plan) {
   if (!plan) {
     configPlanSummaryEl.textContent = "No plan yet";
+    setBadge(configPlanActionEl, "unknown", "info");
+    configPlanImpactEl.textContent = "Validate a config change to preview its operational impact.";
+    configPlanTargetsEl.textContent = "No targets yet.";
+    configPlanChangeCountEl.textContent = "0";
     configChangeRowsEl.innerHTML = "";
     return;
   }
@@ -375,8 +383,20 @@ function renderConfigPlan(plan) {
     : "none";
   const controlPlane = plan.control_plane_restart_required ? "yes" : "no";
   const action = plan.overall_action || "unknown";
+  const targets = [
+    ...(plan.processes_to_restart || []),
+    ...(plan.control_plane_reload_required ? ["embedded-http-auth"] : []),
+    ...(plan.control_plane_restart_required ? ["rns-server"] : []),
+  ];
+  const impact = describePlanImpact(plan);
   const notes = plan.notes?.length ? ` ${plan.notes.join(" ")}` : "";
   configPlanSummaryEl.textContent = `Action: ${action}. Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.${notes}`;
+  setBadge(configPlanActionEl, action.replaceAll("_", " "), planBadgeClass(plan));
+  configPlanImpactEl.textContent = impact;
+  configPlanTargetsEl.innerHTML = targets.length
+    ? `<div class="target-list">${targets.map((target) => `<span class="pill info">${target}</span>`).join("")}</div>`
+    : "No runtime targets affected.";
+  configPlanChangeCountEl.textContent = String((plan.changes || []).length);
 
   configChangeRowsEl.innerHTML = "";
   for (const change of plan.changes || []) {
@@ -388,6 +408,42 @@ function renderConfigPlan(plan) {
       <td>${change.effect}</td>
     `;
     configChangeRowsEl.appendChild(tr);
+  }
+}
+
+function describePlanImpact(plan) {
+  switch (plan.overall_action) {
+    case "none":
+      return "No runtime impact. The candidate matches the current effective configuration.";
+    case "restart_children":
+      return "Applying this config will restart one or more supervised child processes.";
+    case "reload_control_plane":
+      return "Applying this config will reload embedded HTTP auth settings without restarting rns-server.";
+    case "restart_children_and_reload_control_plane":
+      return "Applying this config will restart child processes and reload embedded HTTP auth settings.";
+    case "restart_server":
+      return "Applying this config will still require a full rns-server restart before all control-plane changes take effect.";
+    case "restart_children_and_server":
+      return "Applying this config will restart child processes and still require a full rns-server restart.";
+    default:
+      return "Validate the config to inspect its operational impact.";
+  }
+}
+
+function planBadgeClass(plan) {
+  switch (plan.overall_action) {
+    case "none":
+      return "ok";
+    case "reload_control_plane":
+      return "info";
+    case "restart_children":
+    case "restart_children_and_reload_control_plane":
+      return "warn";
+    case "restart_server":
+    case "restart_children_and_server":
+      return "warn";
+    default:
+      return "info";
   }
 }
 

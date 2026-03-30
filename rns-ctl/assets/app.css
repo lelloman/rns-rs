@@ -185,10 +185,28 @@ th, td {
   background: rgba(19, 34, 52, 0.88);
   color: var(--text);
 }
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.plan-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(125, 211, 252, 0.08), transparent 60%),
+    rgba(19, 34, 52, 0.72);
+}
 .advanced-toggle {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+}
+.target-list {
+  display: flex;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .advanced-section.hidden {
