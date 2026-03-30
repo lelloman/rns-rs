@@ -360,8 +360,9 @@ function renderConfigPlan(plan) {
     ? plan.processes_to_restart.join(", ")
     : "none";
   const controlPlane = plan.control_plane_restart_required ? "yes" : "no";
+  const action = plan.overall_action || "unknown";
   const notes = plan.notes?.length ? ` ${plan.notes.join(" ")}` : "";
-  configPlanSummaryEl.textContent = `Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.${notes}`;
+  configPlanSummaryEl.textContent = `Action: ${action}. Processes to restart: ${restartList}. rns-server restart required: ${controlPlane}.${notes}`;
 
   configChangeRowsEl.innerHTML = "";
   for (const change of plan.changes || []) {
@@ -509,8 +510,9 @@ function renderActionSummary(result, actionLabel) {
     ? result.apply_plan.processes_to_restart.join(", ")
     : "none";
   const serverRestart = result.apply_plan?.control_plane_restart_required ? "yes" : "no";
+  const action = result.apply_plan?.overall_action || "unknown";
   const warningCount = result.warnings?.length || 0;
-  configActionSummaryEl.textContent = `${actionLabel}: child restarts ${childRestarts}; rns-server restart required ${serverRestart}; warnings ${warningCount}.`;
+  configActionSummaryEl.textContent = `${actionLabel}: action ${action}; child restarts ${childRestarts}; rns-server restart required ${serverRestart}; warnings ${warningCount}.`;
 }
 
 function renderProcessLogs(process, lines) {

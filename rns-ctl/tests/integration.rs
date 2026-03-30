@@ -320,6 +320,7 @@ fn sample_server_config_schema() -> ServerConfigSchemaSnapshot {
 
 fn sample_apply_plan() -> ServerConfigApplyPlan {
     ServerConfigApplyPlan {
+        overall_action: "restart_children".into(),
         processes_to_restart: vec!["rns-statsd".into()],
         control_plane_restart_required: false,
         notes: vec!["Restart required for: rns-statsd.".into()],
@@ -668,6 +669,10 @@ fn test_config_save_endpoint_uses_mutator() {
     assert_eq!(res.status, 200);
     let json = res.json();
     assert_eq!(json["result"]["action"], "save");
+    assert_eq!(
+        json["result"]["apply_plan"]["overall_action"],
+        "restart_children"
+    );
     assert_eq!(json["result"]["warnings"][0], "save warning");
     assert_eq!(
         json["result"]["apply_plan"]["processes_to_restart"][0],
@@ -703,6 +708,10 @@ fn test_config_apply_endpoint_uses_mutator() {
     assert_eq!(res.status, 200);
     let json = res.json();
     assert_eq!(json["result"]["action"], "apply");
+    assert_eq!(
+        json["result"]["apply_plan"]["overall_action"],
+        "restart_children"
+    );
     assert_eq!(
         json["result"]["apply_plan"]["changes"][0]["field"],
         "stats_db_path"

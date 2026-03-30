@@ -727,8 +727,18 @@ impl ServerConfig {
                     .into(),
             );
         }
+        let overall_action = match (
+            processes_to_restart.is_empty(),
+            control_plane_restart_required,
+        ) {
+            (true, false) => "none",
+            (false, false) => "restart_children",
+            (true, true) => "restart_server",
+            (false, true) => "restart_children_and_server",
+        };
 
         ServerConfigApplyPlan {
+            overall_action: overall_action.into(),
             processes_to_restart,
             control_plane_restart_required,
             notes,
@@ -825,6 +835,7 @@ mod tests {
 
         let plan = current.apply_plan(&next);
 
+        assert_eq!(plan.overall_action, "restart_children");
         assert_eq!(plan.processes_to_restart, vec!["rns-statsd".to_string()]);
         assert!(plan
             .changes
@@ -848,12 +859,25 @@ mod tests {
 
         let plan = current.apply_plan(&next);
 
+        assert_eq!(plan.overall_action, "restart_server");
         assert!(plan.control_plane_restart_required);
         assert!(plan.processes_to_restart.is_empty());
         assert!(plan
             .changes
             .iter()
             .any(|change| change.field == "http.port" && change.after == "9090"));
+    }
+
+    #[test]
+    fn apply_plan_is_noop_when_config_does_not_change() {
+        let current = test_config();
+        let next = current.with_file_config(&ServerConfigFile::default(), true);
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.overall_action, "none");
+        assert!(plan.processes_to_restart.is_empty());
+        assert!(!plan.control_plane_restart_required);
     }
 
     #[test]

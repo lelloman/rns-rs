@@ -536,6 +536,7 @@ pub struct ServerConfigMutationResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerConfigApplyPlan {
+    pub overall_action: String,
     pub processes_to_restart: Vec<String>,
     pub control_plane_restart_required: bool,
     pub notes: Vec<String>,
