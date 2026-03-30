@@ -21,10 +21,10 @@ use rns_ctl::bridge::CtlCallbacks;
 use rns_ctl::config::CtlConfig;
 use rns_ctl::server::{self, ServerContext};
 use rns_ctl::state::{
-    CtlState, LaunchProcessSnapshot, ServerConfigApplyPlan, ServerConfigChange,
-    ServerConfigFieldSchema, ServerConfigMutationResult, ServerConfigSchemaSnapshot,
-    ServerConfigSnapshot, ServerConfigStatusState, ServerConfigValidationSnapshot,
-    ServerHttpConfigSnapshot, SharedState, WsBroadcast,
+    ensure_process, push_process_log, CtlState, LaunchProcessSnapshot, ManagedProcessState,
+    ServerConfigApplyPlan, ServerConfigChange, ServerConfigFieldSchema, ServerConfigMutationResult,
+    ServerConfigSchemaSnapshot, ServerConfigSnapshot, ServerConfigStatusState,
+    ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState, WsBroadcast,
 };
 
 // ─── Test Server Harness ────────────────────────────────────────────────────
@@ -550,6 +550,68 @@ fn test_get_config_status() {
 }
 
 #[test]
+fn test_get_processes_exposes_log_metadata() {
+    let server = start_test_server();
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        state.processes.insert(
+            "rns-statsd".into(),
+            ManagedProcessState {
+                name: "rns-statsd".into(),
+                status: "running".into(),
+                ready: true,
+                ready_state: "ready".into(),
+                pid: Some(4242),
+                last_exit_code: None,
+                restart_count: 2,
+                last_error: None,
+                status_detail: Some("stats pipeline active".into()),
+                durable_log_path: Some("/tmp/rns/logs/rns-statsd.log".into()),
+                last_log_at: Some(std::time::Instant::now()),
+                recent_log_lines: 3,
+                started_at: Some(std::time::Instant::now()),
+                last_transition_at: Some(std::time::Instant::now()),
+            },
+        );
+    }
+
+    let res = http_get(server.port, "/api/processes");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(
+        json["processes"][0]["durable_log_path"],
+        "/tmp/rns/logs/rns-statsd.log"
+    );
+    assert_eq!(json["processes"][0]["recent_log_lines"], 3);
+    assert!(json["processes"][0]["last_log_age_seconds"]
+        .as_f64()
+        .is_some());
+    server.shutdown();
+}
+
+#[test]
+fn test_get_process_logs_exposes_log_metadata() {
+    let server = start_test_server();
+    ensure_process(&server.ctx.state, "rns-statsd");
+    {
+        let mut state = server.ctx.state.write().unwrap();
+        let process = state.processes.get_mut("rns-statsd").unwrap();
+        process.durable_log_path = Some("/tmp/rns/logs/rns-statsd.log".into());
+    }
+    push_process_log(&server.ctx.state, "rns-statsd", "stdout", "statsd started");
+
+    let res = http_get(server.port, "/api/processes/rns-statsd/logs");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["process"], "rns-statsd");
+    assert_eq!(json["durable_log_path"], "/tmp/rns/logs/rns-statsd.log");
+    assert_eq!(json["recent_log_lines"], 1);
+    assert_eq!(json["lines"][0]["line"], "statsd started");
+    assert!(json["last_log_age_seconds"].as_f64().is_some());
+    server.shutdown();
+}
+
+#[test]
 fn test_config_validate_endpoint_uses_validator() {
     let server = start_test_server();
     {
@@ -565,7 +627,11 @@ fn test_config_validate_endpoint_uses_validator() {
         }));
     }
 
-    let res = http_post(server.port, "/api/config/validate", r#"{"http":{"port":9090}}"#);
+    let res = http_post(
+        server.port,
+        "/api/config/validate",
+        r#"{"http":{"port":9090}}"#,
+    );
     assert_eq!(res.status, 200);
     let json = res.json();
     assert_eq!(json["result"]["valid"], true);
@@ -594,7 +660,11 @@ fn test_config_save_endpoint_uses_mutator() {
         }));
     }
 
-    let res = http_post(server.port, "/api/config", r#"{"stats_db_path":"/tmp/rns/other.db"}"#);
+    let res = http_post(
+        server.port,
+        "/api/config",
+        r#"{"stats_db_path":"/tmp/rns/other.db"}"#,
+    );
     assert_eq!(res.status, 200);
     let json = res.json();
     assert_eq!(json["result"]["action"], "save");
@@ -625,7 +695,11 @@ fn test_config_apply_endpoint_uses_mutator() {
         }));
     }
 
-    let res = http_post(server.port, "/api/config/apply", r#"{"stats_db_path":"/tmp/rns/other.db"}"#);
+    let res = http_post(
+        server.port,
+        "/api/config/apply",
+        r#"{"stats_db_path":"/tmp/rns/other.db"}"#,
+    );
     assert_eq!(res.status, 200);
     let json = res.json();
     assert_eq!(json["result"]["action"], "apply");

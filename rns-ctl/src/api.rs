@@ -264,6 +264,9 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
                 "restart_count": p.restart_count,
                 "last_error": p.last_error,
                 "status_detail": p.status_detail,
+                "durable_log_path": p.durable_log_path,
+                "last_log_age_seconds": p.last_log_age_seconds(),
+                "recent_log_lines": p.recent_log_lines,
                 "uptime_seconds": p.uptime_seconds(),
                 "last_transition_seconds": p.last_transition_seconds(),
             }))
@@ -325,6 +328,9 @@ fn handle_process_logs(path: &str, req: &HttpRequest, state: &SharedState) -> Ht
 
     HttpResponse::ok(json!({
         "process": name,
+        "durable_log_path": s.processes.get(name).and_then(|p| p.durable_log_path.clone()),
+        "last_log_age_seconds": s.processes.get(name).and_then(|p| p.last_log_age_seconds()),
+        "recent_log_lines": s.processes.get(name).map(|p| p.recent_log_lines).unwrap_or(0),
         "lines": lines,
     }))
 }

@@ -10,8 +10,8 @@ use std::time::Duration;
 use crate::logs::LogStore;
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
-    mark_process_stopped, push_process_log, set_process_readiness, ProcessControlCommand,
-    SharedState,
+    mark_process_stopped, push_process_log, set_process_log_path, set_process_readiness,
+    ProcessControlCommand, SharedState,
 };
 use rns_net::{HookInfo, RpcAddr, RpcClient};
 
@@ -500,6 +500,16 @@ fn spawn_child(
             let _ = stdout;
         }
         mark_process_running(state, spec.role.display_name(), child.id());
+        if let Some(store) = log_store.as_ref() {
+            set_process_log_path(
+                state,
+                spec.role.display_name(),
+                store
+                    .process_log_path(spec.role.display_name())
+                    .display()
+                    .to_string(),
+            );
+        }
     }
     let mut managed = ManagedChild {
         role: spec.role,

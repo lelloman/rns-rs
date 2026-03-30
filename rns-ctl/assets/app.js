@@ -116,6 +116,11 @@ function renderProcesses(processes) {
   for (const process of processes) {
     const tr = document.createElement("tr");
     const statusClass = process.status === "running" ? "running" : (process.status || "stopped");
+    const healthSummary = [
+      process.status_detail ?? process.last_error ?? "",
+      process.last_log_age_seconds != null ? `last log ${fmtAge(process.last_log_age_seconds)}` : "",
+      process.durable_log_path ? `file ${process.durable_log_path}` : "",
+    ].filter(Boolean).join(" | ");
     tr.innerHTML = `
       <td>${process.name}</td>
       <td><span class="pill ${statusClass}">${process.status}</span></td>
@@ -124,7 +129,7 @@ function renderProcesses(processes) {
       <td>${fmtSeconds(process.uptime_seconds)}</td>
       <td>${fmtSeconds(process.last_transition_seconds)}</td>
       <td>${process.last_exit_code ?? "-"}</td>
-      <td>${process.status_detail ?? process.last_error ?? ""}</td>
+      <td>${healthSummary}</td>
       <td>
         <button class="secondary" data-start="${process.name}">Start</button>
         <button class="secondary" data-stop="${process.name}">Stop</button>
@@ -523,6 +528,18 @@ function renderProcessLogs(process, lines) {
     .join("\n");
 }
 
+function renderProcessLogPayload(payload) {
+  const lines = payload.lines || [];
+  renderProcessLogs(payload.process, lines);
+  const details = [
+    `${lines.length} recent lines`,
+    payload.recent_log_lines != null ? `${payload.recent_log_lines} buffered` : "",
+    payload.last_log_age_seconds != null ? `last log ${fmtAge(payload.last_log_age_seconds)}` : "",
+    payload.durable_log_path ? `file ${payload.durable_log_path}` : "",
+  ].filter(Boolean);
+  logStatusEl.textContent = details.join(" | ");
+}
+
 async function refreshLogs() {
   if (!selectedLogProcess) {
     renderProcessLogs(null, []);
@@ -530,7 +547,7 @@ async function refreshLogs() {
   }
   try {
     const payload = await fetchJson(`/api/processes/${selectedLogProcess}/logs?limit=200`);
-    renderProcessLogs(payload.process, payload.lines || []);
+    renderProcessLogPayload(payload);
   } catch (error) {
     logProcessNameEl.textContent = selectedLogProcess;
     logStatusEl.textContent = error.message;

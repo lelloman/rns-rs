@@ -213,16 +213,34 @@ pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
 
 pub fn push_process_log(state: &SharedState, name: &str, stream: &str, line: impl Into<String>) {
     let mut s = state.write().unwrap();
-    let logs = s.process_logs.entry(name.to_string()).or_default();
-    if logs.len() >= MAX_RECORDS {
-        logs.pop_front();
-    }
-    logs.push_back(ProcessLogRecord {
-        process: name.to_string(),
-        stream: stream.to_string(),
-        line: line.into(),
-        recorded_at: Instant::now(),
-    });
+    let recent_log_lines = {
+        let logs = s.process_logs.entry(name.to_string()).or_default();
+        if logs.len() >= MAX_RECORDS {
+            logs.pop_front();
+        }
+        logs.push_back(ProcessLogRecord {
+            process: name.to_string(),
+            stream: stream.to_string(),
+            line: line.into(),
+            recorded_at: Instant::now(),
+        });
+        logs.len()
+    };
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.last_log_at = Some(Instant::now());
+    process.recent_log_lines = recent_log_lines;
+}
+
+pub fn set_process_log_path(state: &SharedState, name: &str, path: impl Into<String>) {
+    let mut s = state.write().unwrap();
+    let process = s
+        .processes
+        .entry(name.to_string())
+        .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+    process.durable_log_path = Some(path.into());
 }
 
 pub fn set_control_tx(state: &SharedState, tx: mpsc::Sender<ProcessControlCommand>) {
@@ -601,6 +619,9 @@ pub struct ManagedProcessState {
     pub restart_count: u32,
     pub last_error: Option<String>,
     pub status_detail: Option<String>,
+    pub durable_log_path: Option<String>,
+    pub last_log_at: Option<Instant>,
+    pub recent_log_lines: usize,
     pub started_at: Option<Instant>,
     pub last_transition_at: Option<Instant>,
 }
@@ -624,6 +645,9 @@ impl ManagedProcessState {
             restart_count: 0,
             last_error: None,
             status_detail: None,
+            durable_log_path: None,
+            last_log_at: None,
+            recent_log_lines: 0,
             started_at: None,
             last_transition_at: None,
         }
@@ -637,6 +661,11 @@ impl ManagedProcessState {
     pub fn last_transition_seconds(&self) -> Option<f64> {
         self.last_transition_at
             .map(|transition| transition.elapsed().as_secs_f64())
+    }
+
+    pub fn last_log_age_seconds(&self) -> Option<f64> {
+        self.last_log_at
+            .map(|logged| logged.elapsed().as_secs_f64())
     }
 }
 
