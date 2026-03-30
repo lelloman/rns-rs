@@ -212,6 +212,22 @@ th, td {
 .advanced-section.hidden {
   display: none;
 }
+.process-row-selected {
+  background: rgba(125, 211, 252, 0.08);
+}
+.process-detail-panel {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.1), transparent 14rem),
+    rgba(19, 34, 52, 0.56);
+}
+.process-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
 .warning-list {
   margin: 12px 0 0;
   padding-left: 18px;

@@ -59,6 +59,18 @@ const configSchemaRowsEl = document.getElementById("configSchemaRows");
 const configValidationResultEl = document.getElementById("configValidationResult");
 const processRowsEl = document.getElementById("processRows");
 const processEventRowsEl = document.getElementById("processEventRows");
+const selectedProcessNameEl = document.getElementById("selectedProcessName");
+const selectedProcessSummaryEl = document.getElementById("selectedProcessSummary");
+const selectedProcessStatusBadgeEl = document.getElementById("selectedProcessStatusBadge");
+const selectedProcessReadyEl = document.getElementById("selectedProcessReady");
+const selectedProcessReadyDetailEl = document.getElementById("selectedProcessReadyDetail");
+const selectedProcessRestartsEl = document.getElementById("selectedProcessRestarts");
+const selectedProcessTransitionEl = document.getElementById("selectedProcessTransition");
+const selectedProcessLastExitEl = document.getElementById("selectedProcessLastExit");
+const selectedProcessLastErrorEl = document.getElementById("selectedProcessLastError");
+const selectedProcessLogCountEl = document.getElementById("selectedProcessLogCount");
+const selectedProcessLogMetaEl = document.getElementById("selectedProcessLogMeta");
+const selectedProcessEventRowsEl = document.getElementById("selectedProcessEventRows");
 const logProcessNameEl = document.getElementById("logProcessName");
 const logStatusEl = document.getElementById("logStatus");
 const processLogOutputEl = document.getElementById("processLogOutput");
@@ -67,9 +79,12 @@ const advancedConfigSectionEl = document.getElementById("advancedConfigSection")
 let configEditorDirty = false;
 let configBuilderDirty = false;
 let advancedConfigVisible = false;
+let selectedProcess = null;
 let selectedLogProcess = null;
 let currentConfigJson = "";
 let schemaExampleJson = "";
+let latestProcesses = [];
+let latestProcessEvents = [];
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -120,6 +135,7 @@ async function postJson(path) {
 }
 
 function renderProcesses(processes) {
+  latestProcesses = processes;
   processRowsEl.innerHTML = "";
   for (const process of processes) {
     const tr = document.createElement("tr");
@@ -139,19 +155,39 @@ function renderProcesses(processes) {
       <td>${process.last_exit_code ?? "-"}</td>
       <td>${healthSummary}</td>
       <td>
+        <button class="secondary" data-select="${process.name}">Inspect</button>
         <button class="secondary" data-start="${process.name}">Start</button>
         <button class="secondary" data-stop="${process.name}">Stop</button>
         <button class="secondary" data-restart="${process.name}">Restart</button>
       </td>
       <td><button class="secondary" data-logs="${process.name}">View Logs</button></td>
     `;
+    if (process.name === selectedProcess) {
+      tr.classList.add("process-row-selected");
+    }
     processRowsEl.appendChild(tr);
   }
 
+  if (!selectedProcess && processes.length > 0) {
+    selectedProcess = processes[0].name;
+  }
   if (!selectedLogProcess && processes.length > 0) {
-    selectedLogProcess = processes[0].name;
+    selectedLogProcess = selectedProcess || processes[0].name;
+  }
+  if (selectedProcess && !processes.some((process) => process.name === selectedProcess)) {
+    selectedProcess = processes[0]?.name || null;
+  }
+  if (selectedLogProcess && !processes.some((process) => process.name === selectedLogProcess)) {
+    selectedLogProcess = selectedProcess;
   }
 
+  for (const button of processRowsEl.querySelectorAll("[data-select]")) {
+    button.addEventListener("click", () => {
+      selectedProcess = button.getAttribute("data-select");
+      renderProcesses(latestProcesses);
+      renderSelectedProcessDetail();
+    });
+  }
   for (const button of processRowsEl.querySelectorAll("[data-restart]")) {
     button.addEventListener("click", async () => {
       const name = button.getAttribute("data-restart");
@@ -194,12 +230,16 @@ function renderProcesses(processes) {
   for (const button of processRowsEl.querySelectorAll("[data-logs]")) {
     button.addEventListener("click", async () => {
       selectedLogProcess = button.getAttribute("data-logs");
+      selectedProcess = selectedLogProcess;
+      renderProcesses(latestProcesses);
+      renderSelectedProcessDetail();
       await refreshLogs();
     });
   }
 }
 
 function renderProcessEvents(events) {
+  latestProcessEvents = events;
   processEventRowsEl.innerHTML = "";
   for (const event of events) {
     const tr = document.createElement("tr");
@@ -210,6 +250,74 @@ function renderProcessEvents(events) {
       <td>${event.detail ?? ""}</td>
     `;
     processEventRowsEl.appendChild(tr);
+  }
+  renderSelectedProcessDetail();
+}
+
+function selectedProcessRecord() {
+  return latestProcesses.find((process) => process.name === selectedProcess) || null;
+}
+
+function renderSelectedProcessDetail() {
+  const process = selectedProcessRecord();
+  selectedProcessEventRowsEl.innerHTML = "";
+  if (!process) {
+    selectedProcessNameEl.textContent = "No process selected";
+    selectedProcessSummaryEl.textContent = "Select a process to inspect its runtime detail, recent events, and logs.";
+    setBadge(selectedProcessStatusBadgeEl, "idle", "info");
+    selectedProcessReadyEl.textContent = "-";
+    selectedProcessReadyDetailEl.textContent = "No process selected.";
+    selectedProcessRestartsEl.textContent = "0";
+    selectedProcessTransitionEl.textContent = "No transition data yet.";
+    selectedProcessLastExitEl.textContent = "-";
+    selectedProcessLastErrorEl.textContent = "No recorded process error.";
+    selectedProcessLogCountEl.textContent = "0";
+    selectedProcessLogMetaEl.textContent = "No log metadata yet.";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="3" class="muted">No process selected.</td>`;
+    selectedProcessEventRowsEl.appendChild(tr);
+    return;
+  }
+
+  selectedProcessNameEl.textContent = process.name;
+  selectedProcessSummaryEl.textContent = [
+    `PID ${process.pid ?? "-"}`,
+    `uptime ${fmtSeconds(process.uptime_seconds)}`,
+    process.status_detail || process.last_error || "No extra runtime detail",
+  ].join(" | ");
+  setBadge(
+    selectedProcessStatusBadgeEl,
+    process.status || "unknown",
+    process.status === "running" ? "running" : (process.status || "stopped"),
+  );
+  selectedProcessReadyEl.textContent = process.ready ? "ready" : (process.ready_state || "not-ready");
+  selectedProcessReadyDetailEl.textContent = process.status_detail || process.last_error || "No readiness detail recorded.";
+  selectedProcessRestartsEl.textContent = String(process.restart_count ?? 0);
+  selectedProcessTransitionEl.textContent = `Last transition ${fmtAge(process.last_transition_seconds)}.`;
+  selectedProcessLastExitEl.textContent = process.last_exit_code != null ? String(process.last_exit_code) : "-";
+  selectedProcessLastErrorEl.textContent = process.last_error || "No recorded process error.";
+  selectedProcessLogCountEl.textContent = String(process.recent_log_lines ?? 0);
+  selectedProcessLogMetaEl.textContent = [
+    process.last_log_age_seconds != null ? `Last log ${fmtAge(process.last_log_age_seconds)}` : "",
+    process.durable_log_path ? `File ${process.durable_log_path}` : "",
+  ].filter(Boolean).join(" | ") || "No log metadata yet.";
+
+  const events = latestProcessEvents.filter((event) => event.process === process.name).slice(0, 6);
+  if (!events.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="3" class="muted">No recent lifecycle events for ${process.name}.</td>`;
+    selectedProcessEventRowsEl.appendChild(tr);
+    return;
+  }
+
+  for (const event of events) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${event.event}</td>
+      <td>${fmtAge(event.age_seconds)}</td>
+      <td>${event.detail ?? ""}</td>
+    `;
+    selectedProcessEventRowsEl.appendChild(tr);
   }
 }
 

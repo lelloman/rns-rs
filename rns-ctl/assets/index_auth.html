@@ -89,6 +89,50 @@
         </thead>
         <tbody id="processRows"></tbody>
       </table>
+      <div class="process-detail-panel" style="margin-top: 18px;">
+        <div class="row" style="justify-content: space-between; align-items: flex-start;">
+          <div>
+            <h3 id="selectedProcessName">No process selected</h3>
+            <p id="selectedProcessSummary" class="muted">Select a process to inspect its runtime detail, recent events, and logs.</p>
+          </div>
+          <div id="selectedProcessStatusBadge" class="pill info">idle</div>
+        </div>
+        <div class="process-detail-grid" style="margin-top: 12px;">
+          <article class="status-card">
+            <div class="status-label">Readiness</div>
+            <div id="selectedProcessReady" class="stat">-</div>
+            <p id="selectedProcessReadyDetail" class="muted">No process selected.</p>
+          </article>
+          <article class="status-card">
+            <div class="status-label">Restarts</div>
+            <div id="selectedProcessRestarts" class="stat">0</div>
+            <p id="selectedProcessTransition" class="muted">No transition data yet.</p>
+          </article>
+          <article class="status-card">
+            <div class="status-label">Last Exit</div>
+            <div id="selectedProcessLastExit" class="stat">-</div>
+            <p id="selectedProcessLastError" class="muted">No recorded process error.</p>
+          </article>
+          <article class="status-card">
+            <div class="status-label">Logs</div>
+            <div id="selectedProcessLogCount" class="stat">0</div>
+            <p id="selectedProcessLogMeta" class="muted">No log metadata yet.</p>
+          </article>
+        </div>
+        <div style="margin-top: 16px;">
+          <strong>Recent Events For Selected Process</strong>
+        </div>
+        <table style="margin-top: 10px;">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Age</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="selectedProcessEventRows"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel" style="margin-top: 18px;">
