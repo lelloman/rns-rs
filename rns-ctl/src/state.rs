@@ -505,6 +505,9 @@ pub struct ServerConfigStatusSnapshot {
     pub last_apply_age_seconds: Option<f64>,
     pub last_action: Option<String>,
     pub last_action_age_seconds: Option<f64>,
+    pub pending_action: Option<String>,
+    pub pending_targets: Vec<String>,
+    pub blocking_reason: Option<String>,
     pub pending_process_restarts: Vec<String>,
     pub control_plane_reload_required: bool,
     pub control_plane_restart_required: bool,
@@ -589,6 +592,32 @@ impl ServerConfigStatusState {
         let converged = self.pending_process_restarts.is_empty()
             && !self.control_plane_reload_required
             && !self.control_plane_restart_required;
+        let pending_action = (!converged)
+            .then(|| {
+                self.last_apply_plan
+                    .as_ref()
+                    .map(|plan| plan.overall_action.clone())
+            })
+            .flatten();
+        let mut pending_targets = self.pending_process_restarts.clone();
+        if self.control_plane_reload_required {
+            pending_targets.push("embedded-http-auth".into());
+        }
+        if self.control_plane_restart_required {
+            pending_targets.push("rns-server".into());
+        }
+        let blocking_reason = if self.control_plane_restart_required {
+            Some("Restart rns-server to apply embedded HTTP bind or enablement changes.".into())
+        } else if self.control_plane_reload_required {
+            Some("Apply config to reload embedded HTTP auth settings into the running control plane.".into())
+        } else if !self.pending_process_restarts.is_empty() {
+            Some(format!(
+                "Waiting for restarted processes to become ready: {}.",
+                self.pending_process_restarts.join(", ")
+            ))
+        } else {
+            None
+        };
         let summary = if self.runtime_differs_from_saved {
             if self.control_plane_restart_required {
                 "Saved config is not fully active; rns-server restart is still required.".into()
@@ -618,6 +647,9 @@ impl ServerConfigStatusState {
             last_action_age_seconds: self
                 .last_action_at
                 .map(|instant| instant.elapsed().as_secs_f64()),
+            pending_action,
+            pending_targets,
+            blocking_reason,
             pending_process_restarts: self.pending_process_restarts.clone(),
             control_plane_reload_required: self.control_plane_reload_required,
             control_plane_restart_required: self.control_plane_restart_required,

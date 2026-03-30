@@ -537,8 +537,23 @@ fn test_get_config_status() {
         let mut state = server.ctx.state.write().unwrap();
         state.server_config_status = ServerConfigStatusState {
             last_action: Some("save".into()),
+            control_plane_reload_required: true,
             runtime_differs_from_saved: true,
-            control_plane_restart_required: true,
+            last_apply_plan: Some(ServerConfigApplyPlan {
+                overall_action: "reload_control_plane".into(),
+                processes_to_restart: Vec::new(),
+                control_plane_reload_required: true,
+                control_plane_restart_required: false,
+                notes: vec![
+                    "Embedded control-plane auth settings will be reloaded in place.".into(),
+                ],
+                changes: vec![ServerConfigChange {
+                    field: "http.auth_token".into(),
+                    before: "unset".into(),
+                    after: "set(10 chars)".into(),
+                    effect: "reload embedded HTTP auth".into(),
+                }],
+            }),
             ..ServerConfigStatusState::default()
         };
     }
@@ -548,6 +563,12 @@ fn test_get_config_status() {
     let json = res.json();
     assert_eq!(json["status"]["last_action"], "save");
     assert_eq!(json["status"]["converged"], false);
+    assert_eq!(json["status"]["pending_action"], "reload_control_plane");
+    assert_eq!(json["status"]["pending_targets"][0], "embedded-http-auth");
+    assert!(json["status"]["blocking_reason"]
+        .as_str()
+        .unwrap()
+        .contains("Apply config"));
     server.shutdown();
 }
 

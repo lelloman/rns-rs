@@ -268,11 +268,17 @@ function renderConfigStatus(status) {
   const action = status.last_action
     ? ` Last action: ${status.last_action}.`
     : "";
-  configStatusSummaryEl.textContent = `${status.summary}${action}${pending}`;
+  const pendingAction = status.pending_action
+    ? ` Pending action: ${status.pending_action}.`
+    : "";
+  const pendingTargets = status.pending_targets?.length
+    ? ` Targets: ${status.pending_targets.join(", ")}.`
+    : "";
+  configStatusSummaryEl.textContent = `${status.summary}${action}${pendingAction}${pendingTargets}${pending}`;
 
   if (status.runtime_differs_from_saved) {
     setBadge(configRuntimeBadgeEl, "drifted", "warn");
-    configRuntimeDetailEl.textContent = "Saved config is not fully active in the current runtime state.";
+    configRuntimeDetailEl.textContent = status.blocking_reason || "Saved config is not fully active in the current runtime state.";
   } else {
     setBadge(configRuntimeBadgeEl, "aligned", "ok");
     configRuntimeDetailEl.textContent = "Runtime state matches the saved config.";
@@ -280,7 +286,7 @@ function renderConfigStatus(status) {
 
   if (status.pending_process_restarts?.length) {
     setBadge(configRestartBadgeEl, "pending", "warn");
-    configRestartDetailEl.textContent = `Waiting on: ${status.pending_process_restarts.join(", ")}.`;
+    configRestartDetailEl.textContent = status.blocking_reason || `Waiting on: ${status.pending_process_restarts.join(", ")}.`;
   } else {
     setBadge(configRestartBadgeEl, "clear", "ok");
     configRestartDetailEl.textContent = "No supervised child process restart is pending.";
