@@ -67,6 +67,10 @@ for proc_name in rnsd rns-sentineld rns-statsd; do
     | jq -r ".processes[] | select(.name == \"${proc_name}\") | .status" || echo "")
   assert_eq "$PROC_STATUS" "running" "${proc_name} status is running"
 
+  READY_STATE=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+    | jq -r ".processes[] | select(.name == \"${proc_name}\") | .ready_state // empty" || echo "")
+  assert_eq "$READY_STATE" "ready" "${proc_name} ready_state is ready"
+
   PROC_PID=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
     | jq -r ".processes[] | select(.name == \"${proc_name}\") | .pid // empty" || echo "")
   assert_ne "$PROC_PID" "" "${proc_name} has a pid"
@@ -78,9 +82,26 @@ echo ""
 echo "--- Section 3: Process logs ---"
 
 for proc_name in rnsd rns-sentineld rns-statsd; do
+  PROCESS_JSON=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+    | jq ".processes[] | select(.name == \"${proc_name}\")" 2>/dev/null || echo "{}")
+  LOG_PATH=$(echo "$PROCESS_JSON" | jq -r '.durable_log_path // empty' 2>/dev/null || echo "")
+  assert_ne "$LOG_PATH" "" "${proc_name} exposes durable_log_path"
+
+  if docker exec rns-server-test test -f "$LOG_PATH" >/dev/null 2>&1; then
+    pass_test "${proc_name} durable log file exists in container"
+  else
+    fail_test "${proc_name} durable log file exists in container" "$LOG_PATH"
+  fi
+
   LOG_COUNT=$(ctl_get "$PORT" "/api/processes/${proc_name}/logs" 2>/dev/null \
     | jq '.lines | length' 2>/dev/null || echo "0")
   assert_gt "$LOG_COUNT" "0" "${proc_name} has log lines"
+
+  if docker exec rns-server-test sh -c "grep -q '\\[stdout\\]\\|\\[stderr\\]' '$LOG_PATH'" >/dev/null 2>&1; then
+    pass_test "${proc_name} persisted log file contains stream-tagged lines"
+  else
+    fail_test "${proc_name} persisted log file contains stream-tagged lines" "$LOG_PATH"
+  fi
 done
 
 # ── Section 4: Process events ────────────────────────────────────────────────
@@ -288,10 +309,14 @@ APPLY_RESP=$(ctl_post "$PORT" "/api/config/apply" \
   2>/dev/null || echo "{}")
 APPLY_ACTION=$(echo "$APPLY_RESP" | jq -r '.result.action' 2>/dev/null || echo "")
 assert_eq "$APPLY_ACTION" "apply" "config apply returns action=apply"
+APPLY_OVERALL_ACTION=$(echo "$APPLY_RESP" | jq -r '.result.apply_plan.overall_action // empty' 2>/dev/null || echo "")
+assert_eq "$APPLY_OVERALL_ACTION" "restart_children" "config apply overall action is restart_children"
 
 # The apply should plan to restart rns-statsd (stats_db_path changed)
 RESTART_PLANNED=$(echo "$APPLY_RESP" | jq -r '.result.apply_plan.processes_to_restart | length' 2>/dev/null || echo "0")
 assert_gt "$RESTART_PLANNED" "0" "apply plan includes process restarts"
+APPLY_TARGET=$(echo "$APPLY_RESP" | jq -r '.result.apply_plan.processes_to_restart[0] // empty' 2>/dev/null || echo "")
+assert_eq "$APPLY_TARGET" "rns-statsd" "apply plan targets rns-statsd"
 
 # Poll for rns-statsd restart count to increase
 DEADLINE=$((SECONDS + 15))
@@ -314,6 +339,39 @@ if poll_until "$PORT" "/api/processes" \
 else
   fail_test "all 3 processes running after config apply"
 fi
+
+if poll_until "$PORT" "/api/processes" \
+  '.processes[] | select(.name == "rns-statsd") | .ready_state' \
+  "ready" 30; then
+  pass_test "rns-statsd ready_state returns to ready after config apply"
+else
+  fail_test "rns-statsd ready_state returns to ready after config apply"
+fi
+
+if poll_until "$PORT" "/api/config/status" '.status.converged | tostring' "true" 30; then
+  pass_test "config status converges after config apply"
+else
+  fail_test "config status converges after config apply"
+fi
+
+PENDING_RESTARTS=$(ctl_get "$PORT" "/api/config/status" 2>/dev/null \
+  | jq -r '.status.pending_process_restarts | length' 2>/dev/null || echo "0")
+assert_eq "$PENDING_RESTARTS" "0" "no pending process restarts remain after convergence"
+
+POST_APPLY_LOG_PATH=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+  | jq -r '.processes[] | select(.name == "rns-statsd") | .durable_log_path // empty' 2>/dev/null || echo "")
+assert_ne "$POST_APPLY_LOG_PATH" "" "rns-statsd still exposes durable_log_path after apply"
+
+if docker exec rns-server-test test -f "$POST_APPLY_LOG_PATH" >/dev/null 2>&1; then
+  pass_test "rns-statsd durable log file persists after apply"
+else
+  fail_test "rns-statsd durable log file persists after apply" "$POST_APPLY_LOG_PATH"
+fi
+
+HAS_RECENT_EVENT=$(ctl_get "$PORT" "/api/process_events" 2>/dev/null \
+  | jq '[.events[] | select(.process == "rns-statsd")] | length' \
+  2>/dev/null || echo "0")
+assert_ge "$HAS_RECENT_EVENT" "1" "rns-statsd records recent lifecycle events after apply"
 
 # ── Results ──────────────────────────────────────────────────────────────────
 
