@@ -9,6 +9,8 @@
 - the embedded `rns-ctl` HTTP API and built-in UI
 - process readiness, recent lifecycle events, and durable process logs
 
+Deployment uses one binary. At runtime, `rns-server` self-spawns its child roles from the same executable via `/proc/self/exe`, with `current_exe()` fallback.
+
 ## Build And Package
 
 For a local release-style bundle:
@@ -17,12 +19,12 @@ For a local release-style bundle:
 bash scripts/package-rns-server-tarball.sh
 ```
 
-That script builds release binaries and writes a tarball under `dist/`.
+That script builds the single deployable `rns-server` binary and writes a tarball under `dist/`.
 
 For a direct local build without packaging:
 
 ```bash
-cargo build --release --bin rns-server --bin rnsd --bin rns-sentineld --bin rns-statsd --features rns-hooks
+cargo build --release --bin rns-server --features rns-hooks
 ```
 
 ## Files And Paths
@@ -86,6 +88,16 @@ Key endpoints:
 
 The built-in UI is served from `/`.
 
+## Self-Spawn Runtime
+
+By default, child processes are started by re-executing the running `rns-server` binary with hidden internal role flags. The normal deploy path does not require separate installed copies of:
+
+- `rnsd`
+- `rns-sentineld`
+- `rns-statsd`
+
+Advanced override fields in `rns-server.json` can still point a role at an external binary, but that is not the default operating mode.
+
 ## Config Apply Semantics
 
 `rns-server` classifies config changes into explicit actions:
@@ -147,7 +159,8 @@ Common cases:
 Before shipping a build:
 
 1. `cargo test -p rns-server`
-2. `cargo test -p rns-ctl config_`
-3. `node --test rns-ctl/assets/app.smoke.test.js`
-4. `bash tests/docker/rns-server/run.sh`
-5. Build a tarball with `bash scripts/package-rns-server-tarball.sh`
+2. `cargo test -p rns-cli`
+3. `cargo test -p rns-ctl config_`
+4. `node --test rns-ctl/assets/app.smoke.test.js`
+5. `bash tests/docker/rns-server/run.sh`
+6. Build a tarball with `bash scripts/package-rns-server-tarball.sh`

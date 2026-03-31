@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use crate::args::Args;
-use crate::supervisor::{ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig};
+use crate::supervisor::{
+    ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -174,21 +176,29 @@ impl ServerConfig {
         }
     }
 
+    pub fn ensure_runtime_bootstrap(&self) -> Result<(), String> {
+        let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir)
+            .map_err(|err| format!("failed to create runtime storage dirs: {}", err))?;
+        rns_net::storage::load_or_create_identity(&paths.identities)
+            .map_err(|err| format!("failed to initialize node identity: {}", err))?;
+        Ok(())
+    }
+
     pub fn process_specs(&self) -> Vec<ProcessSpec> {
         vec![
             ProcessSpec {
                 role: Role::Rnsd,
-                bin: self.rnsd_bin.clone(),
+                command: self.command_for_override(&self.rnsd_bin),
                 args: self.rnsd_args(),
             },
             ProcessSpec {
                 role: Role::Sentineld,
-                bin: self.sentineld_bin.clone(),
+                command: self.command_for_override(&self.sentineld_bin),
                 args: self.sentineld_args(),
             },
             ProcessSpec {
                 role: Role::Statsd,
-                bin: self.statsd_bin.clone(),
+                command: self.command_for_override(&self.statsd_bin),
                 args: self.statsd_args(),
             },
         ]
@@ -205,9 +215,9 @@ impl ServerConfig {
             server_config_file_present: self.server_config_file_present,
             server_config_file_json: self.editable_file_json(),
             stats_db_path: self.stats_db_path.display().to_string(),
-            rnsd_bin: self.rnsd_bin.display().to_string(),
-            sentineld_bin: self.sentineld_bin.display().to_string(),
-            statsd_bin: self.statsd_bin.display().to_string(),
+            rnsd_bin: self.binary_mode_label(&self.rnsd_bin, "rnsd"),
+            sentineld_bin: self.binary_mode_label(&self.sentineld_bin, "rns-sentineld"),
+            statsd_bin: self.binary_mode_label(&self.statsd_bin, "rns-statsd"),
             http: ServerHttpConfigSnapshot {
                 enabled: self.http.enabled,
                 host: self.http.host.clone(),
@@ -225,7 +235,7 @@ impl ServerConfig {
                 .into_iter()
                 .map(|spec| LaunchProcessSnapshot {
                     name: spec.role.display_name().to_string(),
-                    bin: spec.bin.display().to_string(),
+                    bin: spec.command.display(spec.role),
                     args: spec.args.clone(),
                     command_line: spec.command_line(),
                 })
@@ -243,6 +253,7 @@ impl ServerConfig {
                     self.server_config_file_path.display()
                 ),
                 "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
+                "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Explicit child binary paths remain available as advanced overrides.".into(),
                 "Changing process launch settings restarts only the affected child processes. Embedded HTTP auth settings reload in place; bind host, port, and enablement changes still require restarting rns-server.".into(),
             ],
             fields: vec![
@@ -258,24 +269,24 @@ impl ServerConfig {
                     field: "rnsd_bin".into(),
                     field_type: "string".into(),
                     required: false,
-                    default_value: "rnsd".into(),
-                    description: "Executable used for the Reticulum daemon.".into(),
+                    default_value: "(self-spawn via /proc/self/exe)".into(),
+                    description: "Advanced override for the Reticulum daemon executable; unset uses self-spawn from rns-server.".into(),
                     effect: "Restarts rnsd when changed.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "sentineld_bin".into(),
                     field_type: "string".into(),
                     required: false,
-                    default_value: "rns-sentineld".into(),
-                    description: "Executable used for the sentinel sidecar.".into(),
+                    default_value: "(self-spawn via /proc/self/exe)".into(),
+                    description: "Advanced override for the sentinel sidecar executable; unset uses self-spawn from rns-server.".into(),
                     effect: "Restarts rns-sentineld when changed.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "statsd_bin".into(),
                     field_type: "string".into(),
                     required: false,
-                    default_value: "rns-statsd".into(),
-                    description: "Executable used for the stats sidecar.".into(),
+                    default_value: "(self-spawn via /proc/self/exe)".into(),
+                    description: "Advanced override for the stats sidecar executable; unset uses self-spawn from rns-server.".into(),
                     effect: "Restarts rns-statsd when changed.".into(),
                 },
                 ServerConfigFieldSchema {
@@ -367,6 +378,22 @@ impl ServerConfig {
             parts.push("--disable-auth".to_string());
         }
         parts.join(" ")
+    }
+
+    fn command_for_override(&self, path: &PathBuf) -> ProcessCommand {
+        if path.as_os_str().is_empty() {
+            ProcessCommand::SelfInvoke
+        } else {
+            ProcessCommand::External(path.clone())
+        }
+    }
+
+    fn binary_mode_label(&self, path: &PathBuf, role: &str) -> String {
+        if path.as_os_str().is_empty() {
+            format!("self-spawn ({role})")
+        } else {
+            path.display().to_string()
+        }
     }
 
     fn readiness_checks(&self) -> Vec<ProcessReadiness> {
@@ -478,17 +505,17 @@ impl ServerConfig {
             .and_then(|args| args.get("rnsd-bin"))
             .map(PathBuf::from)
             .or_else(|| file_cfg.rnsd_bin.as_ref().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("rnsd"));
+            .unwrap_or_default();
         let sentineld_bin = args
             .and_then(|args| args.get("sentineld-bin"))
             .map(PathBuf::from)
             .or_else(|| file_cfg.sentineld_bin.as_ref().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("rns-sentineld"));
+            .unwrap_or_default();
         let statsd_bin = args
             .and_then(|args| args.get("statsd-bin"))
             .map(PathBuf::from)
             .or_else(|| file_cfg.statsd_bin.as_ref().map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("rns-statsd"));
+            .unwrap_or_default();
 
         let http_enabled = if args.is_some_and(|args| args.has("no-http")) {
             false
@@ -627,14 +654,14 @@ impl ServerConfig {
             let Some(next_spec) = next_specs.iter().find(|spec| spec.role == current.role) else {
                 continue;
             };
-            if current.bin != next_spec.bin || current.args != next_spec.args {
+            if current.command != next_spec.command || current.args != next_spec.args {
                 let name = current.role.display_name().to_string();
                 processes_to_restart.push(name.clone());
-                if current.bin != next_spec.bin {
+                if current.command != next_spec.command {
                     changes.push(ServerConfigChange {
                         field: format!("{name}.bin"),
-                        before: current.bin.display().to_string(),
-                        after: next_spec.bin.display().to_string(),
+                        before: current.command.display(current.role),
+                        after: next_spec.command.display(next_spec.role),
                         effect: format!("restart {name}"),
                     });
                 }
@@ -761,9 +788,9 @@ impl ServerConfig {
     fn example_config_json() -> String {
         serde_json::to_string_pretty(&ServerConfigFile {
             stats_db_path: Some("stats.db".into()),
-            rnsd_bin: Some("rnsd".into()),
-            sentineld_bin: Some("rns-sentineld".into()),
-            statsd_bin: Some("rns-statsd".into()),
+            rnsd_bin: None,
+            sentineld_bin: None,
+            statsd_bin: None,
             http: ServerHttpConfigFile {
                 enabled: Some(true),
                 host: Some("127.0.0.1".into()),
@@ -803,7 +830,7 @@ fn mask_token(token: &Option<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{HttpConfig, ServerConfig, ServerConfigFile, ServerHttpConfigFile};
-    use crate::supervisor::{ReadinessTarget, Role};
+    use crate::supervisor::{ProcessCommand, ReadinessTarget, Role};
     use std::path::PathBuf;
 
     fn test_config() -> ServerConfig {
@@ -814,9 +841,9 @@ mod tests {
             server_config_file_present: true,
             file_config: ServerConfigFile::default(),
             stats_db_path: PathBuf::from("/tmp/rns/stats.db"),
-            rnsd_bin: PathBuf::from("rnsd"),
-            sentineld_bin: PathBuf::from("rns-sentineld"),
-            statsd_bin: PathBuf::from("rns-statsd"),
+            rnsd_bin: PathBuf::new(),
+            sentineld_bin: PathBuf::new(),
+            statsd_bin: PathBuf::new(),
             http: HttpConfig {
                 enabled: true,
                 host: "127.0.0.1".into(),
@@ -945,6 +972,7 @@ mod tests {
     fn process_specs_include_sidecar_ready_file_args() {
         let config = test_config();
         let specs = config.process_specs();
+        assert!(matches!(specs[0].command, ProcessCommand::SelfInvoke));
 
         let sentineld = specs
             .iter()
@@ -987,5 +1015,61 @@ mod tests {
             }
             _ => panic!("unexpected statsd readiness target"),
         }
+    }
+
+    #[test]
+    fn explicit_child_override_uses_external_binary_command() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                rnsd_bin: Some("/opt/custom-rnsd".into()),
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let specs = next.process_specs();
+        assert!(matches!(
+            specs[0].command,
+            ProcessCommand::External(ref path) if path == &PathBuf::from("/opt/custom-rnsd")
+        ));
+    }
+
+    #[test]
+    fn ensure_runtime_bootstrap_creates_identity_once() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "rns-server-bootstrap-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        let config = ServerConfig {
+            config_path: Some(config_dir.clone()),
+            resolved_config_dir: config_dir.clone(),
+            server_config_file_path: config_dir.join("rns-server.json"),
+            server_config_file_present: false,
+            file_config: ServerConfigFile::default(),
+            stats_db_path: config_dir.join("stats.db"),
+            rnsd_bin: PathBuf::new(),
+            sentineld_bin: PathBuf::new(),
+            statsd_bin: PathBuf::new(),
+            http: HttpConfig {
+                enabled: true,
+                host: "127.0.0.1".into(),
+                port: 8080,
+                auth_token: None,
+                disable_auth: false,
+                daemon_mode: true,
+            },
+            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+        };
+
+        config.ensure_runtime_bootstrap().unwrap();
+        config.ensure_runtime_bootstrap().unwrap();
+
+        let identity_path = config_dir.join("storage/identities/identity");
+        assert!(identity_path.exists());
+        assert_eq!(std::fs::metadata(identity_path).unwrap().len(), 64);
+
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 }

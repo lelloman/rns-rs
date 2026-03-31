@@ -32,13 +32,17 @@ const HOOK_SPECS: [(&str, &str); 3] = [
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
 
 pub fn main_entry() {
+    main_entry_from(Args::parse());
+}
+
+pub fn main_entry_from(args: Args) {
     let previous_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         SHOULD_STOP.store(true, Ordering::Relaxed);
         previous_panic_hook(panic_info);
     }));
 
-    let exit_code = match std::panic::catch_unwind(run) {
+    let exit_code = match std::panic::catch_unwind(move || run(args)) {
         Ok(Ok(())) => 0,
         Ok(Err(err)) => {
             eprintln!("rns-statsd: {}", err);
@@ -50,8 +54,7 @@ pub fn main_entry() {
     process::exit(exit_code);
 }
 
-fn run() -> Result<(), String> {
-    let args = Args::parse();
+fn run(args: Args) -> Result<(), String> {
     if args.has("version") {
         println!("rns-statsd {}", VERSION);
         return Ok(());

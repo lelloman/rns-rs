@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::logs::LogStore;
+use crate::self_exec::{resolve_self_exec, self_exec_display};
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
     mark_process_stopped, push_process_log, set_process_log_path, set_process_readiness,
@@ -35,15 +36,32 @@ impl Role {
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
     pub role: Role,
-    pub bin: PathBuf,
+    pub command: ProcessCommand,
     pub args: Vec<String>,
 }
 
 impl ProcessSpec {
     pub fn command_line(&self) -> String {
-        let mut parts = vec![self.bin.display().to_string()];
+        let mut parts = vec![self.command.display(self.role)];
         parts.extend(self.args.iter().cloned());
         parts.join(" ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessCommand {
+    External(PathBuf),
+    SelfInvoke,
+}
+
+impl ProcessCommand {
+    pub fn display(&self, role: Role) -> String {
+        match self {
+            ProcessCommand::External(path) => path.display().to_string(),
+            ProcessCommand::SelfInvoke => {
+                format!("{} --internal-role {}", self_exec_display(), role.display_name())
+            }
+        }
     }
 }
 
@@ -481,8 +499,7 @@ fn spawn_child(
     log_store: Option<LogStore>,
 ) -> Result<ManagedChild, String> {
     log::info!("starting {}", spec.command_line());
-    let mut command = Command::new(&spec.bin);
-    command.args(&spec.args);
+    let mut command = command_for_spec(spec)?;
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     let child = match command.spawn() {
@@ -519,6 +536,23 @@ fn spawn_child(
         attach_log_streams(&mut managed, state.clone(), log_store);
     }
     Ok(managed)
+}
+
+fn command_for_spec(spec: &ProcessSpec) -> Result<Command, String> {
+    match &spec.command {
+        ProcessCommand::External(bin) => {
+            let mut command = Command::new(bin);
+            command.args(&spec.args);
+            Ok(command)
+        }
+        ProcessCommand::SelfInvoke => {
+            let mut command = Command::new(resolve_self_exec()?);
+            command.arg("--internal-role");
+            command.arg(spec.role.display_name());
+            command.args(&spec.args);
+            Ok(command)
+        }
+    }
 }
 
 fn attach_log_streams(child: &mut ManagedChild, state: SharedState, log_store: Option<LogStore>) {
@@ -657,8 +691,8 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        missing_required_hooks, probe_ready_file, role_from_name, ProcessSpec, ReadinessTarget,
-        Role, SupervisorConfig,
+        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name,
+        ProcessCommand, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;
@@ -671,17 +705,17 @@ mod tests {
         let specs = vec![
             ProcessSpec {
                 role: Role::Rnsd,
-                bin: PathBuf::from("rnsd"),
+                command: ProcessCommand::External(PathBuf::from("rnsd")),
                 args: vec!["--config".into(), "/tmp/rns".into()],
             },
             ProcessSpec {
                 role: Role::Sentineld,
-                bin: PathBuf::from("rns-sentineld"),
+                command: ProcessCommand::External(PathBuf::from("rns-sentineld")),
                 args: vec!["--config".into(), "/tmp/rns".into()],
             },
             ProcessSpec {
                 role: Role::Statsd,
-                bin: PathBuf::from("rns-statsd"),
+                command: ProcessCommand::External(PathBuf::from("rns-statsd")),
                 args: vec![
                     "--config".into(),
                     "/tmp/rns".into(),
@@ -710,10 +744,48 @@ mod tests {
     fn process_spec_command_line() {
         let spec = ProcessSpec {
             role: Role::Rnsd,
-            bin: PathBuf::from("rnsd"),
+            command: ProcessCommand::External(PathBuf::from("rnsd")),
             args: vec!["--config".into(), "/data".into()],
         };
         assert_eq!(spec.command_line(), "rnsd --config /data");
+    }
+
+    #[test]
+    fn self_invoke_command_line_uses_internal_role() {
+        let spec = ProcessSpec {
+            role: Role::Statsd,
+            command: ProcessCommand::SelfInvoke,
+            args: vec!["--config".into(), "/data".into()],
+        };
+        assert_eq!(
+            spec.command_line(),
+            "/proc/self/exe --internal-role rns-statsd --config /data"
+        );
+    }
+
+    #[test]
+    fn self_invoke_command_builder_includes_internal_role_args() {
+        let spec = ProcessSpec {
+            role: Role::Sentineld,
+            command: ProcessCommand::SelfInvoke,
+            args: vec!["--config".into(), "/data".into()],
+        };
+        let command = command_for_spec(&spec).unwrap();
+        let program = command.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(program == "/proc/self/exe" || !program.is_empty());
+        assert_eq!(
+            args,
+            vec![
+                "--internal-role".to_string(),
+                "rns-sentineld".to_string(),
+                "--config".to_string(),
+                "/data".to_string()
+            ]
+        );
     }
 
     #[test]

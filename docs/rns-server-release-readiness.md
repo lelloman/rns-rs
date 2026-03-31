@@ -31,9 +31,6 @@ The project is substantially complete for the current target, but these remain c
 Release artifacts should include:
 
 - `rns-server`
-- `rnsd`
-- `rns-sentineld`
-- `rns-statsd`
 - [rns-server-operator-runbook.md](/home/lelloman/lelloprojects/rns-rs/docs/rns-server-operator-runbook.md)
 - this readiness document
 
@@ -49,6 +46,7 @@ A release build should pass:
 
 ```bash
 cargo test -p rns-server
+cargo test -p rns-cli
 cargo test -p rns-ctl config_
 node --test rns-ctl/assets/app.smoke.test.js
 bash tests/docker/rns-server/run.sh
@@ -59,6 +57,7 @@ bash tests/docker/rns-server/run.sh
 For the current project scope, release readiness means:
 
 - `rns-server` is the single product entrypoint
+- normal deployment ships one binary and self-spawns child roles
 - supervised children have explicit readiness and durable logs
 - config save/apply behavior is predictable and operator-visible
 - the embedded UI covers the common operator workflow

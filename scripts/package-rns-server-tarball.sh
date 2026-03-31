@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: package-rns-server-tarball.sh [--output-name NAME] [--skip-build]
 
-Build release binaries for rns-server and bundle them into dist/<name>.tar.gz.
+Build a single deployable rns-server binary and bundle it into dist/<name>.tar.gz.
 EOF
 }
 
@@ -40,9 +40,6 @@ done
 if ! $SKIP_BUILD; then
   cargo build --release \
     --bin rns-server \
-    --bin rnsd \
-    --bin rns-sentineld \
-    --bin rns-statsd \
     --features rns-hooks
 fi
 
@@ -50,12 +47,13 @@ rm -rf "${DIST_DIR:?}/${OUTPUT_NAME}"
 mkdir -p "${DIST_DIR}/${OUTPUT_NAME}/bin" "${DIST_DIR}/${OUTPUT_NAME}/docs"
 
 cp "${REPO_ROOT}/target/release/rns-server" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
-cp "${REPO_ROOT}/target/release/rnsd" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
-cp "${REPO_ROOT}/target/release/rns-sentineld" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
-cp "${REPO_ROOT}/target/release/rns-statsd" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
 
 cp "${REPO_ROOT}/docs/rns-server-operator-runbook.md" "${DIST_DIR}/${OUTPUT_NAME}/docs/"
 cp "${REPO_ROOT}/docs/rns-server-release-readiness.md" "${DIST_DIR}/${OUTPUT_NAME}/docs/"
 
-tar -C "${DIST_DIR}" -czf "${DIST_DIR}/${OUTPUT_NAME}.tar.gz" "${OUTPUT_NAME}"
-echo "wrote ${DIST_DIR}/${OUTPUT_NAME}.tar.gz"
+TMP_ARCHIVE="${DIST_DIR}/${OUTPUT_NAME}.tar.gz.tmp"
+FINAL_ARCHIVE="${DIST_DIR}/${OUTPUT_NAME}.tar.gz"
+rm -f "${TMP_ARCHIVE}" "${FINAL_ARCHIVE}"
+tar -C "${DIST_DIR}" -czf "${TMP_ARCHIVE}" "${OUTPUT_NAME}"
+mv "${TMP_ARCHIVE}" "${FINAL_ARCHIVE}"
+echo "wrote ${FINAL_ARCHIVE}"

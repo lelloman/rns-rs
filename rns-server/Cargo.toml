@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+rns-cli = { path = "../rns-cli" }
 rns-net.workspace = true
 rns-ctl = { path = "../rns-ctl" }
 env_logger = "0.11"

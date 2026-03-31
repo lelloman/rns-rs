@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::SharedState;
+use rns_cli::args::Args as CliArgs;
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
 use rns_server::control_plane::{install_config_bridge, new_supervised_state};
@@ -10,6 +11,10 @@ use rns_server::supervisor::Supervisor;
 
 fn main() {
     let args = Args::parse();
+
+    if let Some(role) = args.get("internal-role") {
+        run_internal_role(role);
+    }
 
     if args.has("version") {
         println!("rns-server {}", env!("FULL_VERSION"));
@@ -33,9 +38,40 @@ fn main() {
     }
 }
 
+fn run_internal_role(role: &str) -> ! {
+    let child_args = CliArgs::parse_from(sanitized_internal_argv());
+    match role {
+        "rnsd" => rns_cli::rnsd::main_entry_from(child_args),
+        "rns-sentineld" => rns_cli::sentineld::main_entry_from(child_args),
+        "rns-statsd" => rns_cli::statsd::main_entry_from(child_args),
+        other => {
+            eprintln!("rns-server: unknown internal role '{}'", other);
+            std::process::exit(1);
+        }
+    }
+    std::process::exit(0);
+}
+
+fn sanitized_internal_argv() -> Vec<String> {
+    let mut args = std::env::args().skip(1);
+    let mut sanitized = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--internal-role" {
+            let _ = args.next();
+            continue;
+        }
+        sanitized.push(arg);
+    }
+    sanitized
+}
+
 fn run_start(args: Args) {
     let (shared_state, _control_tx, control_rx) = new_supervised_state();
     let config = ServerConfig::from_args(&args);
+    if let Err(err) = config.ensure_runtime_bootstrap() {
+        eprintln!("rns-server: {}", err);
+        std::process::exit(1);
+    }
     install_config_bridge(&shared_state, &args, &config);
     let dry_run = args.has("dry-run");
 
@@ -138,9 +174,9 @@ USAGE:
 OPTIONS:
     -c, --config PATH        Path to config directory
         --stats-db PATH      Path to stats SQLite database
-        --rnsd-bin PATH      Path to rnsd executable (default: rnsd)
-        --sentineld-bin PATH Path to rns-sentineld executable (default: rns-sentineld)
-        --statsd-bin PATH    Path to rns-statsd executable (default: rns-statsd)
+        --rnsd-bin PATH      Advanced override for rnsd executable
+        --sentineld-bin PATH Advanced override for rns-sentineld executable
+        --statsd-bin PATH    Advanced override for rns-statsd executable
         --http-host HOST     Host for embedded control HTTP server
         --http-port PORT     Port for embedded control HTTP server
         --http-token TOKEN   Auth token for embedded control HTTP server

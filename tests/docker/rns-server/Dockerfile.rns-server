@@ -11,14 +11,11 @@ COPY rns-stats-hook rns-stats-hook
 COPY rns-sentinel-hook rns-sentinel-hook
 COPY rns-server rns-server
 RUN rustup target add wasm32-unknown-unknown
-RUN cargo build --release --bin rns-server --bin rnsd --bin rns-sentineld --bin rns-statsd --features rns-hooks
+RUN cargo build --release --bin rns-server --features rns-hooks
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/rns-server /usr/local/bin/rns-server
-COPY --from=builder /build/target/release/rnsd /usr/local/bin/rnsd
-COPY --from=builder /build/target/release/rns-sentineld /usr/local/bin/rns-sentineld
-COPY --from=builder /build/target/release/rns-statsd /usr/local/bin/rns-statsd
 RUN mkdir -p /etc/rns /data
 EXPOSE 8080
 HEALTHCHECK --interval=2s --timeout=2s --retries=30 \
