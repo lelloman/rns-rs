@@ -50,6 +50,25 @@ Example startup:
 rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 ```
 
+Development startup from the workspace:
+
+```bash
+cargo run --bin rns-server --features rns-hooks -- start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
+```
+
+Release-style startup from a local build:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks
+./target/release/rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
+```
+
+If you use the packaged tarball, the runtime entrypoint is still just:
+
+```bash
+rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
+```
+
 Useful flags:
 
 - `--config PATH`

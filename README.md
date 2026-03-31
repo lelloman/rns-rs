@@ -104,6 +104,28 @@ cargo run --bin rnprobe
 cargo run --bin rnid
 ```
 
+## rns-server
+
+`rns-server` is the single-node product entrypoint. In the default deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd`, `rns-sentineld`, and `rns-statsd` roles from the same executable.
+
+Development startup:
+
+```bash
+cargo run --bin rns-server --features rns-hooks -- start --config /path/to/node
+```
+
+Release-style startup:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks
+./target/release/rns-server start --config /path/to/node
+```
+
+Useful docs:
+
+- [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
+- [docs/rns-server-release-readiness.md](docs/rns-server-release-readiness.md)
+
 ## rns-ctl
 
 `rns-ctl` is a unified CLI tool that combines daemon, control server, and all CLI utilities into a single binary:
