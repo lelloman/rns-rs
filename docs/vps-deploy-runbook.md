@@ -173,7 +173,35 @@ Useful log checks:
 ssh root@vps 'journalctl -u rnsd -n 20 --no-pager'
 ssh root@vps 'journalctl -u rns-statsd -n 20 --no-pager'
 ssh root@vps 'journalctl -u rns-sentineld -n 20 --no-pager'
+ssh root@vps "journalctl -u rnsd --since '1 hour ago' --no-pager | grep MEMSTATS"
 ```
+
+`MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
+signal for the VPS experiment.
+
+Important fields:
+
+- `rss_mb`, `vmrss_mb`
+  Current resident memory sample.
+- `vmhwm_mb`
+  Peak resident set seen by the kernel.
+- `vmdata_mb`
+  Process data-segment size; useful for tracking heap-like growth.
+- `smaps_anon_mb`
+  Anonymous resident memory. If this rises while table counts stay flat, treat
+  the growth as in-process memory, not filesystem cache.
+- `smaps_file_est_mb`
+  Approximate file-backed resident memory (`smaps_rss_mb - smaps_anon_mb`).
+  If this rises with `stats.db`, page cache / file-backed mappings are likely
+  part of the story.
+- `smaps_private_dirty_mb`
+  Private dirty resident memory. Sustained growth here is a strong signal that
+  `rnsd` itself is retaining writable pages.
+- `known_dest`, `path`, `announce`, `link`, `hashlist`, `sig_cache`,
+  `ann_verify_q`
+  Existing tracked collections and queues. If these stay flat while anonymous
+  memory rises, the remaining growth is likely allocator retention or an
+  untracked buffer/cache.
 
 ## 9. Rollback
 

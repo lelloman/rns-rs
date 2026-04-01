@@ -7217,17 +7217,119 @@ impl Driver {
         Some(rss_pages as f64 * 4096.0 / (1024.0 * 1024.0))
     }
 
+    fn parse_proc_kib(contents: &str, key: &str) -> Option<u64> {
+        contents.lines().find_map(|line| {
+            let value = line.strip_prefix(key)?;
+            value.split_whitespace().next()?.parse().ok()
+        })
+    }
+
+    fn proc_status_mb() -> Option<(f64, f64, f64, f64)> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let vm_rss = Self::parse_proc_kib(&status, "VmRSS:")? as f64 / 1024.0;
+        let vm_hwm = Self::parse_proc_kib(&status, "VmHWM:")? as f64 / 1024.0;
+        let vm_data = Self::parse_proc_kib(&status, "VmData:")? as f64 / 1024.0;
+        let vm_swap = Self::parse_proc_kib(&status, "VmSwap:").unwrap_or(0) as f64 / 1024.0;
+        Some((vm_rss, vm_hwm, vm_data, vm_swap))
+    }
+
+    fn smaps_rollup_mb() -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
+        let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+        let rss_kib = Self::parse_proc_kib(&smaps, "Rss:")?;
+        let anon_kib = Self::parse_proc_kib(&smaps, "Anonymous:")?;
+        let shared_clean_kib = Self::parse_proc_kib(&smaps, "Shared_Clean:").unwrap_or(0);
+        let shared_dirty_kib = Self::parse_proc_kib(&smaps, "Shared_Dirty:").unwrap_or(0);
+        let private_clean_kib = Self::parse_proc_kib(&smaps, "Private_Clean:").unwrap_or(0);
+        let private_dirty_kib = Self::parse_proc_kib(&smaps, "Private_Dirty:").unwrap_or(0);
+        let swap_kib = Self::parse_proc_kib(&smaps, "Swap:").unwrap_or(0);
+        let file_est_kib = rss_kib.saturating_sub(anon_kib);
+        Some((
+            rss_kib as f64 / 1024.0,
+            anon_kib as f64 / 1024.0,
+            file_est_kib as f64 / 1024.0,
+            shared_clean_kib as f64 / 1024.0,
+            shared_dirty_kib as f64 / 1024.0,
+            private_clean_kib as f64 / 1024.0,
+            private_dirty_kib as f64 / 1024.0,
+            swap_kib as f64 / 1024.0,
+        ))
+    }
+
     /// Log sizes of all major collections for memory growth diagnostics.
     fn log_memory_stats(&self) {
         let rss = Self::rss_mb()
             .map(|v| format!("{:.1}", v))
             .unwrap_or_else(|| "N/A".into());
+        let (vm_rss, vm_hwm, vm_data, vm_swap) = Self::proc_status_mb()
+            .map(|(rss, hwm, data, swap)| {
+                (
+                    format!("{rss:.1}"),
+                    format!("{hwm:.1}"),
+                    format!("{data:.1}"),
+                    format!("{swap:.1}"),
+                )
+            })
+            .unwrap_or_else(|| ("N/A".into(), "N/A".into(), "N/A".into(), "N/A".into()));
+        let (
+            smaps_rss,
+            smaps_anon,
+            smaps_file_est,
+            smaps_shared_clean,
+            smaps_shared_dirty,
+            smaps_private_clean,
+            smaps_private_dirty,
+            smaps_swap,
+        ) = Self::smaps_rollup_mb()
+            .map(
+                |(
+                    rss,
+                    anon,
+                    file_est,
+                    shared_clean,
+                    shared_dirty,
+                    private_clean,
+                    private_dirty,
+                    swap,
+                )| {
+                    (
+                        format!("{rss:.1}"),
+                        format!("{anon:.1}"),
+                        format!("{file_est:.1}"),
+                        format!("{shared_clean:.1}"),
+                        format!("{shared_dirty:.1}"),
+                        format!("{private_clean:.1}"),
+                        format!("{private_dirty:.1}"),
+                        format!("{swap:.1}"),
+                    )
+                },
+            )
+            .unwrap_or_else(|| {
+                (
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                    "N/A".into(),
+                )
+            });
         log::info!(
-            "MEMSTATS rss_mb={} known_dest={} path={} announce={} reverse={} \
-             link={} held_ann={} hashlist={} sig_cache={} ann_verify_q={} rate_lim={} blackhole={} tunnel={} \
-             pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={} \
-             shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
+            "MEMSTATS rss_mb={} vmrss_mb={} vmhwm_mb={} vmdata_mb={} vmswap_mb={} smaps_rss_mb={} smaps_anon_mb={} smaps_file_est_mb={} smaps_shared_clean_mb={} smaps_shared_dirty_mb={} smaps_private_clean_mb={} smaps_private_dirty_mb={} smaps_swap_mb={} known_dest={} path={} announce={} reverse={}              link={} held_ann={} hashlist={} sig_cache={} ann_verify_q={} rate_lim={} blackhole={} tunnel={}              pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={}              shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
             rss,
+            vm_rss,
+            vm_hwm,
+            vm_data,
+            vm_swap,
+            smaps_rss,
+            smaps_anon,
+            smaps_file_est,
+            smaps_shared_clean,
+            smaps_shared_dirty,
+            smaps_private_clean,
+            smaps_private_dirty,
+            smaps_swap,
             self.known_destinations.len(),
             self.engine.path_table_count(),
             self.engine.announce_table_count(),
