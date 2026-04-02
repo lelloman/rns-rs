@@ -94,43 +94,13 @@ fn run(args: Args) -> Result<(), String> {
 
     let mut db = StatsDb::open(&db_path).map_err(|e| format!("sqlite open failed: {}", e))?;
     let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
-    loop {
-        unload_stale_hooks(&control);
-        match load_hooks(&control, priority) {
-            Ok(()) => break,
-            Err(err) => {
-                log::warn!("waiting for rnsd RPC: {}", err);
-                for _ in 0..50 {
-                    if SHOULD_STOP.load(Ordering::Relaxed) {
-                        return Err("interrupted while waiting for rnsd".to_string());
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    }
+    wait_for_loaded_hooks(&control, priority)?;
     let hook_guard = HookGuard {
         control: control.clone(),
         armed: true,
     };
 
-    let mut stream = loop {
-        match UnixStream::connect(&runtime.provider_socket) {
-            Ok(s) => break s,
-            Err(err) => {
-                log::warn!("waiting for provider bridge: {}", err);
-                for _ in 0..50 {
-                    if SHOULD_STOP.load(Ordering::Relaxed) {
-                        return Err("interrupted while waiting for provider bridge".to_string());
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+    let mut stream = wait_for_provider_bridge(&runtime.provider_socket)?;
     if let Some(ready_file) = ready_file.as_ref() {
         ready_file.mark_ready(
             "rns-statsd",
@@ -150,15 +120,16 @@ fn run(args: Args) -> Result<(), String> {
         match read_provider_envelope(&mut stream) {
             Ok(Some(envelope)) => aggregator.ingest(envelope),
             Ok(None) => {}
-            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                return Err("provider bridge disconnected".to_string());
-            }
             Err(err)
                 if matches!(
                     err.kind(),
                     io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                 ) => {}
-            Err(err) => return Err(format!("provider bridge read failed: {}", err)),
+            Err(err) => {
+                log::warn!("provider bridge disconnected: {}", err);
+                wait_for_loaded_hooks(&control, priority)?;
+                stream = wait_for_provider_bridge(&runtime.provider_socket)?;
+            }
         }
 
         if Instant::now() >= next_flush {
@@ -667,6 +638,46 @@ fn unload_stale_hooks(control: &RpcControl) {
             }
         }
     }
+}
+
+fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), String> {
+    loop {
+        unload_stale_hooks(control);
+        match load_hooks(control, priority) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                log::warn!("waiting for rnsd RPC: {}", err);
+                sleep_or_interrupt("interrupted while waiting for rnsd")?;
+            }
+        }
+    }
+}
+
+fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+                return Ok(stream);
+            }
+            Err(err) => {
+                log::warn!("waiting for provider bridge: {}", err);
+                sleep_or_interrupt("interrupted while waiting for provider bridge")?;
+            }
+        }
+    }
+}
+
+fn sleep_or_interrupt(message: &str) -> Result<(), String> {
+    for _ in 0..50 {
+        if SHOULD_STOP.load(Ordering::Relaxed) {
+            return Err(message.to_string());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
 }
 
 fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<ProviderEnvelope>> {
