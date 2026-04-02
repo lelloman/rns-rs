@@ -59,7 +59,11 @@ impl ProcessCommand {
         match self {
             ProcessCommand::External(path) => path.display().to_string(),
             ProcessCommand::SelfInvoke => {
-                format!("{} --internal-role {}", self_exec_display(), role.display_name())
+                format!(
+                    "{} --internal-role {}",
+                    self_exec_display(),
+                    role.display_name()
+                )
             }
         }
     }
@@ -691,8 +695,8 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name,
-        ProcessCommand, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name, ProcessCommand,
+        ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;

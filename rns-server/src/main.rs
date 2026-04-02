@@ -1,9 +1,9 @@
 use std::thread;
 use std::time::Duration;
 
+use rns_cli::args::Args as CliArgs;
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
 use rns_ctl::state::SharedState;
-use rns_cli::args::Args as CliArgs;
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
 use rns_server::control_plane::{install_config_bridge, new_supervised_state};

@@ -817,12 +817,13 @@ fn test_config_validate_endpoint_returns_bad_request_on_validation_error() {
         }));
     }
 
-    let res = http_post(server.port, "/api/config/validate", r#"{"stats_db_path":"relative.db"}"#);
-    assert_eq!(res.status, 400);
-    assert_eq!(
-        res.json()["error"],
-        "stats_db_path must be absolute"
+    let res = http_post(
+        server.port,
+        "/api/config/validate",
+        r#"{"stats_db_path":"relative.db"}"#,
     );
+    assert_eq!(res.status, 400);
+    assert_eq!(res.json()["error"], "stats_db_path must be absolute");
     server.shutdown();
 }
 

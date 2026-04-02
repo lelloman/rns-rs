@@ -1037,10 +1037,8 @@ mod tests {
 
     #[test]
     fn ensure_runtime_bootstrap_creates_identity_once() {
-        let config_dir = std::env::temp_dir().join(format!(
-            "rns-server-bootstrap-test-{}",
-            std::process::id()
-        ));
+        let config_dir =
+            std::env::temp_dir().join(format!("rns-server-bootstrap-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&config_dir);
         let config = ServerConfig {
             config_path: Some(config_dir.clone()),
