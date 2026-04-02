@@ -5,6 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rns_hooks_abi::sentinel::{BackbonePeerPayload, BACKBONE_PEER_PAYLOAD_TYPE};
@@ -227,15 +228,15 @@ fn run(args: Args) -> Result<(), String> {
     }
 
     let mut tracker = PeerTracker::new(policy);
+    let blacklist_worker = BlacklistWorker::start(control.clone());
 
     while !SHOULD_STOP.load(Ordering::Relaxed) {
         match read_provider_envelope(&mut stream) {
             Ok(Some(envelope)) => {
                 if let ProviderMessage::Event(ref event) = envelope.message {
                     if let Some(action) = tracker.ingest(event) {
-                        if let Err(e) = execute_blacklist(&control, &action.interface_name, &action)
-                        {
-                            log::warn!("blacklist RPC failed for {}: {}", action.peer_ip, e);
+                        if let Err(err) = blacklist_worker.submit(action) {
+                            log::warn!("blacklist worker submit failed: {}", err);
                         }
                     }
                 }
@@ -490,6 +491,45 @@ struct BlacklistAction {
     duration_secs: u64,
     level: u8,
     reason: String,
+}
+
+struct BlacklistWorker {
+    tx: Option<mpsc::Sender<BlacklistAction>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BlacklistWorker {
+    fn start(control: RpcControl) -> Self {
+        let (tx, rx) = mpsc::channel::<BlacklistAction>();
+        let thread = std::thread::spawn(move || {
+            while let Ok(action) = rx.recv() {
+                if let Err(err) = execute_blacklist(&control, &action.interface_name, &action) {
+                    log::warn!("blacklist RPC failed for {}: {}", action.peer_ip, err);
+                }
+            }
+        });
+        Self {
+            tx: Some(tx),
+            thread: Some(thread),
+        }
+    }
+
+    fn submit(&self, action: BlacklistAction) -> Result<(), String> {
+        self.tx
+            .as_ref()
+            .ok_or_else(|| "blacklist worker is shut down".to_string())?
+            .send(action)
+            .map_err(|_| "blacklist worker channel closed".to_string())
+    }
+}
+
+impl Drop for BlacklistWorker {
+    fn drop(&mut self) {
+        self.tx.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 struct DetectionPolicy {
