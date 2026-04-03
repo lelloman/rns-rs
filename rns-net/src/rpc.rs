@@ -23,9 +23,9 @@ use rns_crypto::sha256::sha256;
 
 use crate::event::{
     BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, Event, EventSender, HookInfo,
-    InterfaceStatsResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    InterfaceStatsResponse, PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse,
+    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -413,6 +413,17 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                     let resp = send_query(event_tx, QueryRequest::BackboneInterfaces)?;
                     if let QueryResponse::BackboneInterfaces(entries) = resp {
                         Ok(backbone_interfaces_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
+                "provider_bridge_stats" => {
+                    let resp = send_query(event_tx, QueryRequest::ProviderBridgeStats)?;
+                    if let QueryResponse::ProviderBridgeStats(stats) = resp {
+                        Ok(stats
+                            .as_ref()
+                            .map(provider_bridge_stats_to_pickle)
+                            .unwrap_or(PickleValue::None))
                     } else {
                         Ok(PickleValue::None)
                     }
@@ -1345,6 +1356,92 @@ fn backbone_interfaces_to_pickle(entries: &[BackboneInterfaceEntry]) -> PickleVa
     )
 }
 
+fn provider_bridge_stats_to_pickle(stats: &ProviderBridgeStats) -> PickleValue {
+    PickleValue::Dict(vec![
+        (
+            PickleValue::String("connected".into()),
+            PickleValue::Bool(stats.connected),
+        ),
+        (
+            PickleValue::String("consumer_count".into()),
+            PickleValue::Int(stats.consumer_count as i64),
+        ),
+        (
+            PickleValue::String("queue_max_events".into()),
+            PickleValue::Int(stats.queue_max_events as i64),
+        ),
+        (
+            PickleValue::String("queue_max_bytes".into()),
+            PickleValue::Int(stats.queue_max_bytes as i64),
+        ),
+        (
+            PickleValue::String("backlog_len".into()),
+            PickleValue::Int(stats.backlog_len as i64),
+        ),
+        (
+            PickleValue::String("backlog_bytes".into()),
+            PickleValue::Int(stats.backlog_bytes as i64),
+        ),
+        (
+            PickleValue::String("backlog_dropped_pending".into()),
+            PickleValue::Int(stats.backlog_dropped_pending as i64),
+        ),
+        (
+            PickleValue::String("backlog_dropped_total".into()),
+            PickleValue::Int(stats.backlog_dropped_total as i64),
+        ),
+        (
+            PickleValue::String("total_disconnect_count".into()),
+            PickleValue::Int(stats.total_disconnect_count as i64),
+        ),
+        (
+            PickleValue::String("consumers".into()),
+            PickleValue::List(
+                stats
+                    .consumers
+                    .iter()
+                    .map(|consumer| {
+                        PickleValue::Dict(vec![
+                            (
+                                PickleValue::String("id".into()),
+                                PickleValue::Int(consumer.id as i64),
+                            ),
+                            (
+                                PickleValue::String("connected".into()),
+                                PickleValue::Bool(consumer.connected),
+                            ),
+                            (
+                                PickleValue::String("queue_len".into()),
+                                PickleValue::Int(consumer.queue_len as i64),
+                            ),
+                            (
+                                PickleValue::String("queued_bytes".into()),
+                                PickleValue::Int(consumer.queued_bytes as i64),
+                            ),
+                            (
+                                PickleValue::String("dropped_pending".into()),
+                                PickleValue::Int(consumer.dropped_pending as i64),
+                            ),
+                            (
+                                PickleValue::String("dropped_total".into()),
+                                PickleValue::Int(consumer.dropped_total as i64),
+                            ),
+                            (
+                                PickleValue::String("queue_max_events".into()),
+                                PickleValue::Int(consumer.queue_max_events as i64),
+                            ),
+                            (
+                                PickleValue::String("queue_max_bytes".into()),
+                                PickleValue::Int(consumer.queue_max_bytes as i64),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
 fn runtime_config_value_to_pickle(value: &RuntimeConfigValue) -> PickleValue {
     match value {
         RuntimeConfigValue::Int(v) => PickleValue::Int(*v),
@@ -1479,6 +1576,13 @@ impl RpcClient {
             PickleValue::String("hooks".into()),
         )]))?;
         parse_hook_list(&response)
+    }
+
+    pub fn provider_bridge_stats(&mut self) -> io::Result<PickleValue> {
+        self.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("provider_bridge_stats".into()),
+        )]))
     }
 
     pub fn load_hook(

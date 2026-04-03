@@ -21,9 +21,10 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeStats, QueryRequest,
+    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -5081,6 +5082,18 @@ impl Driver {
             }
             QueryRequest::BackboneInterfaces => {
                 QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
+            }
+            QueryRequest::ProviderBridgeStats => {
+                #[cfg(feature = "rns-hooks")]
+                {
+                    QueryResponse::ProviderBridgeStats(
+                        self.provider_bridge.as_ref().map(|bridge| bridge.stats()),
+                    )
+                }
+                #[cfg(not(feature = "rns-hooks"))]
+                {
+                    QueryResponse::ProviderBridgeStats(None::<ProviderBridgeStats>)
+                }
             }
             QueryRequest::PathTable { max_hops } => {
                 let entries: Vec<PathTableEntry> = self

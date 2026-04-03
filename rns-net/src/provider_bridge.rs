@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::common::event::{ProviderBridgeConsumerStats, ProviderBridgeStats};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
     DropNewest,
@@ -82,6 +84,8 @@ struct BridgeState {
     backlog: VecDeque<QueuedEnvelope>,
     backlog_bytes: usize,
     backlog_dropped_count: u64,
+    backlog_dropped_total: u64,
+    total_disconnect_count: u64,
 }
 
 struct BridgeShared {
@@ -95,6 +99,7 @@ struct ConsumerState {
     queue: VecDeque<QueuedEnvelope>,
     queued_bytes: usize,
     dropped_count: u64,
+    dropped_total: u64,
     queue_max_events: usize,
     queue_max_bytes: usize,
     connected: bool,
@@ -115,6 +120,7 @@ impl ConsumerShared {
                 queue: VecDeque::new(),
                 queued_bytes: 0,
                 dropped_count: 0,
+                dropped_total: 0,
                 queue_max_events,
                 queue_max_bytes,
                 connected: true,
@@ -154,6 +160,8 @@ impl ProviderBridge {
                 backlog: VecDeque::new(),
                 backlog_bytes: 0,
                 backlog_dropped_count: 0,
+                backlog_dropped_total: 0,
+                total_disconnect_count: 0,
             }),
             condvar: Condvar::new(),
         });
@@ -252,6 +260,69 @@ impl ProviderBridge {
         };
         for consumer in consumers {
             consumer.state.lock().unwrap().queue_max_bytes = value;
+        }
+    }
+
+    pub fn stats(&self) -> ProviderBridgeStats {
+        let (
+            connected,
+            consumer_count,
+            queue_max_events,
+            queue_max_bytes,
+            backlog_len,
+            backlog_bytes,
+            backlog_dropped_pending,
+            backlog_dropped_total,
+            total_disconnect_count,
+            consumers,
+        ) = {
+            let state = self.shared.state.lock().unwrap();
+            (
+                state.connected,
+                state.consumers.len(),
+                state.queue_max_events,
+                state.queue_max_bytes,
+                state.backlog.len(),
+                state.backlog_bytes,
+                state.backlog_dropped_count,
+                state.backlog_dropped_total,
+                state.total_disconnect_count,
+                state
+                    .consumers
+                    .iter()
+                    .map(|consumer| consumer.shared.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let consumers = consumers
+            .into_iter()
+            .map(|consumer| {
+                let state = consumer.state.lock().unwrap();
+                ProviderBridgeConsumerStats {
+                    id: consumer.id,
+                    connected: state.connected,
+                    queue_len: state.queue.len(),
+                    queued_bytes: state.queued_bytes,
+                    dropped_pending: state.dropped_count,
+                    dropped_total: state.dropped_total,
+                    queue_max_events: state.queue_max_events,
+                    queue_max_bytes: state.queue_max_bytes,
+                }
+            })
+            .collect();
+
+        ProviderBridgeStats {
+            connected,
+            consumer_count,
+            queue_max_events,
+            queue_max_bytes,
+            backlog_len,
+            backlog_bytes,
+            backlog_dropped_pending,
+            backlog_dropped_total,
+            total_disconnect_count,
+            consumers,
         }
     }
 }
@@ -411,6 +482,10 @@ fn spawn_consumer_thread(
                         let mut state = consumer_shared.state.lock().unwrap();
                         state.connected = false;
                         state.shutdown = true;
+                        drop(state);
+                        let mut bridge_state = bridge_shared.state.lock().unwrap();
+                        bridge_state.total_disconnect_count =
+                            bridge_state.total_disconnect_count.saturating_add(1);
                         bridge_shared.condvar.notify_all();
                         break;
                     }
@@ -503,6 +578,7 @@ fn enqueue_backlog(config: &ProviderBridgeConfig, state: &mut BridgeState, encod
         &mut state.backlog,
         &mut state.backlog_bytes,
         &mut state.backlog_dropped_count,
+        &mut state.backlog_dropped_total,
         state.queue_max_events,
         state.queue_max_bytes,
         encoded,
@@ -531,6 +607,7 @@ fn enqueue_consumer_state(
     let queue_max_bytes = state.queue_max_bytes;
     if encoded.len() > queue_max_bytes {
         state.dropped_count = state.dropped_count.saturating_add(1);
+        state.dropped_total = state.dropped_total.saturating_add(1);
         return;
     }
 
@@ -540,14 +617,17 @@ fn enqueue_consumer_state(
         match overflow_policy {
             OverflowPolicy::DropNewest => {
                 state.dropped_count = state.dropped_count.saturating_add(1);
+                state.dropped_total = state.dropped_total.saturating_add(1);
                 return;
             }
             OverflowPolicy::DropOldest => {
                 if let Some(old) = state.queue.pop_front() {
                     state.queued_bytes = state.queued_bytes.saturating_sub(old.encoded.len());
                     state.dropped_count = state.dropped_count.saturating_add(1);
+                    state.dropped_total = state.dropped_total.saturating_add(1);
                 } else {
                     state.dropped_count = state.dropped_count.saturating_add(1);
+                    state.dropped_total = state.dropped_total.saturating_add(1);
                     return;
                 }
             }
@@ -563,12 +643,14 @@ fn enqueue_into_queue(
     queue: &mut VecDeque<QueuedEnvelope>,
     queued_bytes: &mut usize,
     dropped_count: &mut u64,
+    dropped_total: &mut u64,
     queue_max_events: usize,
     queue_max_bytes: usize,
     encoded: Vec<u8>,
 ) {
     if encoded.len() > queue_max_bytes {
         *dropped_count = dropped_count.saturating_add(1);
+        *dropped_total = dropped_total.saturating_add(1);
         return;
     }
 
@@ -578,14 +660,17 @@ fn enqueue_into_queue(
         match overflow_policy {
             OverflowPolicy::DropNewest => {
                 *dropped_count = dropped_count.saturating_add(1);
+                *dropped_total = dropped_total.saturating_add(1);
                 return;
             }
             OverflowPolicy::DropOldest => {
                 if let Some(old) = queue.pop_front() {
                     *queued_bytes = queued_bytes.saturating_sub(old.encoded.len());
                     *dropped_count = dropped_count.saturating_add(1);
+                    *dropped_total = dropped_total.saturating_add(1);
                 } else {
                     *dropped_count = dropped_count.saturating_add(1);
+                    *dropped_total = dropped_total.saturating_add(1);
                     return;
                 }
             }
@@ -755,5 +840,43 @@ mod tests {
             ProviderMessage::Event(evt) => assert_eq!(evt.payload, vec![7, 8, 9]),
             other => panic!("unexpected message: {:?}", other),
         }
+    }
+
+    #[test]
+    fn stats_expose_queue_depth_drop_totals_and_disconnects() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = ProviderBridge::start(ProviderBridgeConfig {
+            enabled: true,
+            socket_path: socket_path.clone(),
+            queue_max_events: 1,
+            queue_max_bytes: 4096,
+            overflow_policy: OverflowPolicy::DropNewest,
+            node_instance: "node-d".into(),
+        })
+        .unwrap();
+
+        let mut stream_a = UnixStream::connect(&socket_path).unwrap();
+        wait_for_consumer(&bridge);
+        let stream_b = UnixStream::connect(&socket_path).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![1]);
+        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![2]);
+
+        let stats = bridge.stats();
+        assert_eq!(stats.consumer_count, 2);
+        assert_eq!(stats.total_disconnect_count, 0);
+        assert!(stats.consumers.iter().all(|c| c.queue_len <= 1));
+        assert!(stats.consumers.iter().all(|c| c.dropped_total >= 1));
+        assert!(stats.consumers.iter().all(|c| c.dropped_pending >= 1));
+
+        drop(stream_b);
+        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![3]);
+        let _ = read_frame(&mut stream_a);
+        std::thread::sleep(Duration::from_millis(200));
+
+        let stats = bridge.stats();
+        assert!(stats.total_disconnect_count >= 1);
     }
 }

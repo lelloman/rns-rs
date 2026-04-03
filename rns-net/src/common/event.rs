@@ -343,6 +343,32 @@ pub struct BackboneInterfaceEntry {
     pub interface_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBridgeConsumerStats {
+    pub id: u64,
+    pub connected: bool,
+    pub queue_len: usize,
+    pub queued_bytes: usize,
+    pub dropped_pending: u64,
+    pub dropped_total: u64,
+    pub queue_max_events: usize,
+    pub queue_max_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBridgeStats {
+    pub connected: bool,
+    pub consumer_count: usize,
+    pub queue_max_events: usize,
+    pub queue_max_bytes: usize,
+    pub backlog_len: usize,
+    pub backlog_bytes: usize,
+    pub backlog_dropped_pending: u64,
+    pub backlog_dropped_total: u64,
+    pub total_disconnect_count: u64,
+    pub consumers: Vec<ProviderBridgeConsumerStats>,
+}
+
 /// Queries that can be sent to the driver.
 #[derive(Debug)]
 pub enum QueryRequest {
@@ -433,6 +459,8 @@ pub enum QueryRequest {
     BackbonePeerState { interface_name: Option<String> },
     /// List registered backbone server interfaces.
     BackboneInterfaces,
+    /// Report live provider-bridge queue/drop state.
+    ProviderBridgeStats,
     /// Clear live backbone peer state for one interface/IP pair.
     ClearBackbonePeerState {
         interface_name: String,
@@ -490,6 +518,8 @@ pub enum QueryResponse {
     BackbonePeerState(Vec<BackbonePeerStateEntry>),
     /// Registered backbone server interfaces.
     BackboneInterfaces(Vec<BackboneInterfaceEntry>),
+    /// Live provider-bridge queue/drop state if enabled.
+    ProviderBridgeStats(Option<ProviderBridgeStats>),
     /// Result of clearing one backbone peer state entry.
     ClearBackbonePeerState(bool),
     /// Result of blacklisting a backbone peer.

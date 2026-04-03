@@ -20,6 +20,7 @@ pub fn run(args: Args) {
 
     match args.positional.first().map(|s| s.as_str()) {
         Some("blacklist") => run_blacklist(&args, &mut client, json_output),
+        Some("provider") => run_provider(&mut client, json_output),
         Some(other) => {
             eprintln!("Unknown backbone subcommand: {}", other);
             print_usage();
@@ -96,6 +97,24 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
     }
 }
 
+fn run_provider(client: &mut RpcClient, json_output: bool) {
+    let response = rpc_call(
+        client,
+        PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("provider_bridge_stats".into()),
+        )]),
+    );
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&provider_stats_to_json(&response)).unwrap_or_default()
+        );
+    } else {
+        print_provider_stats(&response);
+    }
+}
+
 fn print_blacklist(response: &PickleValue) {
     let Some(entries) = response.as_list() else {
         eprintln!("Unexpected response");
@@ -160,6 +179,138 @@ fn pickle_list_to_json(value: &PickleValue) -> Value {
             })
             .collect(),
     )
+}
+
+fn provider_stats_to_json(value: &PickleValue) -> Value {
+    let Some(consumers) = value.get("consumers").and_then(|v| v.as_list()) else {
+        return Value::Null;
+    };
+
+    json!({
+        "connected": value.get("connected").and_then(|v| v.as_bool()),
+        "consumer_count": value.get("consumer_count").and_then(|v| v.as_int()),
+        "queue_max_events": value.get("queue_max_events").and_then(|v| v.as_int()),
+        "queue_max_bytes": value.get("queue_max_bytes").and_then(|v| v.as_int()),
+        "backlog_len": value.get("backlog_len").and_then(|v| v.as_int()),
+        "backlog_bytes": value.get("backlog_bytes").and_then(|v| v.as_int()),
+        "backlog_dropped_pending": value.get("backlog_dropped_pending").and_then(|v| v.as_int()),
+        "backlog_dropped_total": value.get("backlog_dropped_total").and_then(|v| v.as_int()),
+        "total_disconnect_count": value.get("total_disconnect_count").and_then(|v| v.as_int()),
+        "consumers": consumers.iter().map(|consumer| {
+            json!({
+                "id": consumer.get("id").and_then(|v| v.as_int()),
+                "connected": consumer.get("connected").and_then(|v| v.as_bool()),
+                "queue_len": consumer.get("queue_len").and_then(|v| v.as_int()),
+                "queued_bytes": consumer.get("queued_bytes").and_then(|v| v.as_int()),
+                "dropped_pending": consumer.get("dropped_pending").and_then(|v| v.as_int()),
+                "dropped_total": consumer.get("dropped_total").and_then(|v| v.as_int()),
+                "queue_max_events": consumer.get("queue_max_events").and_then(|v| v.as_int()),
+                "queue_max_bytes": consumer.get("queue_max_bytes").and_then(|v| v.as_int()),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn print_provider_stats(response: &PickleValue) {
+    if matches!(response, PickleValue::None) {
+        println!("Provider bridge disabled or unavailable");
+        return;
+    }
+
+    let Some(consumers) = response.get("consumers").and_then(|v| v.as_list()) else {
+        eprintln!("Unexpected response");
+        process::exit(1);
+    };
+
+    println!(
+        "Provider bridge: connected={} consumers={} queue_max_events={} queue_max_bytes={} backlog_len={} backlog_bytes={} backlog_dropped_pending={} backlog_dropped_total={} disconnects={}",
+        response
+            .get("connected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        response
+            .get("consumer_count")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("queue_max_events")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("queue_max_bytes")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("backlog_len")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("backlog_bytes")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("backlog_dropped_pending")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("backlog_dropped_total")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+        response
+            .get("total_disconnect_count")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0),
+    );
+
+    if consumers.is_empty() {
+        println!("No connected provider consumers");
+        return;
+    }
+
+    println!(
+        "{:<4} {:<9} {:>8} {:>12} {:>15} {:>13} {:>11} {:>10}",
+        "ID", "Connected", "Queue", "QueuedBytes", "DroppedPending", "DroppedTotal", "MaxEvents", "MaxBytes"
+    );
+    println!("{}", "-".repeat(96));
+    for consumer in consumers {
+        println!(
+            "{:<4} {:<9} {:>8} {:>12} {:>15} {:>13} {:>11} {:>10}",
+            consumer.get("id").and_then(|v| v.as_int()).unwrap_or(0),
+            if consumer
+                .get("connected")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "yes"
+            } else {
+                "no"
+            },
+            consumer
+                .get("queue_len")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+            consumer
+                .get("queued_bytes")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+            consumer
+                .get("dropped_pending")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+            consumer
+                .get("dropped_total")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+            consumer
+                .get("queue_max_events")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+            consumer
+                .get("queue_max_bytes")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+        );
+    }
 }
 
 fn connect(config_path: Option<&str>) -> RpcClient {
@@ -228,4 +379,5 @@ fn print_usage() {
     println!("Usage:");
     println!("    rns-ctl backbone blacklist list [INTERFACE] [--json]");
     println!("    rns-ctl backbone blacklist clear <INTERFACE> <IP>");
+    println!("    rns-ctl backbone provider [--json]");
 }

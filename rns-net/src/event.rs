@@ -3,9 +3,10 @@
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo,
     HolePunchPolicy, HookInfo, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats, ProviderBridgeStats,
+    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat,
 };
 
 /// Concrete Event type using boxed sync Writer.
