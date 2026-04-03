@@ -21,10 +21,9 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeStats, QueryRequest,
-    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;

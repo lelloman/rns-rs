@@ -262,6 +262,7 @@ struct AnnounceRecord {
 struct StatsAggregator {
     counters: HashMap<CounterKey, CounterValue>,
     announce_records: Vec<AnnounceRecord>,
+    dropped_events: u64,
 }
 
 impl StatsAggregator {
@@ -269,6 +270,7 @@ impl StatsAggregator {
         match envelope.message {
             ProviderMessage::DroppedEvents { count } => {
                 log::warn!("provider bridge dropped {} event(s)", count);
+                self.dropped_events = self.dropped_events.saturating_add(count);
             }
             ProviderMessage::Event(event) => {
                 if event.payload_type == ANNOUNCE_STATS_PAYLOAD_TYPE {
@@ -385,6 +387,10 @@ impl StatsDb {
                 threads INTEGER NOT NULL,
                 fds INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS provider_drop_samples (
+                ts_ms INTEGER NOT NULL PRIMARY KEY,
+                dropped_events INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS seen_announces (
                 destination_hash BLOB NOT NULL,
                 random_hash BLOB NOT NULL,
@@ -400,7 +406,10 @@ impl StatsDb {
     }
 
     fn flush(&mut self, aggregator: &mut StatsAggregator) -> rusqlite::Result<()> {
-        if aggregator.counters.is_empty() && aggregator.announce_records.is_empty() {
+        if aggregator.counters.is_empty()
+            && aggregator.announce_records.is_empty()
+            && aggregator.dropped_events == 0
+        {
             return Ok(());
         }
         let tx = self.conn.transaction()?;
@@ -487,6 +496,14 @@ impl StatsDb {
                 ])?;
                 name_stmt.execute(params![rec.name_hash.as_slice(), now,])?;
             }
+        }
+        if aggregator.dropped_events > 0 {
+            tx.execute(
+                "INSERT INTO provider_drop_samples (ts_ms, dropped_events)
+                 VALUES (?1, ?2)",
+                params![now, aggregator.dropped_events as i64],
+            )?;
+            aggregator.dropped_events = 0;
         }
         tx.commit()
     }
@@ -829,6 +846,38 @@ mod tests {
         assert_eq!(key.interface_id, None);
         assert_eq!(key.direction, "tx");
         assert_eq!(key.packet_type, "proof");
+    }
+
+    #[test]
+    fn dropped_events_are_persisted_to_sqlite() {
+        let mut agg = StatsAggregator::default();
+        agg.ingest(ProviderEnvelope {
+            version: 1,
+            seq: 1,
+            message: ProviderMessage::DroppedEvents { count: 7 },
+        });
+        agg.ingest(ProviderEnvelope {
+            version: 1,
+            seq: 2,
+            message: ProviderMessage::DroppedEvents { count: 5 },
+        });
+        assert_eq!(agg.dropped_events, 12);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+        db.flush(&mut agg).unwrap();
+        assert_eq!(agg.dropped_events, 0);
+
+        let row: i64 = db
+            .conn
+            .query_row(
+                "SELECT dropped_events FROM provider_drop_samples",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(row, 12);
     }
 
     #[test]
