@@ -54,6 +54,7 @@ pub fn main_entry_from(args: Args) {
     let previous_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         SHOULD_STOP.store(true, Ordering::Relaxed);
+        eprintln!("rns-sentineld panic: {}", panic_info);
         previous_panic_hook(panic_info);
     }));
 
@@ -162,12 +163,17 @@ fn run(args: Args) -> Result<(), String> {
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
 
     let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
+    log::info!("rns-sentineld loading hooks");
     wait_for_loaded_hooks(&control, priority)?;
     let hook_guard = HookGuard {
         control: control.clone(),
         armed: true,
     };
 
+    log::info!(
+        "rns-sentineld connecting provider bridge at {}",
+        runtime.provider_socket.display()
+    );
     let mut stream = wait_for_provider_bridge(&runtime.provider_socket)?;
 
     log::info!(
@@ -218,9 +224,29 @@ fn run(args: Args) -> Result<(), String> {
                     io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                 ) => {}
             Err(err) => {
-                log::warn!("provider bridge disconnected: {}", err);
-                wait_for_loaded_hooks(&control, priority)?;
-                stream = wait_for_provider_bridge(&runtime.provider_socket)?;
+                log::warn!(
+                    "provider bridge disconnected: kind={:?} err={}",
+                    err.kind(),
+                    err
+                );
+                log::info!("rns-sentineld reloading hooks after provider disconnect");
+                wait_for_loaded_hooks(&control, priority).map_err(|reload_err| {
+                    format!(
+                        "hook reload failed after provider disconnect: {}",
+                        reload_err
+                    )
+                })?;
+                log::info!(
+                    "rns-sentineld reconnecting provider bridge at {}",
+                    runtime.provider_socket.display()
+                );
+                stream = wait_for_provider_bridge(&runtime.provider_socket).map_err(|conn_err| {
+                    format!(
+                        "provider reconnect failed after disconnect: {}",
+                        conn_err
+                    )
+                })?;
+                log::info!("rns-sentineld provider bridge reconnected");
             }
         }
     }
@@ -724,12 +750,19 @@ fn unload_stale_hooks(control: &RpcControl) {
 }
 
 fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), String> {
+    let mut attempts = 0u64;
     loop {
+        attempts += 1;
         unload_stale_hooks(control);
         match load_hooks(control, priority) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                if attempts > 1 {
+                    log::info!("rns-sentineld hooks loaded after {} attempt(s)", attempts);
+                }
+                return Ok(());
+            }
             Err(err) => {
-                log::warn!("waiting for rnsd RPC: {}", err);
+                log::warn!("waiting for rnsd RPC (attempt {}): {}", attempts, err);
                 sleep_or_interrupt("interrupted while waiting for rnsd")?;
             }
         }
@@ -737,16 +770,30 @@ fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), Stri
 }
 
 fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
+    let mut attempts = 0u64;
     loop {
+        attempts += 1;
         match UnixStream::connect(socket_path) {
             Ok(stream) => {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+                if attempts > 1 {
+                    log::info!(
+                        "provider bridge connected after {} attempt(s): {}",
+                        attempts,
+                        socket_path.display()
+                    );
+                }
                 return Ok(stream);
             }
             Err(err) => {
-                log::warn!("waiting for provider bridge: {}", err);
+                log::warn!(
+                    "waiting for provider bridge (attempt {}) at {}: {}",
+                    attempts,
+                    socket_path.display(),
+                    err
+                );
                 sleep_or_interrupt("interrupted while waiting for provider bridge")?;
             }
         }
@@ -756,6 +803,7 @@ fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
 fn sleep_or_interrupt(message: &str) -> Result<(), String> {
     for _ in 0..50 {
         if SHOULD_STOP.load(Ordering::Relaxed) {
+            log::warn!("rns-sentineld stop requested: {}", message);
             return Err(message.to_string());
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -803,6 +851,7 @@ fn install_signal_handlers() {
 }
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
+    eprintln!("rns-sentineld: received signal, requesting shutdown");
     SHOULD_STOP.store(true, Ordering::Relaxed);
 }
 
