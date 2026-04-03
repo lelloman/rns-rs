@@ -176,6 +176,31 @@ ssh root@vps 'journalctl -u rns-sentineld -n 20 --no-pager'
 ssh root@vps "journalctl -u rnsd --since '1 hour ago' --no-pager | grep MEMSTATS"
 ```
 
+Provider-bridge / sidecar investigation checks:
+
+```bash
+ssh root@vps '/usr/local/bin/rns-ctl backbone provider --json'
+ssh root@vps "sqlite3 /var/lib/rns/stats.db '
+  SELECT datetime(ts_ms/1000, \"unixepoch\") AS ts, dropped_events
+  FROM provider_drop_samples
+  ORDER BY ts_ms DESC
+  LIMIT 50;
+'"
+```
+
+Interpretation:
+
+- `queue_len` / `queued_bytes` near the configured max on one consumer means
+  that consumer is falling behind.
+- `dropped_pending` shows loss that has already happened but has not yet been
+  emitted to the consumer as a `DroppedEvents` notice.
+- `dropped_total` shows cumulative loss for that consumer since the bridge was
+  started.
+- `total_disconnect_count` helps separate queue saturation from full consumer
+  disconnect/reconnect churn.
+- `provider_drop_samples` in SQLite provide the historical drop rate seen by
+  `rns-statsd`, independent of transient journal retention.
+
 `MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
 signal for the VPS experiment.
 
