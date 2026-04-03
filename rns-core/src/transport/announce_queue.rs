@@ -237,6 +237,30 @@ impl AnnounceQueues {
         actions
     }
 
+    /// Number of interface queues currently tracked.
+    pub fn queue_count(&self) -> usize {
+        self.queues.len()
+    }
+
+    /// Number of interface queues that currently hold buffered announces.
+    pub fn nonempty_queue_count(&self) -> usize {
+        self.queues.values().filter(|queue| !queue.entries.is_empty()).count()
+    }
+
+    /// Total number of buffered announce entries across all interfaces.
+    pub fn total_queued_announces(&self) -> usize {
+        self.queues.values().map(|queue| queue.entries.len()).sum()
+    }
+
+    /// Total retained raw-byte payload across all buffered announces.
+    pub fn total_queued_bytes(&self) -> usize {
+        self.queues
+            .values()
+            .flat_map(|queue| queue.entries.iter())
+            .map(|entry| entry.raw.len())
+            .sum()
+    }
+
     /// Get the queue for a specific interface (for testing).
     #[cfg(test)]
     pub fn queue_for(&self, id: &InterfaceId) -> Option<&InterfaceAnnounceQueue> {

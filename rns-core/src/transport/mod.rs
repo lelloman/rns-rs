@@ -1901,6 +1901,26 @@ impl TransportEngine {
         self.discovery_path_requests.len()
     }
 
+    /// Number of announce bandwidth queues currently tracked.
+    pub fn announce_queue_count(&self) -> usize {
+        self.announce_queues.queue_count()
+    }
+
+    /// Number of non-empty announce bandwidth queues.
+    pub fn nonempty_announce_queue_count(&self) -> usize {
+        self.announce_queues.nonempty_queue_count()
+    }
+
+    /// Total number of buffered announces across all announce queues.
+    pub fn queued_announce_count(&self) -> usize {
+        self.announce_queues.total_queued_announces()
+    }
+
+    /// Total retained raw-byte payload across all buffered announce queues.
+    pub fn queued_announce_bytes(&self) -> usize {
+        self.announce_queues.total_queued_bytes()
+    }
+
     /// Number of local destinations.
     pub fn local_destinations_count(&self) -> usize {
         self.local_destinations.len()
