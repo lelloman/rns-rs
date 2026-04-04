@@ -179,7 +179,10 @@ ssh root@vps "journalctl -u rnsd --since '1 hour ago' --no-pager | grep MEMSTATS
 Provider-bridge / sidecar investigation checks:
 
 ```bash
-ssh root@vps '/usr/local/bin/rns-ctl backbone provider --json'
+ssh root@vps '/usr/local/bin/rns-ctl status'
+ssh root@vps '/usr/local/bin/rns-ctl backbone blacklist list --json'
+ssh root@vps "journalctl -u rns-statsd --since '1 hour ago' --no-pager | grep -c 'provider bridge dropped'"
+ssh root@vps "journalctl -u rns-sentineld --since '24 hours ago' --no-pager | grep -c 'provider bridge disconnected'"
 ssh root@vps "sqlite3 /var/lib/rns/stats.db '
   SELECT datetime(ts_ms/1000, \"unixepoch\") AS ts, dropped_events
   FROM provider_drop_samples
@@ -190,16 +193,23 @@ ssh root@vps "sqlite3 /var/lib/rns/stats.db '
 
 Interpretation:
 
-- `queue_len` / `queued_bytes` near the configured max on one consumer means
-  that consumer is falling behind.
-- `dropped_pending` shows loss that has already happened but has not yet been
-  emitted to the consumer as a `DroppedEvents` notice.
-- `dropped_total` shows cumulative loss for that consumer since the bridge was
-  started.
-- `total_disconnect_count` helps separate queue saturation from full consumer
-  disconnect/reconnect churn.
+- `rns-ctl status` is the current installed command for checking live transport
+  and interface state on the VPS.
+- `rns-ctl backbone blacklist list --json` is the current installed command for
+  checking sentinel blacklist activity and reject counts.
+- `provider bridge dropped` warnings in `rns-statsd` indicate bridge loss that
+  is visible in the current journal window.
+- `provider bridge disconnected` warnings in `rns-sentineld` indicate bridge
+  reconnect churn or a possible return to the earlier degraded state.
 - `provider_drop_samples` in SQLite provide the historical drop rate seen by
-  `rns-statsd`, independent of transient journal retention.
+  `rns-statsd`, independent of transient journal retention, when rows are
+  present.
+
+Important note:
+
+- The `rns-ctl` binary currently deployed on the VPS does **not** provide the
+  older `backbone provider` or `interfaces` subcommands that appeared in older
+  operator habits. Use `rns-ctl status` instead.
 
 `MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
 signal for the VPS experiment.
