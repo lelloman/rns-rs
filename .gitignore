@@ -4,3 +4,4 @@ rns-hooks/sdk/**/target/
 rns-hooks/examples/**/target/
 rns-hooks/target/
 /data/
+dist/
