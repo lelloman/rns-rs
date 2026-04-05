@@ -856,24 +856,25 @@ mod tests {
         })
         .unwrap();
 
+        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![1]);
+        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![2]);
+
+        let stats = bridge.stats();
+        assert_eq!(stats.consumer_count, 0);
+        assert_eq!(stats.total_disconnect_count, 0);
+        assert_eq!(stats.backlog_len, 1);
+        assert!(stats.backlog_dropped_total >= 1);
+        assert!(stats.backlog_dropped_pending >= 1);
+
         let mut stream_a = UnixStream::connect(&socket_path).unwrap();
         wait_for_consumer(&bridge);
         let stream_b = UnixStream::connect(&socket_path).unwrap();
         std::thread::sleep(Duration::from_millis(200));
 
-        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![1]);
-        bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![2]);
-
         let stats = bridge.stats();
         assert_eq!(stats.consumer_count, 2);
         assert_eq!(stats.total_disconnect_count, 0);
         assert!(stats.consumers.iter().all(|c| c.queue_len <= 1));
-        assert!(stats.consumers.iter().any(|c| c.dropped_total >= 1));
-        assert!(
-            stats.consumers.iter().map(|c| c.dropped_total).sum::<u64>() >= 1,
-            "expected at least one dropped event across consumers: {:?}",
-            stats.consumers
-        );
         assert!(
             stats
                 .consumers
