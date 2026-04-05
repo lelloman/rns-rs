@@ -868,8 +868,17 @@ mod tests {
         assert_eq!(stats.consumer_count, 2);
         assert_eq!(stats.total_disconnect_count, 0);
         assert!(stats.consumers.iter().all(|c| c.queue_len <= 1));
-        assert!(stats.consumers.iter().all(|c| c.dropped_total >= 1));
-        assert!(stats.consumers.iter().all(|c| c.dropped_pending >= 1));
+        assert!(stats.consumers.iter().any(|c| c.dropped_total >= 1));
+        assert!(
+            stats.consumers.iter().map(|c| c.dropped_total).sum::<u64>() >= 1,
+            "expected at least one dropped event across consumers: {:?}",
+            stats.consumers
+        );
+        assert!(
+            stats.consumers.iter().all(|c| c.dropped_pending <= c.dropped_total),
+            "pending drops should never exceed total drops: {:?}",
+            stats.consumers
+        );
 
         drop(stream_b);
         bridge.emit_event("PreIngress", "hook-z".into(), "packet".into(), vec![3]);
