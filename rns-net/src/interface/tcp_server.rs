@@ -318,7 +318,6 @@ pub(crate) fn runtime_handle_from_config(config: &TcpServerConfig) -> TcpServerR
 mod tests {
     use super::*;
     use std::net::TcpStream;
-    use std::sync::mpsc;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
@@ -352,7 +351,7 @@ mod tests {
     #[test]
     fn accept_connection() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(1000));
 
         let config = make_server_config(port, 1, None);
@@ -380,7 +379,7 @@ mod tests {
     #[test]
     fn receive_frame_from_client() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(2000));
 
         let config = make_server_config(port, 2, None);
@@ -412,7 +411,7 @@ mod tests {
     #[test]
     fn send_frame_to_client() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(3000));
 
         let config = make_server_config(port, 3, None);
@@ -446,7 +445,7 @@ mod tests {
     #[test]
     fn multiple_clients() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(4000));
 
         let config = make_server_config(port, 4, None);
@@ -476,7 +475,7 @@ mod tests {
     #[test]
     fn client_disconnect() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(5000));
 
         let config = make_server_config(port, 5, None);
@@ -504,7 +503,7 @@ mod tests {
     #[test]
     fn server_bind_port() {
         let port = find_free_port();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(6000));
 
         let config = make_server_config(port, 6, None);
@@ -516,7 +515,7 @@ mod tests {
     #[test]
     fn max_connections_rejects_excess() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7000));
 
         let config = make_server_config(port, 7, Some(2));
@@ -555,7 +554,7 @@ mod tests {
     #[test]
     fn max_connections_allows_after_disconnect() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7100));
 
         let config = make_server_config(port, 71, Some(1));
@@ -588,7 +587,7 @@ mod tests {
     #[test]
     fn runtime_max_connections_updates_live() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7200));
 
         let config = make_server_config(port, 72, None);

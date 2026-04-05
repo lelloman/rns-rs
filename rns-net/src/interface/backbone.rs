@@ -1306,7 +1306,7 @@ mod tests {
     #[test]
     fn backbone_accept_connection() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8000));
 
         let config = make_server_config(port, 80, None, None, None, BackboneAbuseConfig::default());
@@ -1333,7 +1333,7 @@ mod tests {
     #[test]
     fn backbone_receive_frame() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8100));
 
         let config = make_server_config(port, 81, None, None, None, BackboneAbuseConfig::default());
@@ -1363,7 +1363,7 @@ mod tests {
     #[test]
     fn backbone_send_to_client() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8200));
 
         let config = make_server_config(port, 82, None, None, None, BackboneAbuseConfig::default());
@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn backbone_multiple_clients() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8300));
 
         let config = make_server_config(port, 83, None, None, None, BackboneAbuseConfig::default());
@@ -1424,7 +1424,7 @@ mod tests {
     #[test]
     fn backbone_client_disconnect() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8400));
 
         let config = make_server_config(port, 84, None, None, None, BackboneAbuseConfig::default());
@@ -1452,7 +1452,7 @@ mod tests {
     #[test]
     fn backbone_epoll_multiplexing() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8500));
 
         let config = make_server_config(port, 85, None, None, None, BackboneAbuseConfig::default());
@@ -1489,7 +1489,7 @@ mod tests {
     #[test]
     fn backbone_bind_port() {
         let port = find_free_port();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8600));
 
         let config = make_server_config(port, 86, None, None, None, BackboneAbuseConfig::default());
@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn backbone_hdlc_fragmented() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8700));
 
         let config = make_server_config(port, 87, None, None, None, BackboneAbuseConfig::default());
@@ -1560,7 +1560,7 @@ mod tests {
     fn backbone_client_connect() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_client_config(port, 9000);
         let _writer = start_client(config, tx).unwrap();
@@ -1575,7 +1575,7 @@ mod tests {
     fn backbone_client_receive_frame() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_client_config(port, 9100);
         let _writer = start_client(config, tx).unwrap();
@@ -1603,7 +1603,7 @@ mod tests {
     fn backbone_client_send_frame() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
 
         let config = make_client_config(port, 9200);
         let mut writer = start_client(config, tx).unwrap();
@@ -1625,7 +1625,7 @@ mod tests {
     #[test]
     fn backbone_max_connections_rejects_excess() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8800));
 
         let config = make_server_config(
@@ -1671,7 +1671,7 @@ mod tests {
     #[test]
     fn backbone_max_connections_allows_after_disconnect() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(8900));
 
         let config = make_server_config(
@@ -1713,7 +1713,7 @@ mod tests {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
         listener.set_nonblocking(false).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_client_config(port, 9300);
         let _writer = start_client(config, tx).unwrap();
@@ -1741,7 +1741,7 @@ mod tests {
     #[test]
     fn backbone_idle_timeout_disconnects_silent_client() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9400));
 
         let config = make_server_config(
@@ -1771,7 +1771,7 @@ mod tests {
     #[test]
     fn backbone_idle_timeout_ignores_client_after_data() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9500));
 
         let config = make_server_config(
@@ -1816,7 +1816,7 @@ mod tests {
     #[test]
     fn backbone_runtime_idle_timeout_updates_live() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9650));
 
         let config = make_server_config(port, 97, None, None, None, BackboneAbuseConfig::default());
@@ -1844,7 +1844,7 @@ mod tests {
     #[test]
     fn backbone_write_stall_timeout_disconnects_unwritable_client() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9660));
 
         let config = make_server_config(
@@ -1916,7 +1916,7 @@ mod tests {
     #[test]
     fn backbone_write_stall_emits_peer_events() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9700));
 
         let config = make_server_config(
@@ -1973,7 +1973,7 @@ mod tests {
     #[test]
     fn backbone_blacklisted_peer_rejected_on_connect() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(9800));
 
         let config = make_server_config(port, 98, None, None, None, BackboneAbuseConfig::default());

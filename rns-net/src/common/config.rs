@@ -92,6 +92,10 @@ pub struct ReticulumSection {
     pub announce_queue_ttl: u64,
     /// Overflow policy for the async announce verification queue.
     pub announce_queue_overflow_policy: String,
+    /// Maximum queued events awaiting driver processing.
+    pub driver_event_queue_capacity: usize,
+    /// Maximum queued outbound frames per interface writer worker.
+    pub interface_writer_queue_capacity: usize,
     #[cfg(feature = "rns-hooks")]
     pub provider_bridge: bool,
     #[cfg(feature = "rns-hooks")]
@@ -143,6 +147,8 @@ impl Default for ReticulumSection {
             announce_queue_max_bytes: 256 * 1024,
             announce_queue_ttl: 30,
             announce_queue_overflow_policy: "drop_worst".into(),
+            driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
             #[cfg(feature = "rns-hooks")]
@@ -721,6 +727,32 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.announce_queue_overflow_policy = normalized;
     }
+    if let Some(v) = kvs.get("driver_event_queue_capacity") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "driver_event_queue_capacity".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "driver_event_queue_capacity".into(),
+                value: v.clone(),
+            });
+        }
+        section.driver_event_queue_capacity = n;
+    }
+    if let Some(v) = kvs.get("interface_writer_queue_capacity") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "interface_writer_queue_capacity".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "interface_writer_queue_capacity".into(),
+                value: v.clone(),
+            });
+        }
+        section.interface_writer_queue_capacity = n;
+    }
     #[cfg(feature = "rns-hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -885,6 +917,8 @@ announce_queue_max_interfaces = 321
 announce_queue_max_bytes = 4567
 announce_queue_ttl = 89
 announce_queue_overflow_policy = drop_oldest
+driver_event_queue_capacity = 6543
+interface_writer_queue_capacity = 210
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -918,6 +952,8 @@ announce_queue_overflow_policy = drop_oldest
             config.reticulum.announce_queue_overflow_policy,
             "drop_oldest"
         );
+        assert_eq!(config.reticulum.driver_event_queue_capacity, 6543);
+        assert_eq!(config.reticulum.interface_writer_queue_capacity, 210);
     }
 
     #[test]
@@ -992,6 +1028,30 @@ announce_queue_max_bytes = 0
         assert!(matches!(
             err,
             ConfigError::InvalidValue { key, .. } if key == "announce_queue_max_bytes"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+driver_event_queue_capacity = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "driver_event_queue_capacity"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+interface_writer_queue_capacity = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "interface_writer_queue_capacity"
         ));
 
         let err = parse(

@@ -12,9 +12,15 @@ pub use crate::common::event::{
 /// Concrete Event type using boxed sync Writer.
 pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;
 
-pub type EventSender = std::sync::mpsc::Sender<Event>;
+pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 8192;
+
+pub type EventSender = std::sync::mpsc::SyncSender<Event>;
 pub type EventReceiver = std::sync::mpsc::Receiver<Event>;
 
 pub fn channel() -> (EventSender, EventReceiver) {
-    std::sync::mpsc::channel()
+    channel_with_capacity(DEFAULT_EVENT_QUEUE_CAPACITY)
+}
+
+pub fn channel_with_capacity(capacity: usize) -> (EventSender, EventReceiver) {
+    std::sync::mpsc::sync_channel(capacity.max(1))
 }

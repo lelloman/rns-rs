@@ -269,7 +269,6 @@ pub(crate) fn udp_runtime_handle_from_config(config: &UdpConfig) -> UdpRuntimeCo
 mod tests {
     use super::*;
     use std::net::UdpSocket;
-    use std::sync::mpsc;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
@@ -283,7 +282,7 @@ mod tests {
     #[test]
     fn bind_and_receive() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = UdpConfig {
             name: "test-udp".into(),
@@ -321,7 +320,7 @@ mod tests {
     #[test]
     fn send_broadcast() {
         let recv_port = find_free_port();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
 
         let config = UdpConfig {
             name: "test-udp-send".into(),
@@ -356,7 +355,7 @@ mod tests {
     fn round_trip() {
         let listen_port = find_free_port();
         let forward_port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = UdpConfig {
             name: "test-udp-rt".into(),
@@ -390,7 +389,7 @@ mod tests {
     #[test]
     fn multiple_datagrams() {
         let port = find_free_port();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = UdpConfig {
             name: "test-udp-multi".into(),

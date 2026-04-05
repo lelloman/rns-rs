@@ -231,7 +231,7 @@ mod tests {
     fn connect_shared_to_tcp_server() {
         let port = find_free_port();
         let next_id = Arc::new(AtomicU64::new(50000));
-        let (server_tx, server_rx) = mpsc::channel();
+        let (server_tx, server_rx) = crate::event::channel();
 
         // Start a local server
         let server_config = LocalServerConfig {
@@ -263,7 +263,7 @@ mod tests {
     fn shared_client_register_destination() {
         let port = find_free_port();
         let next_id = Arc::new(AtomicU64::new(51000));
-        let (server_tx, _server_rx) = mpsc::channel();
+        let (server_tx, _server_rx) = crate::event::channel();
 
         let server_config = LocalServerConfig {
             instance_name: "test-shared-reg".into(),
@@ -297,7 +297,7 @@ mod tests {
     fn shared_client_send_packet() {
         let port = find_free_port();
         let next_id = Arc::new(AtomicU64::new(52000));
-        let (server_tx, server_rx) = mpsc::channel();
+        let (server_tx, server_rx) = crate::event::channel();
 
         let server_config = LocalServerConfig {
             instance_name: "test-shared-send".into(),

@@ -27,8 +27,10 @@ pub mod udp;
 use std::any::Any;
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::event::EventSender;
@@ -67,6 +69,93 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// Each implementation wraps a socket + framing.
 pub trait Writer: Send {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
+}
+
+pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
+
+struct AsyncWriter {
+    tx: SyncSender<Vec<u8>>,
+    worker_alive: Arc<AtomicBool>,
+}
+
+impl Writer for AsyncWriter {
+    fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        if !self.worker_alive.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "interface writer worker is offline",
+            ));
+        }
+
+        match self.tx.try_send(data.to_vec()) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "interface writer queue is full",
+            )),
+            Err(TrySendError::Disconnected(_)) => {
+                self.worker_alive.store(false, Ordering::Relaxed);
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "interface writer worker disconnected",
+                ))
+            }
+        }
+    }
+}
+
+pub fn wrap_async_writer(
+    writer: Box<dyn Writer>,
+    interface_id: InterfaceId,
+    interface_name: &str,
+    event_tx: EventSender,
+    queue_capacity: usize,
+) -> Box<dyn Writer> {
+    let (tx, rx) = sync_channel::<Vec<u8>>(queue_capacity.max(1));
+    let worker_alive = Arc::new(AtomicBool::new(true));
+    let worker_alive_thread = Arc::clone(&worker_alive);
+    let name = interface_name.to_string();
+
+    thread::Builder::new()
+        .name(format!("iface-writer-{}", interface_id.0))
+        .spawn(move || {
+            async_writer_loop(
+                writer,
+                rx,
+                interface_id,
+                name,
+                event_tx,
+                worker_alive_thread,
+            )
+        })
+        .expect("failed to spawn interface writer thread");
+
+    Box::new(AsyncWriter { tx, worker_alive })
+}
+
+fn async_writer_loop(
+    mut writer: Box<dyn Writer>,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    interface_id: InterfaceId,
+    interface_name: String,
+    event_tx: EventSender,
+    worker_alive: Arc<AtomicBool>,
+) {
+    while let Ok(frame) = rx.recv() {
+        if let Err(err) = writer.send_frame(&frame) {
+            worker_alive.store(false, Ordering::Relaxed);
+            log::warn!(
+                "[{}:{}] async writer exiting after send failure: {}",
+                interface_name,
+                interface_id.0,
+                err
+            );
+            let _ = event_tx.send(crate::event::Event::InterfaceDown(interface_id));
+            return;
+        }
+    }
+
+    worker_alive.store(false, Ordering::Relaxed);
 }
 
 pub use crate::common::interface_stats::{InterfaceStats, ANNOUNCE_SAMPLE_MAX};
@@ -186,7 +275,9 @@ impl InterfaceStatusView for InterfaceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
     use rns_core::constants;
+    use std::sync::mpsc;
 
     struct MockWriter {
         sent: Vec<Vec<u8>>,
@@ -259,5 +350,62 @@ mod tests {
         let data = vec![0x01, 0x02, 0x03];
         writer.send_frame(&data).unwrap();
         assert_eq!(writer.sent[0], data);
+    }
+
+    struct BlockingWriter {
+        entered_tx: mpsc::Sender<()>,
+        release_rx: mpsc::Receiver<()>,
+    }
+
+    impl Writer for BlockingWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            let _ = self.entered_tx.send(());
+            let _ = self.release_rx.recv();
+            Ok(())
+        }
+    }
+
+    struct FailingWriter;
+
+    impl Writer for FailingWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"))
+        }
+    }
+
+    #[test]
+    fn async_writer_returns_wouldblock_when_queue_is_full() {
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut writer = wrap_async_writer(
+            Box::new(BlockingWriter {
+                entered_tx,
+                release_rx,
+            }),
+            InterfaceId(7),
+            "test",
+            event_tx,
+            1,
+        );
+
+        writer.send_frame(&[1]).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        writer.send_frame(&[2]).unwrap();
+        let err = writer.send_frame(&[3]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn async_writer_reports_interface_down_after_worker_failure() {
+        let (event_tx, event_rx) = crate::event::channel();
+        let mut writer =
+            wrap_async_writer(Box::new(FailingWriter), InterfaceId(9), "fail", event_tx, 2);
+
+        writer.send_frame(&[1]).unwrap();
+        let event = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(InterfaceId(9))));
     }
 }

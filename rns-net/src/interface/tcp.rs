@@ -550,7 +550,6 @@ pub(crate) fn tcp_client_runtime_handle_from_config(
 mod tests {
     use super::*;
     use std::net::TcpListener;
-    use std::sync::mpsc;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
@@ -585,7 +584,7 @@ mod tests {
     fn connect_to_listener() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_config(port);
         let _writer = start(config, tx).unwrap();
@@ -602,7 +601,7 @@ mod tests {
     fn receive_frame() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_config(port);
         let _writer = start(config, tx).unwrap();
@@ -632,7 +631,7 @@ mod tests {
     fn send_frame() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
 
         let config = make_config(port);
         let mut writer = start(config, tx).unwrap();
@@ -657,7 +656,7 @@ mod tests {
     fn multiple_frames() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_config(port);
         let _writer = start(config, tx).unwrap();
@@ -689,7 +688,7 @@ mod tests {
     fn split_across_reads() {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_config(port);
         let _writer = start(config, tx).unwrap();
@@ -722,7 +721,7 @@ mod tests {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
         listener.set_nonblocking(false).unwrap();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
 
         let config = make_config(port);
         let _writer = start(config, tx).unwrap();

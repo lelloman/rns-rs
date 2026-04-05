@@ -197,6 +197,9 @@ fn main() {
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity:
+                rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: std::time::Duration::from_secs(
@@ -277,6 +280,9 @@ fn main() {
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity:
+                rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: std::time::Duration::from_secs(
@@ -354,6 +360,9 @@ fn main() {
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity:
+                rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: std::time::Duration::from_secs(

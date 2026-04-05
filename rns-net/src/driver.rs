@@ -435,6 +435,8 @@ pub struct Driver {
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
+    /// Maximum queued outbound frames per interface writer worker.
+    pub(crate) interface_writer_queue_capacity: usize,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
@@ -609,6 +611,7 @@ impl Driver {
                 None,
             ),
             event_tx: tx,
+            interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
@@ -690,6 +693,21 @@ impl Driver {
             max_stale_secs,
             overflow_policy,
         )));
+    }
+
+    fn wrap_interface_writer(
+        &self,
+        interface_id: InterfaceId,
+        interface_name: &str,
+        writer: Box<dyn crate::interface::Writer>,
+    ) -> Box<dyn crate::interface::Writer> {
+        crate::interface::wrap_async_writer(
+            writer,
+            interface_id,
+            interface_name,
+            self.event_tx.clone(),
+            self.interface_writer_queue_capacity,
+        )
     }
 
     fn upsert_known_destination(
@@ -4266,6 +4284,7 @@ impl Driver {
                         self.register_interface_runtime_defaults(&info);
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
+                            let writer = self.wrap_interface_writer(id, &info.name, writer);
                             self.interfaces.insert(
                                 id,
                                 InterfaceEntry {
@@ -4318,11 +4337,21 @@ impl Driver {
                             .unwrap_or(false);
                         replay_shared_announces = is_local_client
                             && self.shared_reconnect_pending.remove(&id).unwrap_or(false);
+                        let interface_name = self
+                            .interfaces
+                            .get(&id)
+                            .map(|entry| entry.info.name.clone())
+                            .unwrap_or_else(|| format!("iface-{}", id.0));
+                        let wrapped_writer = if let Some(writer) = new_writer {
+                            Some(self.wrap_interface_writer(id, &interface_name, writer))
+                        } else {
+                            None
+                        };
                         if let Some(entry) = self.interfaces.get_mut(&id) {
                             log::info!("[{}] interface online", id.0);
                             wants_tunnel = entry.info.wants_tunnel;
                             entry.online = true;
-                            if let Some(writer) = new_writer {
+                            if let Some(writer) = wrapped_writer {
                                 log::info!("[{}] writer refreshed after reconnect", id.0);
                                 entry.writer = writer;
                             }

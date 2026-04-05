@@ -291,6 +291,10 @@ pub struct NodeConfig {
     pub announce_table_ttl: Duration,
     /// Maximum retained bytes for announce retransmission state.
     pub announce_table_max_bytes: usize,
+    /// Maximum queued events awaiting driver processing.
+    pub driver_event_queue_capacity: usize,
+    /// Maximum queued outbound frames per interface writer worker.
+    pub interface_writer_queue_capacity: usize,
     /// Whether the announce signature verification cache is enabled.
     pub announce_sig_cache_enabled: bool,
     /// Maximum entries in the announce signature verification cache.
@@ -337,6 +341,8 @@ impl Default for NodeConfig {
             known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -617,6 +623,8 @@ impl RnsNode {
             known_destinations_max_entries: rns_config.reticulum.known_destinations_max_entries,
             announce_table_ttl: Duration::from_secs(rns_config.reticulum.announce_table_ttl),
             announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
+            driver_event_queue_capacity: rns_config.reticulum.driver_event_queue_capacity,
+            interface_writer_queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
             announce_sig_cache_enabled: rns_config.reticulum.announce_sig_cache_enabled,
             announce_sig_cache_max_entries: rns_config.reticulum.announce_sig_cache_max_entries,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -706,7 +714,7 @@ impl RnsNode {
             announce_queue_max_interfaces,
         };
 
-        let (tx, rx) = event::channel();
+        let (tx, rx) = event::channel_with_capacity(config.driver_event_queue_capacity);
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.set_announce_verify_queue_config(
@@ -720,6 +728,7 @@ impl RnsNode {
         driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
+        driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
 
@@ -1029,6 +1038,13 @@ impl RnsNode {
                     writer,
                     interface_type_name,
                 } => {
+                    let writer = crate::interface::wrap_async_writer(
+                        writer,
+                        id,
+                        &info.name,
+                        tx.clone(),
+                        config.interface_writer_queue_capacity,
+                    );
                     driver.register_interface_runtime_defaults(&info);
                     driver.register_interface_ifac_runtime(&info.name, ifac_runtime.clone());
                     driver.engine.register_interface(info.clone());
@@ -1060,6 +1076,13 @@ impl RnsNode {
                     let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
                     for sub in subs {
+                        let writer = crate::interface::wrap_async_writer(
+                            sub.writer,
+                            sub.id,
+                            &sub.info.name,
+                            tx.clone(),
+                            config.interface_writer_queue_capacity,
+                        );
                         let sub_ifac = if first {
                             first = false;
                             ifac_state.take()
@@ -1082,7 +1105,7 @@ impl RnsNode {
                             InterfaceEntry {
                                 id: sub.id,
                                 info: sub.info,
-                                writer: sub.writer,
+                                writer,
                                 enabled: true,
                                 online: false,
                                 dynamic: false,
@@ -2062,6 +2085,9 @@ mod tests {
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2113,6 +2139,9 @@ mod tests {
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2164,6 +2193,9 @@ mod tests {
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2694,6 +2726,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2754,6 +2789,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2810,6 +2848,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2863,6 +2904,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2923,6 +2967,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2984,6 +3031,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3043,6 +3093,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3113,6 +3166,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3175,6 +3231,9 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
                 announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+                interface_writer_queue_capacity:
+                    crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(

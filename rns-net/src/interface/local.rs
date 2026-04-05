@@ -664,7 +664,7 @@ mod tests {
     fn server_bind_tcp() {
         let port = find_free_port();
         let instance_name = "test-bind".to_string();
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7000));
 
         let config = LocalServerConfig {
@@ -685,7 +685,7 @@ mod tests {
     fn server_accept_client() {
         let port = find_free_port();
         let instance_name = "test-accept".to_string();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7100));
 
         let config = LocalServerConfig {
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn client_send_receive() {
         let port = find_free_port();
-        let (server_tx, server_rx) = mpsc::channel();
+        let (server_tx, server_rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7200));
 
         let server_config = LocalServerConfig {
@@ -726,7 +726,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         // Connect client
-        let (client_tx, client_rx) = mpsc::channel();
+        let (client_tx, client_rx) = crate::event::channel();
         let client_config = LocalClientConfig {
             name: "test-client".into(),
             instance_name: "test-sr".into(),
@@ -776,7 +776,7 @@ mod tests {
     fn multiple_local_clients() {
         let port = find_free_port();
         let instance_name = "test-multi".to_string();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7300));
 
         let config = LocalServerConfig {
@@ -808,7 +808,7 @@ mod tests {
     fn client_disconnect_detected() {
         let port = find_free_port();
         let instance_name = "test-dc".to_string();
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let next_id = Arc::new(AtomicU64::new(7400));
 
         let config = LocalServerConfig {
@@ -853,7 +853,7 @@ mod tests {
             accepted1_tx.send(stream).unwrap();
         });
 
-        let (client_tx, client_rx) = mpsc::channel();
+        let (client_tx, client_rx) = crate::event::channel();
         let client_config = LocalClientConfig {
             name: "test-client".into(),
             instance_name,

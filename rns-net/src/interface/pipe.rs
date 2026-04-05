@@ -330,12 +330,11 @@ pub(crate) fn pipe_runtime_handle_from_config(config: &PipeConfig) -> PipeRuntim
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
 
     #[test]
     fn pipe_start_and_receive() {
         // Use `cat` as a loopback subprocess
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let config = PipeConfig {
             name: "test-pipe".into(),
             command: "cat".into(),
@@ -373,7 +372,7 @@ mod tests {
     #[test]
     fn pipe_writer_sends() {
         // Verify the writer wraps data in HDLC
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let config = PipeConfig {
             name: "test-pipe-writer".into(),
             command: "cat".into(),
@@ -403,7 +402,7 @@ mod tests {
     #[test]
     fn pipe_subprocess_exit() {
         // Use a command that exits immediately
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::event::channel();
         let config = PipeConfig {
             name: "test-pipe-exit".into(),
             command: "true".into(),                 // exits immediately with 0
@@ -444,7 +443,7 @@ mod tests {
 
     #[test]
     fn pipe_invalid_command() {
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = crate::event::channel();
         let config = PipeConfig {
             name: "test-pipe-bad".into(),
             command: "/nonexistent_rns_test_binary_that_does_not_exist_xyz".into(),
