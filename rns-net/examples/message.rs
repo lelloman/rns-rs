@@ -192,6 +192,7 @@ fn main() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
@@ -271,6 +272,7 @@ fn main() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
@@ -347,6 +349,7 @@ fn main() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),

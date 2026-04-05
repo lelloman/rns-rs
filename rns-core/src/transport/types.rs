@@ -1,6 +1,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
+
 /// Opaque identifier for a network interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InterfaceId(pub u64);
@@ -190,7 +192,7 @@ mod tests {
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
             max_discovery_pr_tags: crate::constants::MAX_PR_TAGS,
-            max_path_destinations: usize::MAX,
+            max_path_destinations: DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: crate::constants::ANNOUNCE_TABLE_TTL,
@@ -210,7 +212,7 @@ mod tests {
             crate::constants::HASHLIST_MAXSIZE
         );
         assert_eq!(cfg.max_discovery_pr_tags, crate::constants::MAX_PR_TAGS);
-        assert_eq!(cfg.max_path_destinations, usize::MAX);
+        assert_eq!(cfg.max_path_destinations, DEFAULT_MAX_PATH_DESTINATIONS);
         assert_eq!(cfg.max_tunnel_destinations_total, usize::MAX);
         assert_eq!(
             cfg.destination_timeout_secs,

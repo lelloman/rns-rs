@@ -21,8 +21,8 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeStats, QueryRequest,
+    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
@@ -66,6 +66,7 @@ use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
 const DEFAULT_KNOWN_DESTINATIONS_TTL: f64 = 48.0 * 60.0 * 60.0;
+const DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES: usize = 8192;
 const DEFAULT_RATE_LIMITER_TTL_SECS: f64 = 48.0 * 60.0 * 60.0;
 const DEFAULT_TICK_INTERVAL_MS: u64 = 1000;
 const DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS: u32 = 3600;
@@ -405,6 +406,8 @@ pub struct Driver {
     pub(crate) known_destinations: HashMap<[u8; 16], crate::destination::AnnouncedIdentity>,
     /// TTL for known destinations without an active path, in seconds.
     pub(crate) known_destinations_ttl: f64,
+    /// Maximum number of retained known destinations.
+    pub(crate) known_destinations_max_entries: usize,
     /// TTL for announce rate-limiter entries without an active path, in seconds.
     pub(crate) rate_limiter_ttl_secs: f64,
     /// Destination hash for rnstransport.path.request (PLAIN).
@@ -505,6 +508,8 @@ pub struct Driver {
     pub(crate) announce_cache_cleanup_counter: u32,
     /// Runtime-configurable cleanup interval for known destinations.
     pub(crate) known_destinations_cleanup_interval_ticks: u32,
+    /// Count of known-destination cap evictions since start.
+    pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
     pub(crate) announce_cache_cleanup_interval_ticks: u32,
     /// When set, announce cache cleanup is in progress (contains active packet hashes).
@@ -589,6 +594,7 @@ impl Driver {
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+            known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             path_request_dest,
             proof_strategies: HashMap::new(),
@@ -651,6 +657,7 @@ impl Driver {
             announce_cache_cleanup_counter: 0,
             known_destinations_cleanup_interval_ticks: runtime_config_defaults
                 .known_destinations_cleanup_interval_ticks,
+            known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
                 .announce_cache_cleanup_interval_ticks,
             cache_cleanup_active_hashes: None,
@@ -683,6 +690,69 @@ impl Driver {
             max_stale_secs,
             overflow_policy,
         )));
+    }
+
+    fn upsert_known_destination(
+        &mut self,
+        dest_hash: [u8; 16],
+        announced: crate::destination::AnnouncedIdentity,
+    ) {
+        if let Some(existing) = self.known_destinations.get_mut(&dest_hash) {
+            *existing = announced;
+            return;
+        }
+
+        self.enforce_known_destination_cap(true);
+        self.known_destinations.insert(dest_hash, announced);
+    }
+
+    fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
+        if self.known_destinations_max_entries == usize::MAX {
+            return 0;
+        }
+
+        let mut evicted = 0usize;
+        while if for_insert {
+            self.known_destinations.len() >= self.known_destinations_max_entries
+        } else {
+            self.known_destinations.len() > self.known_destinations_max_entries
+        } {
+            let active_dests = self.engine.active_destination_hashes();
+            let candidate = self
+                .oldest_known_destination(false, &active_dests)
+                .or_else(|| self.oldest_known_destination(true, &active_dests));
+            let Some(dest_hash) = candidate else {
+                break;
+            };
+            if self.known_destinations.remove(&dest_hash).is_some() {
+                evicted += 1;
+                self.known_destinations_cap_evict_count += 1;
+            } else {
+                break;
+            }
+        }
+        evicted
+    }
+
+    fn oldest_known_destination(
+        &self,
+        include_protected: bool,
+        active_dests: &std::collections::BTreeSet<[u8; 16]>,
+    ) -> Option<[u8; 16]> {
+        self.known_destinations
+            .iter()
+            .filter(|(dest_hash, _)| {
+                include_protected
+                    || (!active_dests.contains(*dest_hash)
+                        && !self.local_destinations.contains_key(*dest_hash))
+            })
+            .min_by(|a, b| {
+                a.1.received_at
+                    .partial_cmp(&b.1.received_at)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.0.cmp(b.0))
+            })
+            .map(|(dest_hash, _)| *dest_hash)
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -4096,6 +4166,7 @@ impl Driver {
                                 || now - announced.received_at < ttl
                         });
                         let kd_removed = kd_before - self.known_destinations.len();
+                        let kd_evicted = self.enforce_known_destination_cap(false);
 
                         // Cull rate limiter entries while keeping active or recently used ones.
                         let rl_removed = self.engine.cull_rate_limiter(
@@ -4104,10 +4175,10 @@ impl Driver {
                             self.rate_limiter_ttl_secs,
                         );
 
-                        if kd_removed > 0 || rl_removed > 0 {
+                        if kd_removed > 0 || kd_evicted > 0 || rl_removed > 0 {
                             log::info!(
-                                "Memory cleanup: removed {} known_destinations, {} rate_limiter entries",
-                                kd_removed, rl_removed
+                                "Memory cleanup: removed {} known_destinations, evicted {} known_destinations, {} rate_limiter entries",
+                                kd_removed, kd_evicted, rl_removed
                             );
                         }
                     }
@@ -5354,7 +5425,7 @@ impl Driver {
                 hops,
                 received_at,
             } => {
-                self.known_destinations.insert(
+                self.upsert_known_destination(
                     dest_hash,
                     crate::destination::AnnouncedIdentity {
                         dest_hash: rns_core::types::DestHash(dest_hash),
@@ -6396,8 +6467,7 @@ impl Driver {
                         received_at: time::now(),
                         receiving_interface,
                     };
-                    self.known_destinations
-                        .insert(destination_hash, announced.clone());
+                    self.upsert_known_destination(destination_hash, announced.clone());
                     log::info!(
                         "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
                         destination_hash[0],
@@ -7328,7 +7398,7 @@ impl Driver {
                 )
             });
         log::info!(
-            "MEMSTATS rss_mb={} vmrss_mb={} vmhwm_mb={} vmdata_mb={} vmswap_mb={} smaps_rss_mb={} smaps_anon_mb={} smaps_file_est_mb={} smaps_shared_clean_mb={} smaps_shared_dirty_mb={} smaps_private_clean_mb={} smaps_private_dirty_mb={} smaps_swap_mb={} known_dest={} path={} announce={} reverse={}              link={} held_ann={} hashlist={} sig_cache={} ann_verify_q={} rate_lim={} blackhole={} tunnel={} ann_q_ifaces={} ann_q_nonempty={} ann_q_entries={} ann_q_bytes={} ann_q_iface_drop={}              pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={}              shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
+            "MEMSTATS rss_mb={} vmrss_mb={} vmhwm_mb={} vmdata_mb={} vmswap_mb={} smaps_rss_mb={} smaps_anon_mb={} smaps_file_est_mb={} smaps_shared_clean_mb={} smaps_shared_dirty_mb={} smaps_private_clean_mb={} smaps_private_dirty_mb={} smaps_swap_mb={} known_dest={} known_dest_cap_evict={} path={} path_cap_evict={} announce={} reverse={}              link={} held_ann={} hashlist={} sig_cache={} ann_verify_q={} rate_lim={} blackhole={} tunnel={} ann_q_ifaces={} ann_q_nonempty={} ann_q_entries={} ann_q_bytes={} ann_q_iface_drop={}              pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={}              shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
             rss,
             vm_rss,
             vm_hwm,
@@ -7343,7 +7413,9 @@ impl Driver {
             smaps_private_dirty,
             smaps_swap,
             self.known_destinations.len(),
+            self.known_destinations_cap_evict_count,
             self.engine.path_table_count(),
+            self.engine.path_destination_cap_evict_count(),
             self.engine.announce_table_count(),
             self.engine.reverse_table_count(),
             self.engine.link_table_count(),
@@ -7717,6 +7789,22 @@ mod tests {
         let mut driver = Driver::new(transport_config, rx, tx, Box::new(callbacks));
         driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
         driver
+    }
+
+    fn make_announced_identity(
+        dest_hash: [u8; 16],
+        received_at: f64,
+        receiving_interface: InterfaceId,
+    ) -> crate::destination::AnnouncedIdentity {
+        crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash(dest_hash),
+            identity_hash: rns_core::types::IdentityHash([dest_hash[0]; 16]),
+            public_key: [dest_hash[0]; 64],
+            app_data: None,
+            hops: 1,
+            received_at,
+            receiving_interface,
+        }
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -11227,6 +11315,154 @@ mod tests {
 
         assert!(!driver.known_destinations.contains_key(&stale_dest));
         assert!(driver.known_destinations.contains_key(&fresh_dest));
+    }
+
+    #[test]
+    fn known_destinations_cap_prefers_evicting_oldest_non_active_non_local() {
+        let mut driver = new_test_driver();
+        driver.known_destinations_max_entries = 2;
+        driver.engine.register_interface(make_interface_info(1));
+
+        let active_dest = [0x11; 16];
+        let evictable_dest = [0x22; 16];
+        let new_dest = [0x33; 16];
+
+        driver.engine.inject_path(
+            active_dest,
+            PathEntry {
+                timestamp: 100.0,
+                next_hop: [0x44; 16],
+                hops: 1,
+                expires: 1000.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(1),
+                packet_hash: [0x55; 32],
+                announce_raw: None,
+            },
+        );
+
+        driver.upsert_known_destination(
+            active_dest,
+            make_announced_identity(active_dest, 10.0, InterfaceId(1)),
+        );
+        driver.upsert_known_destination(
+            evictable_dest,
+            make_announced_identity(evictable_dest, 20.0, InterfaceId(1)),
+        );
+        driver.upsert_known_destination(
+            new_dest,
+            make_announced_identity(new_dest, 30.0, InterfaceId(1)),
+        );
+
+        assert!(driver.known_destinations.contains_key(&active_dest));
+        assert!(!driver.known_destinations.contains_key(&evictable_dest));
+        assert!(driver.known_destinations.contains_key(&new_dest));
+        assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    }
+
+    #[test]
+    fn known_destinations_cap_falls_back_to_oldest_overall_when_all_protected() {
+        let mut driver = new_test_driver();
+        driver.known_destinations_max_entries = 2;
+
+        let local_oldest = [0x41; 16];
+        let local_newer = [0x42; 16];
+        let new_dest = [0x43; 16];
+        driver
+            .local_destinations
+            .insert(local_oldest, rns_core::constants::DESTINATION_SINGLE);
+        driver
+            .local_destinations
+            .insert(local_newer, rns_core::constants::DESTINATION_SINGLE);
+
+        driver.upsert_known_destination(
+            local_oldest,
+            make_announced_identity(local_oldest, 10.0, InterfaceId(1)),
+        );
+        driver.upsert_known_destination(
+            local_newer,
+            make_announced_identity(local_newer, 20.0, InterfaceId(1)),
+        );
+        driver.upsert_known_destination(
+            new_dest,
+            make_announced_identity(new_dest, 30.0, InterfaceId(1)),
+        );
+
+        assert!(!driver.known_destinations.contains_key(&local_oldest));
+        assert!(driver.known_destinations.contains_key(&local_newer));
+        assert!(driver.known_destinations.contains_key(&new_dest));
+        assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    }
+
+    #[test]
+    fn known_destinations_cap_update_existing_entry_does_not_evict() {
+        let mut driver = new_test_driver();
+        driver.known_destinations_max_entries = 1;
+
+        let dest = [0x61; 16];
+        driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
+        driver.upsert_known_destination(dest, make_announced_identity(dest, 20.0, InterfaceId(2)));
+
+        assert_eq!(driver.known_destinations.len(), 1);
+        assert_eq!(
+            driver.known_destinations[&dest].receiving_interface,
+            InterfaceId(2)
+        );
+        assert_eq!(driver.known_destinations_cap_evict_count, 0);
+    }
+
+    #[test]
+    fn known_destinations_cleanup_enforces_cap() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        driver.known_destinations_ttl = 1000.0;
+        driver.known_destinations_max_entries = 2;
+        driver.cache_cleanup_counter = 3599;
+        let now = time::now();
+        driver.known_destinations.insert(
+            [0x71; 16],
+            make_announced_identity([0x71; 16], now - 30.0, InterfaceId(1)),
+        );
+        driver.known_destinations.insert(
+            [0x72; 16],
+            make_announced_identity([0x72; 16], now - 20.0, InterfaceId(1)),
+        );
+        driver.known_destinations.insert(
+            [0x73; 16],
+            make_announced_identity([0x73; 16], now - 10.0, InterfaceId(1)),
+        );
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert_eq!(driver.known_destinations.len(), 2);
+        assert!(!driver.known_destinations.contains_key(&[0x71; 16]));
+        assert_eq!(driver.known_destinations_cap_evict_count, 1);
     }
 
     #[test]

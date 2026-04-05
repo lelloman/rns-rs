@@ -70,6 +70,8 @@ pub struct ReticulumSection {
     pub max_tunnel_destinations_total: usize,
     /// TTL for recalled known destinations without an active path, in seconds.
     pub known_destinations_ttl: u64,
+    /// Maximum number of recalled known destinations retained.
+    pub known_destinations_max_entries: usize,
     /// TTL for announce retransmission state, in seconds.
     pub announce_table_ttl: u64,
     /// Maximum retained bytes for announce retransmission state.
@@ -127,9 +129,10 @@ impl Default for ReticulumSection {
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
-            max_path_destinations: usize::MAX,
+            max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: 48 * 60 * 60,
+            known_destinations_max_entries: 8192,
             announce_table_ttl: rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
@@ -583,6 +586,19 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 value: v.clone(),
             })?;
     }
+    if let Some(v) = kvs.get("known_destinations_max_entries") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "known_destinations_max_entries".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "known_destinations_max_entries".into(),
+                value: v.clone(),
+            });
+        }
+        section.known_destinations_max_entries = n;
+    }
     if let Some(v) = kvs.get("destination_timeout_secs") {
         section.known_destinations_ttl =
             v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
@@ -854,6 +870,7 @@ use_implicit_proof = False
 respond_to_probes = True
 network_identity = /home/user/.reticulum/identity
 known_destinations_ttl = 1234
+known_destinations_max_entries = 4321
 announce_table_ttl = 45
 announce_table_max_bytes = 65536
 packet_hashlist_max_entries = 321
@@ -883,6 +900,7 @@ announce_queue_overflow_policy = drop_oldest
             Some("/home/user/.reticulum/identity")
         );
         assert_eq!(config.reticulum.known_destinations_ttl, 1234);
+        assert_eq!(config.reticulum.known_destinations_max_entries, 4321);
         assert_eq!(config.reticulum.announce_table_ttl, 45);
         assert_eq!(config.reticulum.announce_table_max_bytes, 65536);
         assert_eq!(config.reticulum.packet_hashlist_max_entries, 321);
@@ -914,6 +932,18 @@ announce_table_ttl = 0
         assert!(matches!(
             err,
             ConfigError::InvalidValue { key, .. } if key == "announce_table_ttl"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+known_destinations_max_entries = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "known_destinations_max_entries"
         ));
 
         let err = parse(

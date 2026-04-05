@@ -214,6 +214,20 @@ Important note:
 `MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
 signal for the VPS experiment.
 
+Relevant memory-safety config knobs in `[reticulum]`:
+
+- `announce_queue_max_interfaces`
+  Maximum number of interface-scoped announce bandwidth queues retained.
+  Default: `1024`. This bounds historical dynamic-interface churn from growing
+  the outer announce-queue map without limit.
+- `max_path_destinations`
+  Maximum number of retained path-table destinations.
+  Default: `8192`. This bounds live path-table cardinality on public nodes.
+- `known_destinations_max_entries`
+  Maximum number of retained recalled announced identities.
+  Default: `8192`. This bounds `known_destinations` in addition to its TTL
+  cleanup policy.
+
 Important fields:
 
 - `rss_mb`, `vmrss_mb`
@@ -237,6 +251,24 @@ Important fields:
   Existing tracked collections and queues. If these stay flat while anonymous
   memory rises, the remaining growth is likely allocator retention or an
   untracked buffer/cache.
+- `known_dest_cap_evict`
+  Number of `known_destinations` evictions caused by
+  `known_destinations_max_entries`. In normal VPS operation this should remain
+  `0` or grow very slowly; sustained growth means the cap is actively shaping
+  behavior.
+- `path_cap_evict`
+  Number of path-table destination evictions caused by `max_path_destinations`.
+  In normal VPS operation this should remain `0` or near `0`; sustained growth
+  means the configured path-table cap is too low for the observed destination
+  churn.
+- `ann_q_ifaces`, `ann_q_nonempty`, `ann_q_entries`, `ann_q_bytes`
+  Per-interface announce bandwidth queue cardinality and buffered payload size.
+  `ann_q_ifaces` should stay close to live interface churn after the queue
+  cleanup fix.
+- `ann_q_iface_drop`
+  Number of announces dropped because creating a new interface queue would
+  exceed `announce_queue_max_interfaces`. In normal VPS operation this should
+  remain `0`; non-zero values mean the cap is too low for the workload.
 
 ## 9. Rollback
 

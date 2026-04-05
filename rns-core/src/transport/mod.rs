@@ -68,6 +68,7 @@ pub struct TransportEngine {
     tunnel_table: TunnelTable,
     discovery_pr_tags: Vec<[u8; 32]>,
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
+    path_destination_cap_evict_count: usize,
     // Job timing
     announces_last_checked: f64,
     tables_last_culled: f64,
@@ -102,6 +103,7 @@ impl TransportEngine {
             tunnel_table: TunnelTable::new(),
             discovery_pr_tags: Vec::new(),
             discovery_path_requests: BTreeMap::new(),
+            path_destination_cap_evict_count: 0,
             announces_last_checked: 0.0,
             tables_last_culled: 0.0,
         }
@@ -143,6 +145,7 @@ impl TransportEngine {
             };
             self.path_table.remove(&dest_hash);
             self.path_states.remove(&dest_hash);
+            self.path_destination_cap_evict_count += 1;
         }
     }
 
@@ -2127,6 +2130,10 @@ impl TransportEngine {
         self.path_table.keys().copied().collect()
     }
 
+    pub fn path_destination_cap_evict_count(&self) -> usize {
+        self.path_destination_cap_evict_count
+    }
+
     /// Collect all packet hashes from active path entries (all paths, not just primaries).
     pub fn active_packet_hashes(&self) -> Vec<[u8; 32]> {
         self.path_table
@@ -3721,6 +3728,7 @@ mod tests {
         assert!(engine.has_path(&dest2));
         assert!(engine.has_path(&dest3));
         assert!(!engine.path_states.contains_key(&dest1));
+        assert_eq!(engine.path_destination_cap_evict_count(), 1);
     }
 
     #[test]

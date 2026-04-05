@@ -213,6 +213,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             device: None,
             hooks: Vec::new(),
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),
@@ -273,6 +274,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             device: None,
             hooks: Vec::new(),
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
                 rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             ),

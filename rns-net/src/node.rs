@@ -47,6 +47,7 @@ use crate::time;
 
 #[cfg(test)]
 const DEFAULT_KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
+const DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES: usize = 8192;
 
 /// Parse an interface mode string to the corresponding constant.
 /// Matches Python's `_synthesize_interface()` in `RNS/Reticulum.py`.
@@ -284,6 +285,8 @@ pub struct NodeConfig {
     pub max_tunnel_destinations_total: usize,
     /// TTL for recalled known destinations without an active path.
     pub known_destinations_ttl: Duration,
+    /// Maximum number of recalled known destinations retained.
+    pub known_destinations_max_entries: usize,
     /// TTL for announce retransmission state.
     pub announce_table_ttl: Duration,
     /// Maximum retained bytes for announce retransmission state.
@@ -328,9 +331,10 @@ impl Default for NodeConfig {
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
-            max_path_destinations: usize::MAX,
+            max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
+            known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
@@ -610,6 +614,7 @@ impl RnsNode {
             known_destinations_ttl: Duration::from_secs(
                 rns_config.reticulum.known_destinations_ttl,
             ),
+            known_destinations_max_entries: rns_config.reticulum.known_destinations_max_entries,
             announce_table_ttl: Duration::from_secs(rns_config.reticulum.announce_table_ttl),
             announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
             announce_sig_cache_enabled: rns_config.reticulum.announce_sig_cache_enabled,
@@ -714,6 +719,7 @@ impl RnsNode {
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
         driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
+        driver.known_destinations_max_entries = config.known_destinations_max_entries;
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
 
@@ -2051,6 +2057,7 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2101,6 +2108,7 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2151,6 +2159,7 @@ mod tests {
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2680,6 +2689,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2739,6 +2749,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2794,6 +2805,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2846,6 +2858,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2905,6 +2918,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -2965,6 +2979,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -3023,6 +3038,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -3092,6 +3108,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),
@@ -3153,6 +3170,7 @@ enable_transport = False
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+                known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
                 announce_table_ttl: Duration::from_secs(
                     rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
                 ),

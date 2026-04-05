@@ -9,7 +9,9 @@ mod tests {
     use crate::time;
     use rns_core::constants;
     use rns_core::msgpack::{self, Value};
-    use rns_core::transport::types::{InterfaceId, InterfaceInfo, TransportConfig};
+    use rns_core::transport::types::{
+        InterfaceId, InterfaceInfo, TransportConfig, DEFAULT_MAX_PATH_DESTINATIONS,
+    };
     use rns_core::transport::TransportEngine;
     use std::collections::HashMap;
     use std::io;
@@ -30,7 +32,7 @@ mod tests {
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
-            max_path_destinations: usize::MAX,
+            max_path_destinations: DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
