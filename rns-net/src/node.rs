@@ -647,6 +647,7 @@ impl RnsNode {
             node_config,
             callbacks,
             rns_config.reticulum.announce_queue_max_entries,
+            rns_config.reticulum.announce_queue_max_interfaces,
             rns_config.reticulum.announce_queue_max_bytes,
             rns_config.reticulum.announce_queue_ttl as f64,
             match rns_config.reticulum.announce_queue_overflow_policy.as_str() {
@@ -663,6 +664,7 @@ impl RnsNode {
             config,
             callbacks,
             256,
+            1024,
             256 * 1024,
             30.0,
             AnnounceQueueOverflowPolicy::DropWorst,
@@ -673,6 +675,7 @@ impl RnsNode {
         config: NodeConfig,
         callbacks: Box<dyn Callbacks>,
         announce_queue_max_entries: usize,
+        announce_queue_max_interfaces: usize,
         announce_queue_max_bytes: usize,
         announce_queue_ttl_secs: f64,
         announce_queue_overflow_policy: AnnounceQueueOverflowPolicy,
@@ -695,6 +698,7 @@ impl RnsNode {
             announce_sig_cache_max_entries: config.announce_sig_cache_max_entries,
             announce_sig_cache_ttl_secs: config.announce_sig_cache_ttl.as_secs_f64(),
             announce_queue_max_entries,
+            announce_queue_max_interfaces,
         };
 
         let (tx, rx) = event::channel();

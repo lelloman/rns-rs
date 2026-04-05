@@ -133,12 +133,16 @@ impl Default for InterfaceAnnounceQueue {
 #[derive(Debug, Clone)]
 pub struct AnnounceQueues {
     queues: BTreeMap<InterfaceId, InterfaceAnnounceQueue>,
+    max_interfaces: usize,
+    interface_cap_drops: u64,
 }
 
 impl AnnounceQueues {
-    pub fn new() -> Self {
+    pub fn new(max_interfaces: usize) -> Self {
         AnnounceQueues {
             queues: BTreeMap::new(),
+            max_interfaces,
+            interface_cap_drops: 0,
         }
     }
 
@@ -158,8 +162,6 @@ impl AnnounceQueues {
         bitrate: Option<u64>,
         announce_cap: f64,
     ) -> Option<TransportAction> {
-        let queue = self.queues.entry(interface).or_default();
-
         // If no bitrate, no cap applies — send immediately
         let bitrate = match bitrate {
             Some(br) if br > 0 => br,
@@ -167,6 +169,13 @@ impl AnnounceQueues {
                 return Some(TransportAction::SendOnInterface { interface, raw });
             }
         };
+
+        if !self.queues.contains_key(&interface) && self.queues.len() >= self.max_interfaces {
+            self.interface_cap_drops = self.interface_cap_drops.saturating_add(1);
+            return None;
+        }
+
+        let queue = self.queues.entry(interface).or_default();
 
         if queue.is_allowed(now) {
             // Bandwidth available — send now and update allowed_at
@@ -198,6 +207,7 @@ impl AnnounceQueues {
         interfaces: &BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
+        let mut empty_queues = Vec::new();
 
         for (iface_id, queue) in self.queues.iter_mut() {
             // Remove stale entries
@@ -232,9 +242,22 @@ impl AnnounceQueues {
                     break;
                 }
             }
+
+            if queue.entries.is_empty() {
+                empty_queues.push(*iface_id);
+            }
+        }
+
+        for iface_id in empty_queues {
+            self.queues.remove(&iface_id);
         }
 
         actions
+    }
+
+    /// Remove all announce queue state for an interface.
+    pub fn remove_interface(&mut self, interface: InterfaceId) -> bool {
+        self.queues.remove(&interface).is_some()
     }
 
     /// Number of interface queues currently tracked.
@@ -244,7 +267,10 @@ impl AnnounceQueues {
 
     /// Number of interface queues that currently hold buffered announces.
     pub fn nonempty_queue_count(&self) -> usize {
-        self.queues.values().filter(|queue| !queue.entries.is_empty()).count()
+        self.queues
+            .values()
+            .filter(|queue| !queue.entries.is_empty())
+            .count()
     }
 
     /// Total number of buffered announce entries across all interfaces.
@@ -261,6 +287,11 @@ impl AnnounceQueues {
             .sum()
     }
 
+    /// Number of announces dropped because the interface queue cap was reached.
+    pub fn interface_cap_drop_count(&self) -> u64 {
+        self.interface_cap_drops
+    }
+
     /// Get the queue for a specific interface (for testing).
     #[cfg(test)]
     pub fn queue_for(&self, id: &InterfaceId) -> Option<&InterfaceAnnounceQueue> {
@@ -270,7 +301,7 @@ impl AnnounceQueues {
 
 impl Default for AnnounceQueues {
     fn default() -> Self {
-        Self::new()
+        Self::new(1024)
     }
 }
 
@@ -434,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_gate_announce_no_bitrate_immediate() {
-        let mut queues = AnnounceQueues::new();
+        let mut queues = AnnounceQueues::new(1024);
         let result = queues.gate_announce(
             InterfaceId(1),
             vec![0x01, 0x02, 0x03],
@@ -454,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_gate_announce_bandwidth_available() {
-        let mut queues = AnnounceQueues::new();
+        let mut queues = AnnounceQueues::new(1024);
         let result = queues.gate_announce(
             InterfaceId(1),
             vec![0x01; 100],
@@ -475,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_gate_announce_bandwidth_exhausted_queues() {
-        let mut queues = AnnounceQueues::new();
+        let mut queues = AnnounceQueues::new(1024);
 
         // First announce goes through
         let r1 = queues.gate_announce(
@@ -509,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_process_queues_dequeues_when_allowed() {
-        let mut queues = AnnounceQueues::new();
+        let mut queues = AnnounceQueues::new(1024);
 
         // Queue an announce by exhausting bandwidth first
         let _ = queues.gate_announce(
@@ -552,8 +583,8 @@ mod tests {
             TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(1)
         ));
 
-        // Queue should be empty now
-        assert_eq!(queues.queue_for(&InterfaceId(1)).unwrap().entries.len(), 0);
+        // Queue should be pruned now that it is empty
+        assert!(queues.queue_for(&InterfaceId(1)).is_none());
     }
 
     #[test]
@@ -561,7 +592,7 @@ mod tests {
         // hops == 0 means locally-originated, should not be queued
         // The caller (TransportEngine) is responsible for only calling gate_announce
         // for hops > 0. We verify the gate_announce works for hops=0 too.
-        let mut queues = AnnounceQueues::new();
+        let mut queues = AnnounceQueues::new(1024);
 
         // Exhaust bandwidth
         let _ = queues.gate_announce(
@@ -588,5 +619,193 @@ mod tests {
             0.02,
         );
         assert!(r.is_none()); // queued — caller must bypass for hops==0
+    }
+
+    #[test]
+    fn test_remove_interface_queue() {
+        let mut queues = AnnounceQueues::new(1024);
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+
+        assert!(queues.queue_for(&InterfaceId(1)).is_some());
+        assert!(queues.remove_interface(InterfaceId(1)));
+        assert!(queues.queue_for(&InterfaceId(1)).is_none());
+        assert!(!queues.remove_interface(InterfaceId(1)));
+    }
+
+    #[test]
+    fn test_process_queues_prunes_empty_queue() {
+        let mut queues = AnnounceQueues::new(1024);
+
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 10],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 10],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1, Some(1000)));
+        let allowed_at = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+
+        let actions = queues.process_queues(allowed_at + 1.0, &interfaces);
+        assert_eq!(actions.len(), 1);
+        assert!(queues.queue_for(&InterfaceId(1)).is_none());
+        assert_eq!(queues.queue_count(), 0);
+    }
+
+    #[test]
+    fn test_process_queues_keeps_nonempty_queue() {
+        let mut queues = AnnounceQueues::new(1024);
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x03; 100],
+            [0xCC; 16],
+            4,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1, Some(1000)));
+        let allowed_at = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
+
+        let actions = queues.process_queues(allowed_at + 1.0, &interfaces);
+        assert_eq!(actions.len(), 1);
+        assert!(queues.queue_for(&InterfaceId(1)).is_some());
+        assert_eq!(queues.queue_for(&InterfaceId(1)).unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn test_gate_announce_refuses_new_interface_when_at_capacity() {
+        let mut queues = AnnounceQueues::new(1);
+
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let second = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        assert!(second.is_none());
+        assert_eq!(queues.queue_count(), 1);
+
+        let rejected = queues.gate_announce(
+            InterfaceId(2),
+            vec![0x03; 100],
+            [0xCC; 16],
+            4,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        assert!(rejected.is_none());
+        assert_eq!(queues.queue_count(), 1);
+        assert!(queues.queue_for(&InterfaceId(2)).is_none());
+        assert_eq!(queues.interface_cap_drop_count(), 1);
+    }
+
+    #[test]
+    fn test_gate_announce_allows_existing_queue_when_at_capacity() {
+        let mut queues = AnnounceQueues::new(1);
+
+        let _ = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        let queued = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            0.02,
+        );
+        assert!(queued.is_none());
+        assert_eq!(queues.queue_count(), 1);
+        assert_eq!(queues.queue_for(&InterfaceId(1)).unwrap().entries.len(), 1);
+        assert_eq!(queues.interface_cap_drop_count(), 0);
     }
 }

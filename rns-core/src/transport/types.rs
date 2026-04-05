@@ -165,6 +165,8 @@ pub struct TransportConfig {
     pub announce_sig_cache_ttl_secs: f64,
     /// Maximum entries in the async announce verification queue.
     pub announce_queue_max_entries: usize,
+    /// Maximum number of interface-scoped announce queues retained.
+    pub announce_queue_max_interfaces: usize,
 }
 
 #[cfg(test)]
@@ -197,6 +199,7 @@ mod tests {
             announce_sig_cache_max_entries: crate::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: crate::constants::ANNOUNCE_SIG_CACHE_TTL,
             announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
@@ -231,5 +234,6 @@ mod tests {
             crate::constants::ANNOUNCE_SIG_CACHE_TTL
         );
         assert_eq!(cfg.announce_queue_max_entries, 256);
+        assert_eq!(cfg.announce_queue_max_interfaces, 1024);
     }
 }

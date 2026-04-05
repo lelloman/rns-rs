@@ -82,6 +82,7 @@ impl TransportEngine {
             0
         };
         let sig_cache_ttl = config.announce_sig_cache_ttl_secs;
+        let announce_queue_max_interfaces = config.announce_queue_max_interfaces;
         TransportEngine {
             config,
             path_table: BTreeMap::new(),
@@ -96,7 +97,7 @@ impl TransportEngine {
             interfaces: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
-            announce_queues: AnnounceQueues::new(),
+            announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
             ingress_control: IngressControl::new(),
             tunnel_table: TunnelTable::new(),
             discovery_pr_tags: Vec::new(),
@@ -280,6 +281,7 @@ impl TransportEngine {
 
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
+        self.announce_queues.remove_interface(id);
         self.ingress_control.remove_interface(&id);
     }
 
@@ -1921,6 +1923,11 @@ impl TransportEngine {
         self.announce_queues.total_queued_bytes()
     }
 
+    /// Number of announces dropped because the announce-queue interface cap was reached.
+    pub fn announce_queue_interface_cap_drop_count(&self) -> u64 {
+        self.announce_queues.interface_cap_drop_count()
+    }
+
     /// Number of local destinations.
     pub fn local_destinations_count(&self) -> usize {
         self.local_destinations.len()
@@ -2030,7 +2037,7 @@ impl TransportEngine {
     pub fn drop_announce_queues(&mut self) {
         self.announce_table.clear();
         self.held_announces.clear();
-        self.announce_queues = AnnounceQueues::new();
+        self.announce_queues = AnnounceQueues::new(self.config.announce_queue_max_interfaces);
         self.ingress_control.clear();
     }
 
@@ -2222,6 +2229,7 @@ mod tests {
             announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
             announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
         }
     }
 
@@ -2306,6 +2314,89 @@ mod tests {
 
         engine.deregister_interface(InterfaceId(1));
         assert!(!engine.interfaces.contains_key(&InterfaceId(1)));
+    }
+
+    #[test]
+    fn test_deregister_interface_removes_announce_queue_state() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+        assert_eq!(engine.announce_queue_count(), 1);
+
+        engine.deregister_interface(InterfaceId(1));
+        assert_eq!(engine.announce_queue_count(), 0);
+    }
+
+    #[test]
+    fn test_deregister_interface_preserves_other_announce_queues() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100],
+            [0xAA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100],
+            [0xAB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(2),
+            vec![0x03; 100],
+            [0xBA; 16],
+            2,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(2),
+            vec![0x04; 100],
+            [0xBB; 16],
+            3,
+            0.0,
+            0.0,
+            Some(1000),
+            constants::ANNOUNCE_CAP,
+        );
+
+        engine.deregister_interface(InterfaceId(1));
+        assert_eq!(engine.announce_queue_count(), 1);
+        assert_eq!(engine.nonempty_announce_queue_count(), 1);
     }
 
     #[test]
@@ -3932,6 +4023,7 @@ mod tests {
             announce_sig_cache_max_entries: constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: constants::ANNOUNCE_SIG_CACHE_TTL,
             announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
         });
         engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
         engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob

@@ -39,6 +39,7 @@ mod tests {
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
             announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
         })
     }
 

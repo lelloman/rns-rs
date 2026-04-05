@@ -82,6 +82,8 @@ pub struct ReticulumSection {
     pub announce_sig_cache_ttl: u64,
     /// Maximum entries in the async announce verification queue.
     pub announce_queue_max_entries: usize,
+    /// Maximum interface-scoped announce queues retained.
+    pub announce_queue_max_interfaces: usize,
     /// Maximum retained bytes in the async announce verification queue.
     pub announce_queue_max_bytes: usize,
     /// TTL for queued async announce verification entries, in seconds.
@@ -134,6 +136,7 @@ impl Default for ReticulumSection {
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
             announce_queue_max_bytes: 256 * 1024,
             announce_queue_ttl: 30,
             announce_queue_overflow_policy: "drop_worst".into(),
@@ -652,6 +655,19 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.announce_queue_max_entries = n;
     }
+    if let Some(v) = kvs.get("announce_queue_max_interfaces") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "announce_queue_max_interfaces".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "announce_queue_max_interfaces".into(),
+                value: v.clone(),
+            });
+        }
+        section.announce_queue_max_interfaces = n;
+    }
     if let Some(v) = kvs.get("announce_queue_max_bytes") {
         let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
             key: "announce_queue_max_bytes".into(),
@@ -848,6 +864,7 @@ announce_signature_cache_enabled = false
 announce_signature_cache_max_entries = 500
 announce_signature_cache_ttl = 300
 announce_queue_max_entries = 123
+announce_queue_max_interfaces = 321
 announce_queue_max_bytes = 4567
 announce_queue_ttl = 89
 announce_queue_overflow_policy = drop_oldest
@@ -876,6 +893,7 @@ announce_queue_overflow_policy = drop_oldest
         assert_eq!(config.reticulum.announce_sig_cache_max_entries, 500);
         assert_eq!(config.reticulum.announce_sig_cache_ttl, 300);
         assert_eq!(config.reticulum.announce_queue_max_entries, 123);
+        assert_eq!(config.reticulum.announce_queue_max_interfaces, 321);
         assert_eq!(config.reticulum.announce_queue_max_bytes, 4567);
         assert_eq!(config.reticulum.announce_queue_ttl, 89);
         assert_eq!(
@@ -920,6 +938,18 @@ announce_queue_max_entries = 0
         assert!(matches!(
             err,
             ConfigError::InvalidValue { key, .. } if key == "announce_queue_max_entries"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+announce_queue_max_interfaces = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "announce_queue_max_interfaces"
         ));
 
         let err = parse(
