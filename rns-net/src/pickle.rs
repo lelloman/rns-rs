@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn roundtrip_float() {
-        let val = PickleValue::Float(3.14159);
+        let val = PickleValue::Float(std::f64::consts::PI);
         let encoded = encode(&val);
         let decoded = decode(&encoded).unwrap();
         assert_eq!(decoded, val);

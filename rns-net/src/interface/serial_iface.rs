@@ -381,7 +381,7 @@ mod tests {
             loop {
                 match reader.read(&mut buf) {
                     Ok(n) if n > 0 => {
-                        for frame in decoder.feed(&buf[..n]) {
+                        if let Some(frame) = decoder.feed(&buf[..n]).into_iter().next() {
                             let _ = tx.send(Event::Frame {
                                 interface_id: InterfaceId(0),
                                 data: frame,
