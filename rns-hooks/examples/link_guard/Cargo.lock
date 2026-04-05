@@ -11,11 +11,11 @@ dependencies = [
 
 [[package]]
 name = "rns-hooks-abi"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "rns-hooks-sdk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rns-hooks-abi",
 ]
