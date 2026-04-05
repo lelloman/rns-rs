@@ -240,12 +240,10 @@ fn run(args: Args) -> Result<(), String> {
                     "rns-sentineld reconnecting provider bridge at {}",
                     runtime.provider_socket.display()
                 );
-                stream = wait_for_provider_bridge(&runtime.provider_socket).map_err(|conn_err| {
-                    format!(
-                        "provider reconnect failed after disconnect: {}",
-                        conn_err
-                    )
-                })?;
+                stream =
+                    wait_for_provider_bridge(&runtime.provider_socket).map_err(|conn_err| {
+                        format!("provider reconnect failed after disconnect: {}", conn_err)
+                    })?;
                 log::info!("rns-sentineld provider bridge reconnected");
             }
         }

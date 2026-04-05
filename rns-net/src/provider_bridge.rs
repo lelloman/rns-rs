@@ -875,7 +875,10 @@ mod tests {
             stats.consumers
         );
         assert!(
-            stats.consumers.iter().all(|c| c.dropped_pending <= c.dropped_total),
+            stats
+                .consumers
+                .iter()
+                .all(|c| c.dropped_pending <= c.dropped_total),
             "pending drops should never exceed total drops: {:?}",
             stats.consumers
         );

@@ -269,7 +269,14 @@ fn print_provider_stats(response: &PickleValue) {
 
     println!(
         "{:<4} {:<9} {:>8} {:>12} {:>15} {:>13} {:>11} {:>10}",
-        "ID", "Connected", "Queue", "QueuedBytes", "DroppedPending", "DroppedTotal", "MaxEvents", "MaxBytes"
+        "ID",
+        "Connected",
+        "Queue",
+        "QueuedBytes",
+        "DroppedPending",
+        "DroppedTotal",
+        "MaxEvents",
+        "MaxBytes"
     );
     println!("{}", "-".repeat(96));
     for consumer in consumers {
