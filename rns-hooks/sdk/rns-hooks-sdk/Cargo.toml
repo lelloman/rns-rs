@@ -1,6 +1,6 @@
 [package]
 name = "rns-hooks-sdk"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Guest-side SDK for writing rns-hooks WASM programs"
 license = "MIT"
@@ -11,6 +11,6 @@ default = []
 alloc = []
 
 [dependencies]
-rns-hooks-abi = { version = "0.1.1", path = "../rns-hooks-abi" }
+rns-hooks-abi = { version = "0.1.2", path = "../rns-hooks-abi" }
 
 [lib]

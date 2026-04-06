@@ -25,6 +25,7 @@ tikv-jemallocator = "0.6"
 anyhow = "1"
 serde_json = "1"
 rns-stats-hook = { version = "0.1.1", path = "../rns-stats-hook" }
+rns-sentinel-hook = { version = "0.1.1", path = "../rns-sentinel-hook" }
 
 [dev-dependencies]
 tempfile = "3"

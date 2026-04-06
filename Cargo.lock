@@ -1962,6 +1962,7 @@ dependencies = [
  "rns-crypto",
  "rns-hooks-abi",
  "rns-net",
+ "rns-sentinel-hook",
  "rns-stats-hook",
  "rusqlite",
  "serde_json",
@@ -2011,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "rns-hooks"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "criterion",
  "log",
@@ -2022,11 +2023,11 @@ dependencies = [
 
 [[package]]
 name = "rns-hooks-abi"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "rns-hooks-sdk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rns-hooks-abi",
 ]
@@ -2054,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "rns-sentinel-hook"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rns-hooks-abi",
  "rns-hooks-sdk",
