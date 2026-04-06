@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "rns-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "log",
  "rns-crypto",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "env_logger 0.11.8",
  "libc",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bincode",
  "bzip2",
@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "rns-stats-hook"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rns-hooks-abi",
  "rns-hooks-sdk",
