@@ -5191,7 +5191,7 @@ impl Driver {
                 }
                 #[cfg(not(feature = "rns-hooks"))]
                 {
-                    QueryResponse::ProviderBridgeStats(None::<ProviderBridgeStats>)
+                    QueryResponse::ProviderBridgeStats(None::<crate::event::ProviderBridgeStats>)
                 }
             }
             QueryRequest::PathTable { max_hops } => {
@@ -7652,6 +7652,8 @@ mod tests {
     use std::io;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     struct MockWriter {
         sent: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -7695,6 +7697,17 @@ mod tests {
                 "intentional stall",
             ))
         }
+    }
+
+    fn wait_for_sent_len(sent: &Arc<Mutex<Vec<Vec<u8>>>>, expected: usize) {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            if sent.lock().unwrap().len() == expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(sent.lock().unwrap().len(), expected);
     }
 
     use rns_core::types::{DestHash, IdentityHash, LinkId as TypedLinkId, PacketHash};
@@ -8683,7 +8696,7 @@ mod tests {
         // Old writer should not have received anything
         assert_eq!(sent_old.lock().unwrap().len(), 0);
         // New writer should have received the data
-        assert_eq!(sent_new.lock().unwrap().len(), 1);
+        wait_for_sent_len(&sent_new, 1);
         assert_eq!(sent_new.lock().unwrap()[0], vec![0xFF]);
 
         drop(tx);
@@ -8744,7 +8757,7 @@ mod tests {
             interface: InterfaceId(100),
             raw: vec![0x42],
         }]);
-        assert_eq!(sent.lock().unwrap().len(), 1);
+        wait_for_sent_len(&sent, 1);
 
         drop(tx);
     }
