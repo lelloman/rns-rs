@@ -346,6 +346,7 @@ pub(crate) fn runtime_handle_from_config(config: &TcpServerConfig) -> TcpServerR
 mod tests {
     use super::*;
     use std::net::TcpStream;
+    use std::sync::mpsc::RecvTimeoutError;
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
@@ -401,6 +402,33 @@ mod tests {
                 assert!(info.is_some());
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn listener_stop_prevents_new_accepts() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(1500));
+
+        let config = make_server_config(port, 15, None);
+        let control = start(config, tx, next_id).unwrap();
+
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        thread::sleep(Duration::from_millis(120));
+
+        let connect_result = TcpStream::connect(format!("127.0.0.1:{}", port));
+        if let Ok(stream) = connect_result {
+            drop(stream);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {}
+            other => panic!(
+                "expected no InterfaceUp after listener stop, got {:?}",
+                other
+            ),
         }
     }
 

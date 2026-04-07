@@ -672,6 +672,7 @@ impl InterfaceFactory for LocalClientFactory {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+    use std::sync::mpsc::RecvTimeoutError;
 
     fn connect_test_client(instance_name: &str, _port: u16) {
         #[cfg(target_os = "linux")]
@@ -740,6 +741,40 @@ mod tests {
                 assert!(info.is_some());
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn server_stop_prevents_new_accepts() {
+        let port = find_free_port();
+        let instance_name = "test-stop".to_string();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(7150));
+
+        let config = LocalServerConfig {
+            instance_name: instance_name.clone(),
+            port,
+            interface_id: InterfaceId(71),
+        };
+
+        let control = start_server(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        control.request_stop();
+        thread::sleep(Duration::from_millis(120));
+
+        #[cfg(target_os = "linux")]
+        let connect_result = unix_socket::try_connect_unix(&instance_name);
+
+        #[cfg(not(target_os = "linux"))]
+        let connect_result = TcpStream::connect(format!("127.0.0.1:{}", port));
+
+        if let Ok(stream) = connect_result {
+            drop(stream);
+        }
+
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {}
+            other => panic!("expected no InterfaceUp after server stop, got {:?}", other),
         }
     }
 
