@@ -710,7 +710,16 @@ fn check_exits(children: &mut [ManagedChild]) -> Result<Option<(Role, ExitStatus
     Ok(None)
 }
 
+fn shutdown_priority(role: Role) -> u8 {
+    match role {
+        Role::Statsd => 0,
+        Role::Sentineld => 1,
+        Role::Rnsd => 2,
+    }
+}
+
 fn terminate_children(children: &mut [ManagedChild], shared_state: Option<&SharedState>) {
+    children.sort_by_key(|managed| shutdown_priority(managed.role));
     for managed in children.iter_mut() {
         if let Err(e) = terminate_child(managed) {
             log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
@@ -777,8 +786,8 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name, ProcessCommand,
-        ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name,
+        shutdown_priority, ProcessCommand, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;
@@ -881,6 +890,13 @@ mod tests {
         assert_eq!(role_from_name("rns-sentineld"), Some(Role::Sentineld));
         assert_eq!(role_from_name("rns-statsd"), Some(Role::Statsd));
         assert_eq!(role_from_name("unknown"), None);
+    }
+
+    #[test]
+    fn shutdown_priority_stops_sidecars_before_rnsd() {
+        let mut roles = vec![Role::Rnsd, Role::Sentineld, Role::Statsd];
+        roles.sort_by_key(|role| shutdown_priority(*role));
+        assert_eq!(roles, vec![Role::Statsd, Role::Sentineld, Role::Rnsd]);
     }
 
     #[test]
