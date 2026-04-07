@@ -14,7 +14,7 @@ use rns_ctl::state::{
     mark_process_stopped, push_process_log, set_process_log_path, set_process_readiness,
     ProcessControlCommand, SharedState,
 };
-use rns_net::{HookInfo, RpcAddr, RpcClient};
+use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -75,6 +75,7 @@ pub struct SupervisorConfig {
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     pub readiness: Vec<ProcessReadiness>,
     pub log_dir: Option<PathBuf>,
+    pub rnsd_drain: Option<RnsdDrainConfig>,
 }
 
 pub struct Supervisor {
@@ -83,6 +84,15 @@ pub struct Supervisor {
     control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     readiness: Vec<ProcessReadiness>,
     log_store: Option<LogStore>,
+    rnsd_drain: Option<RnsdDrainConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RnsdDrainConfig {
+    pub rpc_addr: RpcAddr,
+    pub auth_key: [u8; 32],
+    pub timeout: Duration,
+    pub poll_interval: Duration,
 }
 
 impl Supervisor {
@@ -93,6 +103,7 @@ impl Supervisor {
             control_rx: config.control_rx,
             readiness: config.readiness,
             log_store: config.log_dir.map(LogStore::new),
+            rnsd_drain: config.rnsd_drain,
         }
     }
 
@@ -121,6 +132,7 @@ impl Supervisor {
         loop {
             if stop_rx.try_recv().is_ok() {
                 log::info!("shutdown requested");
+                self.drain_rnsd(&children, "supervisor shutdown");
                 terminate_children(&mut children, self.shared_state.as_ref());
                 return Ok(0);
             }
@@ -171,6 +183,7 @@ impl Supervisor {
         };
 
         if let Some(index) = children.iter().position(|child| child.role == role) {
+            self.drain_role(role, children, "process restart");
             terminate_child(&mut children[index]).map_err(|e| {
                 format!(
                     "failed to terminate {} during restart: {}",
@@ -214,6 +227,7 @@ impl Supervisor {
         let Some(index) = children.iter().position(|child| child.role == role) else {
             return Ok(());
         };
+        self.drain_role(role, children, "process stop");
         terminate_child(&mut children[index]).map_err(|e| {
             format!(
                 "failed to terminate {} during stop: {}",
@@ -242,6 +256,34 @@ impl Supervisor {
         for readiness in &self.readiness {
             let (ready, ready_state, detail) = readiness.probe(state);
             set_process_readiness(state, readiness.name(), ready, ready_state, detail);
+        }
+    }
+
+    fn drain_role(&self, role: Role, children: &[ManagedChild], reason: &str) {
+        if role == Role::Rnsd {
+            self.drain_rnsd(children, reason);
+        }
+    }
+
+    fn drain_rnsd(&self, children: &[ManagedChild], reason: &str) {
+        let Some(config) = self.rnsd_drain.as_ref() else {
+            return;
+        };
+        if !children.iter().any(|child| child.role == Role::Rnsd) {
+            return;
+        }
+        match request_rnsd_drain(config, reason) {
+            Ok(()) => {
+                let drained = wait_for_rnsd_drain(config);
+                if drained {
+                    log::info!("rnsd drain completed before {}", reason);
+                } else {
+                    log::warn!("rnsd drain timed out before {}", reason);
+                }
+            }
+            Err(err) => {
+                log::warn!("failed to request rnsd drain before {}: {}", reason, err);
+            }
         }
     }
 }
@@ -497,6 +539,46 @@ fn missing_required_hooks(hooks: &[HookInfo], required_hooks: &[(String, String)
         .collect()
 }
 
+fn request_rnsd_drain(config: &RnsdDrainConfig, reason: &str) -> Result<(), String> {
+    log::info!(
+        "requesting rnsd drain before {} with {:.3}s timeout",
+        reason,
+        config.timeout.as_secs_f64()
+    );
+    let mut client = RpcClient::connect(&config.rpc_addr, &config.auth_key)
+        .map_err(|err| format!("rpc connect failed: {}", err))?;
+    client
+        .begin_drain(config.timeout)
+        .map_err(|err| format!("begin_drain failed: {}", err))?;
+    Ok(())
+}
+
+fn wait_for_rnsd_drain(config: &RnsdDrainConfig) -> bool {
+    let deadline = std::time::Instant::now() + config.timeout;
+    while std::time::Instant::now() < deadline {
+        match fetch_rnsd_drain_status(config) {
+            Ok(Some(status)) if drain_complete_for_shutdown(&status) => return true,
+            Ok(Some(_)) => {}
+            Ok(None) => {}
+            Err(err) => log::debug!("rnsd drain status poll failed: {}", err),
+        }
+        thread::sleep(config.poll_interval);
+    }
+    false
+}
+
+fn fetch_rnsd_drain_status(config: &RnsdDrainConfig) -> Result<Option<DrainStatus>, String> {
+    let mut client = RpcClient::connect(&config.rpc_addr, &config.auth_key)
+        .map_err(|err| format!("rpc connect failed: {}", err))?;
+    client
+        .drain_status()
+        .map_err(|err| format!("drain_status failed: {}", err))
+}
+
+fn drain_complete_for_shutdown(status: &DrainStatus) -> bool {
+    status.drain_complete || status.deadline_remaining_seconds == Some(0.0)
+}
+
 fn spawn_child(
     spec: &ProcessSpec,
     shared_state: Option<&SharedState>,
@@ -735,6 +817,7 @@ mod tests {
             control_rx: None,
             readiness: Vec::new(),
             log_dir: None,
+            rnsd_drain: None,
         };
 
         assert_eq!(supervisor.specs.len(), 3);

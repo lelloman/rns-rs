@@ -22,10 +22,11 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, Event, EventSender, HookInfo,
-    InterfaceStatsResponse, PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventSender,
+    HookInfo, InterfaceStatsResponse, LifecycleState, PathTableEntry, ProviderBridgeStats,
+    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -428,9 +429,28 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "drain_status" => {
+                    let resp = send_query(event_tx, QueryRequest::DrainStatus)?;
+                    if let QueryResponse::DrainStatus(status) = resp {
+                        Ok(drain_status_to_pickle(&status))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
             };
         }
+    }
+
+    if let Some(begin_val) = request.get("begin_drain") {
+        let timeout_secs = begin_val
+            .as_float()
+            .or_else(|| begin_val.as_int().map(|value| value as f64))
+            .unwrap_or(0.0)
+            .max(0.0);
+        let timeout = Duration::from_secs_f64(timeout_secs);
+        let _ = event_tx.send(Event::BeginDrain { timeout });
+        return Ok(PickleValue::Bool(true));
     }
 
     if let Some(set_val) = request.get("set").and_then(|v| v.as_str()) {
@@ -1442,6 +1462,50 @@ fn provider_bridge_stats_to_pickle(stats: &ProviderBridgeStats) -> PickleValue {
     ])
 }
 
+fn lifecycle_state_name(state: LifecycleState) -> &'static str {
+    match state {
+        LifecycleState::Active => "active",
+        LifecycleState::Draining => "draining",
+        LifecycleState::Stopping => "stopping",
+        LifecycleState::Stopped => "stopped",
+    }
+}
+
+fn drain_status_to_pickle(status: &DrainStatus) -> PickleValue {
+    PickleValue::Dict(vec![
+        (
+            PickleValue::String("state".into()),
+            PickleValue::String(lifecycle_state_name(status.state).into()),
+        ),
+        (
+            PickleValue::String("drain_age_seconds".into()),
+            status
+                .drain_age_seconds
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("deadline_remaining_seconds".into()),
+            status
+                .deadline_remaining_seconds
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("drain_complete".into()),
+            PickleValue::Bool(status.drain_complete),
+        ),
+        (
+            PickleValue::String("detail".into()),
+            status
+                .detail
+                .as_ref()
+                .map(|detail| PickleValue::String(detail.clone()))
+                .unwrap_or(PickleValue::None),
+        ),
+    ])
+}
+
 fn runtime_config_value_to_pickle(value: &RuntimeConfigValue) -> PickleValue {
     match value {
         RuntimeConfigValue::Int(v) => PickleValue::Int(*v),
@@ -1576,6 +1640,22 @@ impl RpcClient {
             PickleValue::String("hooks".into()),
         )]))?;
         parse_hook_list(&response)
+    }
+
+    pub fn begin_drain(&mut self, timeout: Duration) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![(
+            PickleValue::String("begin_drain".into()),
+            PickleValue::Float(timeout.as_secs_f64()),
+        )]))?;
+        Ok(response.as_bool().unwrap_or(false))
+    }
+
+    pub fn drain_status(&mut self) -> io::Result<Option<DrainStatus>> {
+        let response = self.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("drain_status".into()),
+        )]))?;
+        parse_drain_status(&response)
     }
 
     pub fn provider_bridge_stats(&mut self) -> io::Result<PickleValue> {
@@ -1731,6 +1811,49 @@ impl RpcClient {
         let response = self.call(&PickleValue::Dict(request))?;
         Ok(response.as_bool().unwrap_or(false))
     }
+}
+
+fn parse_lifecycle_state(value: &str) -> Option<LifecycleState> {
+    match value {
+        "active" => Some(LifecycleState::Active),
+        "draining" => Some(LifecycleState::Draining),
+        "stopping" => Some(LifecycleState::Stopping),
+        "stopped" => Some(LifecycleState::Stopped),
+        _ => None,
+    }
+}
+
+fn parse_drain_status(value: &PickleValue) -> io::Result<Option<DrainStatus>> {
+    if !matches!(value, PickleValue::Dict(_)) {
+        return Ok(None);
+    }
+    let state = value
+        .get("state")
+        .and_then(|entry| entry.as_str())
+        .and_then(parse_lifecycle_state)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing drain state"))?;
+    let drain_age_seconds = value
+        .get("drain_age_seconds")
+        .and_then(|entry| entry.as_float().or_else(|| entry.as_int().map(|v| v as f64)));
+    let deadline_remaining_seconds = value.get("deadline_remaining_seconds").and_then(|entry| {
+        entry
+            .as_float()
+            .or_else(|| entry.as_int().map(|v| v as f64))
+    });
+    let drain_complete = value
+        .get("drain_complete")
+        .and_then(|entry| entry.as_bool())
+        .unwrap_or(false);
+    let detail = value
+        .get("detail")
+        .and_then(|entry| entry.as_str().map(|v| v.to_string()));
+    Ok(Some(DrainStatus {
+        state,
+        drain_age_seconds,
+        deadline_remaining_seconds,
+        drain_complete,
+        detail,
+    }))
 }
 
 fn parse_hook_result(response: &PickleValue) -> io::Result<Result<(), String>> {
@@ -2351,6 +2474,68 @@ mod tests {
 
         let response = handle_rpc_request(&request, &event_tx).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn begin_drain_rpc_emits_event() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || match event_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Event::BeginDrain { timeout }) => {
+                assert!((timeout.as_secs_f64() - 1.5).abs() < 0.001);
+            }
+            other => panic!("Expected BeginDrain event, got {:?}", other),
+        });
+
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("begin_drain".into()),
+            PickleValue::Float(1.5),
+        )]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::Bool(true));
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn drain_status_rpc_roundtrips_fields() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) = event_rx.recv() {
+                let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                    state: LifecycleState::Draining,
+                    drain_age_seconds: Some(0.75),
+                    deadline_remaining_seconds: Some(2.25),
+                    drain_complete: false,
+                    detail: Some("node is draining existing work".into()),
+                }));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("drain_status".into()),
+        )]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response.get("state").unwrap().as_str(), Some("draining"));
+        assert_eq!(
+            response.get("drain_complete").unwrap().as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            response
+                .get("deadline_remaining_seconds")
+                .unwrap()
+                .as_float(),
+            Some(2.25)
+        );
+        assert_eq!(
+            response.get("detail").unwrap().as_str(),
+            Some("node is draining existing work")
+        );
         driver.join().unwrap();
     }
 

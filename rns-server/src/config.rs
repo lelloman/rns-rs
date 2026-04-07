@@ -10,8 +10,10 @@ use std::sync::mpsc;
 
 use crate::args::Args;
 use crate::supervisor::{
-    ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+    ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role,
+    SupervisorConfig,
 };
+use rns_net::RpcAddr;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -173,6 +175,7 @@ impl ServerConfig {
             control_rx,
             readiness: self.readiness_checks(),
             log_dir: Some(self.resolved_config_dir.join("logs")),
+            rnsd_drain: self.rnsd_drain_config(),
         }
     }
 
@@ -411,6 +414,21 @@ impl ServerConfig {
                 target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
             },
         ]
+    }
+
+    fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
+        let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
+        let identity = rns_net::storage::load_or_create_identity(&paths.identities).ok()?;
+        let private_key = identity.get_private_key()?;
+        Some(RnsdDrainConfig {
+            rpc_addr: RpcAddr::Tcp(
+                self.rnsd_rpc_addr.ip().to_string(),
+                self.rnsd_rpc_addr.port(),
+            ),
+            auth_key: rns_net::rpc::derive_auth_key(&private_key),
+            timeout: std::time::Duration::from_secs(3),
+            poll_interval: std::time::Duration::from_millis(100),
+        })
     }
 
     fn rnsd_args(&self) -> Vec<String> {
