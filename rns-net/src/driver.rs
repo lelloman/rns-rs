@@ -826,6 +826,25 @@ impl Driver {
         }
     }
 
+    fn enforce_drain_deadline(&mut self) {
+        if !matches!(self.lifecycle_state, LifecycleState::Draining) {
+            return;
+        }
+        let Some(deadline) = self.drain_deadline else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+
+        log::info!("driver drain deadline reached; tearing down remaining links");
+        self.lifecycle_state = LifecycleState::Stopping;
+        let link_actions = self.link_manager.teardown_all_links();
+        self.dispatch_link_actions(link_actions);
+        let cleanup_actions = self.link_manager.tick(&mut self.rng);
+        self.dispatch_link_actions(cleanup_actions);
+    }
+
     fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
         if self.known_destinations_max_entries == usize::MAX {
             return 0;
@@ -4227,6 +4246,7 @@ impl Driver {
                     // Tick link manager (keepalive, stale, timeout)
                     let link_actions = self.link_manager.tick(&mut self.rng);
                     self.dispatch_link_actions(link_actions);
+                    self.enforce_drain_deadline();
                     // Tick hole-punch manager
                     {
                         let tx = self.get_event_sender();
@@ -8783,6 +8803,55 @@ mod tests {
             .detail
             .unwrap_or_default()
             .contains("1 link(s) still active"));
+    }
+
+    #[test]
+    fn enforce_drain_deadline_tears_down_remaining_links() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+
+        let _ = driver.link_manager.create_link(
+            &[0xDD; 16],
+            &[0x11; 32],
+            1,
+            rns_core::constants::MTU as u32,
+            &mut OsRng,
+        );
+        driver.begin_drain(Duration::ZERO);
+
+        driver.enforce_drain_deadline();
+
+        assert_eq!(driver.lifecycle_state, LifecycleState::Stopping);
+        assert_eq!(driver.link_manager.link_count(), 0);
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert!(status.drain_complete);
+        assert_eq!(status.state, LifecycleState::Stopping);
     }
 
     #[test]
