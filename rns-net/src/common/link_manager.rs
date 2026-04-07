@@ -2116,6 +2116,40 @@ impl LinkManager {
             .sum()
     }
 
+    /// Cancel all active resource transfers and return the generated actions.
+    pub fn cancel_all_resources(&mut self, rng: &mut dyn Rng) -> Vec<LinkManagerAction> {
+        let link_ids: Vec<LinkId> = self.links.keys().copied().collect();
+        let mut all_actions = Vec::new();
+
+        for link_id in &link_ids {
+            let link = match self.links.get_mut(link_id) {
+                Some(l) => l,
+                None => continue,
+            };
+
+            let mut sender_actions = Vec::new();
+            for sender in &mut link.outgoing_resources {
+                sender_actions.extend(sender.cancel());
+            }
+
+            let mut receiver_actions = Vec::new();
+            for receiver in &mut link.incoming_resources {
+                receiver_actions.extend(receiver.reject());
+            }
+
+            link.outgoing_resources
+                .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
+            link.incoming_resources
+                .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
+
+            let _ = link;
+            all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
+            all_actions.extend(self.process_resource_actions(link_id, receiver_actions, rng));
+        }
+
+        all_actions
+    }
+
     /// Get information about all active links.
     pub fn link_entries(&self) -> Vec<crate::event::LinkInfoEntry> {
         self.links
@@ -3298,6 +3332,23 @@ mod tests {
             .iter()
             .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
         assert!(has_failed, "RCL should produce ResourceFailed");
+    }
+
+    #[test]
+    fn test_cancel_all_resources_clears_active_transfers() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let actions = init_mgr.send_resource(&link_id, b"resource body", None, &mut rng);
+        assert!(!actions.is_empty());
+        assert_eq!(init_mgr.resource_transfer_count(), 1);
+
+        let cancel_actions = init_mgr.cancel_all_resources(&mut rng);
+
+        assert_eq!(init_mgr.resource_transfer_count(), 0);
+        assert!(cancel_actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::SendPacket { .. })));
     }
 
     #[test]

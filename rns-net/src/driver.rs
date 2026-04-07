@@ -869,6 +869,8 @@ impl Driver {
 
         log::info!("driver drain deadline reached; tearing down remaining links");
         self.lifecycle_state = LifecycleState::Stopping;
+        let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
+        self.dispatch_link_actions(resource_actions);
         let link_actions = self.link_manager.teardown_all_links();
         self.dispatch_link_actions(link_actions);
         let cleanup_actions = self.link_manager.tick(&mut self.rng);
