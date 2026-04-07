@@ -479,6 +479,16 @@ impl HolePunchManager {
         }
     }
 
+    /// Abort and remove all active hole-punch sessions.
+    pub fn abort_all_sessions(&mut self) {
+        for (_, mut session) in self.sessions.drain() {
+            if let Some(handle) = session.punch_handle.take() {
+                handle.cancel();
+            }
+        }
+        self.link_to_session.clear();
+    }
+
     /// Check if a message type is a hole-punch signaling message.
     pub fn is_holepunch_message(msgtype: u16) -> bool {
         is_holepunch_msgtype(msgtype)
@@ -1018,6 +1028,25 @@ mod tests {
         mgr.link_closed(&link_id);
         assert_eq!(mgr.session_count(), 0);
         assert!(!mgr.has_session_for_link(&link_id));
+    }
+
+    #[test]
+    fn test_abort_all_sessions_cleans_up_all_links() {
+        let mut mgr = HolePunchManager::new(vec![make_probe_addr()], ProbeProtocol::Rnsp, None);
+        let mut rng = make_rng(0x55);
+        let (tx, _rx) = make_tx();
+        let link_a = [0x11; 16];
+        let link_b = [0x22; 16];
+
+        mgr.propose(link_a, &test_derived_key(), &mut rng, &tx);
+        mgr.propose(link_b, &[0xBB; 32], &mut rng, &tx);
+        assert!(mgr.session_count() >= 1);
+
+        mgr.abort_all_sessions();
+
+        assert_eq!(mgr.session_count(), 0);
+        assert!(!mgr.has_session_for_link(&link_a));
+        assert!(!mgr.has_session_for_link(&link_b));
     }
 
     #[test]

@@ -793,6 +793,7 @@ impl Driver {
     fn drain_status(&self) -> DrainStatus {
         let now = Instant::now();
         let active_links = self.link_manager.link_count();
+        let active_holepunch_sessions = self.holepunch_manager.session_count();
         let drain_age_seconds = self
             .drain_started_at
             .map(|started| started.elapsed().as_secs_f64());
@@ -804,13 +805,19 @@ impl Driver {
         });
         let detail = match self.lifecycle_state {
             LifecycleState::Active => Some("node is accepting normal work".into()),
-            LifecycleState::Draining => Some(if active_links > 0 {
-                format!(
-                    "node is draining existing work; {} link(s) still active",
-                    active_links
-                )
-            } else {
-                "node is draining existing work; no active links remain".into()
+            LifecycleState::Draining => Some(match (active_links, active_holepunch_sessions) {
+                (0, 0) => "node is draining existing work; no active links or hole-punch sessions remain".into(),
+                (links, 0) => {
+                    format!("node is draining existing work; {} link(s) still active", links)
+                }
+                (0, sessions) => format!(
+                    "node is draining existing work; {} hole-punch session(s) still active",
+                    sessions
+                ),
+                (links, sessions) => format!(
+                    "node is draining existing work; {} link(s) and {} hole-punch session(s) still active",
+                    links, sessions
+                ),
             }),
             LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
             LifecycleState::Stopped => Some("node is stopped".into()),
@@ -821,7 +828,7 @@ impl Driver {
             drain_age_seconds,
             deadline_remaining_seconds,
             drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining)
-                || active_links == 0,
+                || (active_links == 0 && active_holepunch_sessions == 0),
             detail,
         }
     }
@@ -843,6 +850,7 @@ impl Driver {
         self.dispatch_link_actions(link_actions);
         let cleanup_actions = self.link_manager.tick(&mut self.rng);
         self.dispatch_link_actions(cleanup_actions);
+        self.holepunch_manager.abort_all_sessions();
     }
 
     fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
@@ -8751,7 +8759,7 @@ mod tests {
         assert!(status.deadline_remaining_seconds.is_some());
         assert_eq!(
             status.detail.as_deref(),
-            Some("node is draining existing work; no active links remain")
+            Some("node is draining existing work; no active links or hole-punch sessions remain")
         );
     }
 
@@ -8846,6 +8854,72 @@ mod tests {
 
         assert_eq!(driver.lifecycle_state, LifecycleState::Stopping);
         assert_eq!(driver.link_manager.link_count(), 0);
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert!(status.drain_complete);
+        assert_eq!(status.state, LifecycleState::Stopping);
+    }
+
+    #[test]
+    fn begin_drain_with_holepunch_session_reports_incomplete_status_and_deadline_aborts_it() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+        driver.holepunch_manager = crate::holepunch::orchestrator::HolePunchManager::new(
+            vec!["127.0.0.1:4343".parse().unwrap()],
+            rns_core::holepunch::ProbeProtocol::Rnsp,
+            None,
+        );
+
+        let _ = driver.holepunch_manager.propose(
+            [0x44; 16],
+            &[0xAA; 32],
+            &mut OsRng,
+            &driver.get_event_sender(),
+        );
+        assert_eq!(driver.holepunch_manager.session_count(), 1);
+
+        driver.begin_drain(Duration::from_secs(3));
+
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert_eq!(status.state, LifecycleState::Draining);
+        assert!(!status.drain_complete);
+        assert!(status
+            .detail
+            .unwrap_or_default()
+            .contains("1 hole-punch session(s) still active"));
+
+        driver.begin_drain(Duration::ZERO);
+        driver.enforce_drain_deadline();
+
+        assert_eq!(driver.holepunch_manager.session_count(), 0);
         let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
         else {
             panic!("expected drain status response");
