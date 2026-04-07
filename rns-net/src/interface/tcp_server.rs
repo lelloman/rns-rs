@@ -15,7 +15,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{ListenerControl, Writer};
 
 /// Configuration for a TCP server interface.
 #[derive(Debug, Clone)]
@@ -82,22 +82,37 @@ impl Writer for TcpServerWriter {
 ///
 /// `next_id` is shared with the node for allocating unique InterfaceIds
 /// for each connected client.
-pub fn start(config: TcpServerConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
+pub fn start(
+    config: TcpServerConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+) -> io::Result<ListenerControl> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
+    listener.set_nonblocking(true)?;
 
     log::info!("[{}] TCP server listening on {}", config.name, addr);
 
     let name = config.name.clone();
     let runtime = Arc::clone(&config.runtime);
     let active_connections = Arc::new(AtomicUsize::new(0));
+    let control = ListenerControl::new();
+    let listener_control = control.clone();
     thread::Builder::new()
         .name(format!("tcp-server-{}", config.interface_id.0))
         .spawn(move || {
-            listener_loop(listener, name, tx, next_id, runtime, active_connections);
+            listener_loop(
+                listener,
+                name,
+                tx,
+                next_id,
+                runtime,
+                active_connections,
+                listener_control,
+            );
         })?;
 
-    Ok(())
+    Ok(control)
 }
 
 /// Listener thread: accepts connections and spawns reader threads.
@@ -108,10 +123,21 @@ fn listener_loop(
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<TcpServerRuntime>>,
     active_connections: Arc<AtomicUsize>,
+    control: ListenerControl,
 ) {
-    for stream_result in listener.incoming() {
+    loop {
+        if control.should_stop() {
+            log::info!("[{}] listener stopping", name);
+            return;
+        }
+
+        let stream_result = listener.accept().map(|(stream, _)| stream);
         let stream = match stream_result {
             Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
             Err(e) => {
                 log::warn!("[{}] accept failed: {}", name, e);
                 continue;
@@ -301,8 +327,10 @@ impl InterfaceFactory for TcpServerFactory {
             .into_any()
             .downcast::<TcpServerConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
-        start(cfg, ctx.tx, ctx.next_dynamic_id)?;
-        Ok(StartResult::Listener)
+        let control = start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+        Ok(StartResult::Listener {
+            control: Some(control),
+        })
     }
 }
 

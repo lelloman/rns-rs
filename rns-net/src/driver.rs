@@ -393,6 +393,7 @@ pub struct Driver {
     pub(crate) lifecycle_state: LifecycleState,
     pub(crate) drain_started_at: Option<Instant>,
     pub(crate) drain_deadline: Option<Instant>,
+    pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
     /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
     pub(crate) tunnel_synth_dest: [u8; 16],
@@ -594,6 +595,7 @@ impl Driver {
             lifecycle_state: LifecycleState::Active,
             drain_started_at: None,
             drain_deadline: None,
+            listener_controls: Vec::new(),
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,
@@ -743,6 +745,7 @@ impl Driver {
                     "driver entering drain mode with {:.3}s timeout",
                     timeout.as_secs_f64()
                 );
+                self.stop_listener_accepts();
             }
             LifecycleState::Draining => {
                 self.drain_deadline = Some(deadline);
@@ -750,6 +753,7 @@ impl Driver {
                     "driver drain deadline updated to {:.3}s from now",
                     timeout.as_secs_f64()
                 );
+                self.stop_listener_accepts();
             }
             LifecycleState::Stopping | LifecycleState::Stopped => {
                 log::debug!(
@@ -762,6 +766,20 @@ impl Driver {
 
     fn is_draining(&self) -> bool {
         matches!(self.lifecycle_state, LifecycleState::Draining)
+    }
+
+    pub fn register_listener_control(&mut self, control: crate::interface::ListenerControl) {
+        self.listener_controls.push(control);
+    }
+
+    fn stop_listener_accepts(&mut self) {
+        for control in &self.listener_controls {
+            control.request_stop();
+        }
+        #[cfg(feature = "rns-hooks")]
+        if let Some(bridge) = self.provider_bridge.as_ref() {
+            bridge.stop_accepting();
+        }
     }
 
     fn reject_new_work(&self, op: &str) {
@@ -4672,6 +4690,11 @@ impl Driver {
                     path,
                     data,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("send link request");
+                        let _ = (link_id, path, data);
+                        continue;
+                    }
                     let link_actions =
                         self.link_manager
                             .send_request(&link_id, &path, &data, &mut self.rng);
@@ -4681,6 +4704,11 @@ impl Driver {
                     link_id,
                     identity_prv_key,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("identify on link");
+                        let _ = (link_id, identity_prv_key);
+                        continue;
+                    }
                     let identity =
                         rns_crypto::identity::Identity::from_private_key(&identity_prv_key);
                     let link_actions =
@@ -4697,6 +4725,11 @@ impl Driver {
                     data,
                     metadata,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("send resource");
+                        let _ = (link_id, data, metadata);
+                        continue;
+                    }
                     let link_actions = self.link_manager.send_resource(
                         &link_id,
                         &data,
@@ -4720,6 +4753,11 @@ impl Driver {
                     resource_hash,
                     accept,
                 } => {
+                    if self.is_draining() && accept {
+                        self.reject_new_work("accept resource");
+                        let _ = (link_id, resource_hash, accept);
+                        continue;
+                    }
                     let link_actions = self.link_manager.accept_resource(
                         &link_id,
                         &resource_hash,
@@ -4759,6 +4797,11 @@ impl Driver {
                     data,
                     context,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("send link payload");
+                        let _ = (link_id, data, context);
+                        continue;
+                    }
                     let link_actions =
                         self.link_manager
                             .send_on_link(&link_id, &data, context, &mut self.rng);

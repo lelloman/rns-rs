@@ -77,6 +77,7 @@ struct BridgeState {
     next_seq: u64,
     next_consumer_id: u64,
     connected: bool,
+    accepting: bool,
     shutdown: bool,
     queue_max_events: usize,
     queue_max_bytes: usize,
@@ -153,6 +154,7 @@ impl ProviderBridge {
                 next_seq: 1,
                 next_consumer_id: 1,
                 connected: false,
+                accepting: true,
                 shutdown: false,
                 queue_max_events,
                 queue_max_bytes,
@@ -325,6 +327,16 @@ impl ProviderBridge {
             consumers,
         }
     }
+
+    pub fn stop_accepting(&self) {
+        let mut state = self.shared.state.lock().unwrap();
+        if !state.accepting {
+            return;
+        }
+        state.accepting = false;
+        self.shared.condvar.notify_all();
+        log::info!("provider bridge stopped accepting new consumers");
+    }
 }
 
 impl Drop for ProviderBridge {
@@ -332,6 +344,7 @@ impl Drop for ProviderBridge {
         {
             let mut state = self.shared.state.lock().unwrap();
             state.shutdown = true;
+            state.accepting = false;
             self.shared.condvar.notify_all();
         }
         if let Some(thread) = self.thread.take() {
@@ -370,6 +383,13 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
             let state = shared.state.lock().unwrap();
             if state.shutdown {
                 break;
+            }
+            if !state.accepting {
+                let _ = shared
+                    .condvar
+                    .wait_timeout(state, Duration::from_millis(100))
+                    .unwrap();
+                continue;
             }
         }
 

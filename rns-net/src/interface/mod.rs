@@ -73,6 +73,27 @@ pub trait Writer: Send {
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
 
+#[derive(Clone, Default)]
+pub struct ListenerControl {
+    stop: Arc<AtomicBool>,
+}
+
+impl ListenerControl {
+    pub fn new() -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn should_stop(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+}
+
 struct AsyncWriter {
     tx: SyncSender<Vec<u8>>,
     worker_alive: Arc<AtomicBool>,
@@ -195,7 +216,7 @@ pub enum StartResult {
         interface_type_name: String,
     },
     /// Spawns a listener; dynamic interfaces arrive via Event::InterfaceUp (TcpServer, Auto, I2P, etc.)
-    Listener,
+    Listener { control: Option<ListenerControl> },
     /// Multiple subinterfaces from one config (RNode).
     Multi(Vec<SubInterface>),
 }

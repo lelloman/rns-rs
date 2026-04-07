@@ -1115,7 +1115,7 @@ impl InterfaceFactory for AutoFactory {
         })?;
 
         start(auto_config, ctx.tx, ctx.next_dynamic_id)?;
-        Ok(StartResult::Listener)
+        Ok(StartResult::Listener { control: None })
     }
 }
 

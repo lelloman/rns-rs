@@ -1196,7 +1196,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             }
             BackboneMode::Server(cfg) => {
                 start(cfg, ctx.tx, ctx.next_dynamic_id)?;
-                Ok(StartResult::Listener)
+                Ok(StartResult::Listener { control: None })
             }
         }
     }

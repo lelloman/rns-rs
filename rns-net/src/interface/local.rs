@@ -20,7 +20,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{ListenerControl, Writer};
 
 /// Configuration for a Local server (shared instance).
 #[derive(Debug, Clone)]
@@ -105,23 +105,26 @@ pub fn start_server(
     config: LocalServerConfig,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
-) -> io::Result<()> {
+) -> io::Result<ListenerControl> {
+    let control = ListenerControl::new();
     // Try Unix socket first on Linux
     #[cfg(target_os = "linux")]
     {
         match unix_socket::try_bind_unix(&config.instance_name) {
             Ok(listener) => {
+                listener.set_nonblocking(true)?;
                 log::info!(
                     "Local server using Unix socket: rns/{}",
                     config.instance_name
                 );
                 let name = format!("rns/{}", config.instance_name);
+                let listener_control = control.clone();
                 thread::Builder::new()
                     .name("local-server".into())
                     .spawn(move || {
-                        unix_server_loop(listener, name, tx, next_id);
+                        unix_server_loop(listener, name, tx, next_id, listener_control);
                     })?;
-                return Ok(());
+                return Ok(control);
             }
             Err(e) => {
                 log::info!("Unix socket bind failed ({}), falling back to TCP", e);
@@ -132,23 +135,40 @@ pub fn start_server(
     // Fallback: TCP on localhost
     let addr = format!("127.0.0.1:{}", config.port);
     let listener = TcpListener::bind(&addr)?;
+    listener.set_nonblocking(true)?;
 
     log::info!("Local server listening on TCP {}", addr);
 
+    let listener_control = control.clone();
     thread::Builder::new()
         .name("local-server".into())
         .spawn(move || {
-            tcp_server_loop(listener, tx, next_id);
+            tcp_server_loop(listener, tx, next_id, listener_control);
         })?;
 
-    Ok(())
+    Ok(control)
 }
 
 /// TCP server accept loop for local interface.
-fn tcp_server_loop(listener: TcpListener, tx: EventSender, next_id: Arc<AtomicU64>) {
-    for stream_result in listener.incoming() {
+fn tcp_server_loop(
+    listener: TcpListener,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    control: ListenerControl,
+) {
+    loop {
+        if control.should_stop() {
+            log::info!("Local TCP listener stopping");
+            return;
+        }
+
+        let stream_result = listener.accept().map(|(stream, _)| stream);
         let stream = match stream_result {
             Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             Err(e) => {
                 log::warn!("Local server accept failed: {}", e);
                 continue;
@@ -171,10 +191,21 @@ fn unix_server_loop(
     name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
+    control: ListenerControl,
 ) {
-    for stream_result in listener.incoming() {
+    loop {
+        if control.should_stop() {
+            log::info!("[{}] Local Unix listener stopping", name);
+            return;
+        }
+
+        let stream_result = listener.accept().map(|(stream, _)| stream);
         let stream = match stream_result {
             Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             Err(e) => {
                 log::warn!("[{}] Local server accept failed: {}", name, e);
                 continue;
@@ -554,8 +585,10 @@ impl InterfaceFactory for LocalServerFactory {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
             })?;
 
-        start_server(server_config, ctx.tx, ctx.next_dynamic_id)?;
-        Ok(StartResult::Listener)
+        let control = start_server(server_config, ctx.tx, ctx.next_dynamic_id)?;
+        Ok(StartResult::Listener {
+            control: Some(control),
+        })
     }
 }
 

@@ -1068,9 +1068,12 @@ impl RnsNode {
                         },
                     );
                 }
-                crate::interface::StartResult::Listener => {
+                crate::interface::StartResult::Listener { control } => {
                     // Listener-type interface (TcpServer, Auto, I2P, etc.)
                     // registers dynamic interfaces via InterfaceUp events.
+                    if let Some(control) = control {
+                        driver.register_listener_control(control);
+                    }
                 }
                 crate::interface::StartResult::Multi(subs) => {
                     let ifac_cfg = &iface_config.ifac;
@@ -1286,7 +1289,8 @@ impl RnsNode {
                 tx.clone(),
                 next_dynamic_id.clone(),
             ) {
-                Ok(()) => {
+                Ok(control) => {
+                    driver.register_listener_control(control);
                     log::info!(
                         "Local shared instance server started (instance={}, port={})",
                         config.instance_name,

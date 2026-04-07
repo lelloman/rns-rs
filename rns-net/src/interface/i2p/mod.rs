@@ -578,7 +578,7 @@ impl InterfaceFactory for I2pFactory {
             .downcast::<I2pConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
-        Ok(StartResult::Listener)
+        Ok(StartResult::Listener { control: None })
     }
 }
 
