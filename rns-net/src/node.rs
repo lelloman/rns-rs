@@ -1450,6 +1450,15 @@ impl RnsNode {
         }
     }
 
+    fn reject_new_work_if_draining(&self) -> Result<(), SendError> {
+        let status = self.drain_status()?;
+        if matches!(status.state, crate::event::LifecycleState::Active) {
+            Ok(())
+        } else {
+            Err(SendError)
+        }
+    }
+
     /// Send a raw outbound packet.
     pub fn send_raw(
         &self,
@@ -1545,6 +1554,7 @@ impl RnsNode {
         dest_hash: [u8; 16],
         dest_sig_pub_bytes: [u8; 32],
     ) -> Result<[u8; 16], SendError> {
+        self.reject_new_work_if_draining()?;
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::CreateLink {
@@ -1568,6 +1578,7 @@ impl RnsNode {
         path: &str,
         data: &[u8],
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendRequest {
                 link_id,
@@ -1583,6 +1594,7 @@ impl RnsNode {
         link_id: [u8; 16],
         identity_prv_key: [u8; 64],
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::IdentifyOnLink {
                 link_id,
@@ -1605,6 +1617,7 @@ impl RnsNode {
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendResource {
                 link_id,
@@ -1630,6 +1643,9 @@ impl RnsNode {
         resource_hash: Vec<u8>,
         accept: bool,
     ) -> Result<(), SendError> {
+        if accept {
+            self.reject_new_work_if_draining()?;
+        }
         self.tx
             .send(Event::AcceptResource {
                 link_id,
@@ -1646,6 +1662,7 @@ impl RnsNode {
         msgtype: u16,
         payload: Vec<u8>,
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::SendChannelMessage {
@@ -1666,6 +1683,7 @@ impl RnsNode {
     /// The link must be active and connected through a backbone node.
     /// If successful, a direct UDP connection will be established, bypassing the backbone.
     pub fn propose_direct_connect(&self, link_id: [u8; 16]) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::ProposeDirectConnect { link_id })
             .map_err(|_| SendError)
@@ -1688,6 +1706,7 @@ impl RnsNode {
         data: Vec<u8>,
         context: u8,
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendOnLink {
                 link_id,
@@ -1707,6 +1726,7 @@ impl RnsNode {
         identity: &Identity,
         app_data: Option<&[u8]>,
     ) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         let name_hash = rns_core::destination::name_hash(
             &dest.app_name,
             &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -1778,6 +1798,7 @@ impl RnsNode {
         dest: &crate::destination::Destination,
         data: &[u8],
     ) -> Result<rns_core::types::PacketHash, SendError> {
+        self.reject_new_work_if_draining()?;
         use rns_core::types::DestinationType;
 
         let payload = match dest.dest_type {
@@ -1849,6 +1870,7 @@ impl RnsNode {
 
     /// Request a path to a destination from the network.
     pub fn request_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<(), SendError> {
+        self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::RequestPath {
                 dest_hash: dest_hash.0,
@@ -2963,9 +2985,30 @@ enable_transport = False
         node.shutdown();
     }
 
+    #[test]
+    fn request_path_returns_error_while_draining() {
+        let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+
+        node.begin_drain(Duration::from_secs(1)).unwrap();
+        assert!(node.request_path(&rns_core::types::DestHash([0xAB; 16])).is_err());
+
+        node.shutdown();
+    }
+
     // =========================================================================
     // Phase 9d: send_packet + register_destination_with_proof tests
     // =========================================================================
+
+    #[test]
+    fn send_packet_returns_error_while_draining() {
+        let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+        let dest = crate::destination::Destination::plain("drain-test", &["send"]);
+
+        node.begin_drain(Duration::from_secs(1)).unwrap();
+        assert!(node.send_packet(&dest, b"hello").is_err());
+
+        node.shutdown();
+    }
 
     #[test]
     fn send_packet_plain() {
