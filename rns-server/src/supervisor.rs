@@ -741,6 +741,15 @@ fn shutdown_priority(role: Role) -> u8 {
     }
 }
 
+const TERMINATE_GRACE_POLLS: usize = 20;
+const TERMINATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminationObservation {
+    drain_acknowledged: bool,
+    forced_kill: bool,
+}
+
 fn terminate_children(
     children: &mut [ManagedChild],
     shared_state: Option<&SharedState>,
@@ -749,8 +758,25 @@ fn terminate_children(
     children.sort_by_key(|managed| shutdown_priority(managed.role));
     for managed in children.iter_mut() {
         let ready_file = ready_file_path_for_role(managed.role, readiness);
-        if let Err(e) = terminate_child(managed, shared_state, ready_file.as_ref()) {
-            log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
+        match terminate_child(managed, shared_state, ready_file.as_ref()) {
+            Ok(observation) => {
+                if observation.drain_acknowledged {
+                    log::info!(
+                        "{} acknowledged draining before exit",
+                        managed.role.display_name()
+                    );
+                }
+                if observation.forced_kill {
+                    log::warn!(
+                        "{} did not exit within {:.1}s; sent SIGKILL",
+                        managed.role.display_name(),
+                        TERMINATE_GRACE_POLLS as f64 * TERMINATE_POLL_INTERVAL.as_secs_f64()
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
+            }
         }
         if let Some(state) = shared_state {
             let code = managed
@@ -768,9 +794,12 @@ fn terminate_child(
     managed: &mut ManagedChild,
     shared_state: Option<&SharedState>,
     ready_file: Option<&PathBuf>,
-) -> io::Result<()> {
+) -> io::Result<TerminationObservation> {
     if managed.child.try_wait()?.is_some() {
-        return Ok(());
+        return Ok(TerminationObservation {
+            drain_acknowledged: false,
+            forced_kill: false,
+        });
     }
 
     #[cfg(unix)]
@@ -778,35 +807,42 @@ fn terminate_child(
         libc::kill(managed.child.id() as i32, libc::SIGTERM);
     }
 
-    for _ in 0..20 {
+    let mut drain_acknowledged = false;
+    for _ in 0..TERMINATE_GRACE_POLLS {
         if managed.child.try_wait()?.is_some() {
-            return Ok(());
+            return Ok(TerminationObservation {
+                drain_acknowledged,
+                forced_kill: false,
+            });
         }
-        observe_sidecar_draining(managed, shared_state, ready_file);
-        std::thread::sleep(Duration::from_millis(100));
+        drain_acknowledged |= observe_sidecar_draining(managed, shared_state, ready_file);
+        std::thread::sleep(TERMINATE_POLL_INTERVAL);
     }
 
     managed.child.kill()?;
     let _ = managed.child.wait();
-    Ok(())
+    Ok(TerminationObservation {
+        drain_acknowledged,
+        forced_kill: true,
+    })
 }
 
 fn observe_sidecar_draining(
     managed: &ManagedChild,
     shared_state: Option<&SharedState>,
     ready_file: Option<&PathBuf>,
-) {
+) -> bool {
     let Some(state) = shared_state else {
-        return;
+        return false;
     };
     let Some(path) = ready_file else {
-        return;
+        return false;
     };
     let Ok(contract) = inspect_ready_file(path, managed.role.display_name(), state) else {
-        return;
+        return false;
     };
     if contract.status != "draining" {
-        return;
+        return false;
     }
 
     set_process_readiness(
@@ -821,6 +857,7 @@ fn observe_sidecar_draining(
             path.display()
         )),
     );
+    true
 }
 
 fn ready_file_path_for_role(role: Role, readiness: &[ProcessReadiness]) -> Option<PathBuf> {
@@ -863,13 +900,14 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, inspect_ready_file, missing_required_hooks, probe_ready_file,
-        ready_file_path_for_role, role_from_name, shutdown_priority, ProcessCommand,
-        ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, inspect_ready_file, missing_required_hooks, observe_sidecar_draining,
+        probe_ready_file, ready_file_path_for_role, role_from_name, shutdown_priority,
+        ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::{Arc, RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1089,6 +1127,43 @@ mod tests {
             Some(path)
         );
         assert_eq!(ready_file_path_for_role(Role::Statsd, &readiness), None);
+    }
+
+    #[test]
+    fn observe_sidecar_draining_updates_process_state() {
+        let path = unique_temp_path("rns-sentineld");
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-sentineld");
+        mark_process_running(&state, "rns-sentineld", 4242);
+        std::fs::write(
+            &path,
+            "version=1\nstatus=draining\nprocess=rns-sentineld\npid=4242\ndetail=draining queue\n",
+        )
+        .unwrap();
+
+        let managed = super::ManagedChild {
+            role: Role::Sentineld,
+            child: Command::new("sleep").arg("0").spawn().unwrap(),
+        };
+
+        assert!(observe_sidecar_draining(
+            &managed,
+            Some(&state),
+            Some(&path)
+        ));
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rns-sentineld").cloned().unwrap()
+        };
+        assert!(!snapshot.ready);
+        assert_eq!(snapshot.ready_state, "draining");
+        assert!(snapshot
+            .status_detail
+            .unwrap_or_default()
+            .contains("draining queue"));
+
+        let _ = std::fs::remove_file(path);
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {
