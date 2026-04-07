@@ -578,10 +578,12 @@ fn request_rnsd_drain(config: &RnsdDrainConfig, reason: &str) -> Result<(), Stri
 
 fn wait_for_rnsd_drain(config: &RnsdDrainConfig, shared_state: Option<&SharedState>) -> bool {
     let deadline = std::time::Instant::now() + config.timeout;
+    let mut last_observed = None;
     while std::time::Instant::now() < deadline {
         match fetch_rnsd_drain_status(config) {
             Ok(Some(status)) => {
                 reflect_rnsd_drain_status(shared_state, &status);
+                log_rnsd_drain_progress(shared_state, &status, &mut last_observed);
                 if drain_complete_for_shutdown(&status) {
                     return true;
                 }
@@ -592,6 +594,31 @@ fn wait_for_rnsd_drain(config: &RnsdDrainConfig, shared_state: Option<&SharedSta
         thread::sleep(config.poll_interval);
     }
     false
+}
+
+fn log_rnsd_drain_progress(
+    shared_state: Option<&SharedState>,
+    status: &DrainStatus,
+    last_observed: &mut Option<(String, String)>,
+) {
+    let ready_state = match status.state {
+        rns_net::event::LifecycleState::Active => "ready",
+        rns_net::event::LifecycleState::Draining => "draining",
+        rns_net::event::LifecycleState::Stopping => "stopping",
+        rns_net::event::LifecycleState::Stopped => "stopped",
+    }
+    .to_string();
+    let detail = format_drain_status_detail(status);
+    let observed = (ready_state.clone(), detail.clone());
+    if last_observed.as_ref() == Some(&observed) {
+        return;
+    }
+    *last_observed = Some(observed);
+
+    log::info!("rnsd {}: {}", ready_state, detail);
+    if let Some(state) = shared_state {
+        push_process_log(state, Role::Rnsd.display_name(), "supervisor", detail);
+    }
 }
 
 fn reflect_rnsd_drain_status(shared_state: Option<&SharedState>, status: &DrainStatus) {
@@ -934,10 +961,10 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, format_drain_status_detail, inspect_ready_file, missing_required_hooks,
-        observe_sidecar_draining, probe_ready_file, ready_file_path_for_role,
-        reflect_rnsd_drain_status, role_from_name, shutdown_priority, ProcessCommand,
-        ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, format_drain_status_detail, inspect_ready_file, log_rnsd_drain_progress,
+        missing_required_hooks, observe_sidecar_draining, probe_ready_file,
+        ready_file_path_for_role, reflect_rnsd_drain_status, role_from_name, shutdown_priority,
+        ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{event::DrainStatus, event::LifecycleState, HookInfo};
@@ -1244,6 +1271,43 @@ mod tests {
             .status_detail
             .unwrap_or_default()
             .contains("1 link still active"));
+    }
+
+    #[test]
+    fn log_rnsd_drain_progress_deduplicates_identical_updates() {
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rnsd");
+        let mut last_observed = None;
+        let draining = DrainStatus {
+            state: LifecycleState::Draining,
+            drain_age_seconds: Some(0.5),
+            deadline_remaining_seconds: Some(2.0),
+            drain_complete: false,
+            detail: Some("1 link still active".into()),
+        };
+
+        log_rnsd_drain_progress(Some(&state), &draining, &mut last_observed);
+        log_rnsd_drain_progress(Some(&state), &draining, &mut last_observed);
+        log_rnsd_drain_progress(
+            Some(&state),
+            &DrainStatus {
+                state: LifecycleState::Stopping,
+                drain_age_seconds: Some(1.5),
+                deadline_remaining_seconds: Some(0.0),
+                drain_complete: true,
+                detail: Some("tearing down remaining work".into()),
+            },
+            &mut last_observed,
+        );
+
+        let log_count = {
+            let s = state.read().unwrap();
+            s.process_logs
+                .get("rnsd")
+                .map(|logs| logs.len())
+                .unwrap_or(0)
+        };
+        assert_eq!(log_count, 2);
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {
