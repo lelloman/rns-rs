@@ -21,10 +21,10 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventReceiver,
-    InterfaceStatsResponse, LifecycleState, LocalDestinationEntry, NextHopResponse,
-    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    InterfaceStatsResponse, LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry,
+    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -758,6 +758,18 @@ impl Driver {
                 );
             }
         }
+    }
+
+    fn is_draining(&self) -> bool {
+        matches!(self.lifecycle_state, LifecycleState::Draining)
+    }
+
+    fn reject_new_work(&self, op: &str) {
+        log::info!("rejecting {} while node is draining", op);
+    }
+
+    fn drain_error(&self, op: &str) -> String {
+        format!("cannot {} while node is draining", op)
     }
 
     fn drain_status(&self) -> DrainStatus {
@@ -4513,6 +4525,10 @@ impl Driver {
                     dest_type,
                     attached_interface,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("send outbound packet");
+                        continue;
+                    }
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
                             let is_announce = packet.flags.packet_type
@@ -4718,6 +4734,11 @@ impl Driver {
                     payload,
                     response_tx,
                 } => {
+                    if self.is_draining() {
+                        self.reject_new_work("send channel message");
+                        let _ = response_tx.send(Err(self.drain_error("send channel message")));
+                        continue;
+                    }
                     match self.link_manager.send_channel_message(
                         &link_id,
                         msgtype,
@@ -4744,6 +4765,11 @@ impl Driver {
                     self.dispatch_link_actions(link_actions);
                 }
                 Event::RequestPath { dest_hash } => {
+                    if self.is_draining() {
+                        self.reject_new_work("request path");
+                        let _ = dest_hash;
+                        continue;
+                    }
                     self.handle_request_path(dest_hash);
                 }
                 Event::RegisterProofStrategy {
@@ -4757,6 +4783,11 @@ impl Driver {
                         .insert(dest_hash, (strategy, identity));
                 }
                 Event::ProposeDirectConnect { link_id } => {
+                    if self.is_draining() {
+                        self.reject_new_work("propose direct connect");
+                        let _ = link_id;
+                        continue;
+                    }
                     let derived_key = self.link_manager.get_derived_key(&link_id);
                     if let Some(dk) = derived_key {
                         let tx = self.get_event_sender();
@@ -8687,6 +8718,156 @@ mod tests {
         assert_eq!(status.state, LifecycleState::Draining);
         tx_query.send(Event::Shutdown).unwrap();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn send_channel_message_returns_error_while_draining() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        tx.send(Event::BeginDrain {
+            timeout: Duration::from_secs(2),
+        })
+        .unwrap();
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::SendChannelMessage {
+            link_id: [0xAA; 16],
+            msgtype: 7,
+            payload: b"drain".to_vec(),
+            response_tx: resp_tx,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let response = resp_rx.recv().unwrap();
+        assert_eq!(
+            response,
+            Err("cannot send channel message while node is draining".into())
+        );
+    }
+
+    #[test]
+    fn send_outbound_is_ignored_while_draining() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let identity = Identity::new(&mut OsRng);
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        tx.send(Event::BeginDrain {
+            timeout: Duration::from_secs(2),
+        })
+        .unwrap();
+        tx.send(Event::SendOutbound {
+            raw: build_announce_packet(&identity),
+            dest_type: constants::DESTINATION_SINGLE,
+            attached_interface: None,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(driver.sent_packets.is_empty());
+    }
+
+    #[test]
+    fn request_path_is_ignored_while_draining() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        tx.send(Event::BeginDrain {
+            timeout: Duration::from_secs(2),
+        })
+        .unwrap();
+        tx.send(Event::RequestPath {
+            dest_hash: [0xAA; 16],
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(sent.lock().unwrap().is_empty());
     }
 
     #[test]
