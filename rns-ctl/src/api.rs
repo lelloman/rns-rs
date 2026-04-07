@@ -2,7 +2,8 @@ use serde_json::{json, Value};
 
 use rns_crypto::identity::Identity;
 use rns_net::{
-    DestHash, Destination, IdentityHash, ProofStrategy, QueryRequest, QueryResponse, RnsNode,
+    event::LifecycleState, DestHash, Destination, IdentityHash, ProofStrategy, QueryRequest,
+    QueryResponse, RnsNode,
 };
 
 use crate::auth::check_auth;
@@ -23,6 +24,27 @@ where
         Some(n) => f(n),
         None => HttpResponse::internal_error("Node is shutting down"),
     }
+}
+
+fn with_active_node<F>(node: &NodeHandle, f: F) -> HttpResponse
+where
+    F: FnOnce(&RnsNode) -> HttpResponse,
+{
+    with_node(node, |n| {
+        match n.query(QueryRequest::DrainStatus) {
+            Ok(QueryResponse::DrainStatus(status))
+                if !matches!(status.state, LifecycleState::Active) =>
+            {
+                HttpResponse::conflict(
+                    status
+                        .detail
+                        .as_deref()
+                        .unwrap_or("Node is draining and not accepting new work"),
+                )
+            }
+            _ => f(n),
+        }
+    })
 }
 
 /// Route dispatch: match method + path and call the appropriate handler.
@@ -804,7 +826,7 @@ fn handle_post_announce(req: &HttpRequest, node: &NodeHandle, state: &SharedStat
         (dest, identity)
     };
 
-    with_node(node, |n| {
+    with_active_node(node, |n| {
         match n.announce(&dest, &identity, app_data.as_deref()) {
             Ok(()) => HttpResponse::ok(json!({"status": "announced", "dest_hash": dh_str})),
             Err(_) => HttpResponse::internal_error("Announce failed"),
@@ -852,7 +874,7 @@ fn handle_post_send(req: &HttpRequest, node: &NodeHandle, state: &SharedState) -
         ));
     }
 
-    with_node(node, |n| match n.send_packet(&dest, &data) {
+    with_active_node(node, |n| match n.send_packet(&dest, &data) {
         Ok(ph) => HttpResponse::ok(json!({
             "status": "sent",
             "packet_hash": to_hex(&ph.0),
@@ -876,7 +898,7 @@ fn handle_post_link(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
 
-    with_node(node, |n| {
+    with_active_node(node, |n| {
         // Recall identity to get signing public key
         let recalled = match n.recall_identity(&DestHash(dh)) {
             Ok(Some(ai)) => ai,
@@ -912,7 +934,7 @@ fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     };
     let context = body["context"].as_u64().unwrap_or(0) as u8;
 
-    with_node(node, |n| match n.send_on_link(link_id, data, context) {
+    with_active_node(node, |n| match n.send_on_link(link_id, data, context) {
         Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
         Err(_) => HttpResponse::internal_error("Send on link failed"),
     })
@@ -951,7 +973,7 @@ fn handle_post_channel(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Missing or invalid base64 payload"),
     };
 
-    with_node(node, |n| {
+    with_active_node(node, |n| {
         match n.send_channel_message(link_id, msgtype, payload) {
             Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
             Err(_) => HttpResponse::bad_request("Channel message failed"),
@@ -975,7 +997,7 @@ fn handle_post_resource(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     };
     let metadata = body["metadata"].as_str().and_then(from_base64);
 
-    with_node(node, |n| match n.send_resource(link_id, data, metadata) {
+    with_active_node(node, |n| match n.send_resource(link_id, data, metadata) {
         Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
         Err(_) => HttpResponse::internal_error("Resource send failed"),
     })
@@ -996,7 +1018,7 @@ fn handle_post_path_request(req: &HttpRequest, node: &NodeHandle) -> HttpRespons
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
 
-    with_node(node, |n| match n.request_path(&DestHash(dh)) {
+    with_active_node(node, |n| match n.request_path(&DestHash(dh)) {
         Ok(()) => HttpResponse::ok(json!({"status": "requested"})),
         Err(_) => HttpResponse::internal_error("Path request failed"),
     })
@@ -1017,7 +1039,7 @@ fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -> HttpRespo
         None => return HttpResponse::bad_request("Invalid link_id"),
     };
 
-    with_node(node, |n| match n.propose_direct_connect(link_id) {
+    with_active_node(node, |n| match n.propose_direct_connect(link_id) {
         Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
         Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
     })

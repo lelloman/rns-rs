@@ -427,6 +427,36 @@ fn test_get_node_reports_drain_status() {
 }
 
 #[test]
+fn test_send_returns_conflict_while_draining() {
+    let server = start_test_server();
+    let register = http_post(
+        server.port,
+        "/api/destination",
+        r#"{"type":"plain","app_name":"drain-test","aspects":["send"]}"#,
+    );
+    assert_eq!(register.status, 201);
+    let dest_hash = register.json()["dest_hash"].as_str().unwrap().to_string();
+
+    {
+        let guard = server.ctx.node.lock().unwrap();
+        let node = guard.as_ref().unwrap();
+        node.begin_drain(Duration::from_secs(5)).unwrap();
+    }
+
+    let res = http_post(
+        server.port,
+        "/api/send",
+        &format!(r#"{{"dest_hash":"{dest_hash}","data":"aGVsbG8="}}"#),
+    );
+    assert_eq!(res.status, 409);
+    assert!(res.json()["error"]
+        .as_str()
+        .unwrap()
+        .contains("draining existing work"));
+    server.shutdown();
+}
+
+#[test]
 fn test_get_interfaces_empty() {
     let server = start_test_server();
     let res = http_get(server.port, "/api/interfaces");

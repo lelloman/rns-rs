@@ -58,6 +58,10 @@ impl HttpResponse {
         Self::json(401, "Unauthorized", &serde_json::json!({"error": msg}))
     }
 
+    pub fn conflict(msg: &str) -> Self {
+        Self::json(409, "Conflict", &serde_json::json!({"error": msg}))
+    }
+
     pub fn not_found() -> Self {
         Self::json(404, "Not Found", &serde_json::json!({"error": "Not found"}))
     }
