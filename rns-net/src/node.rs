@@ -1553,7 +1553,12 @@ impl RnsNode {
                 response_tx,
             })
             .map_err(|_| SendError)?;
-        response_rx.recv().map_err(|_| SendError)
+        let link_id = response_rx.recv().map_err(|_| SendError)?;
+        if link_id == [0u8; 16] {
+            Err(SendError)
+        } else {
+            Ok(link_id)
+        }
     }
 
     /// Send a request on an established link.
@@ -2944,6 +2949,16 @@ enable_transport = False
 
         // Small wait for the event to be processed
         thread::sleep(Duration::from_millis(50));
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn create_link_returns_error_while_draining() {
+        let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
+
+        node.begin_drain(Duration::from_secs(1)).unwrap();
+        assert!(node.create_link([0xAB; 16], [0xCD; 32]).is_err());
 
         node.shutdown();
     }
