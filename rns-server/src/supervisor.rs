@@ -133,7 +133,7 @@ impl Supervisor {
             if stop_rx.try_recv().is_ok() {
                 log::info!("shutdown requested");
                 self.drain_rnsd(&children, "supervisor shutdown");
-                terminate_children(&mut children, self.shared_state.as_ref());
+                terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
                 return Ok(0);
             }
 
@@ -148,7 +148,7 @@ impl Supervisor {
                 if let Some(state) = self.shared_state.as_ref() {
                     mark_process_stopped(state, role.display_name(), status.code());
                 }
-                terminate_children(&mut children, self.shared_state.as_ref());
+                terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
                 return Ok(exit_code(status));
             }
 
@@ -184,7 +184,13 @@ impl Supervisor {
 
         if let Some(index) = children.iter().position(|child| child.role == role) {
             self.drain_role(role, children, "process restart");
-            terminate_child(&mut children[index]).map_err(|e| {
+            let ready_file = ready_file_path_for_role(role, &self.readiness);
+            terminate_child(
+                &mut children[index],
+                self.shared_state.as_ref(),
+                ready_file.as_ref(),
+            )
+            .map_err(|e| {
                 format!(
                     "failed to terminate {} during restart: {}",
                     role.display_name(),
@@ -228,7 +234,13 @@ impl Supervisor {
             return Ok(());
         };
         self.drain_role(role, children, "process stop");
-        terminate_child(&mut children[index]).map_err(|e| {
+        let ready_file = ready_file_path_for_role(role, &self.readiness);
+        terminate_child(
+            &mut children[index],
+            self.shared_state.as_ref(),
+            ready_file.as_ref(),
+        )
+        .map_err(|e| {
             format!(
                 "failed to terminate {} during stop: {}",
                 role.display_name(),
@@ -396,9 +408,7 @@ fn probe_ready_file(
     process_name: &str,
     state: &SharedState,
 ) -> Result<String, String> {
-    let body = std::fs::read_to_string(path)
-        .map_err(|err| format!("waiting for readiness file {}: {}", path.display(), err))?;
-    let contract = ReadyFileContract::parse(&body)?;
+    let contract = inspect_ready_file(path, process_name, state)?;
 
     if contract.status != "ready" {
         return Err(format!(
@@ -407,6 +417,24 @@ fn probe_ready_file(
             contract.status
         ));
     }
+
+    Ok(format!(
+        "{} (pid {}, file {})",
+        contract.detail,
+        contract.pid,
+        path.display()
+    ))
+}
+
+fn inspect_ready_file(
+    path: &PathBuf,
+    process_name: &str,
+    state: &SharedState,
+) -> Result<ReadyFileContract, String> {
+    let body = std::fs::read_to_string(path)
+        .map_err(|err| format!("waiting for readiness file {}: {}", path.display(), err))?;
+    let contract = ReadyFileContract::parse(&body)?;
+
     if contract.process != process_name {
         return Err(format!(
             "readiness file {} belongs to {}",
@@ -432,12 +460,7 @@ fn probe_ready_file(
         }
     }
 
-    Ok(format!(
-        "{} (pid {}, file {})",
-        contract.detail,
-        contract.pid,
-        path.display()
-    ))
+    Ok(contract)
 }
 
 struct ReadyFileContract {
@@ -718,10 +741,15 @@ fn shutdown_priority(role: Role) -> u8 {
     }
 }
 
-fn terminate_children(children: &mut [ManagedChild], shared_state: Option<&SharedState>) {
+fn terminate_children(
+    children: &mut [ManagedChild],
+    shared_state: Option<&SharedState>,
+    readiness: &[ProcessReadiness],
+) {
     children.sort_by_key(|managed| shutdown_priority(managed.role));
     for managed in children.iter_mut() {
-        if let Err(e) = terminate_child(managed) {
+        let ready_file = ready_file_path_for_role(managed.role, readiness);
+        if let Err(e) = terminate_child(managed, shared_state, ready_file.as_ref()) {
             log::warn!("failed to stop {}: {}", managed.role.display_name(), e);
         }
         if let Some(state) = shared_state {
@@ -736,7 +764,11 @@ fn terminate_children(children: &mut [ManagedChild], shared_state: Option<&Share
     }
 }
 
-fn terminate_child(managed: &mut ManagedChild) -> io::Result<()> {
+fn terminate_child(
+    managed: &mut ManagedChild,
+    shared_state: Option<&SharedState>,
+    ready_file: Option<&PathBuf>,
+) -> io::Result<()> {
     if managed.child.try_wait()?.is_some() {
         return Ok(());
     }
@@ -750,12 +782,57 @@ fn terminate_child(managed: &mut ManagedChild) -> io::Result<()> {
         if managed.child.try_wait()?.is_some() {
             return Ok(());
         }
+        observe_sidecar_draining(managed, shared_state, ready_file);
         std::thread::sleep(Duration::from_millis(100));
     }
 
     managed.child.kill()?;
     let _ = managed.child.wait();
     Ok(())
+}
+
+fn observe_sidecar_draining(
+    managed: &ManagedChild,
+    shared_state: Option<&SharedState>,
+    ready_file: Option<&PathBuf>,
+) {
+    let Some(state) = shared_state else {
+        return;
+    };
+    let Some(path) = ready_file else {
+        return;
+    };
+    let Ok(contract) = inspect_ready_file(path, managed.role.display_name(), state) else {
+        return;
+    };
+    if contract.status != "draining" {
+        return;
+    }
+
+    set_process_readiness(
+        state,
+        managed.role.display_name(),
+        false,
+        "draining",
+        Some(format!(
+            "{} (pid {}, file {})",
+            contract.detail,
+            contract.pid,
+            path.display()
+        )),
+    );
+}
+
+fn ready_file_path_for_role(role: Role, readiness: &[ProcessReadiness]) -> Option<PathBuf> {
+    readiness.iter().find_map(|probe| {
+        if probe.role != role {
+            return None;
+        }
+        match &probe.target {
+            ReadinessTarget::ReadyFile(path) => Some(path.clone()),
+            _ => None,
+        }
+    })
 }
 
 fn exit_code(status: ExitStatus) -> i32 {
@@ -786,8 +863,9 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, missing_required_hooks, probe_ready_file, role_from_name,
-        shutdown_priority, ProcessCommand, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, inspect_ready_file, missing_required_hooks, probe_ready_file,
+        ready_file_path_for_role, role_from_name, shutdown_priority, ProcessCommand,
+        ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::HookInfo;
@@ -966,12 +1044,51 @@ mod tests {
     }
 
     #[test]
+    fn inspect_ready_file_accepts_draining_status_for_matching_process_and_pid() {
+        let path = unique_temp_path("rns-statsd");
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-statsd");
+        mark_process_running(&state, "rns-statsd", 77);
+        std::fs::write(
+            &path,
+            "version=1\nstatus=draining\nprocess=rns-statsd\npid=77\ndetail=flushing stats\n",
+        )
+        .unwrap();
+
+        let contract = inspect_ready_file(&path, "rns-statsd", &state).unwrap();
+        assert_eq!(contract.status, "draining");
+        assert_eq!(contract.detail, "flushing stats");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn ready_file_target_is_constructible() {
         let target = ReadinessTarget::ReadyFile(PathBuf::from("/tmp/rns.ready"));
         match target {
             ReadinessTarget::ReadyFile(path) => assert_eq!(path, PathBuf::from("/tmp/rns.ready")),
             _ => panic!("unexpected target"),
         }
+    }
+
+    #[test]
+    fn ready_file_path_for_role_selects_matching_ready_file_target() {
+        let path = PathBuf::from("/tmp/rns-sentineld.ready");
+        let readiness = vec![
+            ProcessReadiness {
+                role: Role::Sentineld,
+                target: ReadinessTarget::ReadyFile(path.clone()),
+            },
+            ProcessReadiness {
+                role: Role::Rnsd,
+                target: ReadinessTarget::ProcessAge(std::time::Duration::from_secs(1)),
+            },
+        ];
+
+        assert_eq!(
+            ready_file_path_for_role(Role::Sentineld, &readiness),
+            Some(path)
+        );
+        assert_eq!(ready_file_path_for_role(Role::Statsd, &readiness), None);
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {

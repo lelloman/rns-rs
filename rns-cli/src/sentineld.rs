@@ -249,6 +249,12 @@ fn run(args: Args) -> Result<(), String> {
         }
     }
 
+    if let Some(ready_file) = ready_file.as_ref() {
+        ready_file.mark_draining(
+            "rns-sentineld",
+            "stopping new enforcement work and draining blacklist queue",
+        )?;
+    }
     drop(hook_guard);
     Ok(())
 }

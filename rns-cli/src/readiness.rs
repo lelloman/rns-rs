@@ -19,6 +19,14 @@ impl ReadyFile {
     }
 
     pub fn mark_ready(&self, process: &str, detail: &str) -> Result<(), String> {
+        self.write_status(process, "ready", detail)
+    }
+
+    pub fn mark_draining(&self, process: &str, detail: &str) -> Result<(), String> {
+        self.write_status(process, "draining", detail)
+    }
+
+    fn write_status(&self, process: &str, status: &str, detail: &str) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 format!(
@@ -30,7 +38,8 @@ impl ReadyFile {
         }
 
         let body = format!(
-            "version=1\nstatus=ready\nprocess={}\npid={}\ntimestamp_ms={}\ndetail={}\n",
+            "version=1\nstatus={}\nprocess={}\npid={}\ntimestamp_ms={}\ndetail={}\n",
+            status,
             process,
             std::process::id(),
             now_unix_ms(),
@@ -107,6 +116,25 @@ mod tests {
 
         ready_file.clear().unwrap();
         assert!(!ready_file.path().exists());
+    }
+
+    #[test]
+    fn ready_file_can_report_draining_state() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("statsd.ready");
+        let path_string = path.display().to_string();
+        let ready_file = ReadyFile::new(Some(&path_string))
+            .unwrap()
+            .expect("ready file should be configured");
+
+        ready_file
+            .mark_draining("rns-statsd", "stopping ingest and flushing stats database")
+            .unwrap();
+
+        let body = fs::read_to_string(ready_file.path()).unwrap();
+        assert!(body.contains("status=draining"));
+        assert!(body.contains("process=rns-statsd"));
+        assert!(body.contains("detail=stopping ingest and flushing stats database"));
     }
 
     #[test]

@@ -143,6 +143,9 @@ fn run(args: Args) -> Result<(), String> {
         }
     }
 
+    if let Some(ready_file) = ready_file.as_ref() {
+        ready_file.mark_draining("rns-statsd", "stopping ingest and flushing stats database")?;
+    }
     db.flush(&mut aggregator)
         .map_err(|e| format!("sqlite shutdown flush failed: {}", e))?;
     drop(hook_guard);
