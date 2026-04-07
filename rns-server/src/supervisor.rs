@@ -962,7 +962,8 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 mod tests {
     use super::{
         command_for_spec, format_drain_status_detail, inspect_ready_file, log_rnsd_drain_progress,
-        missing_required_hooks, observe_sidecar_draining, probe_ready_file,
+        drain_complete_for_shutdown, missing_required_hooks, observe_sidecar_draining,
+        probe_ready_file,
         ready_file_path_for_role, reflect_rnsd_drain_status, role_from_name, shutdown_priority,
         ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
@@ -1308,6 +1309,19 @@ mod tests {
                 .unwrap_or(0)
         };
         assert_eq!(log_count, 2);
+    }
+
+    #[test]
+    fn drain_complete_for_shutdown_accepts_expired_deadline() {
+        let status = DrainStatus {
+            state: LifecycleState::Draining,
+            drain_age_seconds: Some(1.0),
+            deadline_remaining_seconds: Some(0.0),
+            drain_complete: false,
+            detail: Some("1 link still active".into()),
+        };
+
+        assert!(drain_complete_for_shutdown(&status));
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {

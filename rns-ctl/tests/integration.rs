@@ -401,6 +401,32 @@ fn test_get_info() {
 }
 
 #[test]
+fn test_get_node_reports_drain_status() {
+    let server = start_test_server();
+    {
+        let guard = server.ctx.node.lock().unwrap();
+        let node = guard.as_ref().unwrap();
+        node.begin_drain(Duration::from_secs(5)).unwrap();
+    }
+
+    let res = http_get(server.port, "/api/node");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["drain"]["state"], "draining");
+    assert_eq!(json["drain"]["drain_complete"], true);
+    assert!(json["drain"]["drain_age_seconds"].as_f64().unwrap() >= 0.0);
+    assert!(json["drain"]["deadline_remaining_seconds"]
+        .as_f64()
+        .unwrap()
+        > 0.0);
+    assert!(json["drain"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("no active links"));
+    server.shutdown();
+}
+
+#[test]
 fn test_get_interfaces_empty() {
     let server = start_test_server();
     let res = http_get(server.port, "/api/interfaces");
