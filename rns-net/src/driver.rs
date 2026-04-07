@@ -792,6 +792,7 @@ impl Driver {
 
     fn drain_status(&self) -> DrainStatus {
         let now = Instant::now();
+        let active_links = self.link_manager.link_count();
         let drain_age_seconds = self
             .drain_started_at
             .map(|started| started.elapsed().as_secs_f64());
@@ -803,7 +804,14 @@ impl Driver {
         });
         let detail = match self.lifecycle_state {
             LifecycleState::Active => Some("node is accepting normal work".into()),
-            LifecycleState::Draining => Some("node is draining existing work".into()),
+            LifecycleState::Draining => Some(if active_links > 0 {
+                format!(
+                    "node is draining existing work; {} link(s) still active",
+                    active_links
+                )
+            } else {
+                "node is draining existing work; no active links remain".into()
+            }),
             LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
             LifecycleState::Stopped => Some("node is stopped".into()),
         };
@@ -812,7 +820,8 @@ impl Driver {
             state: self.lifecycle_state,
             drain_age_seconds,
             deadline_remaining_seconds,
-            drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining),
+            drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining)
+                || active_links == 0,
             detail,
         }
     }
@@ -8717,9 +8726,63 @@ mod tests {
             panic!("expected drain status response");
         };
         assert_eq!(status.state, LifecycleState::Draining);
-        assert!(!status.drain_complete);
+        assert!(status.drain_complete);
         assert!(status.drain_age_seconds.is_some());
         assert!(status.deadline_remaining_seconds.is_some());
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("node is draining existing work; no active links remain")
+        );
+    }
+
+    #[test]
+    fn begin_drain_with_pending_link_reports_incomplete_status() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+
+        let _ = driver.link_manager.create_link(
+            &[0xDD; 16],
+            &[0x11; 32],
+            1,
+            rns_core::constants::MTU as u32,
+            &mut OsRng,
+        );
+
+        driver.begin_drain(Duration::from_secs(3));
+
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert_eq!(status.state, LifecycleState::Draining);
+        assert!(!status.drain_complete);
+        assert!(status
+            .detail
+            .unwrap_or_default()
+            .contains("1 link(s) still active"));
     }
 
     #[test]
