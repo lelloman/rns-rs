@@ -286,7 +286,7 @@ impl Supervisor {
         }
         match request_rnsd_drain(config, reason) {
             Ok(()) => {
-                let drained = wait_for_rnsd_drain(config);
+                let drained = wait_for_rnsd_drain(config, self.shared_state.as_ref());
                 if drained {
                     log::info!("rnsd drain completed before {}", reason);
                 } else {
@@ -576,18 +576,52 @@ fn request_rnsd_drain(config: &RnsdDrainConfig, reason: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn wait_for_rnsd_drain(config: &RnsdDrainConfig) -> bool {
+fn wait_for_rnsd_drain(config: &RnsdDrainConfig, shared_state: Option<&SharedState>) -> bool {
     let deadline = std::time::Instant::now() + config.timeout;
     while std::time::Instant::now() < deadline {
         match fetch_rnsd_drain_status(config) {
-            Ok(Some(status)) if drain_complete_for_shutdown(&status) => return true,
-            Ok(Some(_)) => {}
+            Ok(Some(status)) => {
+                reflect_rnsd_drain_status(shared_state, &status);
+                if drain_complete_for_shutdown(&status) {
+                    return true;
+                }
+            }
             Ok(None) => {}
             Err(err) => log::debug!("rnsd drain status poll failed: {}", err),
         }
         thread::sleep(config.poll_interval);
     }
     false
+}
+
+fn reflect_rnsd_drain_status(shared_state: Option<&SharedState>, status: &DrainStatus) {
+    let Some(state) = shared_state else {
+        return;
+    };
+    let ready_state = match status.state {
+        rns_net::event::LifecycleState::Active => "ready",
+        rns_net::event::LifecycleState::Draining => "draining",
+        rns_net::event::LifecycleState::Stopping => "stopping",
+        rns_net::event::LifecycleState::Stopped => "stopped",
+    };
+    set_process_readiness(
+        state,
+        Role::Rnsd.display_name(),
+        false,
+        ready_state,
+        Some(format_drain_status_detail(status)),
+    );
+}
+
+fn format_drain_status_detail(status: &DrainStatus) -> String {
+    let mut detail = status
+        .detail
+        .clone()
+        .unwrap_or_else(|| "drain status unavailable".into());
+    if let Some(remaining) = status.deadline_remaining_seconds {
+        detail.push_str(&format!(" (deadline {:.1}s remaining)", remaining.max(0.0)));
+    }
+    detail
 }
 
 fn fetch_rnsd_drain_status(config: &RnsdDrainConfig) -> Result<Option<DrainStatus>, String> {
@@ -900,12 +934,13 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, inspect_ready_file, missing_required_hooks, observe_sidecar_draining,
-        probe_ready_file, ready_file_path_for_role, role_from_name, shutdown_priority,
-        ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        command_for_spec, format_drain_status_detail, inspect_ready_file, missing_required_hooks,
+        observe_sidecar_draining, probe_ready_file, ready_file_path_for_role,
+        reflect_rnsd_drain_status, role_from_name, shutdown_priority, ProcessCommand,
+        ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
-    use rns_net::HookInfo;
+    use rns_net::{event::DrainStatus, event::LifecycleState, HookInfo};
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::{Arc, RwLock};
@@ -1164,6 +1199,51 @@ mod tests {
             .contains("draining queue"));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn format_drain_status_detail_includes_deadline_when_present() {
+        let status = DrainStatus {
+            state: LifecycleState::Draining,
+            drain_age_seconds: Some(1.2),
+            deadline_remaining_seconds: Some(2.5),
+            drain_complete: false,
+            detail: Some("draining 2 links".into()),
+        };
+
+        assert_eq!(
+            format_drain_status_detail(&status),
+            "draining 2 links (deadline 2.5s remaining)"
+        );
+    }
+
+    #[test]
+    fn reflect_rnsd_drain_status_updates_process_readiness() {
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rnsd");
+        mark_process_running(&state, "rnsd", 1234);
+
+        reflect_rnsd_drain_status(
+            Some(&state),
+            &DrainStatus {
+                state: LifecycleState::Draining,
+                drain_age_seconds: Some(0.5),
+                deadline_remaining_seconds: Some(1.0),
+                drain_complete: false,
+                detail: Some("1 link still active".into()),
+            },
+        );
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rnsd").cloned().unwrap()
+        };
+        assert!(!snapshot.ready);
+        assert_eq!(snapshot.ready_state, "draining");
+        assert!(snapshot
+            .status_detail
+            .unwrap_or_default()
+            .contains("1 link still active"));
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {
