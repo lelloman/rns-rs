@@ -1431,6 +1431,21 @@ impl RnsNode {
         resp_rx.recv().map_err(|_| SendError)
     }
 
+    /// Enter drain mode and stop admitting new work.
+    pub fn begin_drain(&self, timeout: Duration) -> Result<(), SendError> {
+        self.tx
+            .send(Event::BeginDrain { timeout })
+            .map_err(|_| SendError)
+    }
+
+    /// Query current drain/lifecycle status.
+    pub fn drain_status(&self) -> Result<crate::event::DrainStatus, SendError> {
+        match self.query(QueryRequest::DrainStatus)? {
+            QueryResponse::DrainStatus(status) => Ok(status),
+            _ => Err(SendError),
+        }
+    }
+
     /// Send a raw outbound packet.
     pub fn send_raw(
         &self,

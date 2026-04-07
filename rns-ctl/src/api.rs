@@ -153,14 +153,20 @@ fn index_html(config: &ControlPlaneConfigHandle) -> &'static str {
 // --- Read handlers ---
 
 fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
-    let transport_id = {
+    let (transport_id, drain_status) = {
         let guard = node.lock().unwrap();
-        guard
-            .as_ref()
-            .and_then(|n| match n.query(QueryRequest::TransportIdentity) {
-                Ok(QueryResponse::TransportIdentity(id)) => id,
-                _ => None,
-            })
+        let Some(node) = guard.as_ref() else {
+            return HttpResponse::internal_error("Node is shutting down");
+        };
+        let transport_id = match node.query(QueryRequest::TransportIdentity) {
+            Ok(QueryResponse::TransportIdentity(id)) => id,
+            _ => None,
+        };
+        let drain_status = match node.query(QueryRequest::DrainStatus) {
+            Ok(QueryResponse::DrainStatus(status)) => Some(status),
+            _ => None,
+        };
+        (transport_id, drain_status)
     };
 
     let s = state.read().unwrap();
@@ -172,6 +178,13 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
         "process_count": s.processes.len(),
         "processes_running": s.processes.values().filter(|p| p.status == "running").count(),
         "processes_ready": s.processes.values().filter(|p| p.ready).count(),
+        "drain": drain_status.map(|status| json!({
+            "state": format!("{:?}", status.state).to_lowercase(),
+            "drain_age_seconds": status.drain_age_seconds,
+            "deadline_remaining_seconds": status.deadline_remaining_seconds,
+            "drain_complete": status.drain_complete,
+            "detail": status.detail,
+        })),
     }))
 }
 

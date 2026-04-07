@@ -2,11 +2,12 @@
 
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo,
-    HolePunchPolicy, HookInfo, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats, ProviderBridgeStats,
-    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    DrainStatus, HolePunchPolicy, HookInfo, InterfaceStatsResponse, LifecycleState,
+    LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
+    ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 
 /// Concrete Event type using boxed sync Writer.

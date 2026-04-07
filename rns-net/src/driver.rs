@@ -20,10 +20,11 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 #[cfg(feature = "rns-hooks")]
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
-    BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventReceiver,
+    InterfaceStatsResponse, LifecycleState, LocalDestinationEntry, NextHopResponse,
+    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -389,6 +390,9 @@ pub struct Driver {
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
     pub(crate) started: f64,
+    pub(crate) lifecycle_state: LifecycleState,
+    pub(crate) drain_started_at: Option<Instant>,
+    pub(crate) drain_deadline: Option<Instant>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
     /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
     pub(crate) tunnel_synth_dest: [u8; 16],
@@ -587,6 +591,9 @@ impl Driver {
             rx,
             callbacks,
             started: time::now(),
+            lifecycle_state: LifecycleState::Active,
+            drain_started_at: None,
+            drain_deadline: None,
             announce_cache: None,
             tunnel_synth_dest,
             transport_identity: None,
@@ -722,6 +729,62 @@ impl Driver {
 
         self.enforce_known_destination_cap(true);
         self.known_destinations.insert(dest_hash, announced);
+    }
+
+    fn begin_drain(&mut self, timeout: Duration) {
+        let now = Instant::now();
+        let deadline = now + timeout;
+        match self.lifecycle_state {
+            LifecycleState::Active => {
+                self.lifecycle_state = LifecycleState::Draining;
+                self.drain_started_at = Some(now);
+                self.drain_deadline = Some(deadline);
+                log::info!(
+                    "driver entering drain mode with {:.3}s timeout",
+                    timeout.as_secs_f64()
+                );
+            }
+            LifecycleState::Draining => {
+                self.drain_deadline = Some(deadline);
+                log::info!(
+                    "driver drain deadline updated to {:.3}s from now",
+                    timeout.as_secs_f64()
+                );
+            }
+            LifecycleState::Stopping | LifecycleState::Stopped => {
+                log::debug!(
+                    "ignoring BeginDrain while lifecycle state is {:?}",
+                    self.lifecycle_state
+                );
+            }
+        }
+    }
+
+    fn drain_status(&self) -> DrainStatus {
+        let now = Instant::now();
+        let drain_age_seconds = self
+            .drain_started_at
+            .map(|started| started.elapsed().as_secs_f64());
+        let deadline_remaining_seconds = self.drain_deadline.map(|deadline| {
+            deadline
+                .checked_duration_since(now)
+                .map(|remaining| remaining.as_secs_f64())
+                .unwrap_or(0.0)
+        });
+        let detail = match self.lifecycle_state {
+            LifecycleState::Active => Some("node is accepting normal work".into()),
+            LifecycleState::Draining => Some("node is draining existing work".into()),
+            LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
+            LifecycleState::Stopped => Some("node is stopped".into()),
+        };
+
+        DrainStatus {
+            state: self.lifecycle_state,
+            drain_age_seconds,
+            deadline_remaining_seconds,
+            drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining),
+            detail,
+        }
     }
 
     fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
@@ -4271,6 +4334,9 @@ impl Driver {
                         }
                     }
                 }
+                Event::BeginDrain { timeout } => {
+                    self.begin_drain(timeout);
+                }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
                     let mut replay_shared_announces = false;
@@ -5135,7 +5201,10 @@ impl Driver {
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
-                Event::Shutdown => break,
+                Event::Shutdown => {
+                    self.lifecycle_state = LifecycleState::Stopped;
+                    break;
+                }
             }
         }
     }
@@ -5194,6 +5263,7 @@ impl Driver {
                     QueryResponse::ProviderBridgeStats(None::<crate::event::ProviderBridgeStats>)
                 }
             }
+            QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
             QueryRequest::PathTable { max_hops } => {
                 let entries: Vec<PathTableEntry> = self
                     .engine
@@ -5414,6 +5484,7 @@ impl Driver {
                 reason,
                 penalty_level,
             )),
+            QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
             QueryRequest::InjectPath {
                 dest_hash,
                 next_hop,
@@ -8529,6 +8600,93 @@ mod tests {
 
         tx.send(Event::Shutdown).unwrap();
         driver.run(); // Should return immediately
+    }
+
+    #[test]
+    fn begin_drain_updates_driver_status() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+
+        driver.begin_drain(Duration::from_secs(3));
+
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert_eq!(status.state, LifecycleState::Draining);
+        assert!(!status.drain_complete);
+        assert!(status.drain_age_seconds.is_some());
+        assert!(status.deadline_remaining_seconds.is_some());
+    }
+
+    #[test]
+    fn begin_drain_event_is_processed_by_run_loop() {
+        let (tx, rx) = event::channel();
+        let tx_query = tx.clone();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        let handle = std::thread::spawn(move || driver.run());
+        tx.send(Event::BeginDrain {
+            timeout: Duration::from_secs(2),
+        })
+        .unwrap();
+        let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+        tx_query
+            .send(Event::Query(QueryRequest::DrainStatus, resp_tx))
+            .unwrap();
+        let status = match resp_rx.recv().unwrap() {
+            QueryResponse::DrainStatus(status) => status,
+            other => panic!("expected drain status response, got {:?}", other),
+        };
+        assert_eq!(status.state, LifecycleState::Draining);
+        tx_query.send(Event::Shutdown).unwrap();
+        handle.join().unwrap();
     }
 
     #[test]

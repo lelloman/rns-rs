@@ -81,6 +81,23 @@ pub enum RuntimeConfigErrorCode {
     ApplyFailed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleState {
+    Active,
+    Draining,
+    Stopping,
+    Stopped,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrainStatus {
+    pub state: LifecycleState,
+    pub drain_age_seconds: Option<f64>,
+    pub deadline_remaining_seconds: Option<f64>,
+    pub drain_complete: bool,
+    pub detail: Option<String>,
+}
+
 /// Events sent to the driver thread.
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
@@ -110,6 +127,8 @@ pub enum Event<W: Send> {
     InterfaceDown(InterfaceId),
     /// Periodic maintenance tick (1s interval).
     Tick,
+    /// Enter drain mode and stop admitting new work.
+    BeginDrain { timeout: Duration },
     /// Shut down the driver loop.
     Shutdown,
     /// Send an outbound packet.
@@ -461,6 +480,8 @@ pub enum QueryRequest {
     BackboneInterfaces,
     /// Report live provider-bridge queue/drop state.
     ProviderBridgeStats,
+    /// Report current lifecycle/drain status.
+    DrainStatus,
     /// Clear live backbone peer state for one interface/IP pair.
     ClearBackbonePeerState {
         interface_name: String,
@@ -520,6 +541,8 @@ pub enum QueryResponse {
     BackboneInterfaces(Vec<BackboneInterfaceEntry>),
     /// Live provider-bridge queue/drop state if enabled.
     ProviderBridgeStats(Option<ProviderBridgeStats>),
+    /// Current lifecycle/drain status.
+    DrainStatus(DrainStatus),
     /// Result of clearing one backbone peer state entry.
     ClearBackbonePeerState(bool),
     /// Result of blacklisting a backbone peer.
@@ -666,6 +689,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .finish(),
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),
             Event::Tick => write!(f, "Tick"),
+            Event::BeginDrain { timeout } => f
+                .debug_struct("BeginDrain")
+                .field("timeout", timeout)
+                .finish(),
             Event::Shutdown => write!(f, "Shutdown"),
             Event::SendOutbound { raw, dest_type, .. } => f
                 .debug_struct("SendOutbound")
