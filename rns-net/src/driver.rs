@@ -793,6 +793,7 @@ impl Driver {
     fn drain_status(&self) -> DrainStatus {
         let now = Instant::now();
         let active_links = self.link_manager.link_count();
+        let active_resource_transfers = self.link_manager.resource_transfer_count();
         let active_holepunch_sessions = self.holepunch_manager.session_count();
         let drain_age_seconds = self
             .drain_started_at
@@ -805,20 +806,40 @@ impl Driver {
         });
         let detail = match self.lifecycle_state {
             LifecycleState::Active => Some("node is accepting normal work".into()),
-            LifecycleState::Draining => Some(match (active_links, active_holepunch_sessions) {
-                (0, 0) => "node is draining existing work; no active links or hole-punch sessions remain".into(),
-                (links, 0) => {
-                    format!("node is draining existing work; {} link(s) still active", links)
+            LifecycleState::Draining => Some(
+                match (
+                    active_links,
+                    active_resource_transfers,
+                    active_holepunch_sessions,
+                ) {
+                    (0, 0, 0) => {
+                        "node is draining existing work; no active links, resource transfers, or hole-punch sessions remain".into()
+                    }
+                    (links, 0, 0) => {
+                        format!("node is draining existing work; {} link(s) still active", links)
+                    }
+                    (links, transfers, 0) => format!(
+                        "node is draining existing work; {} link(s) and {} resource transfer(s) still active",
+                        links, transfers
+                    ),
+                    (0, 0, sessions) => format!(
+                        "node is draining existing work; {} hole-punch session(s) still active",
+                        sessions
+                    ),
+                    (links, 0, sessions) => format!(
+                        "node is draining existing work; {} link(s) and {} hole-punch session(s) still active",
+                        links, sessions
+                    ),
+                    (0, transfers, sessions) => format!(
+                        "node is draining existing work; {} resource transfer(s) and {} hole-punch session(s) still active",
+                        transfers, sessions
+                    ),
+                    (links, transfers, sessions) => format!(
+                        "node is draining existing work; {} link(s), {} resource transfer(s), and {} hole-punch session(s) still active",
+                        links, transfers, sessions
+                    ),
                 }
-                (0, sessions) => format!(
-                    "node is draining existing work; {} hole-punch session(s) still active",
-                    sessions
-                ),
-                (links, sessions) => format!(
-                    "node is draining existing work; {} link(s) and {} hole-punch session(s) still active",
-                    links, sessions
-                ),
-            }),
+            ),
             LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
             LifecycleState::Stopped => Some("node is stopped".into()),
         };
@@ -828,7 +849,9 @@ impl Driver {
             drain_age_seconds,
             deadline_remaining_seconds,
             drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining)
-                || (active_links == 0 && active_holepunch_sessions == 0),
+                || (active_links == 0
+                    && active_resource_transfers == 0
+                    && active_holepunch_sessions == 0),
             detail,
         }
     }
@@ -8759,7 +8782,7 @@ mod tests {
         assert!(status.deadline_remaining_seconds.is_some());
         assert_eq!(
             status.detail.as_deref(),
-            Some("node is draining existing work; no active links or hole-punch sessions remain")
+            Some("node is draining existing work; no active links, resource transfers, or hole-punch sessions remain")
         );
     }
 

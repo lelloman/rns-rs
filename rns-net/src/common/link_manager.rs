@@ -2108,6 +2108,14 @@ impl LinkManager {
         self.links.len()
     }
 
+    /// Get the number of active resource transfers across all links.
+    pub fn resource_transfer_count(&self) -> usize {
+        self.links
+            .values()
+            .map(|managed| managed.incoming_resources.len() + managed.outgoing_resources.len())
+            .sum()
+    }
+
     /// Get information about all active links.
     pub fn link_entries(&self) -> Vec<crate::event::LinkInfoEntry> {
         self.links
