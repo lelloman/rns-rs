@@ -302,6 +302,43 @@ pub fn bump_process_restart_count(state: &SharedState, name: &str) {
     );
 }
 
+pub fn record_process_termination_observation(
+    state: &SharedState,
+    name: &str,
+    drain_acknowledged: bool,
+    forced_kill: bool,
+) {
+    let mut s = state.write().unwrap();
+    let detail = {
+        let process = s
+            .processes
+            .entry(name.to_string())
+            .or_insert_with(|| ManagedProcessState::new(name.to_string()));
+        if drain_acknowledged {
+            process.drain_ack_count = process.drain_ack_count.saturating_add(1);
+        }
+        if forced_kill {
+            process.forced_kill_count = process.forced_kill_count.saturating_add(1);
+        }
+
+        let mut parts = Vec::new();
+        if drain_acknowledged {
+            parts.push(format!("drain_ack_count={}", process.drain_ack_count));
+        }
+        if forced_kill {
+            parts.push(format!("forced_kill_count={}", process.forced_kill_count));
+        }
+        (!parts.is_empty()).then(|| parts.join(", "))
+    };
+
+    if let Some(detail) = detail {
+        push_capped(
+            &mut s.process_events,
+            ProcessEventRecord::new(name.to_string(), "termination_observed", Some(detail)),
+        );
+    }
+}
+
 pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i32>) {
     let mut s = state.write().unwrap();
     let process = s
@@ -670,6 +707,8 @@ pub struct ManagedProcessState {
     pub pid: Option<u32>,
     pub last_exit_code: Option<i32>,
     pub restart_count: u32,
+    pub drain_ack_count: u32,
+    pub forced_kill_count: u32,
     pub last_error: Option<String>,
     pub status_detail: Option<String>,
     pub durable_log_path: Option<String>,
@@ -696,6 +735,8 @@ impl ManagedProcessState {
             pid: None,
             last_exit_code: None,
             restart_count: 0,
+            drain_ack_count: 0,
+            forced_kill_count: 0,
             last_error: None,
             status_detail: None,
             durable_log_path: None,
@@ -772,6 +813,30 @@ impl WsEvent {
             "data": self.payload,
         });
         serde_json::to_string(&obj).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        mark_process_running, record_process_termination_observation, CtlState, SharedState,
+    };
+    use std::sync::{Arc, RwLock};
+
+    #[test]
+    fn termination_observation_tracks_drain_ack_and_forced_kill_counts() {
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        mark_process_running(&state, "rnsd", 1234);
+
+        record_process_termination_observation(&state, "rnsd", true, false);
+        record_process_termination_observation(&state, "rnsd", false, true);
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rnsd").cloned().unwrap()
+        };
+        assert_eq!(snapshot.drain_ack_count, 1);
+        assert_eq!(snapshot.forced_kill_count, 1);
     }
 }
 

@@ -73,6 +73,7 @@ The feature is not intended to:
 - Supervisor/control-plane visibility:
   - mirrors `rnsd` drain progress into process state
   - logs drain progress updates while waiting
+  - exposes cumulative `drain_ack_count` and `forced_kill_count` per process
 - `rns-ctl` HTTP control plane rejects new mutating work with `409 Conflict`
   while the node is draining
 - `RnsNode` public API now preflights drain state and returns errors for new
@@ -82,12 +83,9 @@ The feature is not intended to:
 
 - Sidecar drain behavior is observable through ready-file acknowledgements, but
   it still does not expose richer flush counts or queue-depth metrics
-- Forced-shutdown reporting exists in logs/process readiness, but it is not yet
-  summarized as explicit counters in a higher-level status surface
 
 ### Still Missing
 
-- Better reporting of forced-shutdown outcomes/counts in status surfaces
 - A final audit of any remaining public entrypoints that should reject new work
   during drain but may still rely only on lower-level behavior
 
@@ -236,6 +234,8 @@ Delivered:
 - resource transfers are cancelled
 - hole-punch sessions are aborted
 - supervisor stop reporting distinguishes drain acknowledgment from forced kill
+- process state/API expose cumulative drain-acknowledgement and forced-kill
+  counters
 
 Key commits:
 
@@ -246,7 +246,8 @@ Key commits:
 
 Remaining:
 
-- improve forced-shutdown reporting/counts in status if desired
+- add richer detail on what specific work remained active at deadline, if
+  operators need more than the current counters
 
 ### Phase 9: End-To-End Tests
 
@@ -274,28 +275,25 @@ Remaining:
   separate from restart
 - optional multi-node scenarios that verify traffic recovery across a drained
   `rnsd` restart, not just supervised process recovery
-- `rns-ctl` integration coverage for drain status and `409` behavior while draining
-
-Remaining:
-
-- higher-level restart/stop integration tests through `rns-server`
-- tests covering queue drain accounting once that lands
-- tests around sidecar flush/ack behavior under real supervisor control
+- optional tests around sidecar flush/ack behavior under real supervisor control
 
 Key commits:
 
 - `57ab769` Test listener stop behavior during drain
 - `403ecb8` Add drain status test coverage
 - `038d6b0` Reject new ctl work while draining
+- `101653d` Expand graceful shutdown supervisor coverage
+- `34c50f5` Add rnsd restart e2e coverage for graceful drain
 
 ## Recommended Next Steps
 
 The next highest-value work is:
 
-1. Add queue-drain accounting for interface writers and provider-bridge backlog.
-2. Add higher-level `rns-server` integration coverage around stop/restart drain flows.
-3. Improve forced-shutdown reporting so operators can see what was still active at deadline.
-4. Perform a final API/control-surface audit for any remaining drain admission gaps.
+1. Perform a final API/control-surface audit for any remaining drain admission gaps.
+2. Decide whether operators need richer sidecar flush metrics in addition to the
+   current drain-acknowledgement and forced-kill counters.
+3. Decide whether to add optional Docker/e2e coverage for explicit `rnsd`
+   stop/start and multi-node traffic recovery through restart.
 
 ## Working Notes
 

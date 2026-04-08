@@ -647,6 +647,8 @@ fn test_get_processes_exposes_log_metadata() {
                 pid: Some(4242),
                 last_exit_code: None,
                 restart_count: 2,
+                drain_ack_count: 1,
+                forced_kill_count: 0,
                 last_error: None,
                 status_detail: Some("stats pipeline active".into()),
                 durable_log_path: Some("/tmp/rns/logs/rns-statsd.log".into()),
@@ -665,6 +667,8 @@ fn test_get_processes_exposes_log_metadata() {
         json["processes"][0]["durable_log_path"],
         "/tmp/rns/logs/rns-statsd.log"
     );
+    assert_eq!(json["processes"][0]["drain_ack_count"], 1);
+    assert_eq!(json["processes"][0]["forced_kill_count"], 0);
     assert_eq!(json["processes"][0]["recent_log_lines"], 3);
     assert!(json["processes"][0]["last_log_age_seconds"]
         .as_f64()
@@ -687,6 +691,8 @@ fn test_get_processes_exposes_readiness_and_failure_detail() {
                 pid: None,
                 last_exit_code: Some(17),
                 restart_count: 4,
+                drain_ack_count: 2,
+                forced_kill_count: 1,
                 last_error: Some("hook registration timed out".into()),
                 status_detail: Some("waiting for provider bridge".into()),
                 durable_log_path: Some("/tmp/rns/logs/rns-sentineld.log".into()),
@@ -704,6 +710,8 @@ fn test_get_processes_exposes_readiness_and_failure_detail() {
     assert_eq!(json["processes"][0]["name"], "rns-sentineld");
     assert_eq!(json["processes"][0]["ready_state"], "not-ready");
     assert_eq!(json["processes"][0]["restart_count"], 4);
+    assert_eq!(json["processes"][0]["drain_ack_count"], 2);
+    assert_eq!(json["processes"][0]["forced_kill_count"], 1);
     assert_eq!(json["processes"][0]["last_exit_code"], 17);
     assert_eq!(
         json["processes"][0]["last_error"],

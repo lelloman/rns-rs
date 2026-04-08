@@ -11,8 +11,8 @@ use crate::logs::LogStore;
 use crate::self_exec::{resolve_self_exec, self_exec_display};
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
-    mark_process_stopped, push_process_log, set_process_log_path, set_process_readiness,
-    ProcessControlCommand, SharedState,
+    mark_process_stopped, push_process_log, record_process_termination_observation,
+    set_process_log_path, set_process_readiness, ProcessControlCommand, SharedState,
 };
 use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
 
@@ -821,6 +821,14 @@ fn terminate_children(
         let ready_file = ready_file_path_for_role(managed.role, readiness);
         match terminate_child(managed, shared_state, ready_file.as_ref()) {
             Ok(observation) => {
+                if let Some(state) = shared_state {
+                    record_process_termination_observation(
+                        state,
+                        managed.role.display_name(),
+                        observation.drain_acknowledged,
+                        observation.forced_kill,
+                    );
+                }
                 if observation.drain_acknowledged {
                     log::info!(
                         "{} acknowledged draining before exit",
@@ -964,9 +972,8 @@ mod tests {
         command_for_spec, format_drain_status_detail, inspect_ready_file, log_rnsd_drain_progress,
         drain_complete_for_shutdown, missing_required_hooks, observe_sidecar_draining,
         probe_ready_file, ready_file_path_for_role, reflect_rnsd_drain_status, request_rnsd_drain,
-        role_from_name, shutdown_priority, wait_for_rnsd_drain, ProcessCommand,
-        ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role, Supervisor,
-        SupervisorConfig,
+        role_from_name, shutdown_priority, wait_for_rnsd_drain, ProcessCommand, ProcessReadiness,
+        ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role, Supervisor, SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{

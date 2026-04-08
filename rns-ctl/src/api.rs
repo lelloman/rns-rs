@@ -300,6 +300,8 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
                 "pid": p.pid,
                 "last_exit_code": p.last_exit_code,
                 "restart_count": p.restart_count,
+                "drain_ack_count": p.drain_ack_count,
+                "forced_kill_count": p.forced_kill_count,
                 "last_error": p.last_error,
                 "status_detail": p.status_detail,
                 "durable_log_path": p.durable_log_path,
