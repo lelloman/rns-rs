@@ -963,16 +963,23 @@ mod tests {
     use super::{
         command_for_spec, format_drain_status_detail, inspect_ready_file, log_rnsd_drain_progress,
         drain_complete_for_shutdown, missing_required_hooks, observe_sidecar_draining,
-        probe_ready_file,
-        ready_file_path_for_role, reflect_rnsd_drain_status, role_from_name, shutdown_priority,
-        ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, Role, SupervisorConfig,
+        probe_ready_file, ready_file_path_for_role, reflect_rnsd_drain_status, request_rnsd_drain,
+        role_from_name, shutdown_priority, wait_for_rnsd_drain, ProcessCommand,
+        ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role, Supervisor,
+        SupervisorConfig,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
-    use rns_net::{event::DrainStatus, event::LifecycleState, HookInfo};
+    use rns_net::{
+        event::EventSender,
+        event::{DrainStatus, Event, LifecycleState, QueryRequest, QueryResponse},
+        HookInfo, RpcAddr, RpcServer,
+    };
+    use std::net::TcpListener;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::mpsc;
     use std::sync::{Arc, RwLock};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn supervisor_holds_expected_specs() {
@@ -1339,11 +1346,296 @@ mod tests {
         assert!(drain_complete_for_shutdown(&status));
     }
 
+    #[test]
+    fn request_rnsd_drain_emits_begin_drain_over_rpc() {
+        let (event_tx, event_rx) = rns_net::event::channel();
+        let auth_key = [0x42; 32];
+        let (rpc_addr, _server) = start_test_rpc_server(auth_key, event_tx);
+        let config = RnsdDrainConfig {
+            rpc_addr,
+            auth_key,
+            timeout: Duration::from_millis(250),
+            poll_interval: Duration::from_millis(10),
+        };
+
+        request_rnsd_drain(&config, "test shutdown").unwrap();
+
+        match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+            Event::BeginDrain { timeout } => assert_eq!(timeout, config.timeout),
+            other => panic!("expected BeginDrain event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn wait_for_rnsd_drain_returns_true_after_live_rpc_completion() {
+        let (event_tx, event_rx) = rns_net::event::channel();
+        let auth_key = [0x24; 32];
+        let (rpc_addr, _server) = start_test_rpc_server(auth_key, event_tx);
+        let config = RnsdDrainConfig {
+            rpc_addr,
+            auth_key,
+            timeout: Duration::from_millis(250),
+            poll_interval: Duration::from_millis(10),
+        };
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rnsd");
+        mark_process_running(&state, "rnsd", 1234);
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let driver = std::thread::spawn(move || {
+            let mut polls = 0usize;
+            while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
+                if let Event::Query(QueryRequest::DrainStatus, resp_tx) = event {
+                    polls += 1;
+                    let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                        state: if polls == 1 {
+                            LifecycleState::Draining
+                        } else {
+                            LifecycleState::Stopping
+                        },
+                        drain_age_seconds: Some((polls as f64) * 0.05),
+                        deadline_remaining_seconds: Some(if polls == 1 { 0.2 } else { 0.0 }),
+                        drain_complete: polls > 1,
+                        interface_writer_queued_frames: if polls == 1 { 2 } else { 0 },
+                        provider_backlog_events: 0,
+                        provider_consumer_queued_events: 0,
+                        detail: Some(if polls == 1 {
+                            "waiting for queued interface writes".into()
+                        } else {
+                            "all work drained".into()
+                        }),
+                    }));
+                    if polls > 1 {
+                        break;
+                    }
+                }
+            }
+            let _ = done_tx.send(());
+        });
+
+        assert!(wait_for_rnsd_drain(&config, Some(&state)));
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        driver.join().unwrap();
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rnsd").cloned().unwrap()
+        };
+        assert_eq!(snapshot.ready_state, "stopping");
+        assert!(snapshot
+            .status_detail
+            .unwrap_or_default()
+            .contains("all work drained"));
+    }
+
+    #[test]
+    fn wait_for_rnsd_drain_times_out_when_live_rpc_never_completes() {
+        let (event_tx, event_rx) = rns_net::event::channel();
+        let auth_key = [0x11; 32];
+        let (rpc_addr, _server) = start_test_rpc_server(auth_key, event_tx);
+        let config = RnsdDrainConfig {
+            rpc_addr,
+            auth_key,
+            timeout: Duration::from_millis(120),
+            poll_interval: Duration::from_millis(10),
+        };
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rnsd");
+        mark_process_running(&state, "rnsd", 777);
+        let (stop_tx, stop_rx) = mpsc::channel();
+
+        let driver = std::thread::spawn(move || {
+            loop {
+                match event_rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) => {
+                        let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                            state: LifecycleState::Draining,
+                            drain_age_seconds: Some(0.05),
+                            deadline_remaining_seconds: Some(0.05),
+                            drain_complete: false,
+                            interface_writer_queued_frames: 1,
+                            provider_backlog_events: 2,
+                            provider_consumer_queued_events: 3,
+                            detail: Some("still draining queued work".into()),
+                        }));
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+            }
+        });
+
+        assert!(!wait_for_rnsd_drain(&config, Some(&state)));
+        let _ = stop_tx.send(());
+        driver.join().unwrap();
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rnsd").cloned().unwrap()
+        };
+        assert_eq!(snapshot.ready_state, "draining");
+        assert!(snapshot
+            .status_detail
+            .unwrap_or_default()
+            .contains("still draining queued work"));
+    }
+
+    #[test]
+    fn stop_process_requests_rnsd_drain_before_termination() {
+        let (event_tx, event_rx) = rns_net::event::channel();
+        let auth_key = [0x51; 32];
+        let (rpc_addr, _server) = start_test_rpc_server(auth_key, event_tx);
+        let supervisor = Supervisor::new(SupervisorConfig {
+            specs: vec![ProcessSpec {
+                role: Role::Rnsd,
+                command: ProcessCommand::External(PathBuf::from("sleep")),
+                args: vec!["60".into()],
+            }],
+            shared_state: None,
+            control_rx: None,
+            readiness: Vec::new(),
+            log_dir: None,
+            rnsd_drain: Some(RnsdDrainConfig {
+                rpc_addr,
+                auth_key,
+                timeout: Duration::from_millis(250),
+                poll_interval: Duration::from_millis(10),
+            }),
+        });
+        let mut children = vec![super::ManagedChild {
+            role: Role::Rnsd,
+            child: Command::new("sleep").arg("60").spawn().unwrap(),
+        }];
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let driver = std::thread::spawn(move || {
+            let mut saw_begin_drain = false;
+            while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
+                match event {
+                    Event::BeginDrain { .. } => saw_begin_drain = true,
+                    Event::Query(QueryRequest::DrainStatus, resp_tx) => {
+                        let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                            state: LifecycleState::Stopping,
+                            drain_age_seconds: Some(0.05),
+                            deadline_remaining_seconds: Some(0.0),
+                            drain_complete: true,
+                            interface_writer_queued_frames: 0,
+                            provider_backlog_events: 0,
+                            provider_consumer_queued_events: 0,
+                            detail: Some("ready to stop".into()),
+                        }));
+                        let _ = done_tx.send(saw_begin_drain);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        supervisor.stop_process("rnsd", &mut children).unwrap();
+        assert!(children.is_empty());
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn restart_process_requests_rnsd_drain_before_replacement() {
+        let (event_tx, event_rx) = rns_net::event::channel();
+        let auth_key = [0x61; 32];
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rnsd");
+        let (rpc_addr, _server) = start_test_rpc_server(auth_key, event_tx);
+        let supervisor = Supervisor::new(SupervisorConfig {
+            specs: vec![ProcessSpec {
+                role: Role::Rnsd,
+                command: ProcessCommand::External(PathBuf::from("sleep")),
+                args: vec!["60".into()],
+            }],
+            shared_state: Some(state.clone()),
+            control_rx: None,
+            readiness: Vec::new(),
+            log_dir: None,
+            rnsd_drain: Some(RnsdDrainConfig {
+                rpc_addr: rpc_addr.clone(),
+                auth_key,
+                timeout: Duration::from_millis(250),
+                poll_interval: Duration::from_millis(10),
+            }),
+        });
+        let original = Command::new("sleep").arg("60").spawn().unwrap();
+        mark_process_running(&state, "rnsd", original.id());
+        let original_pid = original.id();
+        let mut children = vec![super::ManagedChild {
+            role: Role::Rnsd,
+            child: original,
+        }];
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let driver = std::thread::spawn(move || {
+            let mut saw_begin_drain = false;
+            while let Ok(event) = event_rx.recv_timeout(Duration::from_secs(1)) {
+                match event {
+                    Event::BeginDrain { .. } => saw_begin_drain = true,
+                    Event::Query(QueryRequest::DrainStatus, resp_tx) => {
+                        let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                            state: LifecycleState::Stopping,
+                            drain_age_seconds: Some(0.05),
+                            deadline_remaining_seconds: Some(0.0),
+                            drain_complete: true,
+                            interface_writer_queued_frames: 0,
+                            provider_backlog_events: 0,
+                            provider_consumer_queued_events: 0,
+                            detail: Some("ready to restart".into()),
+                        }));
+                        let _ = done_tx.send(saw_begin_drain);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        supervisor.restart_process("rnsd", &mut children).unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].role, Role::Rnsd);
+        assert_ne!(children[0].child.id(), original_pid);
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        driver.join().unwrap();
+
+        let snapshot = {
+            let s = state.read().unwrap();
+            s.processes.get("rnsd").cloned().unwrap()
+        };
+        assert_eq!(snapshot.restart_count, 1);
+
+        let _ = children[0].child.kill();
+        let _ = children[0].child.wait();
+    }
+
     fn unique_temp_path(prefix: &str) -> PathBuf {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{}-{now}.ready", std::process::id()))
+    }
+
+    fn start_test_rpc_server(auth_key: [u8; 32], event_tx: EventSender) -> (RpcAddr, RpcServer) {
+        for _ in 0..16 {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), port);
+            match RpcServer::start(&rpc_addr, auth_key, event_tx.clone()) {
+                Ok(server) => return (rpc_addr, server),
+                Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => continue,
+                Err(err) => panic!("failed to start rpc server for test: {err}"),
+            }
+        }
+
+        panic!("failed to allocate rpc server address for test");
     }
 }

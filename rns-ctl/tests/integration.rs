@@ -419,6 +419,9 @@ fn test_get_node_reports_drain_status() {
         .as_f64()
         .unwrap()
         > 0.0);
+    assert_eq!(json["drain"]["interface_writer_queued_frames"], 0);
+    assert_eq!(json["drain"]["provider_backlog_events"], 0);
+    assert_eq!(json["drain"]["provider_consumer_queued_events"], 0);
     assert!(json["drain"]["detail"]
         .as_str()
         .unwrap()

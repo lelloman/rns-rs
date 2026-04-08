@@ -63,6 +63,9 @@ The feature is not intended to:
   - active links
   - resource transfers
   - hole-punch sessions
+  - interface writer queued frames
+  - provider backlog events
+  - provider consumer queued events
 - Deadline teardown now actively aborts:
   - remaining links
   - resource transfers
@@ -77,21 +80,14 @@ The feature is not intended to:
 
 ### Partially Implemented
 
-- Drain completion is currently based on:
-  - lifecycle state
-  - active links
-  - active resource transfers
-  - active hole-punch sessions
-- This is useful, but it is not yet full queue-drain accounting for:
-  - interface writer queues
-  - provider-bridge backlog
-  - any other short-lived buffered work that should count toward graceful stop
+- Sidecar drain behavior is observable through ready-file acknowledgements, but
+  it still does not expose richer flush counts or queue-depth metrics
+- Forced-shutdown reporting exists in logs/process readiness, but it is not yet
+  summarized as explicit counters in a higher-level status surface
 
 ### Still Missing
 
 - Broader end-to-end coverage around real stop/restart flows
-- Explicit queue-drain accounting for interface writers and provider-bridge
-  backlog
 - Better reporting of forced-shutdown outcomes/counts in status surfaces
 - A final audit of any remaining public entrypoints that should reject new work
   during drain but may still rely only on lower-level behavior
@@ -154,22 +150,25 @@ Key commits:
 
 ### Phase 4: Queue Drain Accounting
 
-Status: partial
+Status: implemented for currently tracked queued work
 
 Delivered:
 
 - drain status accounts for links/resources/hole-punch sessions
+- drain status accounts for interface writer queue depth
+- drain status accounts for provider-bridge backlog and consumer queue depth
+- `drain_complete` now waits for those queue counters to hit zero
 
 Remaining:
 
-- interface writer queue accounting
-- provider-bridge backlog accounting
-- tighter definition of “drain complete” for short queued work
+- audit whether any other short-lived queues should also contribute to drain
+  completion
 
 Key commits:
 
 - `70d6876` Report active links in drain status
 - `04f7059` Report resource transfers in drain status
+- `b139677` Track queued work in drain status
 
 ### Phase 5: Supervisor Uses Drain Before Stop
 
@@ -252,12 +251,24 @@ Remaining:
 
 ### Phase 9: End-To-End Tests
 
-Status: partial
+Status: improved, but still not complete
 
 Delivered:
 
 - focused unit tests in `rns-net`
 - focused supervisor tests in `rns-server`
+- live RPC-based supervisor tests for:
+  - drain request emission
+  - drain completion path
+  - drain timeout path
+- `rns-ctl` integration coverage for drain visibility and mutating-request
+  rejection during drain
+
+Remaining:
+
+- fuller process-level restart/stop integration coverage through `rns-server`
+- optional Docker/e2e coverage if we want to verify behavior outside unit-level
+  harnesses
 - `rns-ctl` integration coverage for drain status and `409` behavior while draining
 
 Remaining:
