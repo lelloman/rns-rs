@@ -27,7 +27,7 @@ pub mod udp;
 use std::any::Any;
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread;
@@ -94,14 +94,30 @@ impl ListenerControl {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct AsyncWriterMetrics {
+    queued_frames: Arc<AtomicUsize>,
+    worker_alive: Arc<AtomicBool>,
+}
+
+impl AsyncWriterMetrics {
+    pub fn queued_frames(&self) -> usize {
+        self.queued_frames.load(Ordering::Relaxed)
+    }
+
+    pub fn worker_alive(&self) -> bool {
+        self.worker_alive.load(Ordering::Relaxed)
+    }
+}
+
 struct AsyncWriter {
     tx: SyncSender<Vec<u8>>,
-    worker_alive: Arc<AtomicBool>,
+    metrics: AsyncWriterMetrics,
 }
 
 impl Writer for AsyncWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        if !self.worker_alive.load(Ordering::Relaxed) {
+        if !self.metrics.worker_alive() {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "interface writer worker is offline",
@@ -109,13 +125,18 @@ impl Writer for AsyncWriter {
         }
 
         match self.tx.try_send(data.to_vec()) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
             Err(TrySendError::Full(_)) => Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "interface writer queue is full",
             )),
             Err(TrySendError::Disconnected(_)) => {
-                self.worker_alive.store(false, Ordering::Relaxed);
+                self.metrics
+                    .worker_alive
+                    .store(false, Ordering::Relaxed);
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "interface writer worker disconnected",
@@ -131,27 +152,29 @@ pub fn wrap_async_writer(
     interface_name: &str,
     event_tx: EventSender,
     queue_capacity: usize,
-) -> Box<dyn Writer> {
+) -> (Box<dyn Writer>, AsyncWriterMetrics) {
     let (tx, rx) = sync_channel::<Vec<u8>>(queue_capacity.max(1));
-    let worker_alive = Arc::new(AtomicBool::new(true));
-    let worker_alive_thread = Arc::clone(&worker_alive);
+    let metrics = AsyncWriterMetrics {
+        queued_frames: Arc::new(AtomicUsize::new(0)),
+        worker_alive: Arc::new(AtomicBool::new(true)),
+    };
+    let metrics_thread = metrics.clone();
     let name = interface_name.to_string();
 
     thread::Builder::new()
         .name(format!("iface-writer-{}", interface_id.0))
         .spawn(move || {
-            async_writer_loop(
-                writer,
-                rx,
-                interface_id,
-                name,
-                event_tx,
-                worker_alive_thread,
-            )
+            async_writer_loop(writer, rx, interface_id, name, event_tx, metrics_thread)
         })
         .expect("failed to spawn interface writer thread");
 
-    Box::new(AsyncWriter { tx, worker_alive })
+    (
+        Box::new(AsyncWriter {
+            tx,
+            metrics: metrics.clone(),
+        }),
+        metrics,
+    )
 }
 
 fn async_writer_loop(
@@ -160,11 +183,12 @@ fn async_writer_loop(
     interface_id: InterfaceId,
     interface_name: String,
     event_tx: EventSender,
-    worker_alive: Arc<AtomicBool>,
+    metrics: AsyncWriterMetrics,
 ) {
     while let Ok(frame) = rx.recv() {
+        metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
         if let Err(err) = writer.send_frame(&frame) {
-            worker_alive.store(false, Ordering::Relaxed);
+            metrics.worker_alive.store(false, Ordering::Relaxed);
             log::warn!(
                 "[{}:{}] async writer exiting after send failure: {}",
                 interface_name,
@@ -176,7 +200,7 @@ fn async_writer_loop(
         }
     }
 
-    worker_alive.store(false, Ordering::Relaxed);
+    metrics.worker_alive.store(false, Ordering::Relaxed);
 }
 
 pub use crate::common::interface_stats::{InterfaceStats, ANNOUNCE_SAMPLE_MAX};
@@ -188,6 +212,7 @@ pub struct InterfaceEntry {
     pub id: InterfaceId,
     pub info: InterfaceInfo,
     pub writer: Box<dyn Writer>,
+    pub async_writer_metrics: Option<AsyncWriterMetrics>,
     /// Administrative enable/disable state.
     pub enabled: bool,
     pub online: bool,
@@ -341,6 +366,7 @@ mod tests {
                 ingress_control: false,
             },
             writer: Box::new(MockWriter::new()),
+            async_writer_metrics: None,
             enabled: true,
             online: false,
             dynamic: false,
@@ -399,7 +425,7 @@ mod tests {
         let (event_tx, _event_rx) = crate::event::channel();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let mut writer = wrap_async_writer(
+        let (mut writer, metrics) = wrap_async_writer(
             Box::new(BlockingWriter {
                 entered_tx,
                 release_rx,
@@ -413,6 +439,7 @@ mod tests {
         writer.send_frame(&[1]).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         writer.send_frame(&[2]).unwrap();
+        assert_eq!(metrics.queued_frames(), 1);
         let err = writer.send_frame(&[3]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
 
@@ -422,11 +449,12 @@ mod tests {
     #[test]
     fn async_writer_reports_interface_down_after_worker_failure() {
         let (event_tx, event_rx) = crate::event::channel();
-        let mut writer =
+        let (mut writer, metrics) =
             wrap_async_writer(Box::new(FailingWriter), InterfaceId(9), "fail", event_tx, 2);
 
         writer.send_frame(&[1]).unwrap();
         let event = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(InterfaceId(9))));
+        assert!(!metrics.worker_alive());
     }
 }

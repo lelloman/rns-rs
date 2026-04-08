@@ -1236,6 +1236,9 @@ mod tests {
             drain_age_seconds: Some(1.2),
             deadline_remaining_seconds: Some(2.5),
             drain_complete: false,
+            interface_writer_queued_frames: 0,
+            provider_backlog_events: 0,
+            provider_consumer_queued_events: 0,
             detail: Some("draining 2 links".into()),
         };
 
@@ -1258,6 +1261,9 @@ mod tests {
                 drain_age_seconds: Some(0.5),
                 deadline_remaining_seconds: Some(1.0),
                 drain_complete: false,
+                interface_writer_queued_frames: 0,
+                provider_backlog_events: 0,
+                provider_consumer_queued_events: 0,
                 detail: Some("1 link still active".into()),
             },
         );
@@ -1284,6 +1290,9 @@ mod tests {
             drain_age_seconds: Some(0.5),
             deadline_remaining_seconds: Some(2.0),
             drain_complete: false,
+            interface_writer_queued_frames: 0,
+            provider_backlog_events: 0,
+            provider_consumer_queued_events: 0,
             detail: Some("1 link still active".into()),
         };
 
@@ -1296,6 +1305,9 @@ mod tests {
                 drain_age_seconds: Some(1.5),
                 deadline_remaining_seconds: Some(0.0),
                 drain_complete: true,
+                interface_writer_queued_frames: 0,
+                provider_backlog_events: 0,
+                provider_consumer_queued_events: 0,
                 detail: Some("tearing down remaining work".into()),
             },
             &mut last_observed,
@@ -1318,6 +1330,9 @@ mod tests {
             drain_age_seconds: Some(1.0),
             deadline_remaining_seconds: Some(0.0),
             drain_complete: false,
+            interface_writer_queued_frames: 0,
+            provider_backlog_events: 0,
+            provider_consumer_queued_events: 0,
             detail: Some("1 link still active".into()),
         };
 

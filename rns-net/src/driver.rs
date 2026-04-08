@@ -709,7 +709,10 @@ impl Driver {
         interface_id: InterfaceId,
         interface_name: &str,
         writer: Box<dyn crate::interface::Writer>,
-    ) -> Box<dyn crate::interface::Writer> {
+    ) -> (
+        Box<dyn crate::interface::Writer>,
+        crate::interface::AsyncWriterMetrics,
+    ) {
         crate::interface::wrap_async_writer(
             writer,
             interface_id,
@@ -795,6 +798,31 @@ impl Driver {
         let active_links = self.link_manager.link_count();
         let active_resource_transfers = self.link_manager.resource_transfer_count();
         let active_holepunch_sessions = self.holepunch_manager.session_count();
+        let interface_writer_queued_frames = self
+            .interfaces
+            .values()
+            .map(|entry| {
+                entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .map(|metrics| metrics.queued_frames())
+                    .unwrap_or(0)
+            })
+            .sum();
+        #[cfg(feature = "rns-hooks")]
+        let (provider_backlog_events, provider_consumer_queued_events) = self
+            .provider_bridge
+            .as_ref()
+            .map(|bridge| {
+                let stats = bridge.stats();
+                (
+                    stats.backlog_len,
+                    stats.consumers.iter().map(|consumer| consumer.queue_len).sum(),
+                )
+            })
+            .unwrap_or((0, 0));
+        #[cfg(not(feature = "rns-hooks"))]
+        let (provider_backlog_events, provider_consumer_queued_events) = (0, 0);
         let drain_age_seconds = self
             .drain_started_at
             .map(|started| started.elapsed().as_secs_f64());
@@ -806,40 +834,45 @@ impl Driver {
         });
         let detail = match self.lifecycle_state {
             LifecycleState::Active => Some("node is accepting normal work".into()),
-            LifecycleState::Draining => Some(
-                match (
-                    active_links,
-                    active_resource_transfers,
-                    active_holepunch_sessions,
-                ) {
-                    (0, 0, 0) => {
-                        "node is draining existing work; no active links, resource transfers, or hole-punch sessions remain".into()
-                    }
-                    (links, 0, 0) => {
-                        format!("node is draining existing work; {} link(s) still active", links)
-                    }
-                    (links, transfers, 0) => format!(
-                        "node is draining existing work; {} link(s) and {} resource transfer(s) still active",
-                        links, transfers
-                    ),
-                    (0, 0, sessions) => format!(
-                        "node is draining existing work; {} hole-punch session(s) still active",
-                        sessions
-                    ),
-                    (links, 0, sessions) => format!(
-                        "node is draining existing work; {} link(s) and {} hole-punch session(s) still active",
-                        links, sessions
-                    ),
-                    (0, transfers, sessions) => format!(
-                        "node is draining existing work; {} resource transfer(s) and {} hole-punch session(s) still active",
-                        transfers, sessions
-                    ),
-                    (links, transfers, sessions) => format!(
-                        "node is draining existing work; {} link(s), {} resource transfer(s), and {} hole-punch session(s) still active",
-                        links, transfers, sessions
-                    ),
+            LifecycleState::Draining => {
+                let mut remaining = Vec::new();
+                if active_links > 0 {
+                    remaining.push(format!("{active_links} link(s)"));
                 }
-            ),
+                if active_resource_transfers > 0 {
+                    remaining.push(format!(
+                        "{active_resource_transfers} resource transfer(s)"
+                    ));
+                }
+                if active_holepunch_sessions > 0 {
+                    remaining.push(format!(
+                        "{active_holepunch_sessions} hole-punch session(s)"
+                    ));
+                }
+                if interface_writer_queued_frames > 0 {
+                    remaining.push(format!(
+                        "{interface_writer_queued_frames} queued interface writer frame(s)"
+                    ));
+                }
+                if provider_backlog_events > 0 {
+                    remaining.push(format!(
+                        "{provider_backlog_events} provider backlog event(s)"
+                    ));
+                }
+                if provider_consumer_queued_events > 0 {
+                    remaining.push(format!(
+                        "{provider_consumer_queued_events} queued provider consumer event(s)"
+                    ));
+                }
+                Some(if remaining.is_empty() {
+                    "node is draining existing work; no active links, resource transfers, hole-punch sessions, or queued writer/provider work remain".into()
+                } else {
+                    format!(
+                        "node is draining existing work; {} still active",
+                        remaining.join(", ")
+                    )
+                })
+            }
             LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
             LifecycleState::Stopped => Some("node is stopped".into()),
         };
@@ -851,7 +884,13 @@ impl Driver {
             drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining)
                 || (active_links == 0
                     && active_resource_transfers == 0
-                    && active_holepunch_sessions == 0),
+                    && active_holepunch_sessions == 0
+                    && interface_writer_queued_frames == 0
+                    && provider_backlog_events == 0
+                    && provider_consumer_queued_events == 0),
+            interface_writer_queued_frames,
+            provider_backlog_events,
+            provider_consumer_queued_events,
             detail,
         }
     }
@@ -4442,13 +4481,15 @@ impl Driver {
                         self.register_interface_runtime_defaults(&info);
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
-                            let writer = self.wrap_interface_writer(id, &info.name, writer);
+                            let (writer, async_writer_metrics) =
+                                self.wrap_interface_writer(id, &info.name, writer);
                             self.interfaces.insert(
                                 id,
                                 InterfaceEntry {
                                     id,
                                     info,
                                     writer,
+                                    async_writer_metrics: Some(async_writer_metrics),
                                     enabled: true,
                                     online: true,
                                     dynamic: true,
@@ -4509,9 +4550,10 @@ impl Driver {
                             log::info!("[{}] interface online", id.0);
                             wants_tunnel = entry.info.wants_tunnel;
                             entry.online = true;
-                            if let Some(writer) = wrapped_writer {
+                            if let Some((writer, async_writer_metrics)) = wrapped_writer {
                                 log::info!("[{}] writer refreshed after reconnect", id.0);
                                 entry.writer = writer;
+                                entry.async_writer_metrics = Some(async_writer_metrics);
                             }
                             self.callbacks.on_interface_up(id);
                             #[cfg(feature = "rns-hooks")]
@@ -7886,6 +7928,19 @@ mod tests {
         }
     }
 
+    struct BlockingWriter {
+        entered_tx: std::sync::mpsc::Sender<()>,
+        release_rx: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl Writer for BlockingWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            let _ = self.entered_tx.send(());
+            let _ = self.release_rx.recv();
+            Ok(())
+        }
+    }
+
     struct WouldBlockWriter {
         attempts: Arc<Mutex<usize>>,
     }
@@ -8220,6 +8275,7 @@ mod tests {
                 id: InterfaceId(id),
                 info,
                 writer: Box::new(writer),
+                async_writer_metrics: None,
                 enabled: true,
                 online: true,
                 dynamic: false,
@@ -8442,6 +8498,7 @@ mod tests {
             id: InterfaceId(id),
             info: make_interface_info(id),
             writer,
+            async_writer_metrics: None,
             enabled: true,
             online,
             dynamic: false,
@@ -8784,7 +8841,7 @@ mod tests {
         assert!(status.deadline_remaining_seconds.is_some());
         assert_eq!(
             status.detail.as_deref(),
-            Some("node is draining existing work; no active links, resource transfers, or hole-punch sessions remain")
+            Some("node is draining existing work; no active links, resource transfers, hole-punch sessions, or queued writer/provider work remain")
         );
     }
 
@@ -8836,6 +8893,93 @@ mod tests {
             .detail
             .unwrap_or_default()
             .contains("1 link(s) still active"));
+    }
+
+    #[test]
+    fn begin_drain_with_queued_writer_frames_reports_incomplete_status() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx,
+            Box::new(cbs),
+        );
+
+        let info = make_interface_info(77);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (writer, async_writer_metrics) = crate::interface::wrap_async_writer(
+            Box::new(BlockingWriter {
+                entered_tx,
+                release_rx,
+            }),
+            InterfaceId(77),
+            &info.name,
+            driver.event_tx.clone(),
+            1,
+        );
+
+        driver.interfaces.insert(
+            InterfaceId(77),
+            InterfaceEntry {
+                id: InterfaceId(77),
+                info,
+                writer,
+                async_writer_metrics: Some(async_writer_metrics),
+                enabled: true,
+                online: true,
+                dynamic: false,
+                ifac: None,
+                stats: InterfaceStats::default(),
+                interface_type: "TestInterface".to_string(),
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
+            },
+        );
+
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(77),
+            raw: vec![0x01],
+        }]);
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(77),
+            raw: vec![0x02],
+        }]);
+
+        driver.begin_drain(Duration::from_secs(3));
+
+        let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus)
+        else {
+            panic!("expected drain status response");
+        };
+        assert_eq!(status.state, LifecycleState::Draining);
+        assert!(!status.drain_complete);
+        assert_eq!(status.interface_writer_queued_frames, 1);
+        assert!(status
+            .detail
+            .unwrap_or_default()
+            .contains("queued interface writer frame"));
+
+        let _ = release_tx.send(());
     }
 
     #[test]
@@ -9464,6 +9608,7 @@ mod tests {
                 id: InterfaceId(200),
                 info,
                 writer: Box::new(writer),
+                async_writer_metrics: None,
                 enabled: true,
                 online: true,
                 dynamic: true,
@@ -11763,6 +11908,7 @@ mod tests {
                 id: InterfaceId(1),
                 info,
                 writer: Box::new(writer),
+                async_writer_metrics: None,
                 enabled: false,
                 online: true,
                 dynamic: false,

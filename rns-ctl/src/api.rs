@@ -205,6 +205,9 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
             "drain_age_seconds": status.drain_age_seconds,
             "deadline_remaining_seconds": status.deadline_remaining_seconds,
             "drain_complete": status.drain_complete,
+            "interface_writer_queued_frames": status.interface_writer_queued_frames,
+            "provider_backlog_events": status.provider_backlog_events,
+            "provider_consumer_queued_events": status.provider_consumer_queued_events,
             "detail": status.detail,
         })),
     }))

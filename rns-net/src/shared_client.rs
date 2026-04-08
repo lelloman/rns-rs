@@ -120,6 +120,7 @@ impl RnsNode {
                 id,
                 info,
                 writer,
+                async_writer_metrics: None,
                 enabled: true,
                 online: false,
                 dynamic: false,

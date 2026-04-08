@@ -95,6 +95,9 @@ pub struct DrainStatus {
     pub drain_age_seconds: Option<f64>,
     pub deadline_remaining_seconds: Option<f64>,
     pub drain_complete: bool,
+    pub interface_writer_queued_frames: usize,
+    pub provider_backlog_events: usize,
+    pub provider_consumer_queued_events: usize,
     pub detail: Option<String>,
 }
 

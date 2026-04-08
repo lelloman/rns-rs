@@ -1038,7 +1038,7 @@ impl RnsNode {
                     writer,
                     interface_type_name,
                 } => {
-                    let writer = crate::interface::wrap_async_writer(
+                    let (writer, async_writer_metrics) = crate::interface::wrap_async_writer(
                         writer,
                         id,
                         &info.name,
@@ -1054,6 +1054,7 @@ impl RnsNode {
                             id,
                             info,
                             writer,
+                            async_writer_metrics: Some(async_writer_metrics),
                             enabled: true,
                             online: false,
                             dynamic: false,
@@ -1079,7 +1080,7 @@ impl RnsNode {
                     let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
                     for sub in subs {
-                        let writer = crate::interface::wrap_async_writer(
+                        let (writer, async_writer_metrics) = crate::interface::wrap_async_writer(
                             sub.writer,
                             sub.id,
                             &sub.info.name,
@@ -1109,6 +1110,7 @@ impl RnsNode {
                                 id: sub.id,
                                 info: sub.info,
                                 writer,
+                                async_writer_metrics: Some(async_writer_metrics),
                                 enabled: true,
                                 online: false,
                                 dynamic: false,

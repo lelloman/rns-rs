@@ -1496,6 +1496,18 @@ fn drain_status_to_pickle(status: &DrainStatus) -> PickleValue {
             PickleValue::Bool(status.drain_complete),
         ),
         (
+            PickleValue::String("interface_writer_queued_frames".into()),
+            PickleValue::Int(status.interface_writer_queued_frames as i64),
+        ),
+        (
+            PickleValue::String("provider_backlog_events".into()),
+            PickleValue::Int(status.provider_backlog_events as i64),
+        ),
+        (
+            PickleValue::String("provider_consumer_queued_events".into()),
+            PickleValue::Int(status.provider_consumer_queued_events as i64),
+        ),
+        (
             PickleValue::String("detail".into()),
             status
                 .detail
@@ -1844,6 +1856,21 @@ fn parse_drain_status(value: &PickleValue) -> io::Result<Option<DrainStatus>> {
         .get("drain_complete")
         .and_then(|entry| entry.as_bool())
         .unwrap_or(false);
+    let interface_writer_queued_frames = value
+        .get("interface_writer_queued_frames")
+        .and_then(|entry| entry.as_int())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let provider_backlog_events = value
+        .get("provider_backlog_events")
+        .and_then(|entry| entry.as_int())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let provider_consumer_queued_events = value
+        .get("provider_consumer_queued_events")
+        .and_then(|entry| entry.as_int())
+        .unwrap_or(0)
+        .max(0) as usize;
     let detail = value
         .get("detail")
         .and_then(|entry| entry.as_str().map(|v| v.to_string()));
@@ -1852,6 +1879,9 @@ fn parse_drain_status(value: &PickleValue) -> io::Result<Option<DrainStatus>> {
         drain_age_seconds,
         deadline_remaining_seconds,
         drain_complete,
+        interface_writer_queued_frames,
+        provider_backlog_events,
+        provider_consumer_queued_events,
         detail,
     }))
 }
@@ -2509,6 +2539,9 @@ mod tests {
                     drain_age_seconds: Some(0.75),
                     deadline_remaining_seconds: Some(2.25),
                     drain_complete: false,
+                    interface_writer_queued_frames: 3,
+                    provider_backlog_events: 4,
+                    provider_consumer_queued_events: 5,
                     detail: Some("node is draining existing work".into()),
                 }));
             }
@@ -2531,6 +2564,27 @@ mod tests {
                 .unwrap()
                 .as_float(),
             Some(2.25)
+        );
+        assert_eq!(
+            response
+                .get("interface_writer_queued_frames")
+                .unwrap()
+                .as_int(),
+            Some(3)
+        );
+        assert_eq!(
+            response
+                .get("provider_backlog_events")
+                .unwrap()
+                .as_int(),
+            Some(4)
+        );
+        assert_eq!(
+            response
+                .get("provider_consumer_queued_events")
+                .unwrap()
+                .as_int(),
+            Some(5)
         );
         assert_eq!(
             response.get("detail").unwrap().as_str(),

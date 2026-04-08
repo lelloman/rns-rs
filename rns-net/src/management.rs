@@ -73,6 +73,7 @@ mod tests {
                 id,
                 info,
                 writer: Box::new(NullWriter),
+                async_writer_metrics: None,
                 enabled: true,
                 online: true,
                 dynamic: false,
