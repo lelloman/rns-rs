@@ -1,384 +1,288 @@
 # Graceful Shutdown Plan
 
-This document turns the graceful-shutdown discussion for `rns-server` / `rnsd` into a phased implementation plan that can be delivered and tested in small portions.
+This document tracks the current graceful-shutdown implementation status for
+`rns-server` / `rnsd`.
 
-The intent is not full live handoff or blue/green session migration. The target is a bounded, observable shutdown flow that:
+The target remains a bounded, observable shutdown flow, not live blue/green
+handoff or session migration.
 
-- stops admitting new work immediately
-- allows a short drain window for useful queued work
-- force-closes long-lived state after a deadline
-- gives `rns-server` enough control to use this path during restart and stop operations
+## Scope
 
-## Goals
+The feature is intended to:
 
-- Add explicit runtime lifecycle states.
-- Make shutdown behavior observable through the control plane.
-- Stop new inbound accepts and new mutating operations during drain.
-- Drain small queues for a few seconds at most.
-- Flush sidecars cleanly where that adds value.
-- Force termination of links/resources/sockets after the drain deadline.
+- stop admitting new work when drain begins
+- stop accepting new inbound connections
+- expose drain state through RPC and the control plane
+- let `rns-server` use drain before stop/restart
+- give sidecars a chance to acknowledge drain and flush useful work
+- force-close long-lived state at deadline
 
-## Non-Goals
+The feature is not intended to:
 
-- Transparent live migration of existing Reticulum sessions between processes.
-- Generic front-proxy buffering of arbitrary transport traffic.
-- Full blue/green takeover of live node state.
+- preserve live Reticulum sessions across process replacement
+- buffer arbitrary transport traffic in a generic front proxy
+- transfer live node state between generations
 
-## Lifecycle Model
+## Current Status
 
-Add explicit node lifecycle states:
+### Implemented
 
-- `Active`
-- `Draining`
-- `Stopping`
-- `Stopped`
-
-Suggested semantics:
-
-- `Active`: normal operation
-- `Draining`: no new work admitted; existing short-lived work may complete
-- `Stopping`: drain deadline expired or graceful stop completed; remaining state is being torn down
-- `Stopped`: driver exited
-
-## Work Classification
-
-### Disallow Immediately
-
-These should stop as soon as drain begins:
-
-- new inbound TCP server accepts
-- new local/shared-instance accepts
-- new provider-bridge consumers
-- new outbound interface reconnect/dial attempts
-- `SendOutbound`
-- `CreateLink`
-- `SendRequest`
-- `IdentifyOnLink`
-- `SendResource`
-- `AcceptResource { accept: true }`
-- `SendChannelMessage`
-- `SendOnLink`
-- `RequestPath`
-- `SendProbe`
-- `ProposeDirectConnect`
-- new sidecar-originated control actions from `rns-sentineld`
-- new stats ingestion work in `rns-statsd`
-
-### Drain Briefly
-
-These are worth a short grace period:
-
-- interface writer queues
-- packets already accepted into the driver event queue
-- provider-bridge consumer queues/backlog
-- `rns-statsd` final SQLite flush
-- small resource transfers that are nearly complete
-
-### Interrupt At Deadline
-
-These should be forcibly terminated if still active at the deadline:
-
-- active Reticulum links
-- large or stalled resource transfers
-- pending request/response exchanges on links
-- channel traffic still in flight
-- hole-punch/direct-connect operations
-- remaining connected TCP peers
-- stalled interface writers
-- lingering provider-bridge consumers
-
-## PR Breakdown
-
-## PR 1: Drain State Skeleton
-
-### Scope
-
-Add node lifecycle state, drain metadata, and a control/query surface for drain status.
-
-### Tasks
-
-- Add `LifecycleState` enum in `rns-net`.
-- Add driver fields:
-  - `lifecycle_state`
-  - `drain_started_at`
-  - `drain_deadline`
-- Add new event:
-  - `BeginDrain { timeout: Duration }`
-- Add new query:
-  - `QueryDrainStatus`
-- Add a drain-status response struct with:
-  - state
-  - drain age
-  - deadline remaining
-  - `drain_complete` placeholder
-  - detail/reason string
-- Add `RnsNode::begin_drain(timeout)` wrapper.
-- Expose drain status through `rns-ctl` API/state.
-- Log lifecycle transitions.
-
-### Acceptance Criteria
-
-- Calling drain moves node from `Active` to `Draining`.
-- Query/API reports `Draining`.
-- Existing tests still pass.
-- New unit tests cover state transitions.
-
-### Files
-
-- `rns-net/src/common/event.rs`
-- `rns-net/src/driver.rs`
-- `rns-net/src/node.rs`
-- `rns-ctl/src/state.rs`
-- `rns-ctl/src/api.rs`
-
-## PR 2: Reject New Mutating Work During Drain
-
-### Scope
-
-Prevent new work from entering the node while draining.
-
-### Tasks
-
-- In the driver, reject or ignore during `Draining`:
-  - `SendOutbound`
-  - `CreateLink`
-  - `SendRequest`
-  - `IdentifyOnLink`
-  - `SendResource`
-  - `AcceptResource { accept: true }`
-  - `SendChannelMessage`
-  - `SendOnLink`
-  - `RequestPath`
-  - `ProposeDirectConnect`
-- Return explicit errors where a response channel exists.
-- Keep read-only queries working.
-- Add logs for rejected work.
-
-### Acceptance Criteria
-
-- New link/resource/request operations fail with a `draining` error.
-- Read-only queries still succeed.
-- Existing active links are not yet torn down.
-- New tests cover each gated operation family.
-
-### Files
-
-- `rns-net/src/common/event.rs`
-- `rns-net/src/driver.rs`
-
-## PR 3: Listener Stop Handles
-
-### Scope
-
-Make accept loops stoppable so no new inbound connections are admitted during drain.
-
-### Tasks
-
-- Add stop/drain handles for:
+- Explicit lifecycle state in `rns-net`:
+  - `Active`
+  - `Draining`
+  - `Stopping`
+  - `Stopped`
+- Drain control/query surface:
+  - `BeginDrain`
+  - `QueryRequest::DrainStatus`
+  - `RnsNode::begin_drain()`
+  - `RnsNode::drain_status()`
+  - RPC `begin_drain` / `drain_status`
+- Driver-side rejection/ignoring of new work during drain for:
+  - outbound sends
+  - link creation
+  - path requests
+  - direct-connect proposals
+  - channel sends
+  - link requests / identify / resource send / resource accept / generic link payload
+- Listener stop path during drain for:
   - TCP server listener
-  - local TCP listener
-  - local Unix listener
-  - provider bridge listener
-- Replace plain `incoming()` loops with loops that can observe a stop flag or closed listener.
-- Register those handles during node startup.
-- On `BeginDrain`, stop listeners immediately.
+  - local listeners
+  - provider-bridge accept side
+- Tests proving listener accepts stop during drain
+- `rns-server` supervisor drain orchestration:
+  - requests `rnsd` drain before stop/restart
+  - waits until drain completes or deadline expires
+  - falls back to terminate when needed
+- Sidecar shutdown ordering:
+  - `rns-statsd`
+  - `rns-sentineld`
+  - `rnsd`
+- Sidecar drain acknowledgements through ready files
+- Drain status now reports:
+  - active links
+  - resource transfers
+  - hole-punch sessions
+- Deadline teardown now actively aborts:
+  - remaining links
+  - resource transfers
+  - hole-punch sessions
+- Supervisor/control-plane visibility:
+  - mirrors `rnsd` drain progress into process state
+  - logs drain progress updates while waiting
+- `rns-ctl` HTTP control plane rejects new mutating work with `409 Conflict`
+  while the node is draining
+- `RnsNode` public API now preflights drain state and returns errors for new
+  work instead of silently succeeding while the driver drops it
 
-### Acceptance Criteria
+### Partially Implemented
 
-- New inbound connections are refused after drain begins.
-- Existing connections remain alive during the grace window.
-- No listener thread leaks.
-- Tests verify no new accept after drain.
+- Drain completion is currently based on:
+  - lifecycle state
+  - active links
+  - active resource transfers
+  - active hole-punch sessions
+- This is useful, but it is not yet full queue-drain accounting for:
+  - interface writer queues
+  - provider-bridge backlog
+  - any other short-lived buffered work that should count toward graceful stop
 
-### Files
+### Still Missing
 
-- `rns-net/src/interface/tcp_server.rs`
-- `rns-net/src/interface/local.rs`
-- `rns-net/src/provider_bridge.rs`
-- `rns-net/src/node.rs`
+- Broader end-to-end coverage around real stop/restart flows
+- Explicit queue-drain accounting for interface writers and provider-bridge
+  backlog
+- Better reporting of forced-shutdown outcomes/counts in status surfaces
+- A final audit of any remaining public entrypoints that should reject new work
+  during drain but may still rely only on lower-level behavior
 
-## PR 4: Queue Drain Accounting
+## Phase Status
 
-### Scope
+### Phase 1: Drain State Skeleton
 
-Define what “drained” means for short-lived work.
+Status: implemented
 
-### Tasks
+Delivered:
 
-- Add interface writer queue metrics:
-  - queued frame count
-  - worker alive state
-- Include provider-bridge queue/backlog stats in drain status.
-- Define `drain_complete` as something like:
-  - listeners stopped
-  - no pending writer queue entries
-  - provider-bridge queues empty or below threshold
-- Expose these counters through drain status.
+- lifecycle model
+- drain metadata
+- drain query surface
+- RPC support
+- control-plane visibility
 
-### Acceptance Criteria
+Key commits:
 
-- Drain status flips to complete when short queues empty.
-- Artificial queued writes clear before timeout.
-- Tests verify drain-complete transitions.
+- `f46a7d3` Add drain state skeleton for graceful shutdown
 
-### Files
+### Phase 2: Reject New Mutating Work During Drain
 
-- `rns-net/src/interface/mod.rs`
-- `rns-net/src/provider_bridge.rs`
-- `rns-net/src/driver.rs`
+Status: largely implemented
 
-## PR 5: Supervisor Uses Drain Before Stop
+Delivered:
 
-### Scope
+- driver-side rejection/ignore for main mutating events
+- explicit error path for `SendChannelMessage`
+- explicit `RnsNode` API rejection for common public mutating calls
+- `rns-ctl` HTTP rejection for mutating endpoints
 
-Make `rns-server` use drain before child termination.
+Key commits:
 
-### Tasks
+- `11db1e9` Block selected new work while draining
+- `aa60bb9` Reject link creation while draining
+- `063b86c` Return create_link error while draining
+- `038d6b0` Reject new ctl work while draining
+- `4f08faa` Reject node API work while draining
 
-- Add supervisor shutdown sequence:
-  - request drain from `rnsd`
-  - wait up to configured timeout
-  - then terminate child
-- Keep hard-kill fallback.
-- Log:
-  - drain requested
-  - drain completed
-  - drain timed out
+Remaining:
 
-### Acceptance Criteria
+- audit for any lower-frequency mutating paths that should be rejected earlier
 
-- Stop/restart path attempts graceful drain first.
-- Timeout fallback still works.
-- `rns-server` tests continue to pass.
+### Phase 3: Listener Stop Handles
 
-### Files
+Status: implemented
 
-- `rns-server/src/supervisor.rs`
-- possibly `rns-server/src/control_plane.rs`
+Delivered:
 
-## PR 6: `rns-statsd` Flush-On-Drain
+- listener controls registered in node startup
+- TCP/local/provider accept loops stop on drain
+- focused tests proving no new accepts
 
-### Scope
+Key commits:
 
-Make the stats sidecar drain usefully.
+- `6cb732b` Stop listener accepts during drain
+- `57ab769` Test listener stop behavior during drain
 
-### Tasks
+### Phase 4: Queue Drain Accounting
 
-- Add a drain signal/control path.
-- Stop taking new provider events once drain begins.
-- Force final SQLite flush.
-- Report drained/ready-to-stop.
+Status: partial
 
-### Acceptance Criteria
+Delivered:
 
-- Pending stats are flushed on drain.
-- Sidecar exits cleanly after flush.
-- Tests verify buffered counters are not lost.
+- drain status accounts for links/resources/hole-punch sessions
 
-### Files
+Remaining:
 
-- `rns-cli/src/statsd.rs`
+- interface writer queue accounting
+- provider-bridge backlog accounting
+- tighter definition of “drain complete” for short queued work
 
-## PR 7: `rns-sentineld` Quiet-On-Drain
+Key commits:
 
-### Scope
+- `70d6876` Report active links in drain status
+- `04f7059` Report resource transfers in drain status
 
-Make sentinel stop creating new control work during drain.
+### Phase 5: Supervisor Uses Drain Before Stop
 
-### Tasks
+Status: implemented
 
-- Add a drain signal/control path.
-- Stop issuing new blacklist/control actions after drain starts.
-- Allow already-read provider events to settle briefly.
-- Disconnect and exit cleanly.
+Delivered:
 
-### Acceptance Criteria
+- supervisor requests drain before `rnsd` stop/restart
+- drain polling before termination
+- progress reflection into process state
+- progress logging while waiting
 
-- No new enforcement actions after drain begins.
-- Sidecar exits cleanly.
-- Tests verify quiet behavior.
+Key commits:
 
-### Files
+- `da74374` Drain rnsd before supervisor stop and restart
+- `f7c78b7` Reflect rnsd drain progress in supervisor state
+- `f1cc67f` Log rnsd drain progress during supervisor waits
+- `403ecb8` Add drain status test coverage
 
-- `rns-cli/src/sentineld.rs`
+### Phase 6: `rns-statsd` Flush-On-Drain
 
-## PR 8: Force-Close Long-Lived Work At Deadline
+Status: mostly implemented
 
-### Scope
+Delivered:
 
-Ensure shutdown completes even with stubborn sessions.
+- sidecar draining acknowledgment through ready files
+- shutdown ordering stops stats sidecar before `rnsd`
+- stats sidecar enters draining before final shutdown work
 
-### Tasks
+Remaining:
 
-- At drain deadline:
-  - teardown active links
-  - fail or abort in-flight resources
-  - cancel hole-punch/direct-connect work
-  - close remaining live sockets
-- Reflect forced-shutdown counts in logs/status.
+- if needed, richer explicit accounting of exactly what was flushed
 
-### Acceptance Criteria
+Key commits:
 
-- Shutdown completes within bounded time.
-- Active links/resources are terminated deterministically.
-- Tests cover deadline-expiry behavior.
+- `f9a0027` Stop sidecars before rnsd during shutdown
+- `455b24c` Acknowledge sidecar drain through ready files
 
-### Files
+### Phase 7: `rns-sentineld` Quiet-On-Drain
 
-- `rns-net/src/common/link_manager.rs`
-- `rns-net/src/driver.rs`
-- `rns-net/src/holepunch/*`
+Status: mostly implemented
 
-## PR 9: End-To-End Tests
+Delivered:
 
-### Scope
+- sidecar draining acknowledgment through ready files
+- shutdown ordering stops sentinel before `rnsd`
+- sentinel enters draining before final shutdown work
 
-Verify the behavior under real process restarts and stop operations.
+Remaining:
 
-### Tasks
+- if needed, richer metrics around queued enforcement work at stop time
 
-- Add integration/e2e tests for:
-  - drain blocks new connections
-  - existing sessions survive briefly
-  - writer queues flush
-  - stats flushes
-  - supervisor restart path uses drain
-  - deadline expiry works as intended
+Key commits:
 
-### Acceptance Criteria
+- `f9a0027` Stop sidecars before rnsd during shutdown
+- `455b24c` Acknowledge sidecar drain through ready files
 
-- Repeatable passing tests locally and in CI.
-- Failure modes are observable through logs/API.
+### Phase 8: Force-Close Long-Lived Work At Deadline
 
-### Files
+Status: implemented for core runtime state
 
-- `rns-net` unit/integration tests
-- `rns-server` tests
-- `tests/docker/rns-server/*`
+Delivered:
 
-## Recommended Order
+- deadline expiry advances node to `Stopping`
+- remaining links are torn down
+- resource transfers are cancelled
+- hole-punch sessions are aborted
+- supervisor stop reporting distinguishes drain acknowledgment from forced kill
 
-Implement in this order:
+Key commits:
 
-1. PR 1: Drain State Skeleton
-2. PR 2: Reject New Mutating Work During Drain
-3. PR 3: Listener Stop Handles
-4. PR 4: Queue Drain Accounting
-5. PR 5: Supervisor Uses Drain Before Stop
-6. PR 6: `rns-statsd` Flush-On-Drain
-7. PR 7: `rns-sentineld` Quiet-On-Drain
-8. PR 8: Force-Close Long-Lived Work At Deadline
-9. PR 9: End-To-End Tests
+- `8c35ed7` Clarify supervisor stop outcomes during drain
+- `43450a7` Tear down links when drain deadline expires
+- `e78e832` Abort hole-punch sessions during drain shutdown
+- `68356b8` Cancel resource transfers before link teardown
 
-## Smallest Useful First PR
+Remaining:
 
-If the goal is to start with the lowest-risk slice, PR 1 is the best entry point.
+- improve forced-shutdown reporting/counts in status if desired
 
-It gives:
+### Phase 9: End-To-End Tests
 
-- an explicit lifecycle model
-- a stable drain control surface
-- observability through the control plane
-- a foundation for later listener/queue/sidecar work
+Status: partial
 
-It does not yet stop listeners or drain queues, but it establishes the control model cleanly and keeps the next PRs small.
+Delivered:
+
+- focused unit tests in `rns-net`
+- focused supervisor tests in `rns-server`
+- `rns-ctl` integration coverage for drain status and `409` behavior while draining
+
+Remaining:
+
+- higher-level restart/stop integration tests through `rns-server`
+- tests covering queue drain accounting once that lands
+- tests around sidecar flush/ack behavior under real supervisor control
+
+Key commits:
+
+- `57ab769` Test listener stop behavior during drain
+- `403ecb8` Add drain status test coverage
+- `038d6b0` Reject new ctl work while draining
+
+## Recommended Next Steps
+
+The next highest-value work is:
+
+1. Add queue-drain accounting for interface writers and provider-bridge backlog.
+2. Add higher-level `rns-server` integration coverage around stop/restart drain flows.
+3. Improve forced-shutdown reporting so operators can see what was still active at deadline.
+4. Perform a final API/control-surface audit for any remaining drain admission gaps.
+
+## Working Notes
+
+For short-term handoff details and the next suggested coding step, see:
+
+- `docs/graceful-shutdown-next-step.md`
