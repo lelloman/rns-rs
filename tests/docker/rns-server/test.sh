@@ -173,8 +173,7 @@ else
 fi
 
 # ── Section 7: Restart a process ─────────────────────────────────────────────
-# Restart rns-statsd (not rnsd — restarting rnsd kills the provider bridge
-# socket, which causes rns-sentineld to exit and triggers full shutdown)
+# Restart rns-statsd first to verify ordinary sidecar restart behavior.
 
 echo ""
 echo "--- Section 7: Restart a process ---"
@@ -215,10 +214,87 @@ else
   fail_test "rns-statsd ready after restart"
 fi
 
-# ── Section 8: Config read ───────────────────────────────────────────────────
+# ── Section 8: Restart rnsd with drain ──────────────────────────────────────
 
 echo ""
-echo "--- Section 8: Config read ---"
+echo "--- Section 8: Restart rnsd with drain ---"
+
+OLD_RNSD_PID=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+  | jq -r '.processes[] | select(.name == "rnsd") | .pid' || echo "")
+RNSD_RESTARTS_BEFORE=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+  | jq -r '.processes[] | select(.name == "rnsd") | .restart_count' || echo "0")
+echo "  rnsd pid before restart: ${OLD_RNSD_PID}"
+
+if ctl_post "$PORT" "/api/processes/rnsd/restart" > /dev/null 2>&1; then
+  pass_test "rnsd restart request accepted"
+else
+  fail_test "rnsd restart request accepted"
+  suite_result "$_CURRENT_SUITE"
+  exit 1
+fi
+
+if poll_count "$PORT" "/api/process_events" \
+  '[.events[] | select(.process == "rnsd" and .event == "draining")]' \
+  1 20; then
+  pass_test "rnsd emits draining event during restart"
+else
+  fail_test "rnsd emits draining event during restart"
+fi
+
+DEADLINE=$((SECONDS + 45))
+NEW_RNSD_PID="$OLD_RNSD_PID"
+while (( SECONDS < DEADLINE )); do
+  NEW_RNSD_PID=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+    | jq -r '.processes[] | select(.name == "rnsd") | .pid // empty' || echo "")
+  if [[ -n "$NEW_RNSD_PID" && "$NEW_RNSD_PID" != "null" && "$NEW_RNSD_PID" != "$OLD_RNSD_PID" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+echo "  rnsd pid after restart: ${NEW_RNSD_PID}"
+assert_ne "$NEW_RNSD_PID" "$OLD_RNSD_PID" "rnsd pid changed after restart"
+
+RNSD_RESTARTS_AFTER=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \
+  | jq -r '.processes[] | select(.name == "rnsd") | .restart_count' || echo "0")
+assert_gt "$RNSD_RESTARTS_AFTER" "$RNSD_RESTARTS_BEFORE" "rnsd restart_count increased"
+
+if poll_until "$PORT" "/api/processes" \
+  '.processes[] | select(.name == "rnsd") | .ready_state' \
+  "ready" 45; then
+  pass_test "rnsd ready after restart"
+else
+  fail_test "rnsd ready after restart"
+fi
+
+if poll_until "$PORT" "/api/processes" \
+  '[.processes[] | select(.status == "running")] | length | tostring' \
+  "3" 45; then
+  pass_test "all 3 processes running after rnsd restart"
+else
+  fail_test "all 3 processes running after rnsd restart"
+fi
+
+if poll_until "$PORT" "/api/processes" \
+  '[.processes[] | select(.ready == true)] | length | tostring' \
+  "3" 45; then
+  pass_test "all 3 processes ready after rnsd restart"
+else
+  fail_test "all 3 processes ready after rnsd restart"
+fi
+
+if poll_until "$PORT" "/api/process_events" \
+  '[.events[] | select(.process == "rnsd")] | last | .event' \
+  "ready" 20; then
+  pass_test "latest rnsd lifecycle event returns to ready after restart"
+else
+  fail_test "latest rnsd lifecycle event returns to ready after restart"
+fi
+
+# ── Section 9: Config read ───────────────────────────────────────────────────
+
+echo ""
+echo "--- Section 9: Config read ---"
 
 CONFIG_RESP=$(ctl_get "$PORT" "/api/config" 2>/dev/null || echo "{}")
 SCHEMA_RESP=$(ctl_get "$PORT" "/api/config/schema" 2>/dev/null || echo "{}")
@@ -235,10 +311,10 @@ assert_gt "$SCHEMA_FIELDS" "0" "config schema exposes fields"
 EXAMPLE_JSON_PRESENT=$(echo "$SCHEMA_RESP" | jq -r '.schema.example_config_json | length > 0' 2>/dev/null || echo "false")
 assert_eq "$EXAMPLE_JSON_PRESENT" "true" "config schema includes example JSON"
 
-# ── Section 9: Config validate ───────────────────────────────────────────────
+# ── Section 10: Config validate ──────────────────────────────────────────────
 
 echo ""
-echo "--- Section 9: Config validate ---"
+echo "--- Section 10: Config validate ---"
 
 VALIDATE_RESP=$(ctl_post "$PORT" "/api/config/validate" '{"http": {"port": 9090}}' 2>/dev/null || echo "{}")
 VALID=$(echo "$VALIDATE_RESP" | jq -r '.result.valid' 2>/dev/null || echo "")
@@ -265,10 +341,10 @@ else
   pass_test "unknown config fields rejected"
 fi
 
-# ── Section 10: Config save ──────────────────────────────────────────────────
+# ── Section 11: Config save ──────────────────────────────────────────────────
 
 echo ""
-echo "--- Section 10: Config save ---"
+echo "--- Section 11: Config save ---"
 
 # Save a config that matches the running HTTP settings to avoid triggering
 # a control-plane restart notification. Only set stats_db_path to the current
@@ -293,10 +369,10 @@ CONFIG_STATUS=$(ctl_get "$PORT" "/api/config/status" 2>/dev/null || echo "{}")
 HAS_STATUS=$(echo "$CONFIG_STATUS" | jq 'has("status")' 2>/dev/null || echo "false")
 assert_eq "$HAS_STATUS" "true" "config/status returns status object"
 
-# ── Section 11: Config apply ─────────────────────────────────────────────────
+# ── Section 12: Config apply ─────────────────────────────────────────────────
 
 echo ""
-echo "--- Section 11: Config apply ---"
+echo "--- Section 12: Config apply ---"
 
 # Record current rns-statsd restart count before apply
 STATSD_RESTARTS_BEFORE=$(ctl_get "$PORT" "/api/processes" 2>/dev/null \

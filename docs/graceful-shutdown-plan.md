@@ -87,7 +87,6 @@ The feature is not intended to:
 
 ### Still Missing
 
-- Broader end-to-end coverage around real stop/restart flows
 - Better reporting of forced-shutdown outcomes/counts in status surfaces
 - A final audit of any remaining public entrypoints that should reject new work
   during drain but may still rely only on lower-level behavior
@@ -251,7 +250,7 @@ Remaining:
 
 ### Phase 9: End-To-End Tests
 
-Status: improved, but still not complete
+Status: substantially implemented for current stop/restart goals
 
 Delivered:
 
@@ -263,12 +262,18 @@ Delivered:
   - drain timeout path
 - `rns-ctl` integration coverage for drain visibility and mutating-request
   rejection during drain
+- Docker `rns-server` end-to-end coverage for:
+  - sidecar restart
+  - `rnsd` restart through the supervisor
+  - `rnsd` draining event visibility during restart
+  - recovery of all three managed processes to `running` and `ready`
 
 Remaining:
 
-- fuller process-level restart/stop integration coverage through `rns-server`
-- optional Docker/e2e coverage if we want to verify behavior outside unit-level
-  harnesses
+- optional additional Docker/e2e coverage for explicit `rnsd` stop/start
+  separate from restart
+- optional multi-node scenarios that verify traffic recovery across a drained
+  `rnsd` restart, not just supervised process recovery
 - `rns-ctl` integration coverage for drain status and `409` behavior while draining
 
 Remaining:
