@@ -12,6 +12,14 @@ It is based on the production findings in:
 - [vps-production-findings-2026-03-15.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-production-findings-2026-03-15.md)
 - [vps-production-findings-2026-03-17.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-production-findings-2026-03-17.md)
 
+For the standardized daily health-check workflow, see:
+
+- [vps-reporting-runbook.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-reporting-runbook.md)
+
+For the planned migration to the single-binary supervisor model, see:
+
+- [vps-rns-server-cutover.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-rns-server-cutover.md)
+
 ## 1. Build release binaries
 
 From the repo root:
@@ -176,6 +184,17 @@ ssh root@vps 'journalctl -u rns-sentineld -n 20 --no-pager'
 ssh root@vps "journalctl -u rnsd --since '1 hour ago' --no-pager | grep MEMSTATS"
 ```
 
+Preferred daily-report command after deployment verification:
+
+```bash
+python3 scripts/vps_daily_report.py --stdout-summary
+```
+
+That command writes:
+
+- a normalized daily snapshot rowset to `data/vps_daily_reports.db`
+- a generated Markdown report to `docs/vps-production-findings-YYYY-MM-DD.md`
+
 Provider-bridge / sidecar investigation checks:
 
 ```bash
@@ -210,6 +229,9 @@ Important note:
 - The `rns-ctl` binary currently deployed on the VPS does **not** provide the
   older `backbone provider` or `interfaces` subcommands that appeared in older
   operator habits. Use `rns-ctl status` instead.
+- `seen_announces` now uses `seen_at_ms`, and `packet_counters` now uses
+  `updated_at_ms`. Do not use the older ad hoc `ts_ms` query shape against
+  those tables.
 
 `MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
 signal for the VPS experiment.

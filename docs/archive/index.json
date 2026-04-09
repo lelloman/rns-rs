@@ -1,0 +1,140 @@
+{
+  "generated_at_utc": "2026-04-09 15:07:51 UTC",
+  "archive_name": "vps-reports-20260409.zip",
+  "archive_stamp": "20260409",
+  "report_count": 22,
+  "files": [
+    {
+      "path": "docs/vps-investigation-brief-2026-04-02.md",
+      "filename": "vps-investigation-brief-2026-04-02.md",
+      "kind": "investigation_brief",
+      "report_date": "2026-04-02"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-14.md",
+      "filename": "vps-production-findings-2026-03-14.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-14"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-15.md",
+      "filename": "vps-production-findings-2026-03-15.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-15"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-16.md",
+      "filename": "vps-production-findings-2026-03-16.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-16"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-17.md",
+      "filename": "vps-production-findings-2026-03-17.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-17"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-19.md",
+      "filename": "vps-production-findings-2026-03-19.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-19"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-20-run7.md",
+      "filename": "vps-production-findings-2026-03-20-run7.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-20"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-20.md",
+      "filename": "vps-production-findings-2026-03-20.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-20"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-22.md",
+      "filename": "vps-production-findings-2026-03-22.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-22"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-23.md",
+      "filename": "vps-production-findings-2026-03-23.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-23"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-25.md",
+      "filename": "vps-production-findings-2026-03-25.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-25"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-28.md",
+      "filename": "vps-production-findings-2026-03-28.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-28"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-29.md",
+      "filename": "vps-production-findings-2026-03-29.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-29"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-30.md",
+      "filename": "vps-production-findings-2026-03-30.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-30"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-03-31.md",
+      "filename": "vps-production-findings-2026-03-31.md",
+      "kind": "production_findings",
+      "report_date": "2026-03-31"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-01.md",
+      "filename": "vps-production-findings-2026-04-01.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-01"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-02.md",
+      "filename": "vps-production-findings-2026-04-02.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-02"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-04.md",
+      "filename": "vps-production-findings-2026-04-04.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-04"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-05.md",
+      "filename": "vps-production-findings-2026-04-05.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-05"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-06.md",
+      "filename": "vps-production-findings-2026-04-06.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-06"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-08.md",
+      "filename": "vps-production-findings-2026-04-08.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-08"
+    },
+    {
+      "path": "docs/vps-production-findings-2026-04-09.md",
+      "filename": "vps-production-findings-2026-04-09.md",
+      "kind": "production_findings",
+      "report_date": "2026-04-09"
+    }
+  ]
+}
