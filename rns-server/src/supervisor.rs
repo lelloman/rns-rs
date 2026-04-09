@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, BufReader};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -717,6 +718,7 @@ fn command_for_spec(spec: &ProcessSpec) -> Result<Command, String> {
         }
         ProcessCommand::SelfInvoke => {
             let mut command = Command::new(resolve_self_exec()?);
+            command.arg0(spec.role.display_name());
             command.arg("--internal-role");
             command.arg(spec.role.display_name());
             command.args(&spec.args);
