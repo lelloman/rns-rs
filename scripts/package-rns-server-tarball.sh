@@ -49,7 +49,6 @@ mkdir -p "${DIST_DIR}/${OUTPUT_NAME}/bin" "${DIST_DIR}/${OUTPUT_NAME}/docs"
 cp "${REPO_ROOT}/target/release/rns-server" "${DIST_DIR}/${OUTPUT_NAME}/bin/"
 
 cp "${REPO_ROOT}/docs/rns-server-operator-runbook.md" "${DIST_DIR}/${OUTPUT_NAME}/docs/"
-cp "${REPO_ROOT}/docs/rns-server-release-readiness.md" "${DIST_DIR}/${OUTPUT_NAME}/docs/"
 
 TMP_ARCHIVE="${DIST_DIR}/${OUTPUT_NAME}.tar.gz.tmp"
 FINAL_ARCHIVE="${DIST_DIR}/${OUTPUT_NAME}.tar.gz"

@@ -16,6 +16,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "data" / "vps_daily_reports.db"
+DEFAULT_CONFIG_DIR = "/var/lib/rns-node"
+DEFAULT_HTTP_PORT = 18080
 MEMSTATS_RE = re.compile(r"MEMSTATS\s+(.*)$")
 KV_RE = re.compile(r"([a-zA-Z0-9_]+)=([^\s]+)")
 
@@ -43,8 +45,19 @@ def parse_args() -> argparse.Namespace:
         help="Local SQLite DB path for collected daily snapshots",
     )
     parser.add_argument(
+        "--config-dir",
+        default=DEFAULT_CONFIG_DIR,
+        help="Remote rns-server config root",
+    )
+    parser.add_argument(
+        "--http-port",
+        type=int,
+        default=DEFAULT_HTTP_PORT,
+        help="Remote embedded control-plane port",
+    )
+    parser.add_argument(
         "--date",
-        help="Override report date (YYYY-MM-DD). Default: current UTC date on the VPS capture.",
+        help="Override report date (YYYY-MM-DD). Default: current UTC date on capture.",
     )
     parser.add_argument(
         "--stdout-summary",
@@ -72,8 +85,8 @@ def parse_utc(value: str) -> dt.datetime:
 
 def parse_status(text: str) -> dict[str, object]:
     transport_uptime = ""
-    public_entrypoint_name = ""
-    public_entrypoint_up = False
+    primary_peer_name = ""
+    primary_peer_up = False
     backbone_up_count = 0
     named_peer_up_count = 0
 
@@ -103,8 +116,8 @@ def parse_status(text: str) -> dict[str, object]:
         sections.append((section_name, section_status))
 
     if sections:
-        public_entrypoint_name = sections[0][0]
-        public_entrypoint_up = sections[0][1] == "Up"
+        primary_peer_name = sections[0][0]
+        primary_peer_up = sections[0][1] == "Up"
     for name, status in sections[1:]:
         if status != "Up":
             continue
@@ -115,8 +128,8 @@ def parse_status(text: str) -> dict[str, object]:
 
     return {
         "transport_uptime": transport_uptime,
-        "public_entrypoint_name": public_entrypoint_name,
-        "public_entrypoint_up": public_entrypoint_up,
+        "primary_peer_name": primary_peer_name,
+        "primary_peer_up": primary_peer_up,
         "backbone_up_count": backbone_up_count,
         "named_peer_up_count": named_peer_up_count,
     }
@@ -160,7 +173,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "capture_ts_utc",
         "report_date",
         "host",
-        "rnsd_active",
+        "rns_server_active",
         "announce_24h",
         "health_state",
     }
@@ -178,6 +191,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             capture_ts_utc TEXT PRIMARY KEY,
             report_date TEXT NOT NULL,
             host TEXT NOT NULL,
+            config_dir TEXT NOT NULL,
             host_uptime TEXT NOT NULL,
             load1 REAL NOT NULL,
             load5 REAL NOT NULL,
@@ -187,23 +201,21 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             mem_available_mb INTEGER NOT NULL,
             swap_used_mb INTEGER NOT NULL,
             swap_total_mb INTEGER NOT NULL,
-            rnsd_active INTEGER NOT NULL,
-            rns_statsd_active INTEGER NOT NULL,
-            rns_sentineld_active INTEGER NOT NULL,
-            rnsd_active_since_utc TEXT,
-            rns_statsd_active_since_utc TEXT,
-            rns_sentineld_active_since_utc TEXT,
-            rnsd_version TEXT NOT NULL,
-            rns_statsd_version TEXT NOT NULL,
-            rns_sentineld_version TEXT NOT NULL,
+            rns_server_active INTEGER NOT NULL,
+            rns_server_active_since_utc TEXT,
+            rns_server_version TEXT NOT NULL,
             rns_ctl_version TEXT NOT NULL,
+            control_plane_port INTEGER NOT NULL,
             public_listener_present INTEGER NOT NULL,
             rpc_listener_present INTEGER NOT NULL,
-            shared_listener_present INTEGER NOT NULL,
+            control_listener_present INTEGER NOT NULL,
+            child_rnsd_ready INTEGER NOT NULL,
+            child_rns_statsd_ready INTEGER NOT NULL,
+            child_rns_sentineld_ready INTEGER NOT NULL,
             established_sessions_4242 INTEGER NOT NULL,
             transport_uptime TEXT NOT NULL,
-            public_entrypoint_name TEXT NOT NULL,
-            public_entrypoint_up INTEGER NOT NULL,
+            primary_peer_name TEXT NOT NULL,
+            primary_peer_up INTEGER NOT NULL,
             backbone_up_count INTEGER NOT NULL,
             named_peer_up_count INTEGER NOT NULL,
             blacklist_total_entries INTEGER NOT NULL,
@@ -255,16 +267,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 def classify(snapshot: dict[str, object]) -> str:
     services_ok = (
-        snapshot["rnsd_active"]
-        and snapshot["rns_statsd_active"]
-        and snapshot["rns_sentineld_active"]
+        snapshot["rns_server_active"]
+        and snapshot["child_rnsd_ready"]
+        and snapshot["child_rns_statsd_ready"]
+        and snapshot["child_rns_sentineld_ready"]
     )
-    listeners_ok = snapshot["public_listener_present"] and snapshot["rpc_listener_present"]
+    listeners_ok = (
+        snapshot["public_listener_present"]
+        and snapshot["rpc_listener_present"]
+        and snapshot["control_listener_present"]
+    )
     bridge_ok = (
         snapshot["provider_bridge_dropped_24h"] == 0
         and snapshot["provider_bridge_disconnected_24h"] == 0
     )
-    traffic_ok = snapshot["announce_24h"] > 0 and snapshot["packet_freshness_max_age_seconds"] <= 1800
+    traffic_ok = (
+        snapshot["announce_24h"] > 0
+        and snapshot["packet_freshness_max_age_seconds"] <= 1800
+    )
     if not services_ok or not listeners_ok or not bridge_ok or not traffic_ok:
         return "degraded"
     if snapshot["idle_timeout_events_24h"] > 0:
@@ -272,63 +292,80 @@ def classify(snapshot: dict[str, object]) -> str:
     return "healthy"
 
 
-def collect_snapshot(host: str, report_date_override: str | None) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
-    basic_script = r"""
+def collect_snapshot(
+    host: str,
+    config_dir: str,
+    http_port: int,
+    report_date_override: str | None,
+) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+    quoted_config = shlex.quote(config_dir)
+    basic_script = f"""
 set -euo pipefail
 capture_ts=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 read -r load1 load5 load15 _ < /proc/loadavg
-read -r mem_total mem_used _ _ _ mem_available < <(free -m | awk '/^Mem:/ {print $2, $3, $4, $5, $6, $7}')
-read -r swap_total swap_used _ < <(free -m | awk '/^Swap:/ {print $2, $3, $4}')
-echo "CAPTURE_TS=${capture_ts}"
+read -r mem_total mem_used _ _ _ mem_available < <(free -m | awk '/^Mem:/ {{print $2, $3, $4, $5, $6, $7}}')
+read -r swap_total swap_used _ < <(free -m | awk '/^Swap:/ {{print $2, $3, $4}}')
+echo "CAPTURE_TS=${{capture_ts}}"
 echo "HOST_UPTIME=$(uptime -p | sed 's/^up //')"
-echo "LOAD1=${load1}"
-echo "LOAD5=${load5}"
-echo "LOAD15=${load15}"
-echo "MEM_TOTAL_MB=${mem_total}"
-echo "MEM_USED_MB=${mem_used}"
-echo "MEM_AVAILABLE_MB=${mem_available}"
-echo "SWAP_TOTAL_MB=${swap_total}"
-echo "SWAP_USED_MB=${swap_used}"
-for service in rnsd rns-statsd rns-sentineld; do
-  name=$(echo "$service" | tr '[:lower:]-' '[:upper:]_')
-  echo "${name}_ACTIVE=$(systemctl is-active "$service" || true)"
-  echo "${name}_ACTIVE_ENTER=$(systemctl show -p ActiveEnterTimestamp --value "$service" || true)"
-done
-echo "RNSD_VERSION=$(/usr/local/bin/rnsd --version)"
-echo "RNS_STATSD_VERSION=$(/usr/local/bin/rns-statsd --version)"
-echo "RNS_SENTINELD_VERSION=$(/usr/local/bin/rns-sentineld --version)"
+echo "LOAD1=${{load1}}"
+echo "LOAD5=${{load5}}"
+echo "LOAD15=${{load15}}"
+echo "MEM_TOTAL_MB=${{mem_total}}"
+echo "MEM_USED_MB=${{mem_used}}"
+echo "MEM_AVAILABLE_MB=${{mem_available}}"
+echo "SWAP_TOTAL_MB=${{swap_total}}"
+echo "SWAP_USED_MB=${{swap_used}}"
+echo "RNS_SERVER_ACTIVE=$(systemctl is-active rns-server || true)"
+echo "RNS_SERVER_ACTIVE_ENTER=$(systemctl show -p ActiveEnterTimestamp --value rns-server || true)"
+echo "RNS_SERVER_VERSION=$(/usr/local/bin/rns-server --version)"
 echo "RNS_CTL_VERSION=$(/usr/local/bin/rns-ctl --version)"
-listeners=$(ss -ltnH | awk '{print $4}')
-if printf '%s\n' "$listeners" | grep -qx '0.0.0.0:4242'; then echo 'LISTENER_PUBLIC=1'; else echo 'LISTENER_PUBLIC=0'; fi
-if printf '%s\n' "$listeners" | grep -qx '127.0.0.1:37429'; then echo 'LISTENER_RPC=1'; else echo 'LISTENER_RPC=0'; fi
-if printf '%s\n' "$listeners" | grep -qx '127.0.0.1:37428'; then echo 'LISTENER_SHARED=1'; else echo 'LISTENER_SHARED=0'; fi
-echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {count++} END {print count+0}')"
+listeners=$(ss -ltnH | awk '{{print $4}}')
+if printf '%s\\n' "$listeners" | grep -qx '0.0.0.0:4242'; then echo 'LISTENER_PUBLIC=1'; else echo 'LISTENER_PUBLIC=0'; fi
+if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:37429'; then echo 'LISTENER_RPC=1'; else echo 'LISTENER_RPC=0'; fi
+if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:{http_port}'; then echo 'LISTENER_CONTROL=1'; else echo 'LISTENER_CONTROL=0'; fi
+echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {{count++}} END {{print count+0}}')"
 """
     basic = parse_kv(run_ssh(host, basic_script))
-    status = parse_status(run_ssh(host, "/usr/local/bin/rns-ctl status"))
-    blacklist = json.loads(run_ssh(host, "/usr/local/bin/rns-ctl backbone blacklist list --json"))
+    status = parse_status(
+        run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
+    )
+    blacklist = json.loads(
+        run_ssh(
+            host,
+            f"/usr/local/bin/rns-ctl --config {quoted_config} backbone blacklist list --json",
+        )
+    )
+    process_payload = json.loads(
+        run_ssh(host, f"curl -fsS http://127.0.0.1:{http_port}/api/processes")
+    )
+    processes = {
+        row["name"]: row
+        for row in process_payload.get("processes", [])
+        if isinstance(row, dict) and "name" in row
+    }
 
     journal_counts = parse_kv(
         run_ssh(
             host,
             r"""
 set -euo pipefail
-echo "PROVIDER_DROPPED_24H=$(journalctl -u rns-statsd --since '24 hours ago' --no-pager | grep -c 'provider bridge dropped' || true)"
-echo "PROVIDER_DISCONNECTED_24H=$(journalctl -u rns-sentineld --since '24 hours ago' --no-pager | grep -c 'provider bridge disconnected' || true)"
-echo "IDLE_TIMEOUT_24H=$(journalctl -u rns-sentineld --since '24 hours ago' --no-pager | grep -c 'repeated idle timeouts' || true)"
+echo "PROVIDER_DROPPED_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'provider bridge dropped' || true)"
+echo "PROVIDER_DISCONNECTED_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'provider bridge disconnected' || true)"
+echo "IDLE_TIMEOUT_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'repeated idle timeouts' || true)"
 """,
         )
     )
     memstats = parse_memstats(
         run_ssh(
             host,
-            r"journalctl -u rnsd --since '1 hour ago' --no-pager | grep 'MEMSTATS' | tail -n 12 || true",
+            r"journalctl -u rns-server --since '1 hour ago' --no-pager | grep 'MEMSTATS' | tail -n 12 || true",
         )
     )
 
+    stats_db = f"{config_dir.rstrip('/')}/stats.db"
     ann_rows = run_ssh(
         host,
-        r"""sqlite3 /var/lib/rns/stats.db "
+        f"""sqlite3 {shlex.quote(stats_db)} "
 SELECT COUNT(*) FROM seen_announces;
 SELECT datetime(MAX(seen_at_ms)/1000, 'unixepoch') FROM seen_announces;
 SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-3600)*1000;
@@ -338,7 +375,7 @@ SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-86
 
     packet_lines = run_ssh(
         host,
-        r"""sqlite3 /var/lib/rns/stats.db "
+        f"""sqlite3 {shlex.quote(stats_db)} "
 SELECT packet_type || '|' || direction || '|' ||
        COALESCE(datetime(MAX(updated_at_ms)/1000, 'unixepoch'), '')
 FROM packet_counters
@@ -373,6 +410,7 @@ ORDER BY packet_type, direction;
         "capture_ts_utc": capture_ts,
         "report_date": report_date_override or capture_dt.strftime("%Y-%m-%d"),
         "host": host,
+        "config_dir": config_dir,
         "host_uptime": basic["HOST_UPTIME"],
         "load1": float(basic["LOAD1"]),
         "load5": float(basic["LOAD5"]),
@@ -382,43 +420,56 @@ ORDER BY packet_type, direction;
         "mem_available_mb": int(basic["MEM_AVAILABLE_MB"]),
         "swap_used_mb": int(basic["SWAP_USED_MB"]),
         "swap_total_mb": int(basic["SWAP_TOTAL_MB"]),
-        "rnsd_active": int(basic["RNSD_ACTIVE"] == "active"),
-        "rns_statsd_active": int(basic["RNS_STATSD_ACTIVE"] == "active"),
-        "rns_sentineld_active": int(basic["RNS_SENTINELD_ACTIVE"] == "active"),
-        "rnsd_active_since_utc": basic["RNSD_ACTIVE_ENTER"] or None,
-        "rns_statsd_active_since_utc": basic["RNS_STATSD_ACTIVE_ENTER"] or None,
-        "rns_sentineld_active_since_utc": basic["RNS_SENTINELD_ACTIVE_ENTER"] or None,
-        "rnsd_version": basic["RNSD_VERSION"],
-        "rns_statsd_version": basic["RNS_STATSD_VERSION"],
-        "rns_sentineld_version": basic["RNS_SENTINELD_VERSION"],
+        "rns_server_active": int(basic["RNS_SERVER_ACTIVE"] == "active"),
+        "rns_server_active_since_utc": basic["RNS_SERVER_ACTIVE_ENTER"] or None,
+        "rns_server_version": basic["RNS_SERVER_VERSION"],
         "rns_ctl_version": basic["RNS_CTL_VERSION"],
+        "control_plane_port": http_port,
         "public_listener_present": int(basic["LISTENER_PUBLIC"] == "1"),
         "rpc_listener_present": int(basic["LISTENER_RPC"] == "1"),
-        "shared_listener_present": int(basic["LISTENER_SHARED"] == "1"),
+        "control_listener_present": int(basic["LISTENER_CONTROL"] == "1"),
+        "child_rnsd_ready": int(bool(processes.get("rnsd", {}).get("ready"))),
+        "child_rns_statsd_ready": int(bool(processes.get("rns-statsd", {}).get("ready"))),
+        "child_rns_sentineld_ready": int(bool(processes.get("rns-sentineld", {}).get("ready"))),
         "established_sessions_4242": int(basic["ESTABLISHED_4242"]),
         "transport_uptime": status["transport_uptime"],
-        "public_entrypoint_name": status["public_entrypoint_name"],
-        "public_entrypoint_up": int(status["public_entrypoint_up"]),
+        "primary_peer_name": status["primary_peer_name"],
+        "primary_peer_up": int(status["primary_peer_up"]),
         "backbone_up_count": int(status["backbone_up_count"]),
         "named_peer_up_count": int(status["named_peer_up_count"]),
         "blacklist_total_entries": len(blacklist),
-        "blacklist_reject_nonzero_entries": sum(1 for row in blacklist if row.get("reject_count", 0) > 0),
-        "blacklist_active_entries": sum(1 for row in blacklist if row.get("blacklisted_remaining_secs") is not None),
-        "blacklist_connected_entries": sum(1 for row in blacklist if row.get("connected_count", 0) > 0),
+        "blacklist_reject_nonzero_entries": sum(
+            1 for row in blacklist if row.get("reject_count", 0) > 0
+        ),
+        "blacklist_active_entries": sum(
+            1 for row in blacklist if row.get("blacklisted_remaining_secs") is not None
+        ),
+        "blacklist_connected_entries": sum(
+            1 for row in blacklist if row.get("connected_count", 0) > 0
+        ),
         "provider_bridge_dropped_24h": int(journal_counts["PROVIDER_DROPPED_24H"]),
-        "provider_bridge_disconnected_24h": int(journal_counts["PROVIDER_DISCONNECTED_24H"]),
+        "provider_bridge_disconnected_24h": int(
+            journal_counts["PROVIDER_DISCONNECTED_24H"]
+        ),
         "idle_timeout_events_24h": int(journal_counts["IDLE_TIMEOUT_24H"]),
         "announce_total": int(ann_rows[0]),
         "announce_latest_utc": f"{ann_rows[1]} UTC" if ann_rows[1] else None,
         "announce_1h": int(ann_rows[2]),
         "announce_24h": int(ann_rows[3]),
-        "packet_freshness_max_age_seconds": max((row["age_seconds"] for row in packet_rows), default=999999),
+        "packet_freshness_max_age_seconds": max(
+            (row["age_seconds"] for row in packet_rows), default=999999
+        ),
     }
     snapshot["health_state"] = classify(snapshot)
     return snapshot, memstats, packet_rows
 
 
-def write_db(db_path: pathlib.Path, snapshot: dict[str, object], memstats: list[dict[str, object]], packet_rows: list[dict[str, object]]) -> None:
+def write_db(
+    db_path: pathlib.Path,
+    snapshot: dict[str, object],
+    memstats: list[dict[str, object]],
+    packet_rows: list[dict[str, object]],
+) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -429,36 +480,69 @@ def write_db(db_path: pathlib.Path, snapshot: dict[str, object], memstats: list[
         conn.execute(
             """
             INSERT INTO daily_checks (
-                capture_ts_utc, report_date, host, host_uptime, load1, load5, load15,
-                mem_used_mb, mem_total_mb, mem_available_mb, swap_used_mb, swap_total_mb,
-                rnsd_active, rns_statsd_active, rns_sentineld_active,
-                rnsd_active_since_utc, rns_statsd_active_since_utc, rns_sentineld_active_since_utc,
-                rnsd_version, rns_statsd_version, rns_sentineld_version, rns_ctl_version,
-                public_listener_present, rpc_listener_present, shared_listener_present,
-                established_sessions_4242, transport_uptime, public_entrypoint_name,
-                public_entrypoint_up, backbone_up_count, named_peer_up_count,
+                capture_ts_utc, report_date, host, config_dir, host_uptime, load1, load5,
+                load15, mem_used_mb, mem_total_mb, mem_available_mb, swap_used_mb,
+                swap_total_mb, rns_server_active, rns_server_active_since_utc,
+                rns_server_version, rns_ctl_version, control_plane_port,
+                public_listener_present, rpc_listener_present, control_listener_present,
+                child_rnsd_ready, child_rns_statsd_ready, child_rns_sentineld_ready,
+                established_sessions_4242, transport_uptime, primary_peer_name,
+                primary_peer_up, backbone_up_count, named_peer_up_count,
                 blacklist_total_entries, blacklist_reject_nonzero_entries,
                 blacklist_active_entries, blacklist_connected_entries,
                 provider_bridge_dropped_24h, provider_bridge_disconnected_24h,
                 idle_timeout_events_24h, announce_total, announce_latest_utc,
                 announce_1h, announce_24h, packet_freshness_max_age_seconds, health_state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            tuple(snapshot[key] for key in [
-                "capture_ts_utc", "report_date", "host", "host_uptime", "load1", "load5", "load15",
-                "mem_used_mb", "mem_total_mb", "mem_available_mb", "swap_used_mb", "swap_total_mb",
-                "rnsd_active", "rns_statsd_active", "rns_sentineld_active",
-                "rnsd_active_since_utc", "rns_statsd_active_since_utc", "rns_sentineld_active_since_utc",
-                "rnsd_version", "rns_statsd_version", "rns_sentineld_version", "rns_ctl_version",
-                "public_listener_present", "rpc_listener_present", "shared_listener_present",
-                "established_sessions_4242", "transport_uptime", "public_entrypoint_name",
-                "public_entrypoint_up", "backbone_up_count", "named_peer_up_count",
-                "blacklist_total_entries", "blacklist_reject_nonzero_entries",
-                "blacklist_active_entries", "blacklist_connected_entries",
-                "provider_bridge_dropped_24h", "provider_bridge_disconnected_24h",
-                "idle_timeout_events_24h", "announce_total", "announce_latest_utc",
-                "announce_1h", "announce_24h", "packet_freshness_max_age_seconds", "health_state"
-            ]),
+            tuple(
+                snapshot[key]
+                for key in [
+                    "capture_ts_utc",
+                    "report_date",
+                    "host",
+                    "config_dir",
+                    "host_uptime",
+                    "load1",
+                    "load5",
+                    "load15",
+                    "mem_used_mb",
+                    "mem_total_mb",
+                    "mem_available_mb",
+                    "swap_used_mb",
+                    "swap_total_mb",
+                    "rns_server_active",
+                    "rns_server_active_since_utc",
+                    "rns_server_version",
+                    "rns_ctl_version",
+                    "control_plane_port",
+                    "public_listener_present",
+                    "rpc_listener_present",
+                    "control_listener_present",
+                    "child_rnsd_ready",
+                    "child_rns_statsd_ready",
+                    "child_rns_sentineld_ready",
+                    "established_sessions_4242",
+                    "transport_uptime",
+                    "primary_peer_name",
+                    "primary_peer_up",
+                    "backbone_up_count",
+                    "named_peer_up_count",
+                    "blacklist_total_entries",
+                    "blacklist_reject_nonzero_entries",
+                    "blacklist_active_entries",
+                    "blacklist_connected_entries",
+                    "provider_bridge_dropped_24h",
+                    "provider_bridge_disconnected_24h",
+                    "idle_timeout_events_24h",
+                    "announce_total",
+                    "announce_latest_utc",
+                    "announce_1h",
+                    "announce_24h",
+                    "packet_freshness_max_age_seconds",
+                    "health_state",
+                ]
+            ),
         )
         conn.executemany(
             """
@@ -503,22 +587,36 @@ def write_db(db_path: pathlib.Path, snapshot: dict[str, object], memstats: list[
 
 def main() -> int:
     args = parse_args()
-    snapshot, memstats, packet_rows = collect_snapshot(args.host, args.date)
+    snapshot, memstats, packet_rows = collect_snapshot(
+        args.host, args.config_dir, args.http_port, args.date
+    )
     db_path = pathlib.Path(args.db_path)
     write_db(db_path, snapshot, memstats, packet_rows)
     if args.stdout_summary:
-        print(json.dumps({
-            "capture_ts_utc": snapshot["capture_ts_utc"],
-            "report_date": snapshot["report_date"],
-            "db_path": str(db_path),
-            "health_state": snapshot["health_state"],
-            "announce_24h": snapshot["announce_24h"],
-            "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
-            "public_entrypoint_name": snapshot["public_entrypoint_name"],
-            "public_entrypoint_up": bool(snapshot["public_entrypoint_up"]),
-        }, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "capture_ts_utc": snapshot["capture_ts_utc"],
+                    "report_date": snapshot["report_date"],
+                    "db_path": str(db_path),
+                    "health_state": snapshot["health_state"],
+                    "announce_24h": snapshot["announce_24h"],
+                    "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
+                    "primary_peer_name": snapshot["primary_peer_name"],
+                    "primary_peer_up": bool(snapshot["primary_peer_up"]),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
