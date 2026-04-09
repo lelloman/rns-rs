@@ -3,8 +3,5 @@
 rns-hooks/sdk/**/target/
 rns-hooks/examples/**/target/
 rns-hooks/target/
-__pycache__/
-*.pyc
-/data/*
-!/data/README.md
+/data/
 dist/
