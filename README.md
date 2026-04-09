@@ -125,7 +125,7 @@ Useful docs:
 
 - [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
 - [docs/rns-server-release-readiness.md](docs/rns-server-release-readiness.md)
-- [docs/vps-rns-server-cutover.md](docs/vps-rns-server-cutover.md)
+- [docs/vps-deploy-runbook.md](docs/vps-deploy-runbook.md)
 
 ## rns-ctl
 

@@ -11,10 +11,6 @@ Historical VPS findings have been archived into:
 
 - [vps-reports-archive.zip](/home/lelloman/lelloprojects/rns-rs/docs/vps-reports-archive.zip)
 
-For the planned migration to the single-binary supervisor model, see:
-
-- [vps-rns-server-cutover.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-rns-server-cutover.md)
-
 ## 1. Build release binaries
 
 From the repo root:
@@ -217,6 +213,59 @@ Important note:
   `updated_at_ms`. Do not use the older ad hoc `ts_ms` query shape against
   those tables.
 
+## 9. Daily snapshot collection
+
+Use the local collector script to persist one VPS health snapshot into a local
+SQLite DB:
+
+```bash
+python3 scripts/vps_daily_report.py --stdout-summary
+```
+
+Default local DB path:
+
+- `data/vps_daily_reports.db`
+
+The script collects:
+
+- host uptime, load, memory, swap
+- service activity and active-since timestamps
+- installed versions for `rnsd`, `rns-statsd`, `rns-sentineld`, `rns-ctl`
+- required listeners and established session count for `4242`
+- `rns-ctl status` summary
+- blacklist summary counts
+- provider-bridge warning counts
+- recent `MEMSTATS` rows
+- announce counts and packet freshness from `/var/lib/rns/stats.db`
+
+Main tables in the local DB:
+
+- `daily_checks`
+- `memstats_samples`
+- `packet_freshness`
+
+Useful local queries:
+
+```bash
+sqlite3 data/vps_daily_reports.db '
+  SELECT report_date, health_state, announce_24h, idle_timeout_events_24h
+  FROM daily_checks
+  ORDER BY capture_ts_utc DESC
+  LIMIT 30;
+'
+```
+
+```bash
+sqlite3 data/vps_daily_reports.db '
+  SELECT d.report_date, m.sample_ts_utc, m.rss_mb
+  FROM daily_checks AS d
+  JOIN memstats_samples AS m
+    ON m.capture_ts_utc = d.capture_ts_utc
+  ORDER BY d.capture_ts_utc DESC, m.sample_ts_utc DESC
+  LIMIT 60;
+'
+```
+
 `MEMSTATS` runs every ~5 minutes inside `rnsd` and is the primary memory-growth
 signal for the VPS experiment.
 
@@ -276,7 +325,7 @@ Important fields:
   exceed `announce_queue_max_interfaces`. In normal VPS operation this should
   remain `0`; non-zero values mean the cap is too low for the workload.
 
-## 9. Rollback
+## 10. Rollback
 
 If the new `rnsd` does not expose the RPC listener, restore the backups and
 restart in the same order:
@@ -298,7 +347,73 @@ Replace `OLD` with the actual backup suffixes.
 
 Then rerun the final verification commands from section 8.
 
-## 10. Notes
+## 11. Planned `rns-server` migration
+
+When switching the VPS from standalone systemd-managed `rnsd` /
+`rns-statsd` / `rns-sentineld` to the supervised single-binary `rns-server`
+model, use this sequence:
+
+1. Build and package `rns-server`:
+
+```bash
+bash scripts/package-rns-server-tarball.sh
+```
+
+2. Prepare the target node root, recommended:
+
+- `/var/lib/rns-node/config`
+- `/var/lib/rns-node/rns-server.json`
+- `/var/lib/rns-node/stats.db`
+- `/var/lib/rns-node/logs/`
+
+3. Validate non-destructively on the VPS:
+
+```bash
+ssh root@vps '/usr/local/bin/rns-server --version'
+ssh root@vps '/usr/local/bin/rns-server start --config /var/lib/rns-node --dry-run'
+```
+
+4. Install a single `rns-server.service` unit that starts:
+
+```bash
+/usr/local/bin/rns-server start --config /var/lib/rns-node --http-host 127.0.0.1 --http-port 8080
+```
+
+5. During the maintenance window:
+
+- stop and disable `rnsd`, `rns-statsd`, `rns-sentineld`
+- enable and start `rns-server`
+- verify:
+  - `systemctl is-active rns-server`
+  - `curl -fsS http://127.0.0.1:8080/health`
+  - `curl -fsS http://127.0.0.1:8080/api/processes`
+  - required listeners still present on `4242` and `37429`
+  - stats DB is advancing
+  - provider-bridge regressions remain absent
+- capture a post-cutover local snapshot with:
+
+```bash
+python3 scripts/vps_daily_report.py --stdout-summary
+```
+
+6. Roll back immediately if the public listener, RPC listener, child readiness,
+control plane, or packet freshness regresses.
+
+Rollback sequence:
+
+```bash
+ssh root@vps '
+  systemctl stop rns-server
+  systemctl disable rns-server
+  systemctl enable rnsd rns-statsd rns-sentineld
+  systemctl restart rnsd
+  sleep 6
+  systemctl restart rns-statsd
+  systemctl restart rns-sentineld
+'
+```
+
+## 12. Notes
 
 - The safest deployment path is: build locally, upload test binaries, run the
   isolated VPS probe, then promote the live binaries.
@@ -309,7 +424,7 @@ Then rerun the final verification commands from section 8.
   - `/usr/local/bin/rns-statsd`
   - `/usr/local/bin/rns-sentineld`
 
-## 11. First-time `rns-sentineld` setup
+## 13. First-time `rns-sentineld` setup
 
 On a VPS that has never run `rns-sentineld`, create the systemd unit:
 
