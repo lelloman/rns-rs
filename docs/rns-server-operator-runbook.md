@@ -2,7 +2,8 @@
 
 ## Scope
 
-`rns-server` is the single-node product entrypoint for a supervised RNS node. It owns:
+`rns-server` is the default single-node product entrypoint for a supervised RNS
+node. It owns:
 
 - process lifecycle for `rnsd`, `rns-sentineld`, and `rns-statsd`
 - persisted `rns-server.json` config
@@ -22,6 +23,12 @@ bash scripts/package-rns-server-tarball.sh
 That script builds the single deployable `rns-server` binary and writes a tarball under `dist/`.
 
 For a direct local build without packaging:
+
+```bash
+cargo build --release --bin rns-server
+```
+
+If you want WASM hooks enabled in the node runtime:
 
 ```bash
 cargo build --release --bin rns-server --features rns-hooks
@@ -53,10 +60,17 @@ rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 Development startup from the workspace:
 
 ```bash
-cargo run --bin rns-server --features rns-hooks -- start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
+cargo run --bin rns-server -- start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 ```
 
 Release-style startup from a local build:
+
+```bash
+cargo build --release --bin rns-server
+./target/release/rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
+```
+
+If you want hooks enabled:
 
 ```bash
 cargo build --release --bin rns-server --features rns-hooks

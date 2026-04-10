@@ -83,12 +83,47 @@ cd tests/docker && ./run-all.sh
 cd tests/docker && ./run.sh chain 01_health
 ```
 
-## CLI Tools
+## rns-server
+
+`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd`, `rns-sentineld`, and `rns-statsd` roles from the same executable.
+
+If you just want to run a node, start here.
+
+If you want to tinker with the transport internals, build custom workflows, or run pieces independently, the lower-level binaries and hook system are still available separately.
+
+Development startup:
+
+```bash
+cargo run --bin rns-server -- start --config /path/to/node
+```
+
+Release-style startup:
+
+```bash
+cargo build --release --bin rns-server
+./target/release/rns-server start --config /path/to/node
+```
+
+If you want WASM hooks enabled in the node runtime:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks
+./target/release/rns-server start --config /path/to/node
+```
+
+Useful docs:
+
+- [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
+
+## Low-Level Tools
+
+These are lower-level building blocks for development, debugging, custom setups,
+and transport tinkering. Most users should prefer `rns-server`.
 
 Build and run the CLI binaries:
 
 ```bash
-# Run the daemon
+# Run the daemon directly
 cargo run --bin rnsd -- /path/to/config
 
 # Check network status
@@ -103,29 +138,6 @@ cargo run --bin rnprobe
 # Identity management
 cargo run --bin rnid
 ```
-
-## rns-server
-
-`rns-server` is the single-node product entrypoint. In the default deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd`, `rns-sentineld`, and `rns-statsd` roles from the same executable.
-
-Development startup:
-
-```bash
-cargo run --bin rns-server --features rns-hooks -- start --config /path/to/node
-```
-
-Release-style startup:
-
-```bash
-cargo build --release --bin rns-server --features rns-hooks
-./target/release/rns-server start --config /path/to/node
-```
-
-Useful docs:
-
-- [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
-- [docs/rns-server-release-readiness.md](docs/rns-server-release-readiness.md)
-- [docs/vps-deploy-runbook.md](docs/vps-deploy-runbook.md)
 
 ## rns-ctl
 
