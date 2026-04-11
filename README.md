@@ -6,6 +6,7 @@
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg?label=rns-ctl)](https://crates.io/crates/rns-ctl)
 [![rns-cli](https://img.shields.io/crates/v/rns-cli.svg?label=rns-cli)](https://crates.io/crates/rns-cli)
+[![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
 [![rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg?label=rns-hooks)](https://crates.io/crates/rns-hooks)
 [![rns-hooks-sdk](https://img.shields.io/crates/v/rns-hooks-sdk.svg?label=rns-hooks-sdk)](https://crates.io/crates/rns-hooks-sdk)
 [![rns-hooks-abi](https://img.shields.io/crates/v/rns-hooks-abi.svg?label=rns-hooks-abi)](https://crates.io/crates/rns-hooks-abi)
