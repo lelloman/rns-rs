@@ -347,6 +347,17 @@ fn test_health_endpoint() {
     server.shutdown();
 }
 
+#[test]
+fn test_no_auth_ui_serves_app_shell() {
+    let server = start_test_server();
+    let res = http_get(server.port, "/");
+    assert_eq!(res.status, 200);
+    assert!(res.body.contains("<title>RNS Server</title>"));
+    assert!(res.body.contains("/assets/app.js"));
+    assert!(!res.body.contains("location.replace"));
+    server.shutdown();
+}
+
 // ─── Step 3b: Auth ──────────────────────────────────────────────────────────
 
 #[test]

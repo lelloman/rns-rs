@@ -159,17 +159,8 @@ pub fn handle_request(
     }
 }
 
-fn index_html(config: &ControlPlaneConfigHandle) -> &'static str {
-    let config = config.read().unwrap();
-    let auth_mode = if config.disable_auth {
-        "disabled"
-    } else {
-        "bearer-token"
-    };
-    match auth_mode {
-        "disabled" => include_str!("../assets/index_noauth.html"),
-        _ => include_str!("../assets/index_auth.html"),
-    }
+fn index_html(_config: &ControlPlaneConfigHandle) -> &'static str {
+    include_str!("../assets/index_auth.html")
 }
 
 // --- Read handlers ---
