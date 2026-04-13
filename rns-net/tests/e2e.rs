@@ -586,6 +586,7 @@ fn start_transport_node_with_limits(
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -676,6 +677,7 @@ fn start_client_node_with_packet_hashlist(
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -1050,6 +1052,7 @@ fn test_direct_link_no_transport() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -1645,6 +1648,7 @@ fn test_plain_message_delivery() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -1873,6 +1877,7 @@ fn test_group_message_delivery() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -1983,6 +1988,7 @@ fn test_group_wrong_key_fails() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -3083,6 +3089,7 @@ fn test_udp_announce_and_message() {
                     ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -3148,6 +3155,7 @@ fn test_udp_announce_and_message() {
                     ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -3307,6 +3315,7 @@ fn discovery_announce_received_by_client() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "TestBackbone".into(),
@@ -3387,6 +3396,7 @@ fn discovery_announce_received_by_client() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -3506,6 +3516,7 @@ fn discovery_announce_through_relay() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: Some(rns_net::discovery::DiscoveryConfig {
                     discovery_name: "RelayedBackbone".into(),
@@ -3580,6 +3591,7 @@ fn discovery_announce_through_relay() {
                         ..Default::default()
                     }),
                     mode: MODE_FULL,
+                    ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                     ifac: None,
                     discovery: None,
                 },
@@ -3595,6 +3607,7 @@ fn discovery_announce_through_relay() {
                         ..TcpServerConfig::default()
                     }),
                     mode: MODE_FULL,
+                    ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                     ifac: None,
                     discovery: None,
                 },
@@ -3664,6 +3677,7 @@ fn discovery_announce_through_relay() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],
@@ -3774,6 +3788,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
             }],

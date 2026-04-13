@@ -3041,6 +3041,13 @@ impl Driver {
                 "announce_rate_penalty",
                 "announce_cap",
                 "ingress_control",
+                "ic_max_held_announces",
+                "ic_burst_hold",
+                "ic_burst_freq_new",
+                "ic_burst_freq",
+                "ic_new_time",
+                "ic_burst_penalty",
+                "ic_held_release_interval",
             ] {
                 let key = format!("interface.{}.{}", name, suffix);
                 if let Some(entry) = self.generic_interface_runtime_entry(&key) {
@@ -3208,6 +3215,69 @@ impl Driver {
                     RuntimeConfigValue::Bool(startup.ingress_control.enabled),
                     RuntimeConfigApplyMode::Immediate,
                     "Whether ingress control is enabled for this interface.",
+                ))
+            }
+            "ic_max_held_announces" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Int(current.ingress_control.max_held_announces as i64),
+                    RuntimeConfigValue::Int(startup.ingress_control.max_held_announces as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Maximum held announces retained while ingress control is limiting this interface.",
+                ))
+            }
+            "ic_burst_hold" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.burst_hold),
+                    RuntimeConfigValue::Float(startup.ingress_control.burst_hold),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Seconds to keep ingress-control burst state active before releasing held announces.",
+                ))
+            }
+            "ic_burst_freq_new" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.burst_freq_new),
+                    RuntimeConfigValue::Float(startup.ingress_control.burst_freq_new),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Announce frequency threshold for new interfaces.",
+                ))
+            }
+            "ic_burst_freq" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.burst_freq),
+                    RuntimeConfigValue::Float(startup.ingress_control.burst_freq),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Announce frequency threshold for established interfaces.",
+                ))
+            }
+            "ic_new_time" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.new_time),
+                    RuntimeConfigValue::Float(startup.ingress_control.new_time),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Seconds after interface start that ingress control uses the new-interface burst threshold.",
+                ))
+            }
+            "ic_burst_penalty" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.burst_penalty),
+                    RuntimeConfigValue::Float(startup.ingress_control.burst_penalty),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Seconds to wait after a burst before releasing held announces.",
+                ))
+            }
+            "ic_held_release_interval" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.held_release_interval),
+                    RuntimeConfigValue::Float(startup.ingress_control.held_release_interval),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Seconds between held announce releases.",
                 ))
             }
             _ => None,
@@ -3395,6 +3465,26 @@ impl Driver {
             "ingress_control" => {
                 entry.info.ingress_control.enabled = Self::expect_bool(value, key)?
             }
+            "ic_max_held_announces" => {
+                entry.info.ingress_control.max_held_announces =
+                    Self::expect_u64(value, key)? as usize
+            }
+            "ic_burst_hold" => {
+                entry.info.ingress_control.burst_hold = Self::expect_f64(value, key)?
+            }
+            "ic_burst_freq_new" => {
+                entry.info.ingress_control.burst_freq_new = Self::expect_f64(value, key)?
+            }
+            "ic_burst_freq" => {
+                entry.info.ingress_control.burst_freq = Self::expect_f64(value, key)?
+            }
+            "ic_new_time" => entry.info.ingress_control.new_time = Self::expect_f64(value, key)?,
+            "ic_burst_penalty" => {
+                entry.info.ingress_control.burst_penalty = Self::expect_f64(value, key)?
+            }
+            "ic_held_release_interval" => {
+                entry.info.ingress_control.held_release_interval = Self::expect_f64(value, key)?
+            }
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -3495,6 +3585,27 @@ impl Driver {
             "announce_cap" => entry.info.announce_cap = startup.announce_cap,
             "ingress_control" => {
                 entry.info.ingress_control.enabled = startup.ingress_control.enabled
+            }
+            "ic_max_held_announces" => {
+                entry.info.ingress_control.max_held_announces =
+                    startup.ingress_control.max_held_announces
+            }
+            "ic_burst_hold" => {
+                entry.info.ingress_control.burst_hold = startup.ingress_control.burst_hold
+            }
+            "ic_burst_freq_new" => {
+                entry.info.ingress_control.burst_freq_new = startup.ingress_control.burst_freq_new
+            }
+            "ic_burst_freq" => {
+                entry.info.ingress_control.burst_freq = startup.ingress_control.burst_freq
+            }
+            "ic_new_time" => entry.info.ingress_control.new_time = startup.ingress_control.new_time,
+            "ic_burst_penalty" => {
+                entry.info.ingress_control.burst_penalty = startup.ingress_control.burst_penalty
+            }
+            "ic_held_release_interval" => {
+                entry.info.ingress_control.held_release_interval =
+                    startup.ingress_control.held_release_interval
             }
             _ => {
                 return Err(RuntimeConfigError {
@@ -11663,6 +11774,13 @@ mod tests {
         assert!(keys.contains(&"interface.public.announce_rate_penalty".to_string()));
         assert!(keys.contains(&"interface.public.announce_cap".to_string()));
         assert!(keys.contains(&"interface.public.ingress_control".to_string()));
+        assert!(keys.contains(&"interface.public.ic_max_held_announces".to_string()));
+        assert!(keys.contains(&"interface.public.ic_burst_hold".to_string()));
+        assert!(keys.contains(&"interface.public.ic_burst_freq_new".to_string()));
+        assert!(keys.contains(&"interface.public.ic_burst_freq".to_string()));
+        assert!(keys.contains(&"interface.public.ic_new_time".to_string()));
+        assert!(keys.contains(&"interface.public.ic_burst_penalty".to_string()));
+        assert!(keys.contains(&"interface.public.ic_held_release_interval".to_string()));
         assert!(keys.contains(&"interface.public.ifac_netname".to_string()));
         assert!(keys.contains(&"interface.public.ifac_passphrase".to_string()));
         assert!(keys.contains(&"interface.public.ifac_size_bytes".to_string()));
@@ -11716,6 +11834,101 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::String("full".into()));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_max_held_announces".into(),
+            value: RuntimeConfigValue::Int(17),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(17));
+        assert_eq!(
+            driver
+                .engine
+                .interface_info(&InterfaceId(1))
+                .unwrap()
+                .ingress_control
+                .max_held_announces,
+            17
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_burst_hold".into(),
+            value: RuntimeConfigValue::Float(1.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(1.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_burst_freq_new".into(),
+            value: RuntimeConfigValue::Float(2.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_burst_freq".into(),
+            value: RuntimeConfigValue::Float(3.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(3.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_new_time".into(),
+            value: RuntimeConfigValue::Float(4.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(4.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_burst_penalty".into(),
+            value: RuntimeConfigValue::Float(5.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(5.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ic_held_release_interval".into(),
+            value: RuntimeConfigValue::Float(6.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(6.5));
+
+        let ingress_control = driver
+            .engine
+            .interface_info(&InterfaceId(1))
+            .unwrap()
+            .ingress_control;
+        assert_eq!(ingress_control.burst_hold, 1.5);
+        assert_eq!(ingress_control.burst_freq_new, 2.5);
+        assert_eq!(ingress_control.burst_freq, 3.5);
+        assert_eq!(ingress_control.new_time, 4.5);
+        assert_eq!(ingress_control.burst_penalty, 5.5);
+        assert_eq!(ingress_control.held_release_interval, 6.5);
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "interface.public.ic_max_held_announces".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::Int(rns_core::constants::IC_MAX_HELD_ANNOUNCES as i64)
+        );
 
         let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
             key: "interface.public.enabled".into(),

@@ -106,6 +106,7 @@ fn main() {
                 type_name: "RNodeInterface".to_string(),
                 config_data: Box::new(rnode),
                 mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
                 ifac: None,
                 discovery: None,
             }],

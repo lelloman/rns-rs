@@ -75,6 +75,53 @@ fn default_ingress_control_for_type(
     }
 }
 
+fn parse_ingress_control_config(
+    iface_type: &str,
+    params: &std::collections::HashMap<String, String>,
+) -> Result<rns_core::transport::types::IngressControlConfig, String> {
+    let mut config = default_ingress_control_for_type(iface_type);
+
+    if let Some(v) = params.get("ingress_control") {
+        config.enabled = config::parse_bool_pub(v)
+            .ok_or_else(|| format!("ingress_control must be a boolean, got '{}'", v))?;
+    }
+    if let Some(v) = params.get("ic_max_held_announces") {
+        config.max_held_announces = v
+            .parse::<usize>()
+            .map_err(|_| format!("ic_max_held_announces must be an integer, got '{}'", v))?;
+    }
+    if let Some(v) = params.get("ic_burst_hold") {
+        config.burst_hold = parse_nonnegative_f64("ic_burst_hold", v)?;
+    }
+    if let Some(v) = params.get("ic_burst_freq_new") {
+        config.burst_freq_new = parse_nonnegative_f64("ic_burst_freq_new", v)?;
+    }
+    if let Some(v) = params.get("ic_burst_freq") {
+        config.burst_freq = parse_nonnegative_f64("ic_burst_freq", v)?;
+    }
+    if let Some(v) = params.get("ic_new_time") {
+        config.new_time = parse_nonnegative_f64("ic_new_time", v)?;
+    }
+    if let Some(v) = params.get("ic_burst_penalty") {
+        config.burst_penalty = parse_nonnegative_f64("ic_burst_penalty", v)?;
+    }
+    if let Some(v) = params.get("ic_held_release_interval") {
+        config.held_release_interval = parse_nonnegative_f64("ic_held_release_interval", v)?;
+    }
+
+    Ok(config)
+}
+
+fn parse_nonnegative_f64(key: &str, value: &str) -> Result<f64, String> {
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("{} must be numeric, got '{}'", key, value))?;
+    if parsed < 0.0 {
+        return Err(format!("{} must be >= 0, got '{}'", key, value));
+    }
+    Ok(parsed)
+}
+
 /// Extract IFAC configuration from interface params, if present.
 /// Returns None if neither networkname/network_name nor passphrase/pass_phrase is set.
 fn extract_ifac_config(
@@ -389,6 +436,7 @@ pub struct InterfaceConfig {
     pub type_name: String,
     pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
     pub mode: u8,
+    pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub ifac: Option<IfacConfig>,
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
@@ -516,6 +564,18 @@ impl RnsNode {
             let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
             let discovery_config =
                 extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
+            let ingress_control =
+                match parse_ingress_control_config(&iface.interface_type, &iface.params) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to parse ingress control config for '{}': {}",
+                            iface.name,
+                            e
+                        );
+                        continue;
+                    }
+                };
 
             // Inject storage_dir for I2P (and any future factories that need it)
             let mut params = iface.params.clone();
@@ -545,6 +605,7 @@ impl RnsNode {
                 type_name: iface.interface_type.clone(),
                 config_data,
                 mode: iface_mode,
+                ingress_control,
                 ifac: ifac_config,
                 discovery: discovery_config,
             });
@@ -1023,7 +1084,7 @@ impl RnsNode {
                 tx: tx.clone(),
                 next_dynamic_id: next_dynamic_id.clone(),
                 mode: iface_config.mode,
-                ingress_control: default_ingress_control_for_type(&iface_config.type_name),
+                ingress_control: iface_config.ingress_control,
             };
 
             let result = match factory.start(iface_config.config_data, ctx) {
@@ -2138,6 +2199,60 @@ mod tests {
             discovery.is_none(),
             "TCPClientInterface discovery must be rejected unless KISS framing is supported"
         );
+    }
+
+    #[test]
+    fn ingress_control_config_defaults_by_interface_type() {
+        let params = std::collections::HashMap::new();
+
+        let tcp = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap();
+        assert!(tcp.enabled);
+        assert_eq!(
+            tcp.max_held_announces,
+            rns_core::constants::IC_MAX_HELD_ANNOUNCES
+        );
+        assert_eq!(tcp.burst_hold, rns_core::constants::IC_BURST_HOLD);
+
+        let pipe = super::parse_ingress_control_config("PipeInterface", &params).unwrap();
+        assert!(!pipe.enabled);
+        assert_eq!(
+            pipe.held_release_interval,
+            rns_core::constants::IC_HELD_RELEASE_INTERVAL
+        );
+    }
+
+    #[test]
+    fn ingress_control_config_parses_python_ic_keys() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("ingress_control".to_string(), "No".to_string());
+        params.insert("ic_max_held_announces".to_string(), "17".to_string());
+        params.insert("ic_burst_hold".to_string(), "1.5".to_string());
+        params.insert("ic_burst_freq_new".to_string(), "2.5".to_string());
+        params.insert("ic_burst_freq".to_string(), "3.5".to_string());
+        params.insert("ic_new_time".to_string(), "4.5".to_string());
+        params.insert("ic_burst_penalty".to_string(), "5.5".to_string());
+        params.insert("ic_held_release_interval".to_string(), "6.5".to_string());
+
+        let config = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.max_held_announces, 17);
+        assert_eq!(config.burst_hold, 1.5);
+        assert_eq!(config.burst_freq_new, 2.5);
+        assert_eq!(config.burst_freq, 3.5);
+        assert_eq!(config.new_time, 4.5);
+        assert_eq!(config.burst_penalty, 5.5);
+        assert_eq!(config.held_release_interval, 6.5);
+    }
+
+    #[test]
+    fn ingress_control_config_rejects_invalid_values() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("ic_burst_hold".to_string(), "-1".to_string());
+
+        let err = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap_err();
+
+        assert!(err.contains("ic_burst_hold"));
     }
 
     #[test]

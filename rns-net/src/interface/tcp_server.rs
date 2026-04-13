@@ -421,6 +421,13 @@ mod tests {
 
         let mut config = make_server_config(port, 11, None);
         config.ingress_control = IngressControlConfig::disabled();
+        config.ingress_control.max_held_announces = 17;
+        config.ingress_control.burst_hold = 1.5;
+        config.ingress_control.burst_freq_new = 2.5;
+        config.ingress_control.burst_freq = 3.5;
+        config.ingress_control.new_time = 4.5;
+        config.ingress_control.burst_penalty = 5.5;
+        config.ingress_control.held_release_interval = 6.5;
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -431,10 +438,13 @@ mod tests {
         match event {
             Event::InterfaceUp(_, _, Some(info)) => {
                 assert!(!info.ingress_control.enabled);
-                assert_eq!(
-                    info.ingress_control.max_held_announces,
-                    IngressControlConfig::disabled().max_held_announces
-                );
+                assert_eq!(info.ingress_control.max_held_announces, 17);
+                assert_eq!(info.ingress_control.burst_hold, 1.5);
+                assert_eq!(info.ingress_control.burst_freq_new, 2.5);
+                assert_eq!(info.ingress_control.burst_freq, 3.5);
+                assert_eq!(info.ingress_control.new_time, 4.5);
+                assert_eq!(info.ingress_control.burst_penalty, 5.5);
+                assert_eq!(info.ingress_control.held_release_interval, 6.5);
             }
             other => panic!("expected InterfaceUp with InterfaceInfo, got {:?}", other),
         }
