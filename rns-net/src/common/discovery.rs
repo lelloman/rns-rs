@@ -46,6 +46,16 @@ pub const WORKBLOCK_EXPAND_ROUNDS: u32 = 20;
 /// Stamp size in bytes
 pub const STAMP_SIZE: usize = 32;
 
+/// Interface types accepted from discovery announces.
+pub const DISCOVERABLE_TYPES: [&str; 6] = [
+    "BackboneInterface",
+    "TCPServerInterface",
+    "I2PInterface",
+    "RNodeInterface",
+    "WeaveInterface",
+    "KISSInterface",
+];
+
 // Status thresholds (in seconds)
 /// 24 hours - status becomes "unknown"
 pub const THRESHOLD_UNKNOWN: f64 = 24.0 * 60.0 * 60.0;
@@ -253,6 +263,14 @@ pub fn parse_interface_announce(
 
     // Extract required fields
     let interface_type = get_u8_val(INTERFACE_TYPE)?.as_str()?.to_string();
+    if !is_discoverable_type(&interface_type) {
+        log::debug!(
+            "Ignoring discovered interface with unsupported type '{}'",
+            interface_type
+        );
+        return None;
+    }
+
     let transport = get_u8_val(TRANSPORT)?.as_bool()?;
     let name = get_u8_val(NAME)?
         .as_str()
@@ -271,6 +289,16 @@ pub fn parse_interface_announce(
     let longitude = get_u8_val(LONGITUDE).and_then(|v| v.as_float());
     let height = get_u8_val(HEIGHT).and_then(|v| v.as_float());
     let reachable_on = get_u8_val(REACHABLE_ON).and_then(|v| v.as_str().map(|s| s.to_string()));
+    if let Some(ref reachable_on) = reachable_on {
+        if !(is_ip_address(reachable_on) || is_hostname(reachable_on)) {
+            log::debug!(
+                "Ignoring discovered interface with invalid reachable_on '{}'",
+                reachable_on
+            );
+            return None;
+        }
+    }
+
     let port = get_u8_val(PORT).and_then(|v| v.as_uint().map(|n| n as u16));
     let frequency = get_u8_val(FREQUENCY).and_then(|v| v.as_uint().map(|n| n as u32));
     let bandwidth = get_u8_val(BANDWIDTH).and_then(|v| v.as_uint().map(|n| n as u32));
@@ -463,6 +491,11 @@ pub fn is_hostname(s: &str) -> bool {
     })
 }
 
+/// Check whether an interface type can be accepted from discovery.
+pub fn is_discoverable_type(interface_type: &str) -> bool {
+    DISCOVERABLE_TYPES.contains(&interface_type)
+}
+
 /// Filter and sort discovered interfaces
 pub fn filter_and_sort_interfaces(
     interfaces: &mut Vec<DiscoveredInterface>,
@@ -473,6 +506,15 @@ pub fn filter_and_sort_interfaces(
 
     // Update status and filter
     interfaces.retain(|iface| {
+        if !is_discoverable_type(&iface.interface_type) {
+            return false;
+        }
+        if let Some(ref reachable_on) = iface.reachable_on {
+            if !(is_ip_address(reachable_on) || is_hostname(reachable_on)) {
+                return false;
+            }
+        }
+
         let delta = now - iface.last_heard;
 
         // Check for removal threshold

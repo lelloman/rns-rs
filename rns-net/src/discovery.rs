@@ -108,7 +108,16 @@ impl DiscoveredInterfaceStorage {
 
         let interfaces = self.list()?;
         for iface in interfaces {
-            if now - iface.last_heard > THRESHOLD_REMOVE {
+            let invalid_reachable_on = iface
+                .reachable_on
+                .as_ref()
+                .map(|reachable_on| !(is_ip_address(reachable_on) || is_hostname(reachable_on)))
+                .unwrap_or(false);
+
+            if !is_discoverable_type(&iface.interface_type)
+                || invalid_reachable_on
+                || now - iface.last_heard > THRESHOLD_REMOVE
+            {
                 self.remove(&iface.discovery_hash)?;
                 removed += 1;
             }
@@ -782,7 +791,7 @@ mod tests {
 
         let ifaces = vec![
             DiscoveredInterface {
-                interface_type: "A".into(),
+                interface_type: "BackboneInterface".into(),
                 transport: true,
                 name: "high-value-stale".into(),
                 discovered: now,
@@ -811,7 +820,7 @@ mod tests {
                 discovery_hash: [0u8; 32],
             },
             DiscoveredInterface {
-                interface_type: "B".into(),
+                interface_type: "TCPServerInterface".into(),
                 transport: true,
                 name: "low-value-available".into(),
                 discovered: now,
@@ -840,7 +849,7 @@ mod tests {
                 discovery_hash: [1u8; 32],
             },
             DiscoveredInterface {
-                interface_type: "C".into(),
+                interface_type: "I2PInterface".into(),
                 transport: false,
                 name: "high-value-available".into(),
                 discovered: now,
