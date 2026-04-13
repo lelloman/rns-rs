@@ -108,7 +108,7 @@ impl RnsNode {
             mtu: 65535,
             ia_freq: 0.0,
             started: time::now(),
-            ingress_control: false,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         };
 
         let writer = crate::interface::local::start_client(local_config, tx.clone())?;

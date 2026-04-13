@@ -1,8 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use super::types::InterfaceId;
-use crate::constants;
+use super::types::{IngressControlConfig, InterfaceId};
 
 /// A held announce waiting for release after burst conditions subside.
 #[derive(Debug, Clone)]
@@ -57,26 +56,31 @@ impl IngressControl {
     pub fn should_ingress_limit(
         &mut self,
         interface: InterfaceId,
+        config: &IngressControlConfig,
         ia_freq: f64,
         interface_started: f64,
         now: f64,
     ) -> bool {
+        if !config.enabled {
+            return false;
+        }
+
         let state = self
             .states
             .entry(interface)
             .or_insert_with(IngressControlState::new);
         let interface_age = now - interface_started;
-        let threshold = if interface_age < constants::IC_NEW_TIME {
-            constants::IC_BURST_FREQ_NEW
+        let threshold = if interface_age < config.new_time {
+            config.burst_freq_new
         } else {
-            constants::IC_BURST_FREQ
+            config.burst_freq
         };
 
         if state.burst_active {
             // Check if burst can deactivate
-            if ia_freq < threshold && now > state.burst_activated + constants::IC_BURST_HOLD {
+            if ia_freq < threshold && now > state.burst_activated + config.burst_hold {
                 state.burst_active = false;
-                state.held_release = now + constants::IC_BURST_PENALTY;
+                state.held_release = now + config.burst_penalty;
                 return false;
             }
             true
@@ -97,6 +101,7 @@ impl IngressControl {
     pub fn hold_announce(
         &mut self,
         interface: InterfaceId,
+        config: &IngressControlConfig,
         dest_hash: [u8; 16],
         held: HeldAnnounce,
     ) {
@@ -107,7 +112,7 @@ impl IngressControl {
         if state.held_announces.contains_key(&dest_hash) {
             // Update existing
             state.held_announces.insert(dest_hash, held);
-        } else if state.held_announces.len() < constants::IC_MAX_HELD_ANNOUNCES {
+        } else if state.held_announces.len() < config.max_held_announces {
             state.held_announces.insert(dest_hash, held);
         }
         // else: at max, silently drop
@@ -121,10 +126,15 @@ impl IngressControl {
     pub fn process_held_announces(
         &mut self,
         interface: InterfaceId,
+        config: &IngressControlConfig,
         ia_freq: f64,
         interface_started: f64,
         now: f64,
     ) -> Option<HeldAnnounce> {
+        if !config.enabled {
+            return None;
+        }
+
         let state = self.states.get_mut(&interface)?;
 
         // Don't release during active burst
@@ -143,10 +153,10 @@ impl IngressControl {
 
         // Check frequency is below threshold
         let interface_age = now - interface_started;
-        let threshold = if interface_age < constants::IC_NEW_TIME {
-            constants::IC_BURST_FREQ_NEW
+        let threshold = if interface_age < config.new_time {
+            config.burst_freq_new
         } else {
-            constants::IC_BURST_FREQ
+            config.burst_freq
         };
         if ia_freq >= threshold {
             return None;
@@ -160,7 +170,7 @@ impl IngressControl {
             .map(|(k, _)| *k)?;
 
         let held = state.held_announces.remove(&best_key)?;
-        state.held_release = now + constants::IC_HELD_RELEASE_INTERVAL;
+        state.held_release = now + config.held_release_interval;
         Some(held)
     }
 
@@ -201,6 +211,7 @@ impl Default for IngressControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants;
 
     fn iface(n: u64) -> InterfaceId {
         InterfaceId(n)
@@ -212,7 +223,13 @@ mod tests {
         // Mature interface, freq below threshold
         let started = 0.0;
         let now = 10000.0;
-        assert!(!ic.should_ingress_limit(iface(1), 5.0, started, now));
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            5.0,
+            started,
+            now
+        ));
     }
 
     #[test]
@@ -221,7 +238,28 @@ mod tests {
         let started = 0.0;
         let now = 10000.0;
         // Exceed mature threshold (12.0)
-        assert!(ic.should_ingress_limit(iface(1), 13.0, started, now));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            13.0,
+            started,
+            now
+        ));
+    }
+
+    #[test]
+    fn test_disabled_config_never_limits() {
+        let mut ic = IngressControl::new();
+        let started = 0.0;
+        let now = 10000.0;
+
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::disabled(),
+            100.0,
+            started,
+            now
+        ));
     }
 
     #[test]
@@ -230,7 +268,13 @@ mod tests {
         let started = 9000.0;
         let now = 9500.0; // interface_age = 500s < IC_NEW_TIME (7200s)
                           // Below mature threshold but above new threshold (3.5)
-        assert!(ic.should_ingress_limit(iface(1), 4.0, started, now));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            4.0,
+            started,
+            now
+        ));
     }
 
     #[test]
@@ -240,11 +284,23 @@ mod tests {
         let now = 10000.0;
 
         // Activate burst
-        assert!(ic.should_ingress_limit(iface(1), 13.0, started, now));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            13.0,
+            started,
+            now
+        ));
 
         // Freq drops but within hold period
         let now2 = now + 30.0; // < IC_BURST_HOLD (60s)
-        assert!(ic.should_ingress_limit(iface(1), 1.0, started, now2));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now2
+        ));
     }
 
     #[test]
@@ -254,11 +310,23 @@ mod tests {
         let now = 10000.0;
 
         // Activate burst
-        assert!(ic.should_ingress_limit(iface(1), 13.0, started, now));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            13.0,
+            started,
+            now
+        ));
 
         // After hold period with low freq
         let now2 = now + constants::IC_BURST_HOLD + 1.0;
-        assert!(!ic.should_ingress_limit(iface(1), 1.0, started, now2));
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now2
+        ));
     }
 
     #[test]
@@ -268,11 +336,18 @@ mod tests {
         let now = 10000.0;
 
         // Activate burst
-        ic.should_ingress_limit(iface(1), 13.0, started, now);
+        ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            13.0,
+            started,
+            now,
+        );
 
         // Hold an announce
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [1u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -284,17 +359,35 @@ mod tests {
 
         // Deactivate burst
         let now2 = now + constants::IC_BURST_HOLD + 1.0;
-        ic.should_ingress_limit(iface(1), 1.0, started, now2);
+        ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now2,
+        );
 
         // During penalty period, no release
         let now3 = now2 + 10.0; // < IC_BURST_PENALTY (300s)
         assert!(ic
-            .process_held_announces(iface(1), 1.0, started, now3)
+            .process_held_announces(
+                iface(1),
+                &IngressControlConfig::enabled(),
+                1.0,
+                started,
+                now3
+            )
             .is_none());
 
         // After penalty period, release
         let now4 = now2 + constants::IC_BURST_PENALTY + 1.0;
-        let released = ic.process_held_announces(iface(1), 1.0, started, now4);
+        let released = ic.process_held_announces(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now4,
+        );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
     }
@@ -307,6 +400,7 @@ mod tests {
 
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [1u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -317,6 +411,7 @@ mod tests {
         );
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [2u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -327,6 +422,7 @@ mod tests {
         );
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [3u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -338,12 +434,24 @@ mod tests {
 
         // Release (no burst active, past penalty)
         let release_time = now + 1.0;
-        let released = ic.process_held_announces(iface(1), 1.0, started, release_time);
+        let released = ic.process_held_announces(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            release_time,
+        );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 2);
 
         let release_time2 = release_time + constants::IC_HELD_RELEASE_INTERVAL + 1.0;
-        let released2 = ic.process_held_announces(iface(1), 1.0, started, release_time2);
+        let released2 = ic.process_held_announces(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            release_time2,
+        );
         assert!(released2.is_some());
         assert_eq!(released2.unwrap().hops, 5);
     }
@@ -358,6 +466,7 @@ mod tests {
             hash[1] = (i & 0xff) as u8;
             ic.hold_announce(
                 iface(1),
+                &IngressControlConfig::enabled(),
                 hash,
                 HeldAnnounce {
                     raw: vec![0; 10],
@@ -373,6 +482,7 @@ mod tests {
         // One more should be dropped
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [0xff; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -385,12 +495,38 @@ mod tests {
     }
 
     #[test]
+    fn test_custom_max_held_announces() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig {
+            max_held_announces: 2,
+            ..IngressControlConfig::enabled()
+        };
+
+        for i in 0..3 {
+            ic.hold_announce(
+                iface(1),
+                &config,
+                [i as u8; 16],
+                HeldAnnounce {
+                    raw: vec![i as u8],
+                    hops: 1,
+                    receiving_interface: iface(1),
+                    timestamp: i as f64,
+                },
+            );
+        }
+
+        assert_eq!(ic.held_count(&iface(1)), 2);
+    }
+
+    #[test]
     fn test_duplicate_destination_updates() {
         let mut ic = IngressControl::new();
         let hash = [1u8; 16];
 
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             hash,
             HeldAnnounce {
                 raw: vec![1; 10],
@@ -404,6 +540,7 @@ mod tests {
         // Update with better hops
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             hash,
             HeldAnnounce {
                 raw: vec![2; 10],
@@ -422,6 +559,7 @@ mod tests {
 
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [1u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -441,6 +579,7 @@ mod tests {
         let mut ic = IngressControl::new();
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [1u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -464,6 +603,7 @@ mod tests {
 
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [1u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -474,6 +614,7 @@ mod tests {
         );
         ic.hold_announce(
             iface(1),
+            &IngressControlConfig::enabled(),
             [2u8; 16],
             HeldAnnounce {
                 raw: vec![0; 10],
@@ -484,19 +625,37 @@ mod tests {
         );
 
         // First release
-        let released = ic.process_held_announces(iface(1), 1.0, started, now);
+        let released = ic.process_held_announces(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now,
+        );
         assert!(released.is_some());
 
         // Too soon for second release
         let too_soon = now + 10.0; // < IC_HELD_RELEASE_INTERVAL (30s)
         assert!(ic
-            .process_held_announces(iface(1), 1.0, started, too_soon)
+            .process_held_announces(
+                iface(1),
+                &IngressControlConfig::enabled(),
+                1.0,
+                started,
+                too_soon
+            )
             .is_none());
 
         // After interval, second release works
         let ok_time = now + constants::IC_HELD_RELEASE_INTERVAL + 1.0;
         assert!(ic
-            .process_held_announces(iface(1), 1.0, started, ok_time)
+            .process_held_announces(
+                iface(1),
+                &IngressControlConfig::enabled(),
+                1.0,
+                started,
+                ok_time
+            )
             .is_some());
     }
 }

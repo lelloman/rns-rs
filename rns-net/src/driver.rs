@@ -817,7 +817,11 @@ impl Driver {
                 let stats = bridge.stats();
                 (
                     stats.backlog_len,
-                    stats.consumers.iter().map(|consumer| consumer.queue_len).sum(),
+                    stats
+                        .consumers
+                        .iter()
+                        .map(|consumer| consumer.queue_len)
+                        .sum(),
                 )
             })
             .unwrap_or((0, 0));
@@ -840,14 +844,10 @@ impl Driver {
                     remaining.push(format!("{active_links} link(s)"));
                 }
                 if active_resource_transfers > 0 {
-                    remaining.push(format!(
-                        "{active_resource_transfers} resource transfer(s)"
-                    ));
+                    remaining.push(format!("{active_resource_transfers} resource transfer(s)"));
                 }
                 if active_holepunch_sessions > 0 {
-                    remaining.push(format!(
-                        "{active_holepunch_sessions} hole-punch session(s)"
-                    ));
+                    remaining.push(format!("{active_holepunch_sessions} hole-punch session(s)"));
                 }
                 if interface_writer_queued_frames > 0 {
                     remaining.push(format!(
@@ -3204,8 +3204,8 @@ impl Driver {
             "ingress_control" => {
                 let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
                 Some(make_entry(
-                    RuntimeConfigValue::Bool(current.ingress_control),
-                    RuntimeConfigValue::Bool(startup.ingress_control),
+                    RuntimeConfigValue::Bool(current.ingress_control.enabled),
+                    RuntimeConfigValue::Bool(startup.ingress_control.enabled),
                     RuntimeConfigApplyMode::Immediate,
                     "Whether ingress control is enabled for this interface.",
                 ))
@@ -3392,7 +3392,9 @@ impl Driver {
                 entry.info.announce_rate_penalty = Self::expect_f64(value, key)?
             }
             "announce_cap" => entry.info.announce_cap = Self::expect_f64(value, key)?,
-            "ingress_control" => entry.info.ingress_control = Self::expect_bool(value, key)?,
+            "ingress_control" => {
+                entry.info.ingress_control.enabled = Self::expect_bool(value, key)?
+            }
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -3491,7 +3493,9 @@ impl Driver {
                 entry.info.announce_rate_penalty = startup.announce_rate_penalty
             }
             "announce_cap" => entry.info.announce_cap = startup.announce_cap,
-            "ingress_control" => entry.info.ingress_control = startup.ingress_control,
+            "ingress_control" => {
+                entry.info.ingress_control.enabled = startup.ingress_control.enabled
+            }
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -8257,7 +8261,7 @@ mod tests {
         info.announce_rate_grace = 2;
         info.announce_rate_penalty = 0.25;
         info.announce_cap = 0.05;
-        info.ingress_control = true;
+        info.ingress_control.enabled = true;
         driver.register_interface_runtime_defaults(&info);
         driver.register_interface_ifac_runtime(
             &info.name,
@@ -8489,7 +8493,7 @@ mod tests {
             mtu: constants::MTU as u32,
             ia_freq: 0.0,
             started: 0.0,
-            ingress_control: false,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         }
     }
 

@@ -134,9 +134,7 @@ impl Writer for AsyncWriter {
                 "interface writer queue is full",
             )),
             Err(TrySendError::Disconnected(_)) => {
-                self.metrics
-                    .worker_alive
-                    .store(false, Ordering::Relaxed);
+                self.metrics.worker_alive.store(false, Ordering::Relaxed);
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "interface writer worker disconnected",
@@ -163,9 +161,7 @@ pub fn wrap_async_writer(
 
     thread::Builder::new()
         .name(format!("iface-writer-{}", interface_id.0))
-        .spawn(move || {
-            async_writer_loop(writer, rx, interface_id, name, event_tx, metrics_thread)
-        })
+        .spawn(move || async_writer_loop(writer, rx, interface_id, name, event_tx, metrics_thread))
         .expect("failed to spawn interface writer thread");
 
     (
@@ -259,6 +255,7 @@ pub struct StartContext {
     pub tx: EventSender,
     pub next_dynamic_id: Arc<AtomicU64>,
     pub mode: u8,
+    pub ingress_control: rns_core::transport::types::IngressControlConfig,
 }
 
 /// Opaque interface config data. Each factory downcasts to its concrete type.
@@ -363,7 +360,7 @@ mod tests {
                 mtu: constants::MTU as u32,
                 ia_freq: 0.0,
                 started: 0.0,
-                ingress_control: false,
+                ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             },
             writer: Box::new(MockWriter::new()),
             async_writer_metrics: None,

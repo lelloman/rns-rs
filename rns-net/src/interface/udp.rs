@@ -239,7 +239,7 @@ impl InterfaceFactory for UdpFactory {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: 1400,
-            ingress_control: true,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             started: crate::time::now(),
         };

@@ -220,7 +220,7 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
-            ingress_control: false,
+            ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             started: 0.0,
         }

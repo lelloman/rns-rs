@@ -975,15 +975,19 @@ impl TransportEngine {
             return false;
         };
         if packet.context == constants::CONTEXT_PATH_RESPONSE
-            || !info.ingress_control
-            || !self
-                .ingress_control
-                .should_ingress_limit(iface, info.ia_freq, info.started, now)
+            || !self.ingress_control.should_ingress_limit(
+                iface,
+                &info.ingress_control,
+                info.ia_freq,
+                info.started,
+                now,
+            )
         {
             return false;
         }
         self.ingress_control.hold_announce(
             iface,
+            &info.ingress_control,
             packet.destination_hash,
             ingress_control::HeldAnnounce {
                 raw: original_raw.to_vec(),
@@ -1521,17 +1525,20 @@ impl TransportEngine {
         // Process ingress control: release held announces
         let ic_interfaces = self.ingress_control.interfaces_with_held();
         for iface_id in ic_interfaces {
-            let (ia_freq, started, ic_enabled) = match self.interfaces.get(&iface_id) {
+            let (ia_freq, started, ingress_config) = match self.interfaces.get(&iface_id) {
                 Some(info) => (info.ia_freq, info.started, info.ingress_control),
                 None => continue,
             };
-            if !ic_enabled {
+            if !ingress_config.enabled {
                 continue;
             }
-            if let Some(held) = self
-                .ingress_control
-                .process_held_announces(iface_id, ia_freq, started, now)
-            {
+            if let Some(held) = self.ingress_control.process_held_announces(
+                iface_id,
+                &ingress_config,
+                ia_freq,
+                started,
+                now,
+            ) {
                 let released_actions =
                     self.handle_inbound(&held.raw, held.receiving_interface, now, rng);
                 actions.extend(released_actions);
@@ -2256,7 +2263,7 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
-            ingress_control: false,
+            ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             started: 0.0,
         }
@@ -3066,7 +3073,7 @@ mod tests {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: constants::MTU as u32,
-            ingress_control: false,
+            ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             started: 0.0,
         }
@@ -3386,7 +3393,7 @@ mod tests {
             wants_tunnel: true,
             tunnel_id: None,
             mtu: constants::MTU as u32,
-            ingress_control: false,
+            ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             started: 0.0,
         }

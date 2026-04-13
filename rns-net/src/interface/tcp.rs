@@ -520,7 +520,7 @@ impl InterfaceFactory for TcpClientFactory {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: 65535,
-            ingress_control: true,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
             started: crate::time::now(),
         };

@@ -22,7 +22,7 @@ use polling::{Event as PollEvent, Events, Poller};
 use socket2::{SockRef, TcpKeepalive};
 
 use rns_core::constants;
-use rns_core::transport::types::{InterfaceId, InterfaceInfo};
+use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
@@ -44,6 +44,7 @@ pub struct BackboneConfig {
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
+    pub ingress_control: IngressControlConfig,
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 }
@@ -99,6 +100,7 @@ impl Default for BackboneConfig {
             idle_timeout: None,
             write_stall_timeout: None,
             abuse: BackboneAbuseConfig::default(),
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
                 idle_timeout: None,
@@ -241,6 +243,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let server_interface_id = config.interface_id;
     let runtime = Arc::clone(&config.runtime);
     let peer_state = Arc::clone(&config.peer_state);
+    let ingress_control = config.ingress_control;
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
@@ -252,6 +255,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
                 next_id,
                 runtime,
                 peer_state,
+                ingress_control,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -405,6 +409,7 @@ fn poll_loop(
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
     peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    ingress_control: IngressControlConfig,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -558,7 +563,7 @@ fn poll_loop(
                                 mtu: 65535,
                                 ia_freq: 0.0,
                                 started: 0.0,
-                                ingress_control: true,
+                                ingress_control,
                             };
 
                             if tx
@@ -1137,6 +1142,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 idle_timeout,
                 write_stall_timeout,
                 abuse,
+                ingress_control: IngressControlConfig::enabled(),
                 runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                     max_connections: None,
                     idle_timeout: None,
@@ -1182,7 +1188,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     wants_tunnel: false,
                     tunnel_id: None,
                     mtu: 65535,
-                    ingress_control: true,
+                    ingress_control: ctx.ingress_control,
                     ia_freq: 0.0,
                     started: crate::time::now(),
                 };
@@ -1194,7 +1200,8 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     interface_type_name: "BackboneInterface".to_string(),
                 })
             }
-            BackboneMode::Server(cfg) => {
+            BackboneMode::Server(mut cfg) => {
+                cfg.ingress_control = ctx.ingress_control;
                 start(cfg, ctx.tx, ctx.next_dynamic_id)?;
                 Ok(StartResult::Listener { control: None })
             }
@@ -1290,6 +1297,7 @@ mod tests {
             idle_timeout,
             write_stall_timeout,
             abuse,
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
                 idle_timeout: None,

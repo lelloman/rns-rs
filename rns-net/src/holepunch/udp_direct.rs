@@ -92,7 +92,7 @@ pub fn start_direct_interface(
         mtu: 1400,
         ia_freq: 0.0,
         started: 0.0,
-        ingress_control: false,
+        ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     };
 
     let running_clone = running.clone();

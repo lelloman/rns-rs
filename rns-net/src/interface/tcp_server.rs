@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use rns_core::constants;
-use rns_core::transport::types::{InterfaceId, InterfaceInfo};
+use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
@@ -25,6 +25,7 @@ pub struct TcpServerConfig {
     pub listen_port: u16,
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
+    pub ingress_control: IngressControlConfig,
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
@@ -56,6 +57,7 @@ impl Default for TcpServerConfig {
             listen_port: 4242,
             interface_id: InterfaceId(0),
             max_connections: None,
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -95,6 +97,7 @@ pub fn start(
 
     let name = config.name.clone();
     let runtime = Arc::clone(&config.runtime);
+    let ingress_control = config.ingress_control;
     let active_connections = Arc::new(AtomicUsize::new(0));
     let control = ListenerControl::new();
     let listener_control = control.clone();
@@ -107,6 +110,7 @@ pub fn start(
                 tx,
                 next_id,
                 runtime,
+                ingress_control,
                 active_connections,
                 listener_control,
             );
@@ -122,6 +126,7 @@ fn listener_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<TcpServerRuntime>>,
+    ingress_control: IngressControlConfig,
     active_connections: Arc<AtomicUsize>,
     control: ListenerControl,
 ) {
@@ -206,7 +211,7 @@ fn listener_loop(
             mtu: 65535,
             ia_freq: 0.0,
             started: 0.0,
-            ingress_control: true,
+            ingress_control,
         };
 
         // Send InterfaceUp with InterfaceInfo for dynamic registration
@@ -309,6 +314,7 @@ impl InterfaceFactory for TcpServerFactory {
             listen_port,
             interface_id: id,
             max_connections,
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -323,10 +329,11 @@ impl InterfaceFactory for TcpServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let cfg = *config
+        let mut cfg = *config
             .into_any()
             .downcast::<TcpServerConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        cfg.ingress_control = ctx.ingress_control;
         let control = start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener {
             control: Some(control),
@@ -368,6 +375,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(interface_id),
             max_connections,
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -402,6 +410,33 @@ mod tests {
                 assert!(info.is_some());
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn spawned_client_inherits_ingress_control_config() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(1100));
+
+        let mut config = make_server_config(port, 11, None);
+        config.ingress_control = IngressControlConfig::disabled();
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::InterfaceUp(_, _, Some(info)) => {
+                assert!(!info.ingress_control.enabled);
+                assert_eq!(
+                    info.ingress_control.max_held_announces,
+                    IngressControlConfig::disabled().max_held_announces
+                );
+            }
+            other => panic!("expected InterfaceUp with InterfaceInfo, got {:?}", other),
         }
     }
 

@@ -65,7 +65,7 @@ mod tests {
             mtu: rns_core::constants::MTU as u32,
             ia_freq: 0.0,
             started: 0.0,
-            ingress_control: false,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         };
         map.insert(
             id,

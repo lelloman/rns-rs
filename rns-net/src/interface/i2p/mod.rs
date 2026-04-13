@@ -51,6 +51,7 @@ pub struct I2pConfig {
     pub connectable: bool,
     /// Directory for key persistence (typically `{config_dir}/storage`).
     pub storage_dir: PathBuf,
+    pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub runtime: Arc<Mutex<I2pRuntime>>,
 }
 
@@ -84,6 +85,7 @@ impl Default for I2pConfig {
             peers: Vec::new(),
             connectable: false,
             storage_dir: PathBuf::from("."),
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
@@ -196,6 +198,7 @@ fn coordinator(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
 ) -> Result<(), SamError> {
+    let ingress_control = config.ingress_control;
     let sam_addr: SocketAddr = format!("{}:{}", config.sam_host, config.sam_port)
         .parse()
         .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
@@ -248,6 +251,7 @@ fn coordinator(
                     tx2,
                     next_id2,
                     runtime,
+                    ingress_control,
                 );
             })
             .ok();
@@ -264,7 +268,14 @@ fn coordinator(
         thread::Builder::new()
             .name("i2p-acceptor".into())
             .spawn(move || {
-                acceptor_loop(sam_addr2, &session_id2, &iface_name, tx2, next_id2);
+                acceptor_loop(
+                    sam_addr2,
+                    &session_id2,
+                    &iface_name,
+                    tx2,
+                    next_id2,
+                    ingress_control,
+                );
             })
             .ok();
     }
@@ -287,6 +298,7 @@ fn outbound_peer_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<I2pRuntime>>,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
 ) {
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
@@ -349,7 +361,7 @@ fn outbound_peer_loop(
                     mtu: 65535,
                     ia_freq: 0.0,
                     started: 0.0,
-                    ingress_control: true,
+                    ingress_control,
                 };
 
                 // Register dynamic interface
@@ -393,6 +405,7 @@ fn acceptor_loop(
     iface_name: &str,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
 ) {
     loop {
         match sam::stream_accept(&sam_addr, session_id) {
@@ -437,7 +450,7 @@ fn acceptor_loop(
                     mtu: 65535,
                     ia_freq: 0.0,
                     started: 0.0,
-                    ingress_control: true,
+                    ingress_control,
                 };
 
                 // Register dynamic interface
@@ -562,6 +575,7 @@ impl InterfaceFactory for I2pFactory {
             connectable,
             peers,
             storage_dir,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
@@ -573,10 +587,11 @@ impl InterfaceFactory for I2pFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let cfg = *config
+        let mut cfg = *config
             .into_any()
             .downcast::<I2pConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        cfg.ingress_control = ctx.ingress_control;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener { control: None })
     }

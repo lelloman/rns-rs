@@ -63,6 +63,18 @@ fn parse_interface_mode(mode: &str) -> u8 {
     }
 }
 
+fn default_ingress_control_for_type(
+    iface_type: &str,
+) -> rns_core::transport::types::IngressControlConfig {
+    match iface_type {
+        "AutoInterface" | "BackboneInterface" | "TCPClientInterface" | "TCPServerInterface"
+        | "UDPInterface" | "I2PInterface" => {
+            rns_core::transport::types::IngressControlConfig::enabled()
+        }
+        _ => rns_core::transport::types::IngressControlConfig::disabled(),
+    }
+}
+
 /// Extract IFAC configuration from interface params, if present.
 /// Returns None if neither networkname/network_name nor passphrase/pass_phrase is set.
 fn extract_ifac_config(
@@ -1011,6 +1023,7 @@ impl RnsNode {
                 tx: tx.clone(),
                 next_dynamic_id: next_dynamic_id.clone(),
                 mode: iface_config.mode,
+                ingress_control: default_ingress_control_for_type(&iface_config.type_name),
             };
 
             let result = match factory.start(iface_config.config_data, ctx) {
@@ -3020,7 +3033,9 @@ enable_transport = False
         let node = RnsNode::start(NodeConfig::default(), Box::new(NoopCallbacks)).unwrap();
 
         node.begin_drain(Duration::from_secs(1)).unwrap();
-        assert!(node.request_path(&rns_core::types::DestHash([0xAB; 16])).is_err());
+        assert!(node
+            .request_path(&rns_core::types::DestHash([0xAB; 16]))
+            .is_err());
 
         node.shutdown();
     }

@@ -488,7 +488,7 @@ impl InterfaceFactory for KissFactory {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
-            ingress_control: false,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             started: crate::time::now(),
         };

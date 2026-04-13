@@ -100,6 +100,7 @@ pub struct AutoConfig {
     pub configured_bitrate: u64,
     /// Base interface ID. Per-peer IDs will be assigned dynamically.
     pub interface_id: InterfaceId,
+    pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub runtime: Arc<Mutex<AutoRuntime>>,
 }
 
@@ -140,6 +141,7 @@ impl Default for AutoConfig {
             ignored_interfaces: Vec::new(),
             configured_bitrate: BITRATE_GUESS,
             interface_id: InterfaceId(0),
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime {
                 announce_interval_secs: ANNOUNCE_INTERVAL,
                 peer_timeout_secs: PEERING_TIMEOUT,
@@ -411,6 +413,7 @@ pub fn start(
     let data_port = config.data_port;
     let name = config.name.clone();
     let configured_bitrate = config.configured_bitrate;
+    let ingress_control = config.ingress_control;
     {
         let startup = AutoRuntime::from_config(&config);
         *config.runtime.lock().unwrap() = startup;
@@ -495,6 +498,7 @@ pub fn start(
                         &name,
                         data_port,
                         configured_bitrate,
+                        ingress_control,
                         runtime,
                     );
                 })?;
@@ -508,6 +512,7 @@ pub fn start(
             let running = running.clone();
             let name = name.clone();
             let runtime = runtime.clone();
+            let ingress_control = ingress_control;
 
             thread::Builder::new()
                 .name(format!("auto-udisc-rx-{}", ifname))
@@ -521,6 +526,7 @@ pub fn start(
                         &name,
                         data_port,
                         configured_bitrate,
+                        ingress_control,
                         runtime,
                     );
                 })?;
@@ -705,6 +711,7 @@ fn discovery_receiver_loop(
     name: &str,
     data_port: u16,
     configured_bitrate: u64,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
     runtime: Arc<Mutex<AutoRuntime>>,
 ) {
     let mut buf = [0u8; 1024];
@@ -763,6 +770,7 @@ fn discovery_receiver_loop(
                     data_port,
                     name,
                     configured_bitrate,
+                    ingress_control,
                     &runtime,
                 );
             }
@@ -791,6 +799,7 @@ fn add_peer(
     data_port: u16,
     name: &str,
     configured_bitrate: u64,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
     _runtime: &Arc<Mutex<AutoRuntime>>,
 ) {
     let peer_ip: Ipv6Addr = match peer_addr.parse() {
@@ -847,7 +856,7 @@ fn add_peer(
         mtu: 1400,
         ia_freq: 0.0,
         started: 0.0,
-        ingress_control: true,
+        ingress_control,
     };
 
     let now = crate::time::now();
@@ -1097,6 +1106,7 @@ impl InterfaceFactory for AutoFactory {
             ignored_interfaces,
             configured_bitrate,
             interface_id: id,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime {
                 announce_interval_secs: ANNOUNCE_INTERVAL,
                 peer_timeout_secs: PEERING_TIMEOUT,
@@ -1110,10 +1120,11 @@ impl InterfaceFactory for AutoFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
+        let mut auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
         })?;
 
+        auto_config.ingress_control = ctx.ingress_control;
         start(auto_config, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener { control: None })
     }

@@ -1,11 +1,57 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::constants;
+
 pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
 
 /// Opaque identifier for a network interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InterfaceId(pub u64);
+
+/// Per-interface ingress-control configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngressControlConfig {
+    pub enabled: bool,
+    pub max_held_announces: usize,
+    pub burst_freq_new: f64,
+    pub burst_freq: f64,
+    pub new_time: f64,
+    pub burst_hold: f64,
+    pub burst_penalty: f64,
+    pub held_release_interval: f64,
+}
+
+impl IngressControlConfig {
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for IngressControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_held_announces: constants::IC_MAX_HELD_ANNOUNCES,
+            burst_freq_new: constants::IC_BURST_FREQ_NEW,
+            burst_freq: constants::IC_BURST_FREQ,
+            new_time: constants::IC_NEW_TIME,
+            burst_hold: constants::IC_BURST_HOLD,
+            burst_penalty: constants::IC_BURST_PENALTY,
+            held_release_interval: constants::IC_HELD_RELEASE_INTERVAL,
+        }
+    }
+}
 
 /// Metadata about a network interface.
 #[derive(Debug, Clone)]
@@ -29,8 +75,8 @@ pub struct InterfaceInfo {
     pub tunnel_id: Option<[u8; 32]>,
     /// Maximum transmission unit for this interface in bytes.
     pub mtu: u32,
-    /// Whether ingress control is enabled for this interface.
-    pub ingress_control: bool,
+    /// Ingress control behavior for this interface.
+    pub ingress_control: IngressControlConfig,
     /// Current incoming announce frequency (announces/sec), synced from driver.
     pub ia_freq: f64,
     /// When this interface was started (epoch seconds).
