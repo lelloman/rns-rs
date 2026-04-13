@@ -116,6 +116,27 @@ Useful docs:
 
 - [docs/rns-server-operator-runbook.md](docs/rns-server-operator-runbook.md)
 
+## Interface Ingress Control
+
+rns-rs accepts the Python-compatible ingress-control keys in any interface
+section:
+
+```ini
+ingress_control = Yes
+ic_max_held_announces = 256
+ic_burst_hold = 60
+ic_burst_freq_new = 3.5
+ic_burst_freq = 12
+ic_new_time = 7200
+ic_burst_penalty = 300
+ic_held_release_interval = 30
+```
+
+Ingress control defaults to enabled on Auto, Backbone, TCP client/server, UDP,
+and I2P interfaces. It defaults to disabled on local/serial/KISS/RNode/Pipe-style
+interfaces. Spawned dynamic interfaces inherit the full ingress-control config
+from their parent interface.
+
 ## Low-Level Tools
 
 These are lower-level building blocks for development, debugging, custom setups,

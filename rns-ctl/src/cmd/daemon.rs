@@ -195,6 +195,19 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   loglevel = 4
 
 # ─── Interface examples ──────────────────────────────────────────────
+#
+# Ingress-control settings can be added to any interface. They are enabled
+# by default on Auto, Backbone, TCP client/server, UDP and I2P interfaces,
+# and disabled by default on local/serial/KISS/RNode/Pipe-style interfaces.
+#
+#   ingress_control = Yes
+#   ic_max_held_announces = 256
+#   ic_burst_hold = 60
+#   ic_burst_freq_new = 3.5
+#   ic_burst_freq = 12
+#   ic_new_time = 7200
+#   ic_burst_penalty = 300
+#   ic_held_release_interval = 30
 
 # TCP client: connect to a remote transport node
 #
