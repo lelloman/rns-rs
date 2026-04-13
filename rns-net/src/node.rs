@@ -110,6 +110,14 @@ fn extract_discovery_config(
         return None;
     }
 
+    if iface_type == "TCPClientInterface" {
+        log::error!(
+            "Invalid interface discovery configuration for {}, aborting discovery announce",
+            iface_name
+        );
+        return None;
+    }
+
     let discovery_name = params
         .get("discovery_name")
         .cloned()
