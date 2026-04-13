@@ -1,5 +1,8 @@
 /// Maximum number of announce timestamps to keep per direction.
-pub const ANNOUNCE_SAMPLE_MAX: usize = 6;
+pub const ANNOUNCE_SAMPLE_MAX: usize = 12;
+
+/// Minimum number of incoming announce samples before ingress-control frequency is meaningful.
+pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 8;
 
 /// Traffic statistics for an interface.
 #[derive(Debug, Clone, Default)]
@@ -33,25 +36,26 @@ impl InterfaceStats {
     }
 
     /// Compute announce frequency (per second) from timestamps.
-    fn compute_frequency(timestamps: &[f64]) -> f64 {
-        if timestamps.len() < 2 {
+    fn compute_frequency(timestamps: &[f64], min_sample: usize) -> f64 {
+        let sample_count = timestamps.len();
+        if sample_count <= min_sample {
             return 0.0;
         }
-        let span = timestamps[timestamps.len() - 1] - timestamps[0];
+        let span = timestamps[sample_count - 1] - timestamps[0];
         if span <= 0.0 {
             return 0.0;
         }
-        (timestamps.len() - 1) as f64 / span
+        sample_count as f64 / span
     }
 
     /// Incoming announce frequency (per second).
     pub fn incoming_announce_freq(&self) -> f64 {
-        Self::compute_frequency(&self.ia_timestamps)
+        Self::compute_frequency(&self.ia_timestamps, INCOMING_ANNOUNCE_MIN_SAMPLE)
     }
 
     /// Outgoing announce frequency (per second).
     pub fn outgoing_announce_freq(&self) -> f64 {
-        Self::compute_frequency(&self.oa_timestamps)
+        Self::compute_frequency(&self.oa_timestamps, 1)
     }
 }
 
@@ -63,7 +67,7 @@ mod tests {
     fn incoming_frequency_waits_for_minimum_sample_count() {
         let mut stats = InterfaceStats::default();
 
-        for i in 0..=8 {
+        for i in 0..8 {
             stats.record_incoming_announce(i as f64);
         }
 
