@@ -54,3 +54,61 @@ impl InterfaceStats {
         Self::compute_frequency(&self.oa_timestamps)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incoming_frequency_waits_for_minimum_sample_count() {
+        let mut stats = InterfaceStats::default();
+
+        for i in 0..=8 {
+            stats.record_incoming_announce(i as f64);
+        }
+
+        assert_eq!(
+            stats.incoming_announce_freq(),
+            0.0,
+            "incoming announce frequency must stay zero until more than 8 samples exist"
+        );
+    }
+
+    #[test]
+    fn announce_frequency_keeps_twelve_samples() {
+        let mut stats = InterfaceStats::default();
+
+        for i in 0..12 {
+            stats.record_incoming_announce(i as f64);
+            stats.record_outgoing_announce(i as f64);
+        }
+
+        assert_eq!(stats.ia_timestamps.len(), 12);
+        assert_eq!(stats.oa_timestamps.len(), 12);
+
+        stats.record_incoming_announce(12.0);
+        stats.record_outgoing_announce(12.0);
+
+        assert_eq!(stats.ia_timestamps.len(), 12);
+        assert_eq!(stats.oa_timestamps.len(), 12);
+        assert_eq!(stats.ia_timestamps[0], 1.0);
+        assert_eq!(stats.oa_timestamps[0], 1.0);
+    }
+
+    #[test]
+    fn incoming_frequency_uses_sample_count_over_oldest_span() {
+        let mut stats = InterfaceStats::default();
+
+        for i in 0..12 {
+            stats.record_incoming_announce(i as f64);
+        }
+
+        let expected = 12.0 / 11.0;
+        assert!(
+            (stats.incoming_announce_freq() - expected).abs() < f64::EPSILON,
+            "incoming frequency should be samples / span, got {} expected {}",
+            stats.incoming_announce_freq(),
+            expected
+        );
+    }
+}

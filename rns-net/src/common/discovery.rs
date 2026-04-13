@@ -517,3 +517,82 @@ pub fn filter_and_sort_interfaces(
 pub fn discovery_name_hash() -> [u8; 10] {
     rns_core::destination::name_hash(APP_NAME, &["discovery", "interface"])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
+        let mut entries = vec![
+            (
+                Value::UInt(INTERFACE_TYPE as u64),
+                Value::Str(interface_type.to_string()),
+            ),
+            (Value::UInt(TRANSPORT as u64), Value::Bool(true)),
+            (
+                Value::UInt(NAME as u64),
+                Value::Str(format!("test-{interface_type}")),
+            ),
+            (Value::UInt(TRANSPORT_ID as u64), Value::Bin(vec![0x42; 16])),
+        ];
+
+        if let Some(reachable_on) = reachable_on {
+            entries.push((
+                Value::UInt(REACHABLE_ON as u64),
+                Value::Str(reachable_on.to_string()),
+            ));
+        }
+
+        let packed = msgpack::pack(&Value::Map(entries));
+        let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
+        app_data.push(0x00);
+        app_data.extend_from_slice(&packed);
+        app_data.extend_from_slice(&[0u8; STAMP_SIZE]);
+        app_data
+    }
+
+    #[test]
+    fn parse_rejects_unsupported_discovered_interface_type() {
+        let app_data = build_discovery_app_data("BogusInterface", None);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+
+        assert!(
+            parsed.is_none(),
+            "unsupported discovered interface types must be ignored"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_reachable_on_address() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("-not a host-"));
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+
+        assert!(
+            parsed.is_none(),
+            "discovered interfaces with invalid reachable_on values must be ignored"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_supported_discovered_interface_types() {
+        for interface_type in [
+            "BackboneInterface",
+            "TCPServerInterface",
+            "I2PInterface",
+            "RNodeInterface",
+            "WeaveInterface",
+            "KISSInterface",
+        ] {
+            let app_data = build_discovery_app_data(interface_type, Some("example.com"));
+
+            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+
+            assert!(
+                parsed.is_some(),
+                "{interface_type} should be accepted as a discoverable interface type"
+            );
+        }
+    }
+}

@@ -2100,6 +2100,26 @@ mod tests {
     }
 
     #[test]
+    fn tcp_client_interface_is_not_discoverable_without_kiss_framing() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("discoverable".to_string(), "yes".to_string());
+        params.insert(
+            "discovery_name".to_string(),
+            "invalid-tcp-client".to_string(),
+        );
+        params.insert("reachable_on".to_string(), "example.com".to_string());
+        params.insert("target_port".to_string(), "4242".to_string());
+
+        let discovery =
+            super::extract_discovery_config("tcp-client", "TCPClientInterface", &params);
+
+        assert!(
+            discovery.is_none(),
+            "TCPClientInterface discovery must be rejected unless KISS framing is supported"
+        );
+    }
+
+    #[test]
     fn start_and_shutdown() {
         let node = RnsNode::start(
             NodeConfig {
