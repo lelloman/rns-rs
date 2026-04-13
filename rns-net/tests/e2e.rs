@@ -8,6 +8,7 @@
 
 #![allow(unused_variables, unused_assignments, dead_code)]
 
+use std::fs;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,7 +19,7 @@ use rns_crypto::{OsRng, Rng};
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
     InterfaceId, NodeConfig, PacketHash, ProofStrategy, QueryRequest, QueryResponse, RnsNode,
-    TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
+    RuntimeConfigValue, TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
 };
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -535,6 +536,13 @@ fn wait_for_resource_progress(
     })
 }
 
+fn runtime_config_value(node: &RnsNode, key: &str) -> RuntimeConfigValue {
+    match node.query(QueryRequest::GetRuntimeConfig { key: key.into() }) {
+        Ok(QueryResponse::RuntimeConfigEntry(Some(entry))) => entry.value,
+        other => panic!("expected runtime config entry for {}, got {:?}", key, other),
+    }
+}
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_millis(1500);
 const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
@@ -720,6 +728,103 @@ fn start_client_node_with_packet_hashlist(
         callbacks,
     )
     .expect("Failed to start client node")
+}
+
+#[test]
+fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = find_free_port();
+    let config = format!(
+        r#"[reticulum]
+  enable_transport = No
+  share_instance = No
+  panic_on_interface_error = Yes
+
+[interfaces]
+  [[Config Knobs TCP]]
+    type = TCPServerInterface
+    listen_ip = 127.0.0.1
+    listen_port = {}
+    ingress_control = No
+    ic_max_held_announces = 17
+    ic_burst_hold = 1.5
+    ic_burst_freq_new = 2.5
+    ic_burst_freq = 3.5
+    ic_new_time = 4.5
+    ic_burst_penalty = 5.5
+    ic_held_release_interval = 6.5
+"#,
+        port
+    );
+    fs::write(dir.path().join("config"), config).unwrap();
+
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(TransportCallbacks))
+        .expect("node should start from config with custom ingress-control knobs");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let _client = loop {
+        match std::net::TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => break stream,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(err) => panic!("Config listener on {} did not come up: {}", port, err),
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let prefix = loop {
+        match node.query(QueryRequest::ListRuntimeConfig) {
+            Ok(QueryResponse::RuntimeConfigList(entries)) => {
+                if let Some(entry) = entries.iter().find(|entry| {
+                    entry.key.starts_with("interface.TCPServerInterface/Client-")
+                        && entry.key.ends_with(".ingress_control")
+                }) {
+                    break entry
+                        .key
+                        .trim_end_matches(".ingress_control")
+                        .to_string();
+                }
+            }
+            other => panic!("expected runtime config list, got {:?}", other),
+        }
+        if Instant::now() >= deadline {
+            panic!("spawned interface runtime config did not appear");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ingress_control", prefix)),
+        RuntimeConfigValue::Bool(false)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_max_held_announces", prefix)),
+        RuntimeConfigValue::Int(17)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_burst_hold", prefix)),
+        RuntimeConfigValue::Float(1.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_burst_freq_new", prefix)),
+        RuntimeConfigValue::Float(2.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_burst_freq", prefix)),
+        RuntimeConfigValue::Float(3.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_new_time", prefix)),
+        RuntimeConfigValue::Float(4.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_burst_penalty", prefix)),
+        RuntimeConfigValue::Float(5.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_held_release_interval", prefix)),
+        RuntimeConfigValue::Float(6.5)
+    );
+
+    node.shutdown();
 }
 
 /// Set up a two-peer topology: Transport(TCP server) + Alice(TCP client) + Bob(TCP client).
