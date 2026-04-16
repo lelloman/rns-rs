@@ -4,16 +4,16 @@ exclude = ["rns-esp32"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license-file = "LICENSE"
 repository = "https://github.com/lelloman/rns-rs"
 authors = ["rns-rs contributors"]
 
 [workspace.dependencies]
-rns-crypto = { version = "0.1.4", path = "rns-crypto" }
-rns-core = { version = "0.1.7", path = "rns-core" }
-rns-net = { version = "0.5.4", path = "rns-net" }
+rns-crypto = { version = "0.1.5", path = "rns-crypto" }
+rns-core = { version = "0.1.8", path = "rns-core" }
+rns-net = { version = "0.5.5", path = "rns-net" }
 rns-hooks = { version = "0.1.5", path = "rns-hooks" }
 
 # Compile crypto crate with optimizations even in debug/test builds.

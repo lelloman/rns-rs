@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "log",
  "rns-crypto",
@@ -1981,7 +1981,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aes",
  "cbc",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "env_logger 0.11.8",
  "libc",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bincode",
  "bzip2",
