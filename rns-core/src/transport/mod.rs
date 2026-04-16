@@ -1365,13 +1365,11 @@ impl TransportEngine {
             {
                 let link_entry = self.link_table.get(&packet.destination_hash).cloned();
                 if let Some(entry) = link_entry {
-                    if packet.hops == entry.remaining_hops && iface == entry.next_hop_interface {
+                    if let Some((outbound_interface, new_raw)) =
+                        route_via_link_table(packet, &entry, iface)
+                    {
                         // Forward the proof (simplified: skip signature validation
                         // which requires Identity recall)
-                        let mut new_raw = Vec::new();
-                        new_raw.push(packet.raw[0]);
-                        new_raw.push(packet.hops);
-                        new_raw.extend_from_slice(&packet.raw[2..]);
 
                         // Mark link as validated
                         if let Some(le) = self.link_table.get_mut(&packet.destination_hash) {
@@ -1380,11 +1378,11 @@ impl TransportEngine {
 
                         actions.push(TransportAction::LinkEstablished {
                             link_id: packet.destination_hash,
-                            interface: entry.received_interface,
+                            interface: outbound_interface,
                         });
 
                         actions.push(TransportAction::SendOnInterface {
-                            interface: entry.received_interface,
+                            interface: outbound_interface,
                             raw: new_raw,
                         });
                     }

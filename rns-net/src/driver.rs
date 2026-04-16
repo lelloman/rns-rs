@@ -78,6 +78,23 @@ const DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS: f64 = 300.0;
 const SEND_RETRY_BACKOFF_MIN: Duration = Duration::from_millis(25);
 const SEND_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(1000);
 
+fn inject_transport_header(raw: &[u8], next_hop: &[u8; 16]) -> Vec<u8> {
+    if raw.len() < 18 {
+        return raw.to_vec();
+    }
+
+    let new_flags = (rns_core::constants::HEADER_2 << 6)
+        | (rns_core::constants::TRANSPORT_TRANSPORT << 4)
+        | (raw[0] & 0x0F);
+
+    let mut new_raw = Vec::with_capacity(raw.len() + 16);
+    new_raw.push(new_flags);
+    new_raw.push(raw[1]);
+    new_raw.extend_from_slice(next_hop);
+    new_raw.extend_from_slice(&raw[2..]);
+    new_raw
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuntimeConfigDefaults {
     pub(crate) tick_interval_ms: u64,
@@ -7239,10 +7256,45 @@ impl Driver {
         for action in actions {
             match action {
                 LinkManagerAction::SendPacket {
-                    raw,
+                    mut raw,
                     dest_type,
-                    attached_interface,
+                    mut attached_interface,
                 } => {
+                    if dest_type == rns_core::constants::DESTINATION_LINK
+                        && attached_interface.is_none()
+                    {
+                        if let Ok(packet) = RawPacket::unpack(&raw) {
+                            let link_id = packet.destination_hash;
+                            if let Some((iface, transport_id)) =
+                                self.link_manager.get_link_route_hint(&link_id)
+                            {
+                                attached_interface = Some(iface);
+                                if packet.flags.header_type == rns_core::constants::HEADER_1 {
+                                    if let Some(next_hop) = transport_id {
+                                        raw = inject_transport_header(&packet.raw, &next_hop);
+                                        log::debug!(
+                                            "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
+                                            &link_id[..4],
+                                            iface.0,
+                                            &next_hop[..4]
+                                        );
+                                    } else {
+                                        log::debug!(
+                                            "Link SendPacket route: link={:02x?} iface={} header=1 (no transport_id)",
+                                            &link_id[..4],
+                                            iface.0
+                                        );
+                                    }
+                                }
+                            } else {
+                                log::debug!(
+                                    "Link SendPacket no route hint: link={:02x?}",
+                                    &link_id[..4]
+                                );
+                            }
+                        }
+                    }
+
                     // Route through the transport engine's outbound path
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {

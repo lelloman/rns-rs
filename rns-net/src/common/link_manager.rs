@@ -61,6 +61,13 @@ struct ManagedLink {
     outgoing_resources: Vec<ResourceSender>,
     /// Resource acceptance strategy.
     resource_strategy: ResourceStrategy,
+    /// Interface this link's packets should be sent on when known.
+    route_interface: Option<rns_core::transport::types::InterfaceId>,
+    /// Next-hop transport ID seen on inbound HEADER_2 link traffic.
+    ///
+    /// When present, outbound link packets can be rewritten to HEADER_2 using
+    /// this transport ID to preserve multi-hop routing.
+    route_transport_id: Option<[u8; 16]>,
 }
 
 /// A registered link destination that can accept incoming LINKREQUEST.
@@ -210,6 +217,17 @@ impl LinkManager {
             .and_then(|link| link.engine.derived_key().map(|dk| dk.to_vec()))
     }
 
+    /// Return best-known routing hint for link packets.
+    pub fn get_link_route_hint(
+        &self,
+        link_id: &LinkId,
+    ) -> Option<(rns_core::transport::types::InterfaceId, Option<[u8; 16]>)> {
+        self.links.get(link_id).and_then(|link| {
+            link.route_interface
+                .map(|iface| (iface, link.route_transport_id))
+        })
+    }
+
     /// Register a destination that can accept incoming links.
     pub fn register_link_destination(
         &mut self,
@@ -320,6 +338,8 @@ impl LinkManager {
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
             resource_strategy: ResourceStrategy::default(),
+            route_interface: None,
+            route_transport_id: None,
         };
         self.links.insert(link_id, managed);
 
@@ -360,11 +380,11 @@ impl LinkManager {
             }
             constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_LRPROOF => {
                 // LRPROOF: dest_hash is the link_id
-                self.handle_lrproof(&dest_hash, &packet, rng)
+                self.handle_lrproof(&dest_hash, &packet, receiving_interface, rng)
             }
             constants::PACKET_TYPE_PROOF => self.handle_link_proof(&dest_hash, &packet, rng),
             constants::PACKET_TYPE_DATA => {
-                self.handle_link_data(&dest_hash, &packet, packet_hash, rng)
+                self.handle_link_data(&dest_hash, &packet, packet_hash, receiving_interface, rng)
             }
             _ => Vec::new(),
         }
@@ -406,6 +426,14 @@ impl LinkManager {
         };
 
         let link_id = *engine.link_id();
+        log::debug!(
+            "LINKREQUEST accepted: link={:02x?} iface={} header_type={} transport_id_present={} hops={}",
+            &link_id[..4],
+            receiving_interface.0,
+            packet.flags.header_type,
+            packet.transport_id.is_some(),
+            packet.hops
+        );
 
         let managed = ManagedLink {
             engine,
@@ -424,6 +452,12 @@ impl LinkManager {
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
             resource_strategy: ld.resource_strategy,
+            route_interface: Some(receiving_interface),
+            route_transport_id: if packet.flags.header_type == constants::HEADER_2 {
+                packet.transport_id
+            } else {
+                None
+            },
         };
         self.links.insert(link_id, managed);
 
@@ -443,17 +477,75 @@ impl LinkManager {
 
         if let Ok(pkt) = RawPacket::pack(
             flags,
-            0,
+            packet.hops,
             &link_id,
             None,
             constants::CONTEXT_LRPROOF,
             &lrproof_data,
         ) {
+            log::debug!(
+                "LRPROOF queued: link={:02x?} route_iface={} route_tid_present={} hops={}",
+                &link_id[..4],
+                receiving_interface.0,
+                packet.transport_id.is_some(),
+                packet.hops
+            );
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
+        }
+
+        // Compatibility fallback #1: some stacks validate LRPROOF only when
+        // proof packets retain hop=0 semantics.
+        if packet.hops != 0 {
+            if let Ok(pkt0) = RawPacket::pack(
+                flags,
+                0,
+                &link_id,
+                None,
+                constants::CONTEXT_LRPROOF,
+                &lrproof_data,
+            ) {
+                log::debug!(
+                    "LRPROOF fallback queued: link={:02x?} route_iface={} hops=0",
+                    &link_id[..4],
+                    receiving_interface.0
+                );
+                actions.push(LinkManagerAction::SendPacket {
+                    raw: pkt0.raw,
+                    dest_type: constants::DESTINATION_LINK,
+                    attached_interface: None,
+                });
+            }
+        }
+
+        // Compatibility fallback #2: some transport implementations compare
+        // LRPROOF hops against a "remaining hops" value derived differently
+        // from destination-side delivery hops. Queue a +1 hop variant too.
+        if packet.hops < u8::MAX {
+            let hops_plus_one = packet.hops + 1;
+            if let Ok(pkt2) = RawPacket::pack(
+                flags,
+                hops_plus_one,
+                &link_id,
+                None,
+                constants::CONTEXT_LRPROOF,
+                &lrproof_data,
+            ) {
+                log::debug!(
+                    "LRPROOF +1 queued: link={:02x?} route_iface={} hops={}",
+                    &link_id[..4],
+                    receiving_interface.0,
+                    hops_plus_one
+                );
+                actions.push(LinkManagerAction::SendPacket {
+                    raw: pkt2.raw,
+                    dest_type: constants::DESTINATION_LINK,
+                    attached_interface: None,
+                });
+            }
         }
 
         // Notify hook system about the incoming link request
@@ -546,12 +638,27 @@ impl LinkManager {
         &mut self,
         link_id_bytes: &[u8; 16],
         packet: &RawPacket,
+        receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id_bytes) {
             Some(l) => l,
             None => return Vec::new(),
         };
+
+        link.route_interface = Some(receiving_interface);
+        if packet.flags.header_type == constants::HEADER_2 {
+            if let Some(transport_id) = packet.transport_id {
+                link.route_transport_id = Some(transport_id);
+            }
+        }
+        log::debug!(
+            "LRPROOF received: link={:02x?} iface={} header_type={} transport_id_present={}",
+            &link_id_bytes[..4],
+            receiving_interface.0,
+            packet.flags.header_type,
+            packet.transport_id.is_some()
+        );
 
         if link.engine.state() != LinkState::Pending || !link.engine.is_initiator() {
             return Vec::new();
@@ -630,6 +737,7 @@ impl LinkManager {
         link_id_bytes: &[u8; 16],
         packet: &RawPacket,
         packet_hash: [u8; 32],
+        receiving_interface: rns_core::transport::types::InterfaceId,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         // First pass: perform engine operations, collect results
@@ -722,6 +830,13 @@ impl LinkManager {
                 Some(l) => l,
                 None => return Vec::new(),
             };
+
+            link.route_interface = Some(receiving_interface);
+            if packet.flags.header_type == constants::HEADER_2 {
+                if let Some(transport_id) = packet.transport_id {
+                    link.route_transport_id = Some(transport_id);
+                }
+            }
 
             match packet.context {
                 constants::CONTEXT_LRRTT => {
