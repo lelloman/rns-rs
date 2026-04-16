@@ -660,6 +660,7 @@ impl LinkManager {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
+                packet_hash: [u8; 32],
             },
             Response {
                 link_id: LinkId,
@@ -791,6 +792,7 @@ impl LinkManager {
                             link_id,
                             inbound_actions,
                             plaintext,
+                            packet_hash,
                         }
                     }
                     Err(_) => LinkDataResult::Error,
@@ -972,9 +974,10 @@ impl LinkManager {
                 link_id,
                 inbound_actions,
                 plaintext,
+                packet_hash,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_request(&link_id, &plaintext, rng));
+                actions.extend(self.handle_request(&link_id, &plaintext, packet_hash, rng));
             }
             LinkDataResult::Response {
                 link_id,
@@ -1066,6 +1069,7 @@ impl LinkManager {
         &mut self,
         link_id: &LinkId,
         plaintext: &[u8],
+        packet_hash: [u8; 32],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
@@ -1083,8 +1087,17 @@ impl LinkManager {
         let mut path_hash = [0u8; 16];
         path_hash.copy_from_slice(path_hash_bytes);
 
-        // Compute request_id = truncated_hash(packed_request_bytes)
-        let request_id = rns_core::hash::truncated_hash(plaintext);
+        // Python-compatible request_id: Packet.getTruncatedHash(), i.e.
+        // first 16 bytes of the full packet hash computed from hashable part.
+        //
+        // IMPORTANT: This is *not* truncated_hash(plaintext). Using plaintext
+        // here causes interop failures with Python clients (eg. MeshChat),
+        // because they match responses by packet-truncated-hash request IDs.
+        let request_id = {
+            let mut id = [0u8; 16];
+            id.copy_from_slice(&packet_hash[..16]);
+            id
+        };
 
         // Re-encode the data element for the handler
         let request_data = msgpack::pack(&arr[2]);
