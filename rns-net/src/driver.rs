@@ -6395,19 +6395,55 @@ impl Driver {
         proof_data: &[u8],
         _raw_packet_hash: &[u8; 32],
     ) {
-        // Explicit proof format: [packet_hash:32][signature:64] = 96 bytes
-        if proof_data.len() < 96 {
-            log::debug!(
-                "Proof too short for explicit proof: {} bytes",
-                proof_data.len()
-            );
+        // Reticulum supports both proof formats:
+        // - explicit: [packet_hash:32][signature:64]
+        // - implicit: [signature:64], keyed by proof destination hash
+        let (tracked_hash, signature): ([u8; 32], &[u8]) = if proof_data.len() >= 96 {
+            let mut tracked_hash = [0u8; 32];
+            tracked_hash.copy_from_slice(&proof_data[..32]);
+            (tracked_hash, &proof_data[32..96])
+        } else if proof_data.len() == 64 {
+            let mut candidates = self
+                .sent_packets
+                .iter()
+                .filter_map(|(packet_hash, _)| {
+                    if packet_hash[..16] == dest_hash {
+                        Some(*packet_hash)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            if candidates.is_empty() {
+                log::debug!(
+                    "Implicit proof for unknown packet prefix {:02x?} on dest {:02x?}",
+                    &dest_hash[..4],
+                    &dest_hash[..4]
+                );
+                return;
+            }
+
+            // Multiple matches are extremely unlikely (16-byte truncated hash).
+            // Use the newest tracked packet for deterministic behavior.
+            if candidates.len() > 1 {
+                candidates.sort_by(|a, b| {
+                    let ta = self.sent_packets.get(a).map(|(_, t)| *t).unwrap_or_default();
+                    let tb = self.sent_packets.get(b).map(|(_, t)| *t).unwrap_or_default();
+                    tb.partial_cmp(&ta).unwrap_or(core::cmp::Ordering::Equal)
+                });
+                log::debug!(
+                    "Implicit proof matched {} candidates for prefix {:02x?}; using newest",
+                    candidates.len(),
+                    &dest_hash[..4]
+                );
+            }
+
+            (candidates[0], &proof_data[..64])
+        } else {
+            log::debug!("Unsupported proof length: {} bytes", proof_data.len());
             return;
-        }
-
-        let mut tracked_hash = [0u8; 32];
-        tracked_hash.copy_from_slice(&proof_data[..32]);
-
-        let signature = &proof_data[32..96];
+        };
 
         // Look up the tracked sent packet
         if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
@@ -7298,6 +7334,12 @@ impl Driver {
                     // Route through the transport engine's outbound path
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
+                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                                self.sent_packets.insert(
+                                    packet.packet_hash,
+                                    (packet.destination_hash, time::now()),
+                                );
+                            }
                             let transport_actions = self.engine.handle_outbound(
                                 &packet,
                                 dest_type,
@@ -13636,6 +13678,99 @@ mod tests {
 
         // on_proof should NOT have been called
         assert!(proofs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbound_implicit_proof_matches_truncated_destination() {
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let tracked_hash = [0x3Cu8; 32];
+        let sent_time = time::now() - 0.25;
+        driver
+            .sent_packets
+            .insert(tracked_hash, ([0xEE; 16], sent_time));
+
+        let mut proof_dest = [0u8; 16];
+        proof_dest.copy_from_slice(&tracked_hash[..16]);
+        driver
+            .engine
+            .register_destination(proof_dest, constants::DESTINATION_SINGLE);
+
+        // Implicit proof is signature-only (64 bytes)
+        let proof_data = vec![0xAA; 64];
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet =
+            RawPacket::pack(flags, 0, &proof_dest, None, constants::CONTEXT_NONE, &proof_data)
+                .unwrap();
+
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let proof_list = proofs.lock().unwrap();
+        assert_eq!(proof_list.len(), 1);
+        assert_eq!(proof_list[0].0, DestHash([0xEE; 16]));
+        assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
+        assert!(!driver.sent_packets.contains_key(&tracked_hash));
     }
 
     #[test]
