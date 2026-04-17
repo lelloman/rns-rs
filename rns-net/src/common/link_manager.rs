@@ -191,6 +191,18 @@ pub struct LinkManager {
 }
 
 impl LinkManager {
+    fn resource_sdu_for_link(link: &ManagedLink) -> usize {
+        // Python parity: Resource.sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE
+        // when MTU signalling is available on the link.
+        let mtu = link.engine.mtu() as usize;
+        let derived = mtu.saturating_sub(constants::HEADER_MAXSIZE + constants::IFAC_MIN_SIZE);
+        if derived > 0 {
+            derived
+        } else {
+            constants::RESOURCE_SDU
+        }
+    }
+
     /// Create a new empty link manager.
     pub fn new() -> Self {
         LinkManager {
@@ -497,8 +509,8 @@ impl LinkManager {
             });
         }
 
-        // Compatibility fallback #1: some stacks validate LRPROOF only when
-        // proof packets retain hop=0 semantics.
+        // Reticulum interop fallback #1: queue an LRPROOF variant with
+        // hop=0, matching peers that validate LRPROOF with hop=0 semantics.
         if packet.hops != 0 {
             if let Ok(pkt0) = RawPacket::pack(
                 flags,
@@ -521,9 +533,9 @@ impl LinkManager {
             }
         }
 
-        // Compatibility fallback #2: some transport implementations compare
-        // LRPROOF hops against a "remaining hops" value derived differently
-        // from destination-side delivery hops. Queue a +1 hop variant too.
+        // Reticulum interop fallback #2: queue an LRPROOF +1 hop variant for
+        // peers that validate against a remaining-hop value derived
+        // differently from destination-side delivery hops.
         if packet.hops < u8::MAX {
             let hops_plus_one = packet.hops + 1;
             if let Ok(pkt2) = RawPacket::pack(
@@ -768,7 +780,7 @@ impl LinkManager {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
                 plaintext: Vec<u8>,
-                packet_hash: [u8; 32],
+                request_id: [u8; 16],
             },
             Response {
                 link_id: LinkId,
@@ -903,11 +915,12 @@ impl LinkManager {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
                         let link_id = *link.engine.link_id();
+                        let request_id = packet.get_truncated_hash();
                         LinkDataResult::Request {
                             link_id,
                             inbound_actions,
                             plaintext,
-                            packet_hash,
+                            request_id,
                         }
                     }
                     Err(_) => LinkDataResult::Error,
@@ -1089,10 +1102,10 @@ impl LinkManager {
                 link_id,
                 inbound_actions,
                 plaintext,
-                packet_hash,
+                request_id,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_request(&link_id, &plaintext, packet_hash, rng));
+                actions.extend(self.handle_request(&link_id, &plaintext, request_id, rng));
             }
             LinkDataResult::Response {
                 link_id,
@@ -1184,7 +1197,7 @@ impl LinkManager {
         &mut self,
         link_id: &LinkId,
         plaintext: &[u8],
-        packet_hash: [u8; 32],
+        request_id: [u8; 16],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
@@ -1201,18 +1214,6 @@ impl LinkManager {
         };
         let mut path_hash = [0u8; 16];
         path_hash.copy_from_slice(path_hash_bytes);
-
-        // Python-compatible request_id: Packet.getTruncatedHash(), i.e.
-        // first 16 bytes of the full packet hash computed from hashable part.
-        //
-        // IMPORTANT: This is *not* truncated_hash(plaintext). Using plaintext
-        // here causes interop failures with Python clients (eg. MeshChat),
-        // because they match responses by packet-truncated-hash request IDs.
-        let request_id = {
-            let mut id = [0u8; 16];
-            id.copy_from_slice(&packet_hash[..16]);
-            id
-        };
 
         // Re-encode the data element for the handler
         let request_data = msgpack::pack(&arr[2]);
@@ -1270,7 +1271,17 @@ impl LinkManager {
 
         let mut actions = Vec::new();
         if let Some(response_data) = response {
-            actions.extend(self.build_response_packet(link_id, &request_id, &response_data, rng));
+            let mut response_actions =
+                self.build_response_packet(link_id, &request_id, &response_data, rng);
+            if response_actions.is_empty() {
+                response_actions.extend(self.send_response_resource(
+                    link_id,
+                    &request_id,
+                    &response_data,
+                    rng,
+                ));
+            }
+            actions.extend(response_actions);
         }
 
         actions
@@ -1321,6 +1332,75 @@ impl LinkManager {
             }
         }
         actions
+    }
+
+    fn send_response_resource(
+        &mut self,
+        link_id: &LinkId,
+        request_id: &[u8; 16],
+        response_data: &[u8],
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        use rns_core::msgpack::{self, Value};
+
+        let link = match self.links.get_mut(link_id) {
+            Some(l) => l,
+            None => return Vec::new(),
+        };
+
+        if link.engine.state() != LinkState::Active {
+            return Vec::new();
+        }
+
+        let link_rtt = link.engine.rtt().unwrap_or(1.0);
+        let resource_sdu = Self::resource_sdu_for_link(link);
+        let now = time::now();
+
+        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
+        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
+            link.engine
+                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
+                .unwrap_or_else(|_| plaintext.to_vec())
+        };
+
+        // Match Python resource response format from Link.handle_request:
+        // packed_response = msgpack([request_id, response_value])
+        // where response_value is decoded msgpack value, or Bin(raw bytes).
+        let response_value = msgpack::unpack_exact(response_data)
+            .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
+        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
+        let resource_payload = msgpack::pack(&response_array);
+
+        let sender = match ResourceSender::new(
+            &resource_payload,
+            None,
+            resource_sdu,
+            &encrypt_fn,
+            &Bzip2Compressor,
+            rng,
+            now,
+            true, // auto_compress
+            true, // is_response
+            Some(request_id.to_vec()),
+            1,    // segment_index
+            1,    // total_segments
+            None, // original_hash
+            link_rtt,
+            6.0, // traffic_timeout_factor
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                log::debug!("Failed to create response ResourceSender: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut sender = sender;
+        let adv_actions = sender.advertise(now);
+        link.outgoing_resources.push(sender);
+
+        let _ = link;
+        self.process_resource_actions(link_id, adv_actions, rng)
     }
 
     /// Send a management response on a link.
@@ -1571,11 +1651,12 @@ impl LinkManager {
         };
 
         let link_rtt = link.engine.rtt().unwrap_or(1.0);
+        let resource_sdu = Self::resource_sdu_for_link(link);
         let now = time::now();
 
         let receiver = match ResourceReceiver::from_advertisement(
             adv_plaintext,
-            constants::RESOURCE_SDU,
+            resource_sdu,
             link_rtt,
             now,
             None,
@@ -1963,7 +2044,13 @@ impl LinkManager {
             packet_type: constants::PACKET_TYPE_DATA,
         };
         let mut actions = Vec::new();
-        if let Ok(pkt) = RawPacket::pack(flags, 0, link_id, None, context, data) {
+        let max_mtu = self
+            .links
+            .get(link_id)
+            .map(|l| l.engine.mtu() as usize)
+            .unwrap_or(constants::MTU);
+        if let Ok(pkt) = RawPacket::pack_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+        {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1991,6 +2078,7 @@ impl LinkManager {
         }
 
         let link_rtt = link.engine.rtt().unwrap_or(1.0);
+        let resource_sdu = Self::resource_sdu_for_link(link);
         let now = time::now();
 
         // Use RefCell for interior mutability since ResourceSender::new expects &dyn Fn (not FnMut)
@@ -2005,7 +2093,7 @@ impl LinkManager {
         let sender = match ResourceSender::new(
             data,
             metadata,
-            constants::RESOURCE_SDU,
+            resource_sdu,
             &encrypt_fn,
             &Bzip2Compressor,
             rng,

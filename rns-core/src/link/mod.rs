@@ -505,6 +505,10 @@ impl LinkEngine {
         self.mdu
     }
 
+    pub fn mtu(&self) -> u32 {
+        self.mtu
+    }
+
     pub fn is_initiator(&self) -> bool {
         self.is_initiator
     }

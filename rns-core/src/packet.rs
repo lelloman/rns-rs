@@ -93,6 +93,27 @@ impl RawPacket {
         context: u8,
         data: &[u8],
     ) -> Result<Self, PacketError> {
+        Self::pack_with_max_mtu(
+            flags,
+            hops,
+            destination_hash,
+            transport_id,
+            context,
+            data,
+            constants::MTU,
+        )
+    }
+
+    /// Pack fields into raw bytes with a caller-provided MTU limit.
+    pub fn pack_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+        max_mtu: usize,
+    ) -> Result<Self, PacketError> {
         if flags.header_type == constants::HEADER_2 && transport_id.is_none() {
             return Err(PacketError::MissingTransportId);
         }
@@ -109,7 +130,7 @@ impl RawPacket {
         raw.push(context);
         raw.extend_from_slice(data);
 
-        if raw.len() > constants::MTU {
+        if raw.len() > max_mtu {
             return Err(PacketError::ExceedsMtu);
         }
 
