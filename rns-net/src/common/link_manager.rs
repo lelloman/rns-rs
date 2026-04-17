@@ -3798,6 +3798,58 @@ mod tests {
     }
 
     #[test]
+    fn test_large_response_uses_resource_fallback() {
+        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        // Register handler on responder with payload that cannot fit a direct
+        // CONTEXT_RESPONSE packet.
+        let large_payload: Vec<u8> = (0..5000u32).map(|i| (i & 0xFF) as u8).collect();
+        resp_mgr.register_request_handler("/large", None, {
+            let large_payload = large_payload.clone();
+            move |_link_id, _path, _data, _remote| Some(large_payload.clone())
+        });
+
+        // Send request from initiator.
+        let req_actions = init_mgr.send_request(&link_id, "/large", b"\xc0", &mut rng);
+        assert!(!req_actions.is_empty());
+
+        // Deliver request to responder and inspect responder outbound packets.
+        let req_raw = extract_any_send_packet(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let mut has_resource_adv = false;
+        let mut has_direct_response = false;
+        for action in &resp_actions {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(raw).unwrap();
+                if pkt.context == constants::CONTEXT_RESOURCE_ADV {
+                    has_resource_adv = true;
+                }
+                if pkt.context == constants::CONTEXT_RESPONSE {
+                    has_direct_response = true;
+                }
+            }
+        }
+
+        assert!(
+            has_resource_adv,
+            "Large response should advertise a response resource"
+        );
+        assert!(
+            !has_direct_response,
+            "Large response should not use direct CONTEXT_RESPONSE packet"
+        );
+    }
+
+    #[test]
     fn test_send_channel_message_on_no_channel() {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
