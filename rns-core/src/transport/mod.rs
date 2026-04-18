@@ -979,6 +979,9 @@ impl TransportEngine {
         if self.has_path(&packet.destination_hash) {
             return false;
         }
+        if self.discovery_path_requests.contains_key(&packet.destination_hash) {
+            return false;
+        }
         let Some(info) = self.interfaces.get(&iface) else {
             return false;
         };
