@@ -979,7 +979,10 @@ impl TransportEngine {
         if self.has_path(&packet.destination_hash) {
             return false;
         }
-        if self.discovery_path_requests.contains_key(&packet.destination_hash) {
+        if self
+            .discovery_path_requests
+            .contains_key(&packet.destination_hash)
+        {
             return false;
         }
         let Some(info) = self.interfaces.get(&iface) else {
@@ -2321,6 +2324,13 @@ mod tests {
         unique_tag
     }
 
+    fn make_random_blob(timebase: u64) -> [u8; 10] {
+        let mut blob = [0u8; 10];
+        let bytes = timebase.to_be_bytes();
+        blob[5..10].copy_from_slice(&bytes[3..8]);
+        blob
+    }
+
     #[test]
     fn test_empty_engine() {
         let engine = TransportEngine::new(make_config(false));
@@ -3597,6 +3607,61 @@ mod tests {
     }
 
     #[test]
+    fn test_tunnel_reattach_does_not_overwrite_newer_path() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+
+        let tunnel_id = [0xCD; 32];
+        let dest = [0xDE; 16];
+        let older_blob = make_random_blob(100);
+        let newer_blob = make_random_blob(200);
+
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        engine.tunnel_table.store_tunnel_path(
+            &tunnel_id,
+            dest,
+            tunnel::TunnelPath {
+                timestamp: 1000.0,
+                received_from: [0xEE; 16],
+                hops: 2,
+                expires: 1000.0 + constants::DESTINATION_TIMEOUT,
+                random_blobs: vec![older_blob],
+                packet_hash: [0x11; 32],
+            },
+            1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
+        );
+        engine.void_tunnel_interface(&tunnel_id);
+
+        engine.path_table.insert(
+            dest,
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 1500.0,
+                    next_hop: [0xAB; 16],
+                    hops: 3,
+                    expires: 1500.0 + constants::DESTINATION_TIMEOUT,
+                    random_blobs: vec![newer_blob],
+                    receiving_interface: InterfaceId(3),
+                    packet_hash: [0x22; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
+        );
+
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        engine.handle_tunnel(tunnel_id, InterfaceId(2), 2000.0);
+
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        assert_eq!(path.next_hop, [0xAB; 16]);
+        assert_eq!(path.hops, 3);
+        assert_eq!(path.receiving_interface, InterfaceId(3));
+        assert_eq!(path.random_blobs, vec![newer_blob]);
+    }
+
+    #[test]
     fn test_void_tunnel_interface() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_tunnel_interface(1));
@@ -3991,6 +4056,59 @@ mod tests {
         // Should be gone now
         assert!(!engine.discovery_path_requests.contains_key(&dest));
         assert_eq!(engine.discovery_path_requests_waiting(&dest), None);
+    }
+
+    #[test]
+    fn test_pending_path_request_announce_bypasses_ingress_control() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut inbound = make_interface(1, constants::MODE_FULL);
+        inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+        inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+        inbound.started = 0.0;
+        engine.register_interface(inbound);
+        engine.register_interface(make_interface(2, constants::MODE_ACCESS_POINT));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let dest_hash = crate::destination::destination_hash(
+            "ingress",
+            &["path-request"],
+            Some(identity.hash()),
+        );
+        let name_hash = crate::destination::name_hash("ingress", &["path-request"]);
+        let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
+
+        engine.discovery_path_requests.insert(
+            dest_hash,
+            DiscoveryPathRequest {
+                timestamp: 999.0,
+                requesting_interface: InterfaceId(2),
+            },
+        );
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+        let actions = engine.handle_inbound(&announce_raw, InterfaceId(1), 1000.0, &mut rng);
+
+        assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+        assert!(engine.has_path(&dest_hash));
+        assert!(!engine.discovery_path_requests.contains_key(&dest_hash));
+        assert!(actions.iter().any(|a| {
+            matches!(
+                a,
+                TransportAction::AnnounceReceived {
+                    destination_hash,
+                    receiving_interface: InterfaceId(1),
+                    ..
+                } if *destination_hash == dest_hash
+            )
+        }));
+
+        let entry = engine
+            .announce_table
+            .get(&dest_hash)
+            .expect("path response announce should be queued");
+        assert!(entry.block_rebroadcasts);
+        assert_eq!(entry.attached_interface, Some(InterfaceId(2)));
     }
 
     // =========================================================================

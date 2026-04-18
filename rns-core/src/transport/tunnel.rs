@@ -588,9 +588,30 @@ mod tests {
         assert_eq!(table.len(), 1);
 
         // Expired
-        let removed = table.cull(now + constants::DESTINATION_TIMEOUT + 1.0);
+        let removed = table.cull(now + constants::TUNNEL_TIMEOUT + 1.0);
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0], tunnel_id);
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn test_tunnel_table_uses_tunnel_timeout_not_destination_timeout() {
+        let mut table = TunnelTable::new();
+        let tunnel_id = [0x45; 32];
+        let now = 1000.0;
+
+        table.handle_tunnel(
+            tunnel_id,
+            InterfaceId(1),
+            now,
+            constants::DESTINATION_TIMEOUT,
+        );
+
+        assert!(constants::TUNNEL_TIMEOUT < constants::DESTINATION_TIMEOUT);
+        assert!(table.cull(now + constants::TUNNEL_TIMEOUT - 1.0).is_empty());
+
+        let removed = table.cull(now + constants::TUNNEL_TIMEOUT + 1.0);
+        assert_eq!(removed, vec![tunnel_id]);
         assert!(table.is_empty());
     }
 

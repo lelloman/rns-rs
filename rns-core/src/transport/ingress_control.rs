@@ -389,6 +389,51 @@ mod tests {
     }
 
     #[test]
+    fn test_process_held_announces_deactivates_burst_after_penalty() {
+        let mut ic = IngressControl::new();
+        let started = 0.0;
+        let now = 10000.0;
+
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            36.0,
+            started,
+            now
+        ));
+
+        ic.hold_announce(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 3,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
+
+        let released = ic.process_held_announces(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now + constants::IC_BURST_PENALTY + 1.0,
+        );
+        assert!(released.is_some());
+        assert_eq!(released.unwrap().hops, 3);
+
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            1.0,
+            started,
+            now + constants::IC_BURST_HOLD + 1.0
+        ));
+    }
+
+    #[test]
     fn test_released_lowest_hops_first() {
         let mut ic = IngressControl::new();
         let started = 0.0;
