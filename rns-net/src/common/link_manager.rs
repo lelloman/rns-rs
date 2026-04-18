@@ -3595,6 +3595,225 @@ mod tests {
     }
 
     #[test]
+    fn regression_large_response_uses_resource_fallback() {
+        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let large_payload: Vec<u8> = (0..5000u32).map(|i| (i & 0xFF) as u8).collect();
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(large_payload));
+        resp_mgr.register_request_handler("/large", None, {
+            let response_value = response_value.clone();
+            move |_link_id, _path, _data, _remote| Some(response_value.clone())
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/large", b"\xc0", &mut rng);
+        assert!(!req_actions.is_empty());
+
+        let req_raw = extract_any_send_packet(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let mut has_resource_adv = false;
+        let mut has_direct_response = false;
+        for action in &resp_actions {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(raw).unwrap();
+                has_resource_adv |= pkt.context == constants::CONTEXT_RESOURCE_ADV;
+                has_direct_response |= pkt.context == constants::CONTEXT_RESPONSE;
+            }
+        }
+
+        assert!(
+            has_resource_adv,
+            "large responses should advertise a response resource"
+        );
+        assert!(
+            !has_direct_response,
+            "large responses should not use a direct CONTEXT_RESPONSE packet"
+        );
+    }
+
+    #[test]
+    fn test_large_response_resource_completes_as_response() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let large_payload: Vec<u8> = (0..5000u32).map(|i| (i & 0xFF) as u8).collect();
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(large_payload));
+        resp_mgr.register_request_handler("/large", None, {
+            let response_value = response_value.clone();
+            move |_link_id, _path, _data, _remote| Some(response_value.clone())
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/large", b"\xc0", &mut rng);
+        let req_raw = extract_any_send_packet(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let request_id = req_pkt.get_truncated_hash();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            resp_actions.into_iter().map(|a| ('r', a)).collect();
+        let mut rounds = 0;
+        let mut received_response = None;
+
+        while !pending.is_empty() && rounds < 200 {
+            rounds += 1;
+            let mut next = Vec::new();
+
+            for (source, action) in pending.drain(..) {
+                let LinkManagerAction::SendPacket { raw, .. } = action else {
+                    continue;
+                };
+                let pkt = RawPacket::unpack(&raw).unwrap();
+                let target_actions = if source == 'r' {
+                    init_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                } else {
+                    resp_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                };
+
+                let target_source = if source == 'r' { 'i' } else { 'r' };
+                for target_action in &target_actions {
+                    match target_action {
+                        LinkManagerAction::ResponseReceived {
+                            request_id: rid,
+                            data,
+                            ..
+                        } => {
+                            received_response = Some((*rid, data.clone()));
+                        }
+                        LinkManagerAction::ResourceReceived { .. } => {
+                            panic!("response resources must complete as ResponseReceived")
+                        }
+                        LinkManagerAction::ResourceAcceptQuery { .. } => {
+                            panic!("response resources must bypass application acceptance")
+                        }
+                        _ => {}
+                    }
+                }
+                next.extend(target_actions.into_iter().map(|a| (target_source, a)));
+            }
+
+            pending = next;
+        }
+
+        let (received_request_id, received_data) = received_response.unwrap_or_else(|| {
+            panic!(
+                "large response resource did not complete as ResponseReceived after {} rounds",
+                rounds
+            )
+        });
+        assert_eq!(received_request_id, request_id);
+        assert_eq!(received_data, response_value);
+    }
+
+    #[test]
+    fn test_negotiated_mtu_response_uses_resource_before_global_mtu() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        init_mgr.set_link_mtu(&link_id, 300);
+        resp_mgr.set_link_mtu(&link_id, 300);
+
+        let payload = vec![0xAB; 350];
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+        resp_mgr.register_request_handler("/mtu", None, {
+            let response_value = response_value.clone();
+            move |_link_id, _path, _data, _remote| Some(response_value.clone())
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/mtu", b"\xc0", &mut rng);
+        let req_raw = extract_any_send_packet(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let mut has_resource_adv = false;
+        let mut direct_response_len = None;
+        for action in &resp_actions {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(raw).unwrap();
+                has_resource_adv |= pkt.context == constants::CONTEXT_RESOURCE_ADV;
+                if pkt.context == constants::CONTEXT_RESPONSE {
+                    direct_response_len = Some(raw.len());
+                }
+            }
+        }
+
+        assert!(
+            has_resource_adv,
+            "responses larger than the negotiated link MTU should use resource fallback"
+        );
+        assert!(
+            direct_response_len.is_none(),
+            "sent direct response of {} bytes on a 300 byte negotiated MTU",
+            direct_response_len.unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn test_large_management_response_uses_resource_fallback() {
+        let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let payload = vec![0xBC; 5000];
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+        let actions = (&mut resp_mgr).send_management_response(
+            &link_id,
+            &[0x55; 16],
+            &response_value,
+            &mut rng,
+        );
+
+        let mut has_resource_adv = false;
+        let mut has_direct_response = false;
+        for action in &actions {
+            if let LinkManagerAction::SendPacket { raw, .. } = action {
+                let pkt = RawPacket::unpack(raw).unwrap();
+                has_resource_adv |= pkt.context == constants::CONTEXT_RESOURCE_ADV;
+                has_direct_response |= pkt.context == constants::CONTEXT_RESPONSE;
+            }
+        }
+
+        assert!(
+            has_resource_adv,
+            "large management responses should advertise a response resource"
+        );
+        assert!(
+            !has_direct_response,
+            "large management responses should not use a direct CONTEXT_RESPONSE packet"
+        );
+    }
+
+    #[test]
     fn test_send_channel_message_on_no_channel() {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;

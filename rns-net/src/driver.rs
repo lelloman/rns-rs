@@ -13587,6 +13587,143 @@ mod tests {
     }
 
     #[test]
+    fn regression_inbound_implicit_proof_matches_truncated_destination() {
+        let (tx, rx) = event::channel();
+        let proofs = Arc::new(Mutex::new(Vec::new()));
+        let cbs = MockCallbacks {
+            announces: Arc::new(Mutex::new(Vec::new())),
+            paths: Arc::new(Mutex::new(Vec::new())),
+            deliveries: Arc::new(Mutex::new(Vec::new())),
+            iface_ups: Arc::new(Mutex::new(Vec::new())),
+            iface_downs: Arc::new(Mutex::new(Vec::new())),
+            link_established: Arc::new(Mutex::new(Vec::new())),
+            link_closed: Arc::new(Mutex::new(Vec::new())),
+            remote_identified: Arc::new(Mutex::new(Vec::new())),
+            resources_received: Arc::new(Mutex::new(Vec::new())),
+            resource_completed: Arc::new(Mutex::new(Vec::new())),
+            resource_failed: Arc::new(Mutex::new(Vec::new())),
+            channel_messages: Arc::new(Mutex::new(Vec::new())),
+            link_data: Arc::new(Mutex::new(Vec::new())),
+            responses: Arc::new(Mutex::new(Vec::new())),
+            proofs: proofs.clone(),
+            proof_requested: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.engine.register_interface(info);
+        let (writer, _sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let tracked_hash = [0x3Cu8; 32];
+        let sent_time = time::now() - 0.25;
+        driver
+            .sent_packets
+            .insert(tracked_hash, ([0xEE; 16], sent_time));
+
+        let mut proof_dest = [0u8; 16];
+        proof_dest.copy_from_slice(&tracked_hash[..16]);
+        driver
+            .engine
+            .register_destination(proof_dest, constants::DESTINATION_SINGLE);
+
+        let proof_data = vec![0xAA; 64];
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &proof_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &proof_data,
+        )
+        .unwrap();
+
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let proof_list = proofs.lock().unwrap();
+        assert_eq!(proof_list.len(), 1);
+        assert_eq!(proof_list[0].0, DestHash([0xEE; 16]));
+        assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
+        assert!(!driver.sent_packets.contains_key(&tracked_hash));
+    }
+
+    #[test]
+    fn link_manager_data_send_is_tracked_for_proofs() {
+        let mut driver = new_test_driver();
+        let (writer, _sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &[0x77; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"track me",
+        )
+        .unwrap();
+        let packet_hash = packet.packet_hash;
+        let destination_hash = packet.destination_hash;
+
+        driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
+            raw: packet.raw,
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: Some(InterfaceId(1)),
+        }]);
+
+        assert_eq!(
+            driver.sent_packets.get(&packet_hash).map(|(dest, _)| *dest),
+            Some(destination_hash)
+        );
+    }
+
+    #[test]
     fn inbound_proof_with_valid_signature_fires_callback() {
         // When the destination IS in known_destinations, the proof signature is verified
         let (tx, rx) = event::channel();
