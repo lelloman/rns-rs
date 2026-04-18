@@ -35,7 +35,8 @@ use self::inbound::{
 use self::ingress_control::IngressControl;
 use self::outbound::{route_outbound, should_transmit_announce};
 use self::pathfinder::{
-    decide_announce_multipath, extract_random_blob, timebase_from_random_blob, MultiPathDecision,
+    decide_announce_multipath, extract_random_blob, timebase_from_random_blob,
+    timebase_from_random_blobs, MultiPathDecision,
 };
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
@@ -483,10 +484,17 @@ impl TransportEngine {
         for (dest_hash, tunnel_path) in &restored_paths {
             let should_restore = match self.path_table.get(dest_hash).and_then(|ps| ps.primary()) {
                 Some(existing) => {
-                    // Restore if fewer hops or existing expired
-                    tunnel_path.hops <= existing.hops || existing.expires < now
+                    // Restore if fewer/equal hops or existing expired, but never
+                    // overwrite a path learned from a more recent announce.
+                    if tunnel_path.hops <= existing.hops || existing.expires < now {
+                        let existing_timebase = timebase_from_random_blobs(&existing.random_blobs);
+                        let tunnel_timebase = timebase_from_random_blobs(&tunnel_path.random_blobs);
+                        tunnel_timebase >= existing_timebase
+                    } else {
+                        false
+                    }
                 }
-                None => true,
+                None => now < tunnel_path.expires,
             };
 
             if should_restore {

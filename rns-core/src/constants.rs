@@ -199,6 +199,12 @@ pub const REVERSE_TIMEOUT: f64 = 480.0;
 /// Destination table entry timeout (7 days)
 pub const DESTINATION_TIMEOUT: f64 = 604800.0;
 
+/// Tunnel table entry timeout (8 hours)
+pub const TUNNEL_TIMEOUT: f64 = 28800.0;
+
+/// Tunnel path retention timeout (8 hours)
+pub const TUNNEL_PATH_TIMEOUT: f64 = 28800.0;
+
 /// Link stale time = 2 * KEEPALIVE(360) = 720 seconds
 pub const LINK_STALE_TIME: f64 = 720.0;
 

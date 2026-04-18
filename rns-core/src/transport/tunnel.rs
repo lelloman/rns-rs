@@ -184,9 +184,9 @@ impl TunnelTable {
         tunnel_id: [u8; 32],
         interface: InterfaceId,
         now: f64,
-        destination_timeout_secs: f64,
+        _destination_timeout_secs: f64,
     ) -> Vec<([u8; 16], TunnelPath)> {
-        let expires = now + destination_timeout_secs;
+        let expires = now + constants::TUNNEL_TIMEOUT;
 
         if let Some(entry) = self.tunnels.get_mut(&tunnel_id) {
             // Reattach: update interface and expiry
@@ -228,7 +228,7 @@ impl TunnelTable {
         destination_hash: [u8; 16],
         path: TunnelPath,
         now: f64,
-        destination_timeout_secs: f64,
+        _destination_timeout_secs: f64,
         max_destinations_total: usize,
     ) {
         self.cull(now);
@@ -242,7 +242,7 @@ impl TunnelTable {
         if let Some(entry) = self.tunnels.get_mut(tunnel_id) {
             entry.paths.insert(destination_hash, path);
             // Extend tunnel expiry on activity
-            entry.expires = now + destination_timeout_secs;
+            entry.expires = now + constants::TUNNEL_TIMEOUT;
         }
     }
 
@@ -250,16 +250,20 @@ impl TunnelTable {
     ///
     /// Returns tunnel IDs that were removed.
     pub fn cull(&mut self, now: f64) -> Vec<[u8; 32]> {
+        let excessive_expiry_cutoff = now + constants::TUNNEL_TIMEOUT * 2.0;
+
         // Cull expired paths within each tunnel
         for entry in self.tunnels.values_mut() {
-            entry.paths.retain(|_, path| path.expires > now);
+            entry
+                .paths
+                .retain(|_, path| now <= path.timestamp + constants::TUNNEL_PATH_TIMEOUT);
         }
 
         // Cull expired tunnels
         let expired: Vec<[u8; 32]> = self
             .tunnels
             .iter()
-            .filter(|(_, entry)| entry.expires < now)
+            .filter(|(_, entry)| entry.expires < now || entry.expires > excessive_expiry_cutoff)
             .map(|(id, _)| *id)
             .collect();
 
@@ -475,7 +479,7 @@ mod tests {
 
         let entry = table.get(&tunnel_id).unwrap();
         assert_eq!(entry.interface, Some(InterfaceId(1)));
-        assert_eq!(entry.expires, now + constants::DESTINATION_TIMEOUT);
+        assert_eq!(entry.expires, now + constants::TUNNEL_TIMEOUT);
         assert!(entry.paths.is_empty());
     }
 
@@ -610,7 +614,7 @@ mod tests {
             &tunnel_id,
             dest1,
             TunnelPath {
-                timestamp: now,
+                timestamp: now - constants::TUNNEL_PATH_TIMEOUT - 1.0,
                 received_from: [0; 16],
                 hops: 1,
                 expires: now + 100.0, // expires soon
