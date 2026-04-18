@@ -2518,6 +2518,71 @@ mod tests {
     }
 
     #[test]
+    fn test_lrproof_routes_from_originating_side_via_link_table() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let link_id = [0x44; 16];
+        engine.register_link(
+            link_id,
+            LinkEntry {
+                timestamp: 100.0,
+                next_hop_transport_id: [0xAA; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 3,
+                received_interface: InterfaceId(1),
+                taken_hops: 1,
+                destination_hash: [0xBB; 16],
+                validated: false,
+                proof_timeout: 200.0,
+            },
+        );
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_LRPROOF,
+            &[0xCC; 64],
+        )
+        .unwrap();
+        let mut rng = rns_crypto::FixedRng::new(&[0x33; 32]);
+
+        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 101.0, &mut rng);
+
+        assert!(matches!(
+            engine
+                .link_table_ref()
+                .get(&link_id)
+                .map(|entry| entry.validated),
+            Some(true)
+        ));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::LinkEstablished {
+                link_id: established,
+                interface: InterfaceId(2),
+            } if *established == link_id
+        )));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::SendOnInterface {
+                interface: InterfaceId(2),
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn test_packet_filter_drops_plain_announce() {
         let engine = TransportEngine::new(make_config(false));
         let flags = PacketFlags {

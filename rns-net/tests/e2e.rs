@@ -2667,6 +2667,57 @@ fn test_multiple_requests_same_link() {
     transport.shutdown();
 }
 
+#[test]
+fn test_request_response_large_payload_over_resource() {
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
+
+    // Force resource transfer with payload well above link MDU
+    let large: Vec<u8> = (0..16_811u32).map(|i| (i & 0xFF) as u8).collect();
+    bob_node
+        .register_request_handler("/large", None, {
+            let large = large.clone();
+            move |_link_id, _path, _data, _identity| Some(large.clone())
+        })
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    alice_node.send_request(link_id, "/large", b"x").unwrap();
+
+    let (resp_lid, _req_id, resp_data) =
+        wait_for_response(&alice_rx, Duration::from_secs(30))
+            .expect("Alice did not receive large response over resource transfer");
+    assert_eq!(resp_lid, link_id);
+
+    let resp_value = rns_core::msgpack::unpack_exact(&resp_data).unwrap();
+    let resp_bytes = match resp_value {
+        rns_core::msgpack::Value::Bin(b) => b,
+        _ => panic!("Expected msgpack Bin, got {:?}", resp_value),
+    };
+    assert_eq!(resp_bytes.len(), 16_811);
+    for i in 0..16_811u32 {
+        assert_eq!(resp_bytes[i as usize], (i & 0xFF) as u8);
+    }
+
+    alice_node.teardown_link(link_id).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 10. Resource Transfer
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -13774,6 +13774,48 @@ mod tests {
     }
 
     #[test]
+    fn link_manager_data_send_is_tracked_for_proofs() {
+        let mut driver = new_test_driver();
+        let (writer, _sent) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &[0x77; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"track me",
+        )
+        .unwrap();
+        let packet_hash = packet.packet_hash;
+        let destination_hash = packet.destination_hash;
+
+        driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
+            raw: packet.raw,
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: Some(InterfaceId(1)),
+        }]);
+
+        assert_eq!(
+            driver
+                .sent_packets
+                .get(&packet_hash)
+                .map(|(dest, _)| *dest),
+            Some(destination_hash)
+        );
+    }
+
+    #[test]
     fn inbound_proof_with_valid_signature_fires_callback() {
         // When the destination IS in known_destinations, the proof signature is verified
         let (tx, rx) = event::channel();
