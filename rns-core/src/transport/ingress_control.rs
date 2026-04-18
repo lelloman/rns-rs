@@ -80,7 +80,6 @@ impl IngressControl {
             // Check if burst can deactivate
             if ia_freq < threshold && now > state.burst_activated + config.burst_hold {
                 state.burst_active = false;
-                state.held_release = now + config.burst_penalty;
                 return false;
             }
             true
@@ -88,6 +87,7 @@ impl IngressControl {
             // Activate burst
             state.burst_active = true;
             state.burst_activated = now;
+            state.held_release = now + config.burst_penalty;
             true
         } else {
             false
@@ -137,11 +137,6 @@ impl IngressControl {
 
         let state = self.states.get_mut(&interface)?;
 
-        // Don't release during active burst
-        if state.burst_active {
-            return None;
-        }
-
         if state.held_announces.is_empty() {
             return None;
         }
@@ -161,6 +156,7 @@ impl IngressControl {
         if ia_freq >= threshold {
             return None;
         }
+        state.burst_active = false;
 
         // Find announce with lowest hops
         let best_key = state
@@ -237,11 +233,11 @@ mod tests {
         let mut ic = IngressControl::new();
         let started = 0.0;
         let now = 10000.0;
-        // Exceed mature threshold (12.0)
+        // Exceed mature threshold (35.0)
         assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
-            13.0,
+            36.0,
             started,
             now
         ));
@@ -267,11 +263,11 @@ mod tests {
         let mut ic = IngressControl::new();
         let started = 9000.0;
         let now = 9500.0; // interface_age = 500s < IC_NEW_TIME (7200s)
-                          // Below mature threshold but above new threshold (3.5)
+                          // Below mature threshold but above new threshold (6.0)
         assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
-            4.0,
+            7.0,
             started,
             now
         ));
@@ -287,7 +283,7 @@ mod tests {
         assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
-            13.0,
+            36.0,
             started,
             now
         ));
@@ -313,7 +309,7 @@ mod tests {
         assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
-            13.0,
+            36.0,
             started,
             now
         ));
@@ -339,7 +335,7 @@ mod tests {
         ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
-            13.0,
+            36.0,
             started,
             now,
         );
@@ -368,7 +364,7 @@ mod tests {
         );
 
         // During penalty period, no release
-        let now3 = now2 + 10.0; // < IC_BURST_PENALTY (300s)
+        let now3 = now + 10.0; // < IC_BURST_PENALTY (15s) from burst activation
         assert!(ic
             .process_held_announces(
                 iface(1),
@@ -380,7 +376,7 @@ mod tests {
             .is_none());
 
         // After penalty period, release
-        let now4 = now2 + constants::IC_BURST_PENALTY + 1.0;
+        let now4 = now + constants::IC_BURST_PENALTY + 1.0;
         let released = ic.process_held_announces(
             iface(1),
             &IngressControlConfig::enabled(),
@@ -635,7 +631,7 @@ mod tests {
         assert!(released.is_some());
 
         // Too soon for second release
-        let too_soon = now + 10.0; // < IC_HELD_RELEASE_INTERVAL (30s)
+        let too_soon = now + 1.0; // < IC_HELD_RELEASE_INTERVAL (2s)
         assert!(ic
             .process_held_announces(
                 iface(1),
