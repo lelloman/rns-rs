@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
-VPS_HOST="${VPS_HOST:-root@vps-eu}"
+VPS_HOST="${VPS_HOST:-vps-eu}"
 VPS_BIN="${VPS_BIN:-/usr/local/bin/rns-bisect}"
 VPS_CONFIG_DIR="${VPS_CONFIG_DIR:-/tmp/rns-bisect-reticulum}"
 VPS_LOG="${VPS_LOG:-/tmp/rns-bisect.out}"

@@ -106,8 +106,8 @@ The VPS experiment now uses two operator targets:
 
 | Target | SSH alias | Role |
 | --- | --- | --- |
-| `vps-eu` | `root@vps-eu` | Existing European VPS, formerly documented and scripted as `vps` |
-| `vps-us` | `root@vps-us` | New US VPS for the doubled experiment |
+| `vps-eu` | `vps-eu` | Existing European VPS, formerly documented and scripted as `vps` |
+| `vps-us` | `vps-us` | New US VPS for the doubled experiment |
 
 Keep both machines configured with the same runtime layout unless a test case
 explicitly calls out a regional difference:
@@ -142,8 +142,8 @@ done
 Daily VPS snapshots should also be captured per host:
 
 ```bash
-scripts/vps_daily_report.py --host root@vps-eu --stdout-summary
-scripts/vps_daily_report.py --host root@vps-us --stdout-summary
+scripts/vps_daily_report.py --host vps-eu --stdout-summary
+scripts/vps_daily_report.py --host vps-us --stdout-summary
 ```
 
 The report database stores the SSH target in the `host` column, so use the

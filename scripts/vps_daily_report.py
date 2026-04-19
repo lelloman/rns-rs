@@ -47,7 +47,7 @@ def run_ssh(host: str, script: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect a VPS daily snapshot into SQLite.")
-    parser.add_argument("--host", default="root@vps-eu", help="SSH target")
+    parser.add_argument("--host", default="vps-eu", help="SSH target")
     parser.add_argument(
         "--db-path",
         default=str(DEFAULT_DB),
