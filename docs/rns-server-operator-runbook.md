@@ -100,6 +100,55 @@ Useful flags:
 - `--dry-run`
   Print the launch plan and exit.
 
+## VPS Experiment Targets
+
+The VPS experiment now uses two operator targets:
+
+| Target | SSH alias | Role |
+| --- | --- | --- |
+| `vps-eu` | `root@vps-eu` | Existing European VPS, formerly documented and scripted as `vps` |
+| `vps-us` | `root@vps-us` | New US VPS for the doubled experiment |
+
+Keep both machines configured with the same runtime layout unless a test case
+explicitly calls out a regional difference:
+
+- config root: `/var/lib/rns-node`
+- embedded control plane: `127.0.0.1:18080`
+- public Reticulum listener: configured by the node `config`
+- installed binary: `/usr/local/bin/rns-server`
+
+Recommended local SSH config:
+
+```sshconfig
+Host vps-eu
+  HostName <eu-address>
+  User root
+
+Host vps-us
+  HostName <us-address>
+  User root
+```
+
+When an operation needs to run against both machines, loop over the target names
+and keep the output labelled:
+
+```bash
+for host in vps-eu vps-us; do
+  echo "== $host =="
+  ssh "root@$host" 'systemctl status rns-server --no-pager'
+done
+```
+
+Daily VPS snapshots should also be captured per host:
+
+```bash
+scripts/vps_daily_report.py --host root@vps-eu --stdout-summary
+scripts/vps_daily_report.py --host root@vps-us --stdout-summary
+```
+
+The report database stores the SSH target in the `host` column, so use the
+stable aliases above instead of raw IP addresses.
+
 ## Control Plane
 
 Key endpoints:
