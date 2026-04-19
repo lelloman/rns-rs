@@ -20,6 +20,15 @@ DEFAULT_CONFIG_DIR = "/var/lib/rns-node"
 DEFAULT_HTTP_PORT = 18080
 MEMSTATS_RE = re.compile(r"MEMSTATS\s+(.*)$")
 KV_RE = re.compile(r"([a-zA-Z0-9_]+)=([^\s]+)")
+MODE_NAMES = {
+    0: "Disabled",
+    1: "Full",
+    2: "Access Point",
+    3: "Point-to-Point",
+    4: "Roaming",
+    5: "Boundary",
+    6: "Gateway",
+}
 
 
 def run(cmd: list[str]) -> str:
@@ -263,6 +272,85 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS interface_snapshots (
+            capture_ts_utc TEXT NOT NULL,
+            interface_id INTEGER NOT NULL,
+            interface_name TEXT NOT NULL,
+            interface_kind TEXT NOT NULL,
+            public_candidate INTEGER NOT NULL,
+            status INTEGER NOT NULL,
+            mode INTEGER NOT NULL,
+            mode_name TEXT NOT NULL,
+            bitrate_bps INTEGER,
+            rxb INTEGER NOT NULL,
+            txb INTEGER NOT NULL,
+            rx_packets INTEGER NOT NULL,
+            tx_packets INTEGER NOT NULL,
+            ia_freq REAL NOT NULL,
+            oa_freq REAL NOT NULL,
+            started_epoch REAL,
+            uptime_seconds REAL,
+            ifac_size INTEGER,
+            PRIMARY KEY (capture_ts_utc, interface_id, interface_name),
+            FOREIGN KEY (capture_ts_utc) REFERENCES daily_checks(capture_ts_utc) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def interface_kind(name: str) -> str:
+    if name == "LocalInterface":
+        return "local"
+    if name.startswith("BackboneInterface/"):
+        return "backbone_discovered"
+    return "configured_public"
+
+
+def parse_interface_snapshots(
+    response: dict[str, object],
+    capture_dt: dt.datetime,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    interfaces = response.get("interfaces", [])
+    if not isinstance(interfaces, list):
+        return rows
+    capture_epoch = capture_dt.timestamp()
+    for iface in interfaces:
+        if not isinstance(iface, dict):
+            continue
+        name = str(iface.get("name") or "Unknown")
+        kind = interface_kind(name)
+        started_epoch = iface.get("started")
+        uptime_seconds = None
+        if isinstance(started_epoch, (int, float)) and started_epoch > 0:
+            uptime_seconds = max(0.0, capture_epoch - float(started_epoch))
+        mode = int(iface.get("mode") or 0)
+        rows.append(
+            {
+                "interface_id": int(iface.get("id") or 0),
+                "interface_name": name,
+                "interface_kind": kind,
+                "public_candidate": int(kind != "local"),
+                "status": int(bool(iface.get("status"))),
+                "mode": mode,
+                "mode_name": MODE_NAMES.get(mode, "Unknown"),
+                "bitrate_bps": iface.get("bitrate"),
+                "rxb": int(iface.get("rxb") or 0),
+                "txb": int(iface.get("txb") or 0),
+                "rx_packets": int(iface.get("rx_packets") or 0),
+                "tx_packets": int(iface.get("tx_packets") or 0),
+                "ia_freq": float(iface.get("ia_freq") or 0.0),
+                "oa_freq": float(iface.get("oa_freq") or 0.0),
+                "started_epoch": float(started_epoch)
+                if isinstance(started_epoch, (int, float))
+                else None,
+                "uptime_seconds": uptime_seconds,
+                "ifac_size": iface.get("ifac_size"),
+            }
+        )
+    return rows
 
 
 def classify(snapshot: dict[str, object]) -> str:
@@ -297,7 +385,12 @@ def collect_snapshot(
     config_dir: str,
     http_port: int,
     report_date_override: str | None,
-) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+) -> tuple[
+    dict[str, object],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
     quoted_config = shlex.quote(config_dir)
     basic_script = f"""
 set -euo pipefail
@@ -326,8 +419,10 @@ if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:{http_port}'; then echo 'LI
 echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {{count++}} END {{print count+0}}')"
 """
     basic = parse_kv(run_ssh(host, basic_script))
-    status = parse_status(
-        run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
+    status_text = run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
+    status = parse_status(status_text)
+    interface_payload = json.loads(
+        run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status -j")
     )
     blacklist = json.loads(
         run_ssh(
@@ -460,8 +555,9 @@ ORDER BY packet_type, direction;
             (row["age_seconds"] for row in packet_rows), default=999999
         ),
     }
+    interface_rows = parse_interface_snapshots(interface_payload, capture_dt)
     snapshot["health_state"] = classify(snapshot)
-    return snapshot, memstats, packet_rows
+    return snapshot, memstats, packet_rows, interface_rows
 
 
 def write_db(
@@ -469,6 +565,7 @@ def write_db(
     snapshot: dict[str, object],
     memstats: list[dict[str, object]],
     packet_rows: list[dict[str, object]],
+    interface_rows: list[dict[str, object]],
 ) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -582,17 +679,51 @@ def write_db(
                 for row in packet_rows
             ],
         )
+        conn.executemany(
+            """
+            INSERT INTO interface_snapshots (
+                capture_ts_utc, interface_id, interface_name, interface_kind,
+                public_candidate, status, mode, mode_name, bitrate_bps, rxb, txb,
+                rx_packets, tx_packets, ia_freq, oa_freq, started_epoch,
+                uptime_seconds, ifac_size
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    capture_ts,
+                    row["interface_id"],
+                    row["interface_name"],
+                    row["interface_kind"],
+                    row["public_candidate"],
+                    row["status"],
+                    row["mode"],
+                    row["mode_name"],
+                    row["bitrate_bps"],
+                    row["rxb"],
+                    row["txb"],
+                    row["rx_packets"],
+                    row["tx_packets"],
+                    row["ia_freq"],
+                    row["oa_freq"],
+                    row["started_epoch"],
+                    row["uptime_seconds"],
+                    row["ifac_size"],
+                )
+                for row in interface_rows
+            ],
+        )
     conn.close()
 
 
 def main() -> int:
     args = parse_args()
-    snapshot, memstats, packet_rows = collect_snapshot(
+    snapshot, memstats, packet_rows, interface_rows = collect_snapshot(
         args.host, args.config_dir, args.http_port, args.date
     )
     db_path = pathlib.Path(args.db_path)
-    write_db(db_path, snapshot, memstats, packet_rows)
+    write_db(db_path, snapshot, memstats, packet_rows, interface_rows)
     if args.stdout_summary:
+        public_interfaces = [row for row in interface_rows if row["public_candidate"]]
         print(
             json.dumps(
                 {
@@ -604,6 +735,16 @@ def main() -> int:
                     "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
                     "primary_peer_name": snapshot["primary_peer_name"],
                     "primary_peer_up": bool(snapshot["primary_peer_up"]),
+                    "interfaces_total": len(interface_rows),
+                    "public_interfaces_total": len(public_interfaces),
+                    "public_interfaces_up": sum(
+                        1 for row in public_interfaces if row["status"]
+                    ),
+                    "discovered_backbone_interfaces": sum(
+                        1
+                        for row in public_interfaces
+                        if row["interface_kind"] == "backbone_discovered"
+                    ),
                 },
                 indent=2,
                 sort_keys=True,
