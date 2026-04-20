@@ -1,6 +1,7 @@
 use crate::args::Args;
 
 /// Configuration for rns-ctl HTTP server.
+#[derive(Clone)]
 pub struct CtlConfig {
     /// Bind host (default: "127.0.0.1").
     pub host: String,

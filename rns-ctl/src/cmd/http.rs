@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use rns_crypto::identity::Identity;
@@ -102,58 +103,37 @@ pub fn prepare_embedded_with_state(
         .unwrap_or_else(|| Arc::new(std::sync::RwLock::new(state::CtlState::new())));
     let ws_broadcast: state::WsBroadcast = Arc::new(Mutex::new(Vec::new()));
 
-    // Create callbacks
-    let callbacks = Box::new(bridge::CtlCallbacks::new(
-        shared_state.clone(),
-        ws_broadcast.clone(),
-    ));
-
-    // Resolve config path
+    // Resolve config path and expose local identity before the shared node client is ready.
     let config_path = cfg.config_path.as_deref().map(Path::new);
+    load_identity_into_state(config_path, &shared_state);
 
-    // Start the RNS node
-    log::info!("Starting RNS node...");
-    let node = if cfg.daemon_mode {
-        log::info!("Connecting as shared client (daemon mode)");
-        rns_net::RnsNode::connect_shared_from_config(config_path, callbacks)
-    } else {
-        rns_net::RnsNode::from_config(config_path, callbacks)
-    };
-
-    let node = match node {
-        Ok(n) => n,
-        Err(e) => {
-            return Err(format!("failed to start node: {}", e));
-        }
-    };
-
-    // Get identity from the config dir
-    let config_dir = rns_net::storage::resolve_config_dir(config_path);
-    let paths = rns_net::storage::ensure_storage_dirs(&config_dir).ok();
-    let identity: Option<Identity> = paths
-        .as_ref()
-        .and_then(|p| rns_net::storage::load_or_create_identity(&p.identities).ok());
-
-    // Store identity info in shared state
-    {
-        let mut s = shared_state.write().unwrap();
-        if let Some(ref id) = identity {
-            s.identity_hash = Some(*id.hash());
-            // Identity doesn't impl Clone; copy via private key
-            if let Some(prv) = id.get_private_key() {
-                s.identity = Some(Identity::from_private_key(&prv));
-            }
-        }
-    }
-
-    // Wrap node for shared access
-    let node_handle: api::NodeHandle = Arc::new(Mutex::new(Some(node)));
+    // Wrap node for shared access. Daemon mode attaches the shared client asynchronously
+    // so the HTTP control plane can bind even while rnsd is still bringing up slow peers.
+    let node_handle: api::NodeHandle = Arc::new(Mutex::new(None));
     let node_for_shutdown = node_handle.clone();
 
     // Store node handle in shared state so callbacks can access it
     {
         let mut s = shared_state.write().unwrap();
         s.node_handle = Some(node_handle.clone());
+    }
+
+    if cfg.daemon_mode {
+        start_shared_node_connector(
+            cfg.clone(),
+            shared_state.clone(),
+            ws_broadcast.clone(),
+            node_handle.clone(),
+        );
+    } else {
+        let callbacks = Box::new(bridge::CtlCallbacks::new(
+            shared_state.clone(),
+            ws_broadcast.clone(),
+        ));
+        log::info!("Starting RNS node...");
+        let node = rns_net::RnsNode::from_config(config_path, callbacks)
+            .map_err(|e| format!("failed to start node: {}", e))?;
+        *node_handle.lock().unwrap() = Some(node);
     }
 
     // Set up ctrl-c handler
@@ -225,6 +205,70 @@ pub fn prepare_embedded_with_state(
     Ok(PreparedHttpServer { addr, ctx })
 }
 
+fn load_identity_into_state(config_path: Option<&Path>, shared_state: &state::SharedState) {
+    let config_dir = rns_net::storage::resolve_config_dir(config_path);
+    let paths = rns_net::storage::ensure_storage_dirs(&config_dir).ok();
+    let identity: Option<Identity> = paths
+        .as_ref()
+        .and_then(|p| rns_net::storage::load_or_create_identity(&p.identities).ok());
+
+    let mut s = shared_state.write().unwrap();
+    if let Some(ref id) = identity {
+        s.identity_hash = Some(*id.hash());
+        // Identity doesn't impl Clone; copy via private key.
+        if let Some(prv) = id.get_private_key() {
+            s.identity = Some(Identity::from_private_key(&prv));
+        }
+    }
+}
+
+fn start_shared_node_connector(
+    cfg: config::CtlConfig,
+    shared_state: state::SharedState,
+    ws_broadcast: state::WsBroadcast,
+    node_handle: api::NodeHandle,
+) {
+    thread::Builder::new()
+        .name("rns-ctl-shared-client".into())
+        .spawn(move || {
+            let mut attempt: u64 = 0;
+            log::info!("Connecting as shared client (daemon mode)");
+            loop {
+                attempt += 1;
+                let callbacks = Box::new(bridge::CtlCallbacks::new(
+                    shared_state.clone(),
+                    ws_broadcast.clone(),
+                ));
+                let config_path = cfg.config_path.as_deref().map(Path::new);
+
+                match rns_net::RnsNode::connect_shared_from_config(config_path, callbacks) {
+                    Ok(node) => {
+                        *node_handle.lock().unwrap() = Some(node);
+                        log::info!("connected embedded HTTP control plane to shared rnsd");
+                        return;
+                    }
+                    Err(err) => {
+                        if attempt == 1 || attempt % 10 == 0 {
+                            log::warn!(
+                                "shared rnsd not ready for embedded HTTP control plane (attempt {}): {}",
+                                attempt,
+                                err
+                            );
+                        } else {
+                            log::debug!(
+                                "shared rnsd not ready for embedded HTTP control plane (attempt {}): {}",
+                                attempt,
+                                err
+                            );
+                        }
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                }
+            }
+        })
+        .ok();
+}
+
 /// Set up a ctrl-c signal handler.
 fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
     let handler = Mutex::new(Some(handler));
@@ -292,4 +336,49 @@ OPTIONS:
     -h, --help              Show this help
         --version           Show version"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Args {
+        Args::parse_from(values.iter().map(|value| value.to_string()).collect())
+    }
+
+    #[test]
+    fn daemon_mode_prepares_http_context_before_shared_rnsd_is_ready() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "rns-ctl-http-daemon-not-ready-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&config_dir);
+
+        let prepared = prepare_embedded_with_state(
+            args(&[
+                "--daemon",
+                "--disable-auth",
+                "--config",
+                config_dir.to_str().unwrap(),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]),
+            HttpRunOptions::embedded(),
+            None,
+        )
+        .expect("daemon-mode HTTP context should not require rnsd RPC readiness");
+
+        assert_eq!(prepared.addr.ip().to_string(), "127.0.0.1");
+        assert_eq!(prepared.addr.port(), 0);
+        assert!(
+            prepared.ctx.node.lock().unwrap().is_none(),
+            "shared node client should attach asynchronously"
+        );
+        assert!(
+            prepared.ctx.state.read().unwrap().node_handle.is_some(),
+            "HTTP APIs should still receive a node handle placeholder"
+        );
+    }
 }
