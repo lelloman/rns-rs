@@ -30,20 +30,18 @@ fn with_active_node<F>(node: &NodeHandle, f: F) -> HttpResponse
 where
     F: FnOnce(&RnsNode) -> HttpResponse,
 {
-    with_node(node, |n| {
-        match n.query(QueryRequest::DrainStatus) {
-            Ok(QueryResponse::DrainStatus(status))
-                if !matches!(status.state, LifecycleState::Active) =>
-            {
-                HttpResponse::conflict(
-                    status
-                        .detail
-                        .as_deref()
-                        .unwrap_or("Node is draining and not accepting new work"),
-                )
-            }
-            _ => f(n),
+    with_node(node, |n| match n.query(QueryRequest::DrainStatus) {
+        Ok(QueryResponse::DrainStatus(status))
+            if !matches!(status.state, LifecycleState::Active) =>
+        {
+            HttpResponse::conflict(
+                status
+                    .detail
+                    .as_deref()
+                    .unwrap_or("Node is draining and not accepting new work"),
+            )
         }
+        _ => f(n),
     })
 }
 
@@ -427,12 +425,32 @@ fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
                     })
                 })
                 .collect();
+            let backbone_peer_pool = stats.backbone_peer_pool.as_ref().map(|pool| {
+                json!({
+                    "max_connected": pool.max_connected,
+                    "active_count": pool.active_count,
+                    "standby_count": pool.standby_count,
+                    "cooldown_count": pool.cooldown_count,
+                    "members": pool.members.iter().map(|member| {
+                        json!({
+                            "name": member.name,
+                            "remote": member.remote,
+                            "state": member.state,
+                            "interface_id": member.interface_id,
+                            "failure_count": member.failure_count,
+                            "last_error": member.last_error,
+                            "cooldown_remaining_seconds": member.cooldown_remaining_seconds,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+            });
             HttpResponse::ok(json!({
                 "interfaces": ifaces,
                 "transport_enabled": stats.transport_enabled,
                 "transport_uptime": stats.transport_uptime,
                 "total_rxb": stats.total_rxb,
                 "total_txb": stats.total_txb,
+                "backbone_peer_pool": backbone_peer_pool,
             }))
         }
         _ => HttpResponse::internal_error("Query failed"),

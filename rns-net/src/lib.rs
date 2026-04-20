@@ -34,13 +34,16 @@ pub mod provider_bridge;
 
 pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
+#[cfg(feature = "iface-backbone")]
+pub use driver::BackbonePeerPoolSettings;
 pub use driver::Callbacks;
 pub use event::{
-    BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo,
-    InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
+    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]

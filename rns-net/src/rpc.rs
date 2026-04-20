@@ -918,6 +918,86 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         ));
     }
 
+    if let Some(pool) = &stats.backbone_peer_pool {
+        let members = pool
+            .members
+            .iter()
+            .map(|member| {
+                let mut member_dict = vec![
+                    (
+                        PickleValue::String("name".into()),
+                        PickleValue::String(member.name.clone()),
+                    ),
+                    (
+                        PickleValue::String("remote".into()),
+                        PickleValue::String(member.remote.clone()),
+                    ),
+                    (
+                        PickleValue::String("state".into()),
+                        PickleValue::String(member.state.clone()),
+                    ),
+                    (
+                        PickleValue::String("failure_count".into()),
+                        PickleValue::Int(member.failure_count as i64),
+                    ),
+                ];
+                member_dict.push((
+                    PickleValue::String("interface_id".into()),
+                    member
+                        .interface_id
+                        .map(|id| PickleValue::Int(id as i64))
+                        .unwrap_or(PickleValue::None),
+                ));
+                member_dict.push((
+                    PickleValue::String("last_error".into()),
+                    member
+                        .last_error
+                        .as_ref()
+                        .map(|err| PickleValue::String(err.clone()))
+                        .unwrap_or(PickleValue::None),
+                ));
+                member_dict.push((
+                    PickleValue::String("cooldown_remaining_seconds".into()),
+                    member
+                        .cooldown_remaining_seconds
+                        .map(PickleValue::Float)
+                        .unwrap_or(PickleValue::None),
+                ));
+                PickleValue::Dict(member_dict)
+            })
+            .collect();
+        dict.push((
+            PickleValue::String("backbone_peer_pool".into()),
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("max_connected".into()),
+                    PickleValue::Int(pool.max_connected as i64),
+                ),
+                (
+                    PickleValue::String("active_count".into()),
+                    PickleValue::Int(pool.active_count as i64),
+                ),
+                (
+                    PickleValue::String("standby_count".into()),
+                    PickleValue::Int(pool.standby_count as i64),
+                ),
+                (
+                    PickleValue::String("cooldown_count".into()),
+                    PickleValue::Int(pool.cooldown_count as i64),
+                ),
+                (
+                    PickleValue::String("members".into()),
+                    PickleValue::List(members),
+                ),
+            ]),
+        ));
+    } else {
+        dict.push((
+            PickleValue::String("backbone_peer_pool".into()),
+            PickleValue::None,
+        ));
+    }
+
     PickleValue::Dict(dict)
 }
 
@@ -1844,9 +1924,11 @@ fn parse_drain_status(value: &PickleValue) -> io::Result<Option<DrainStatus>> {
         .and_then(|entry| entry.as_str())
         .and_then(parse_lifecycle_state)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing drain state"))?;
-    let drain_age_seconds = value
-        .get("drain_age_seconds")
-        .and_then(|entry| entry.as_float().or_else(|| entry.as_int().map(|v| v as f64)));
+    let drain_age_seconds = value.get("drain_age_seconds").and_then(|entry| {
+        entry
+            .as_float()
+            .or_else(|| entry.as_int().map(|v| v as f64))
+    });
     let deadline_remaining_seconds = value.get("deadline_remaining_seconds").and_then(|entry| {
         entry
             .as_float()
@@ -2112,6 +2194,7 @@ mod tests {
                         total_rxb: 1000,
                         total_txb: 2000,
                         probe_responder: None,
+                        backbone_peer_pool: None,
                     }));
                 }
                 _ => break,
@@ -2299,6 +2382,7 @@ mod tests {
             total_rxb: 100,
             total_txb: 200,
             probe_responder: None,
+            backbone_peer_pool: None,
         };
 
         let pickle = interface_stats_to_pickle(&stats);
@@ -2511,12 +2595,14 @@ mod tests {
     fn begin_drain_rpc_emits_event() {
         let (event_tx, event_rx) = crate::event::channel();
 
-        let driver = thread::spawn(move || match event_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Event::BeginDrain { timeout }) => {
-                assert!((timeout.as_secs_f64() - 1.5).abs() < 0.001);
-            }
-            other => panic!("Expected BeginDrain event, got {:?}", other),
-        });
+        let driver = thread::spawn(
+            move || match event_rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::BeginDrain { timeout }) => {
+                    assert!((timeout.as_secs_f64() - 1.5).abs() < 0.001);
+                }
+                other => panic!("Expected BeginDrain event, got {:?}", other),
+            },
+        );
 
         let request = PickleValue::Dict(vec![(
             PickleValue::String("begin_drain".into()),
@@ -2573,10 +2659,7 @@ mod tests {
             Some(3)
         );
         assert_eq!(
-            response
-                .get("provider_backlog_events")
-                .unwrap()
-                .as_int(),
+            response.get("provider_backlog_events").unwrap().as_int(),
             Some(4)
         );
         assert_eq!(
@@ -2604,6 +2687,7 @@ mod tests {
             total_rxb: 0,
             total_txb: 0,
             probe_responder: Some(probe_hash),
+            backbone_peer_pool: None,
         };
 
         let pickle = interface_stats_to_pickle(&stats);

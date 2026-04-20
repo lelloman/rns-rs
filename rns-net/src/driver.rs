@@ -20,11 +20,11 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 #[cfg(feature = "rns-hooks")]
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
-    BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventReceiver,
-    InterfaceStatsResponse, LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo,
+    DrainStatus, Event, EventReceiver, InterfaceStatsResponse, LifecycleState,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -32,14 +32,13 @@ use crate::ifac;
 use crate::interface::auto::AutoRuntime;
 #[cfg(feature = "iface-auto")]
 use crate::interface::auto::AutoRuntimeConfigHandle;
-#[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
-use crate::interface::backbone::{
-    BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime,
-};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
+    start_client, BackboneClientConfig, BackboneClientRuntime, BackboneClientRuntimeConfigHandle,
+    BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
 };
+#[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
+use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
 #[cfg(all(feature = "iface-i2p", test))]
 use crate::interface::i2p::I2pRuntime;
 #[cfg(feature = "iface-i2p")]
@@ -153,6 +152,41 @@ pub(crate) struct IfacRuntimeConfig {
     pub(crate) netname: Option<String>,
     pub(crate) netkey: Option<String>,
     pub(crate) size: usize,
+}
+
+#[cfg(feature = "iface-backbone")]
+#[derive(Debug, Clone)]
+pub struct BackbonePeerPoolSettings {
+    pub max_connected: usize,
+    pub failure_threshold: usize,
+    pub failure_window: Duration,
+    pub cooldown: Duration,
+}
+
+#[cfg(feature = "iface-backbone")]
+pub(crate) struct BackbonePeerPoolCandidateConfig {
+    pub(crate) client: BackboneClientConfig,
+    pub(crate) mode: u8,
+    pub(crate) ingress_control: rns_core::transport::types::IngressControlConfig,
+    pub(crate) ifac_runtime: IfacRuntimeConfig,
+    pub(crate) ifac_enabled: bool,
+    pub(crate) interface_type_name: String,
+}
+
+#[cfg(feature = "iface-backbone")]
+struct BackbonePeerPool {
+    settings: BackbonePeerPoolSettings,
+    candidates: Vec<BackbonePeerPoolCandidate>,
+}
+
+#[cfg(feature = "iface-backbone")]
+struct BackbonePeerPoolCandidate {
+    config: BackbonePeerPoolCandidateConfig,
+    active_id: Option<InterfaceId>,
+    failures: Vec<f64>,
+    retry_after: Option<f64>,
+    cooldown_until: Option<f64>,
+    last_error: Option<String>,
 }
 
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
@@ -473,6 +507,9 @@ pub struct Driver {
     /// Runtime-config state for backbone discovery metadata, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_discovery_runtime: HashMap<String, BackboneDiscoveryRuntimeHandle>,
+    /// Ordered outbound Backbone peer pool, if enabled.
+    #[cfg(feature = "iface-backbone")]
+    backbone_peer_pool: Option<BackbonePeerPool>,
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
@@ -647,6 +684,8 @@ impl Driver {
             backbone_client_runtime: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
             backbone_discovery_runtime: HashMap::new(),
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
@@ -1270,6 +1309,271 @@ impl Driver {
     ) {
         self.backbone_discovery_runtime
             .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn configure_backbone_peer_pool(
+        &mut self,
+        settings: BackbonePeerPoolSettings,
+        candidates: Vec<BackbonePeerPoolCandidateConfig>,
+    ) {
+        if settings.max_connected == 0 || candidates.is_empty() {
+            self.backbone_peer_pool = None;
+            return;
+        }
+        self.backbone_peer_pool = Some(BackbonePeerPool {
+            settings,
+            candidates: candidates
+                .into_iter()
+                .map(|config| BackbonePeerPoolCandidate {
+                    config,
+                    active_id: None,
+                    failures: Vec::new(),
+                    retry_after: None,
+                    cooldown_until: None,
+                    last_error: None,
+                })
+                .collect(),
+        });
+        self.maintain_backbone_peer_pool();
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn maintain_backbone_peer_pool(&mut self) {
+        let Some(pool) = self.backbone_peer_pool.as_mut() else {
+            return;
+        };
+        let now = time::now();
+        for candidate in &mut pool.candidates {
+            if candidate.cooldown_until.is_some_and(|until| until <= now) {
+                candidate.cooldown_until = None;
+                candidate.retry_after = None;
+            }
+        }
+
+        loop {
+            let Some(pool) = self.backbone_peer_pool.as_ref() else {
+                return;
+            };
+            let active = pool
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.active_id.is_some())
+                .count();
+            if active >= pool.settings.max_connected {
+                return;
+            }
+            let next = pool.candidates.iter().position(|candidate| {
+                candidate.active_id.is_none()
+                    && candidate
+                        .cooldown_until
+                        .map(|until| until <= now)
+                        .unwrap_or(true)
+                    && candidate
+                        .retry_after
+                        .map(|retry_after| retry_after <= now)
+                        .unwrap_or(true)
+            });
+            let Some(index) = next else {
+                return;
+            };
+            if let Err(err) = self.start_backbone_peer_pool_candidate(index) {
+                self.record_backbone_peer_pool_failure(index, err.to_string());
+            }
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn start_backbone_peer_pool_candidate(&mut self, index: usize) -> std::io::Result<()> {
+        let Some(pool) = self.backbone_peer_pool.as_ref() else {
+            return Ok(());
+        };
+        let Some(candidate) = pool.candidates.get(index) else {
+            return Ok(());
+        };
+        let mut client = candidate.config.client.clone();
+        client.max_reconnect_tries = Some(0);
+        if let Ok(mut runtime) = client.runtime.lock() {
+            runtime.max_reconnect_tries = Some(0);
+        }
+        let id = client.interface_id;
+        let name = client.name.clone();
+        let mode = candidate.config.mode;
+        let ingress_control = candidate.config.ingress_control;
+        let ifac_runtime = candidate.config.ifac_runtime.clone();
+        let ifac_enabled = candidate.config.ifac_enabled;
+        let interface_type_name = candidate.config.interface_type_name.clone();
+        let writer = start_client(client.clone(), self.event_tx.clone())?;
+        let info = rns_core::transport::types::InterfaceInfo {
+            id,
+            name: name.clone(),
+            mode,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(1_000_000_000),
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: 65535,
+            ingress_control,
+            ia_freq: 0.0,
+            started: time::now(),
+        };
+        let (writer, async_writer_metrics) = self.wrap_interface_writer(id, &name, writer);
+        let ifac_state = if ifac_enabled {
+            Some(ifac::derive_ifac(
+                ifac_runtime.netname.as_deref(),
+                ifac_runtime.netkey.as_deref(),
+                ifac_runtime.size,
+            ))
+        } else {
+            None
+        };
+        self.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+            interface_name: name.clone(),
+            runtime: Arc::clone(&client.runtime),
+            startup: BackboneClientRuntime::from_config(&client),
+        });
+        self.register_interface_runtime_defaults(&info);
+        self.register_interface_ifac_runtime(&name, ifac_runtime);
+        self.engine.register_interface(info.clone());
+        self.interfaces.insert(
+            id,
+            InterfaceEntry {
+                id,
+                info,
+                writer,
+                async_writer_metrics: Some(async_writer_metrics),
+                enabled: true,
+                online: false,
+                dynamic: false,
+                ifac: ifac_state,
+                stats: InterfaceStats {
+                    started: time::now(),
+                    ..Default::default()
+                },
+                interface_type: interface_type_name,
+                send_retry_at: None,
+                send_retry_backoff: Duration::ZERO,
+            },
+        );
+
+        if let Some(pool) = self.backbone_peer_pool.as_mut() {
+            if let Some(candidate) = pool.candidates.get_mut(index) {
+                candidate.active_id = Some(id);
+                candidate.retry_after = None;
+                candidate.last_error = None;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn record_backbone_peer_pool_failure(&mut self, index: usize, error: String) {
+        let Some(pool) = self.backbone_peer_pool.as_mut() else {
+            return;
+        };
+        let Some(candidate) = pool.candidates.get_mut(index) else {
+            return;
+        };
+        let now = time::now();
+        let window = pool.settings.failure_window.as_secs_f64();
+        candidate.failures.retain(|ts| now - *ts <= window);
+        candidate.failures.push(now);
+        candidate.last_error = Some(error);
+        candidate.active_id = None;
+        if candidate.failures.len() >= pool.settings.failure_threshold {
+            candidate.cooldown_until = Some(now + pool.settings.cooldown.as_secs_f64());
+            candidate.retry_after = None;
+        } else {
+            let reconnect_wait = candidate
+                .config
+                .client
+                .runtime
+                .lock()
+                .map(|runtime| runtime.reconnect_wait)
+                .unwrap_or(candidate.config.client.reconnect_wait);
+            candidate.retry_after = Some(now + reconnect_wait.as_secs_f64());
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn handle_backbone_peer_pool_down(&mut self, id: InterfaceId) {
+        let Some(index) = self.backbone_peer_pool.as_ref().and_then(|pool| {
+            pool.candidates
+                .iter()
+                .position(|candidate| candidate.active_id == Some(id))
+        }) else {
+            return;
+        };
+
+        if let Some(entry) = self.interfaces.remove(&id) {
+            let name = entry.info.name;
+            self.interface_runtime_defaults.remove(&name);
+            self.interface_ifac_runtime.remove(&name);
+            self.interface_ifac_runtime_defaults.remove(&name);
+            self.backbone_client_runtime.remove(&name);
+            self.engine.deregister_interface(id);
+        }
+        self.record_backbone_peer_pool_failure(index, "interface down".into());
+        self.maintain_backbone_peer_pool();
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_peer_pool_status(&self) -> Option<BackbonePeerPoolStatus> {
+        let pool = self.backbone_peer_pool.as_ref()?;
+        let now = time::now();
+        let mut active_count = 0usize;
+        let mut standby_count = 0usize;
+        let mut cooldown_count = 0usize;
+        let members = pool
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let (state, cooldown_remaining_seconds) =
+                    if let Some(until) = candidate.cooldown_until {
+                        cooldown_count += 1;
+                        ("cooldown".to_string(), Some((until - now).max(0.0)))
+                    } else if let Some(id) = candidate.active_id {
+                        active_count += 1;
+                        let online = self
+                            .interfaces
+                            .get(&id)
+                            .map(|entry| entry.online)
+                            .unwrap_or(false);
+                        (
+                            if online { "active" } else { "connecting" }.to_string(),
+                            None,
+                        )
+                    } else {
+                        standby_count += 1;
+                        ("standby".to_string(), None)
+                    };
+                BackbonePeerPoolMemberStatus {
+                    name: candidate.config.client.name.clone(),
+                    remote: format!(
+                        "{}:{}",
+                        candidate.config.client.target_host, candidate.config.client.target_port
+                    ),
+                    state,
+                    interface_id: candidate.active_id.map(|id| id.0),
+                    failure_count: candidate.failures.len(),
+                    last_error: candidate.last_error.clone(),
+                    cooldown_remaining_seconds,
+                }
+            })
+            .collect();
+        Some(BackbonePeerPoolStatus {
+            max_connected: pool.settings.max_connected,
+            active_count,
+            standby_count,
+            cooldown_count,
+            members,
+        })
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -4467,6 +4771,8 @@ impl Driver {
                         .retain(|_, (_, received)| now - *received < 120.0);
 
                     self.tick_discovery_announcer(now);
+                    #[cfg(feature = "iface-backbone")]
+                    self.maintain_backbone_peer_pool();
 
                     // Periodic MEMSTATS logging (~every 5 min / 300 ticks)
                     self.memory_stats_counter += 1;
@@ -4773,6 +5079,8 @@ impl Driver {
                             }
                         }
                     }
+                    #[cfg(feature = "iface-backbone")]
+                    self.handle_backbone_peer_pool_down(id);
                 }
                 Event::SendOutbound {
                     raw,
@@ -5562,6 +5870,10 @@ impl Driver {
                     total_rxb,
                     total_txb,
                     probe_responder: self.probe_responder_hash,
+                    #[cfg(feature = "iface-backbone")]
+                    backbone_peer_pool: self.backbone_peer_pool_status(),
+                    #[cfg(not(feature = "iface-backbone"))]
+                    backbone_peer_pool: None,
                 })
             }
             QueryRequest::BackboneInterfaces => {
@@ -6428,8 +6740,16 @@ impl Driver {
             // Use the newest tracked packet for deterministic behavior.
             if candidates.len() > 1 {
                 candidates.sort_by(|a, b| {
-                    let ta = self.sent_packets.get(a).map(|(_, t)| *t).unwrap_or_default();
-                    let tb = self.sent_packets.get(b).map(|(_, t)| *t).unwrap_or_default();
+                    let ta = self
+                        .sent_packets
+                        .get(a)
+                        .map(|(_, t)| *t)
+                        .unwrap_or_default();
+                    let tb = self
+                        .sent_packets
+                        .get(b)
+                        .map(|(_, t)| *t)
+                        .unwrap_or_default();
                     tb.partial_cmp(&ta).unwrap_or(core::cmp::Ordering::Equal)
                 });
                 log::debug!(
@@ -8324,6 +8644,131 @@ mod tests {
             received_at,
             receiving_interface,
         }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn make_pool_candidate(name: &str, port: u16, id: u64) -> BackbonePeerPoolCandidateConfig {
+        let mut client = BackboneClientConfig {
+            name: name.to_string(),
+            target_host: "127.0.0.1".to_string(),
+            target_port: port,
+            interface_id: InterfaceId(id),
+            reconnect_wait: Duration::from_millis(10),
+            max_reconnect_tries: Some(0),
+            connect_timeout: Duration::from_millis(50),
+            transport_identity: None,
+            ..BackboneClientConfig::default()
+        };
+        client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
+        BackbonePeerPoolCandidateConfig {
+            client,
+            mode: constants::MODE_FULL,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+            ifac_runtime: IfacRuntimeConfig {
+                netname: None,
+                netkey: None,
+                size: 16,
+            },
+            ifac_enabled: false,
+            interface_type_name: "BackboneInterface".to_string(),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_pool_respects_max_connected_order() {
+        let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port_a = listener_a.local_addr().unwrap().port();
+        let port_b = listener_b.local_addr().unwrap().port();
+        let mut driver = new_test_driver();
+
+        driver.configure_backbone_peer_pool(
+            BackbonePeerPoolSettings {
+                max_connected: 1,
+                failure_threshold: 3,
+                failure_window: Duration::from_secs(60),
+                cooldown: Duration::from_secs(60),
+            },
+            vec![
+                make_pool_candidate("first", port_a, 7001),
+                make_pool_candidate("second", port_b, 7002),
+            ],
+        );
+
+        let status = driver.backbone_peer_pool_status().unwrap();
+        assert_eq!(status.max_connected, 1);
+        assert_eq!(status.active_count, 1);
+        assert_eq!(status.standby_count, 1);
+        assert_eq!(status.members[0].name, "first");
+        assert_eq!(status.members[0].interface_id, Some(7001));
+        assert_eq!(status.members[1].name, "second");
+        assert_eq!(status.members[1].state, "standby");
+        drop(listener_a);
+        drop(listener_b);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_pool_cools_down_failed_peer_and_tries_next() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let reachable_port = listener.local_addr().unwrap().port();
+        let mut driver = new_test_driver();
+
+        driver.configure_backbone_peer_pool(
+            BackbonePeerPoolSettings {
+                max_connected: 1,
+                failure_threshold: 1,
+                failure_window: Duration::from_secs(60),
+                cooldown: Duration::from_secs(60),
+            },
+            vec![
+                make_pool_candidate("failed", 1, 7011),
+                make_pool_candidate("replacement", reachable_port, 7012),
+            ],
+        );
+
+        let status = driver.backbone_peer_pool_status().unwrap();
+        assert_eq!(status.active_count, 1);
+        assert_eq!(status.cooldown_count, 1);
+        assert_eq!(status.members[0].name, "failed");
+        assert_eq!(status.members[0].state, "cooldown");
+        assert_eq!(status.members[0].failure_count, 1);
+        assert_eq!(status.members[1].name, "replacement");
+        assert_eq!(status.members[1].interface_id, Some(7012));
+        drop(listener);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_pool_rotates_after_runtime_disconnect() {
+        let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port_a = listener_a.local_addr().unwrap().port();
+        let port_b = listener_b.local_addr().unwrap().port();
+        let mut driver = new_test_driver();
+
+        driver.configure_backbone_peer_pool(
+            BackbonePeerPoolSettings {
+                max_connected: 1,
+                failure_threshold: 1,
+                failure_window: Duration::from_secs(60),
+                cooldown: Duration::from_secs(60),
+            },
+            vec![
+                make_pool_candidate("first", port_a, 7021),
+                make_pool_candidate("second", port_b, 7022),
+            ],
+        );
+        driver.handle_backbone_peer_pool_down(InterfaceId(7021));
+
+        let status = driver.backbone_peer_pool_status().unwrap();
+        assert_eq!(status.active_count, 1);
+        assert_eq!(status.cooldown_count, 1);
+        assert_eq!(status.members[0].state, "cooldown");
+        assert_eq!(status.members[1].interface_id, Some(7022));
+        drop(listener_a);
+        drop(listener_b);
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -13754,9 +14199,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet =
-            RawPacket::pack(flags, 0, &proof_dest, None, constants::CONTEXT_NONE, &proof_data)
-                .unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &proof_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &proof_data,
+        )
+        .unwrap();
 
         tx.send(Event::Frame {
             interface_id: InterfaceId(1),
@@ -13807,10 +14258,7 @@ mod tests {
         }]);
 
         assert_eq!(
-            driver
-                .sent_packets
-                .get(&packet_hash)
-                .map(|(dest, _)| *dest),
+            driver.sent_packets.get(&packet_hash).map(|(dest, _)| *dest),
             Some(destination_hash)
         );
     }

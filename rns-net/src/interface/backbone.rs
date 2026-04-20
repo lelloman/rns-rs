@@ -1067,6 +1067,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
 
 /// Internal enum used by [`BackboneInterfaceFactory`] to carry either a
 /// server or client config through the opaque `InterfaceConfigData` channel.
+#[derive(Clone)]
 pub(crate) enum BackboneMode {
     Server(BackboneConfig),
     Client(BackboneClientConfig),
@@ -1240,6 +1241,13 @@ pub(crate) fn client_runtime_handle_from_mode(
             runtime: Arc::clone(&config.runtime),
             startup: BackboneClientRuntime::from_config(config),
         }),
+        BackboneMode::Server(_) => None,
+    }
+}
+
+pub(crate) fn client_config_from_mode(mode: &BackboneMode) -> Option<BackboneClientConfig> {
+    match mode {
+        BackboneMode::Client(config) => Some(config.clone()),
         BackboneMode::Server(_) => None,
     }
 }

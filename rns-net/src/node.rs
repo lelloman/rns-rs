@@ -15,6 +15,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::{OsRng, Rng};
 
 use crate::config;
+#[cfg(feature = "iface-backbone")]
+use crate::driver::{BackbonePeerPoolCandidateConfig, BackbonePeerPoolSettings};
 use crate::driver::{Callbacks, Driver};
 use crate::event::{self, Event, EventSender};
 use crate::ifac;
@@ -22,8 +24,8 @@ use crate::ifac;
 use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    client_runtime_handle_from_mode, peer_state_handle_from_mode, runtime_handle_from_mode,
-    BackboneMode,
+    client_config_from_mode, client_runtime_handle_from_mode, peer_state_handle_from_mode,
+    runtime_handle_from_mode, BackboneMode,
 };
 #[cfg(feature = "iface-i2p")]
 use crate::interface::i2p::{i2p_runtime_handle_from_config, I2pConfig};
@@ -362,6 +364,9 @@ pub struct NodeConfig {
     pub driver_event_queue_capacity: usize,
     /// Maximum queued outbound frames per interface writer worker.
     pub interface_writer_queue_capacity: usize,
+    /// Outbound Backbone peer-pool settings. Disabled when `None`.
+    #[cfg(feature = "iface-backbone")]
+    pub backbone_peer_pool: Option<BackbonePeerPoolSettings>,
     /// Whether the announce signature verification cache is enabled.
     pub announce_sig_cache_enabled: bool,
     /// Maximum entries in the announce signature verification cache.
@@ -410,6 +415,8 @@ impl Default for NodeConfig {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -706,6 +713,19 @@ impl RnsNode {
             announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
             driver_event_queue_capacity: rns_config.reticulum.driver_event_queue_capacity,
             interface_writer_queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: if rns_config.reticulum.backbone_peer_pool_max_connected > 0 {
+                Some(BackbonePeerPoolSettings {
+                    max_connected: rns_config.reticulum.backbone_peer_pool_max_connected,
+                    failure_threshold: rns_config.reticulum.backbone_peer_pool_failure_threshold,
+                    failure_window: Duration::from_secs(
+                        rns_config.reticulum.backbone_peer_pool_failure_window,
+                    ),
+                    cooldown: Duration::from_secs(rns_config.reticulum.backbone_peer_pool_cooldown),
+                })
+            } else {
+                None
+            },
             announce_sig_cache_enabled: rns_config.reticulum.announce_sig_cache_enabled,
             announce_sig_cache_max_entries: rns_config.reticulum.announce_sig_cache_max_entries,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -933,6 +953,8 @@ impl RnsNode {
 
         // Collect discoverable interface configs for the announcer
         let mut discoverable_interfaces = Vec::new();
+        #[cfg(feature = "iface-backbone")]
+        let mut backbone_peer_pool_candidates = Vec::new();
 
         // --- Registry-based startup for interfaces ---
         let registry = config
@@ -1080,6 +1102,43 @@ impl RnsNode {
                     .unwrap_or(factory.default_ifac_size()),
             };
 
+            #[cfg(feature = "iface-backbone")]
+            if config.backbone_peer_pool.is_some() && iface_config.type_name == "BackboneInterface"
+            {
+                if let Some(mode) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<BackboneMode>()
+                {
+                    if let Some(client) = client_config_from_mode(mode) {
+                        backbone_peer_pool_candidates.push(BackbonePeerPoolCandidateConfig {
+                            client,
+                            mode: iface_config.mode,
+                            ingress_control: iface_config.ingress_control,
+                            ifac_runtime: ifac_runtime.clone(),
+                            ifac_enabled: ifac_state.is_some(),
+                            interface_type_name: iface_config.type_name.clone(),
+                        });
+                        if let Some(ref disc) = iface_config.discovery {
+                            discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
+                                interface_name: iface_config.name.clone(),
+                                config: disc.clone(),
+                                transport_enabled: config.transport_enabled,
+                                ifac_netname: iface_config
+                                    .ifac
+                                    .as_ref()
+                                    .and_then(|ic| ic.netname.clone()),
+                                ifac_netkey: iface_config
+                                    .ifac
+                                    .as_ref()
+                                    .and_then(|ic| ic.netkey.clone()),
+                            });
+                        }
+                        continue;
+                    }
+                }
+            }
+
             let ctx = crate::interface::StartContext {
                 tx: tx.clone(),
                 next_dynamic_id: next_dynamic_id.clone(),
@@ -1209,6 +1268,11 @@ impl RnsNode {
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "iface-backbone")]
+        if let Some(settings) = config.backbone_peer_pool.clone() {
+            driver.configure_backbone_peer_pool(settings, backbone_peer_pool_candidates);
         }
 
         // Set up interface announcer if we have discoverable interfaces
@@ -2292,6 +2356,8 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2346,6 +2412,8 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2400,6 +2468,8 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2933,6 +3003,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -2996,6 +3068,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3055,6 +3129,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3111,6 +3187,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3207,6 +3285,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3271,6 +3351,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3333,6 +3415,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3406,6 +3490,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(
@@ -3471,6 +3557,8 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                #[cfg(feature = "iface-backbone")]
+                backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
                 announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
                 announce_sig_cache_ttl: Duration::from_secs(

@@ -565,6 +565,30 @@ pub struct InterfaceStatsResponse {
     pub total_txb: u64,
     /// Probe responder destination hash (if enabled).
     pub probe_responder: Option<[u8; 16]>,
+    /// Outbound Backbone peer-pool state, if enabled.
+    pub backbone_peer_pool: Option<BackbonePeerPoolStatus>,
+}
+
+/// Runtime status for the outbound Backbone peer pool.
+#[derive(Debug, Clone)]
+pub struct BackbonePeerPoolStatus {
+    pub max_connected: usize,
+    pub active_count: usize,
+    pub standby_count: usize,
+    pub cooldown_count: usize,
+    pub members: Vec<BackbonePeerPoolMemberStatus>,
+}
+
+/// Runtime status for one outbound Backbone peer-pool member.
+#[derive(Debug, Clone)]
+pub struct BackbonePeerPoolMemberStatus {
+    pub name: String,
+    pub remote: String,
+    pub state: String,
+    pub interface_id: Option<u64>,
+    pub failure_count: usize,
+    pub last_error: Option<String>,
+    pub cooldown_remaining_seconds: Option<f64>,
 }
 
 /// Statistics for a single interface.

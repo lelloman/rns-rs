@@ -96,6 +96,14 @@ pub struct ReticulumSection {
     pub driver_event_queue_capacity: usize,
     /// Maximum queued outbound frames per interface writer worker.
     pub interface_writer_queue_capacity: usize,
+    /// Maximum active outbound Backbone peer-pool connections. Zero disables pooling.
+    pub backbone_peer_pool_max_connected: usize,
+    /// Failures within the failure window before a pooled Backbone peer enters cooldown.
+    pub backbone_peer_pool_failure_threshold: usize,
+    /// Failure accounting window for pooled Backbone peers, in seconds.
+    pub backbone_peer_pool_failure_window: u64,
+    /// Cooldown duration for failed pooled Backbone peers, in seconds.
+    pub backbone_peer_pool_cooldown: u64,
     #[cfg(feature = "rns-hooks")]
     pub provider_bridge: bool,
     #[cfg(feature = "rns-hooks")]
@@ -149,6 +157,10 @@ impl Default for ReticulumSection {
             announce_queue_overflow_policy: "drop_worst".into(),
             driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            backbone_peer_pool_max_connected: 0,
+            backbone_peer_pool_failure_threshold: 3,
+            backbone_peer_pool_failure_window: 600,
+            backbone_peer_pool_cooldown: 900,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
             #[cfg(feature = "rns-hooks")]
@@ -753,6 +765,40 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.interface_writer_queue_capacity = n;
     }
+    if let Some(v) = kvs.get("backbone_peer_pool_max_connected") {
+        section.backbone_peer_pool_max_connected =
+            v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                key: "backbone_peer_pool_max_connected".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("backbone_peer_pool_failure_threshold") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "backbone_peer_pool_failure_threshold".into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "backbone_peer_pool_failure_threshold".into(),
+                value: v.clone(),
+            });
+        }
+        section.backbone_peer_pool_failure_threshold = n;
+    }
+    if let Some(v) = kvs.get("backbone_peer_pool_failure_window") {
+        section.backbone_peer_pool_failure_window =
+            v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                key: "backbone_peer_pool_failure_window".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = kvs.get("backbone_peer_pool_cooldown") {
+        section.backbone_peer_pool_cooldown =
+            v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                key: "backbone_peer_pool_cooldown".into(),
+                value: v.clone(),
+            })?;
+    }
     #[cfg(feature = "rns-hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -919,6 +965,10 @@ announce_queue_ttl = 89
 announce_queue_overflow_policy = drop_oldest
 driver_event_queue_capacity = 6543
 interface_writer_queue_capacity = 210
+backbone_peer_pool_max_connected = 6
+backbone_peer_pool_failure_threshold = 4
+backbone_peer_pool_failure_window = 120
+backbone_peer_pool_cooldown = 300
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -954,6 +1004,19 @@ interface_writer_queue_capacity = 210
         );
         assert_eq!(config.reticulum.driver_event_queue_capacity, 6543);
         assert_eq!(config.reticulum.interface_writer_queue_capacity, 210);
+        assert_eq!(config.reticulum.backbone_peer_pool_max_connected, 6);
+        assert_eq!(config.reticulum.backbone_peer_pool_failure_threshold, 4);
+        assert_eq!(config.reticulum.backbone_peer_pool_failure_window, 120);
+        assert_eq!(config.reticulum.backbone_peer_pool_cooldown, 300);
+    }
+
+    #[test]
+    fn parse_backbone_peer_pool_defaults_disabled() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(config.reticulum.backbone_peer_pool_max_connected, 0);
+        assert_eq!(config.reticulum.backbone_peer_pool_failure_threshold, 3);
+        assert_eq!(config.reticulum.backbone_peer_pool_failure_window, 600);
+        assert_eq!(config.reticulum.backbone_peer_pool_cooldown, 900);
     }
 
     #[test]
