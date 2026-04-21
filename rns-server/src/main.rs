@@ -1,5 +1,5 @@
 use std::thread;
-use std::time::Duration;
+use std::net::TcpListener;
 
 use rns_cli::args::Args as CliArgs;
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
@@ -130,34 +130,20 @@ fn start_control_http(
 ) -> Result<(), String> {
     let config = config.clone();
     log::info!("starting embedded control plane");
+    let prepared = prepare_embedded_with_state(
+        config.ctl_args(verbosity),
+        HttpRunOptions::embedded(),
+        Some(shared_state.clone()),
+    )?;
+    let listener = TcpListener::bind(prepared.addr)
+        .map_err(|e| format!("failed to bind embedded control plane {}: {}", prepared.addr, e))?;
+
     thread::Builder::new()
         .name("rns-server-http".into())
         .spawn(move || {
-            for attempt in 1..=50 {
-                match prepare_embedded_with_state(
-                    config.ctl_args(verbosity),
-                    HttpRunOptions::embedded(),
-                    Some(shared_state.clone()),
-                ) {
-                    Ok(prepared) => {
-                        if let Err(err) = rns_ctl::server::run_server(prepared.addr, prepared.ctx) {
-                            log::error!("embedded control plane failed: {}", err);
-                        }
-                        return;
-                    }
-                    Err(err) => {
-                        if attempt == 50 {
-                            log::error!("embedded control plane failed: {}", err);
-                            return;
-                        }
-                        log::debug!(
-                            "embedded control plane not ready yet (attempt {}): {}",
-                            attempt,
-                            err
-                        );
-                        thread::sleep(Duration::from_millis(200));
-                    }
-                }
+            let _ = (config, verbosity, shared_state);
+            if let Err(err) = rns_ctl::server::run_server_with_listener(listener, prepared.ctx) {
+                log::error!("embedded control plane failed: {}", err);
             }
         })
         .map_err(|e| format!("failed to spawn control plane thread: {}", e))?;
@@ -188,4 +174,54 @@ OPTIONS:
     -h, --help               Show this help
         --version            Show version"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rns_server::control_plane::new_supervised_state;
+    use rns_server::config::{HttpConfig, ServerConfig, ServerConfigFile};
+    use std::path::PathBuf;
+
+    fn test_server_config(http_port: u16) -> ServerConfig {
+        let config_dir = std::env::temp_dir().join(format!(
+            "rns-server-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&config_dir).unwrap();
+        ServerConfig {
+            config_path: Some(config_dir.clone()),
+            resolved_config_dir: config_dir.clone(),
+            server_config_file_path: config_dir.join("rns-server.json"),
+            server_config_file_present: false,
+            file_config: ServerConfigFile::default(),
+            stats_db_path: config_dir.join("stats.db"),
+            rnsd_bin: PathBuf::new(),
+            sentineld_bin: PathBuf::new(),
+            statsd_bin: PathBuf::new(),
+            http: HttpConfig {
+                enabled: true,
+                host: "127.0.0.1".into(),
+                port: http_port,
+                auth_token: None,
+                disable_auth: true,
+                daemon_mode: true,
+            },
+            rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn start_control_http_fails_fast_when_port_is_in_use() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let config = test_server_config(port);
+        let (shared_state, _control_tx, _control_rx) = new_supervised_state();
+
+        let err = start_control_http(&config, 0, shared_state).unwrap_err();
+        assert!(err.contains("failed to bind embedded control plane"));
+    }
 }

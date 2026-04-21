@@ -68,6 +68,15 @@ pub struct ServerContext {
 /// Run the HTTP/WS server. Blocks on the accept loop.
 pub fn run_server(addr: SocketAddr, ctx: std::sync::Arc<ServerContext>) -> io::Result<()> {
     let listener = TcpListener::bind(addr)?;
+    run_server_with_listener(listener, ctx)
+}
+
+/// Run the HTTP/WS server using a pre-bound listener. Blocks on the accept loop.
+pub fn run_server_with_listener(
+    listener: TcpListener,
+    ctx: std::sync::Arc<ServerContext>,
+) -> io::Result<()> {
+    let addr = listener.local_addr()?;
 
     #[cfg(feature = "tls")]
     let scheme = if ctx.tls_config.is_some() {
