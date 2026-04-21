@@ -369,12 +369,15 @@ def classify(snapshot: dict[str, object]) -> str:
         snapshot["provider_bridge_dropped_24h"] == 0
         and snapshot["provider_bridge_disconnected_24h"] == 0
     )
-    traffic_ok = (
-        snapshot["announce_24h"] > 0
-        and snapshot["packet_freshness_max_age_seconds"] <= 1800
-    )
+    traffic_ok = snapshot["announce_24h"] > 0
+    public_interfaces_total = int(snapshot.get("public_interfaces_total") or 0)
+    public_interfaces_up = int(snapshot.get("public_interfaces_up") or 0)
     if not services_ok or not listeners_ok or not bridge_ok or not traffic_ok:
         return "degraded"
+    if public_interfaces_total > 0 and public_interfaces_up == 0:
+        return "degraded"
+    if public_interfaces_total > 0 and public_interfaces_up < public_interfaces_total:
+        return "healthy_with_partial_connectivity"
     if snapshot["idle_timeout_events_24h"] > 0:
         return "healthy_with_blacklist_pressure"
     return "healthy"
@@ -501,6 +504,9 @@ ORDER BY packet_type, direction;
             }
         )
 
+    interface_rows = parse_interface_snapshots(interface_payload, capture_dt)
+    public_interfaces = [row for row in interface_rows if row["public_candidate"]]
+
     snapshot: dict[str, object] = {
         "capture_ts_utc": capture_ts,
         "report_date": report_date_override or capture_dt.strftime("%Y-%m-%d"),
@@ -554,8 +560,9 @@ ORDER BY packet_type, direction;
         "packet_freshness_max_age_seconds": max(
             (row["age_seconds"] for row in packet_rows), default=999999
         ),
+        "public_interfaces_total": len(public_interfaces),
+        "public_interfaces_up": sum(1 for row in public_interfaces if row["status"]),
     }
-    interface_rows = parse_interface_snapshots(interface_payload, capture_dt)
     snapshot["health_state"] = classify(snapshot)
     return snapshot, memstats, packet_rows, interface_rows
 
