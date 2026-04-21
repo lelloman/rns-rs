@@ -625,6 +625,8 @@ fn start_transport_node_with_limits(
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -716,6 +718,8 @@ fn start_client_node_with_packet_hashlist(
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -775,13 +779,12 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
         match node.query(QueryRequest::ListRuntimeConfig) {
             Ok(QueryResponse::RuntimeConfigList(entries)) => {
                 if let Some(entry) = entries.iter().find(|entry| {
-                    entry.key.starts_with("interface.TCPServerInterface/Client-")
+                    entry
+                        .key
+                        .starts_with("interface.TCPServerInterface/Client-")
                         && entry.key.ends_with(".ingress_control")
                 }) {
-                    break entry
-                        .key
-                        .trim_end_matches(".ingress_control")
-                        .to_string();
+                    break entry.key.trim_end_matches(".ingress_control").to_string();
                 }
             }
             other => panic!("expected runtime config list, got {:?}", other),
@@ -1188,6 +1191,8 @@ fn test_direct_link_no_transport() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -1784,6 +1789,8 @@ fn test_plain_message_delivery() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -2013,6 +2020,8 @@ fn test_group_message_delivery() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -2124,6 +2133,8 @@ fn test_group_wrong_key_fails() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -2695,9 +2706,8 @@ fn test_request_response_large_payload_over_resource() {
 
     alice_node.send_request(link_id, "/large", b"x").unwrap();
 
-    let (resp_lid, _req_id, resp_data) =
-        wait_for_response(&alice_rx, Duration::from_secs(30))
-            .expect("Alice did not receive large response over resource transfer");
+    let (resp_lid, _req_id, resp_data) = wait_for_response(&alice_rx, Duration::from_secs(30))
+        .expect("Alice did not receive large response over resource transfer");
     assert_eq!(resp_lid, link_id);
 
     let resp_value = rns_core::msgpack::unpack_exact(&resp_data).unwrap();
@@ -3276,6 +3286,8 @@ fn test_udp_announce_and_message() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3342,6 +3354,8 @@ fn test_udp_announce_and_message() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3512,6 +3526,8 @@ fn discovery_announce_received_by_client() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3583,6 +3599,8 @@ fn discovery_announce_received_by_client() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3713,6 +3731,8 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3795,6 +3815,8 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3864,6 +3886,8 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
@@ -3975,6 +3999,8 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
             announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
             announce_sig_cache_ttl: Duration::from_secs(
