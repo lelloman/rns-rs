@@ -182,6 +182,20 @@ struct SubFlowState {
     queue: std::collections::VecDeque<Vec<u8>>,
 }
 
+fn make_sub_writer(
+    writer: Arc<Mutex<std::fs::File>>,
+    index: u8,
+    flow_control: bool,
+    flow_state: Arc<Mutex<SubFlowState>>,
+) -> Box<dyn Writer> {
+    Box::new(RNodeSubWriter {
+        writer,
+        index,
+        flow_control,
+        flow_state,
+    })
+}
+
 impl Writer for RNodeSubWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let frame = rnode_kiss::rnode_data_frame(self.index, data);
@@ -258,13 +272,7 @@ pub fn start(
             queue: std::collections::VecDeque::new(),
         }));
         flow_states.push(flow_state.clone());
-
-        let sub_writer: Box<dyn Writer> = Box::new(RNodeSubWriter {
-            writer: shared_writer.clone(),
-            index: i as u8,
-            flow_control: sub.flow_control,
-            flow_state,
-        });
+        let sub_writer = make_sub_writer(shared_writer.clone(), i as u8, sub.flow_control, flow_state);
         writers.push((sub_id, sub_writer));
     }
 
@@ -305,7 +313,6 @@ pub fn start(
                 thread::sleep(Duration::from_secs(15));
                 if let Err(e) = keepalive_writer.lock().unwrap().write_all(&detect) {
                     log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
-                    return;
                 }
             }
         })?;
@@ -321,47 +328,132 @@ fn reader_loop(
     tx: EventSender,
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
 ) {
+    const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
+    const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
     // Initial delay for hardware init (matches Python: sleep(2.0))
     thread::sleep(Duration::from_secs(2));
+    let mut connected_once = false;
+    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
+        log::error!("[{}] initial RNode setup failed: {}", config.name, e);
+        return;
+    }
+    signal_interface_up(&tx, &config, &writer, &flow_states, connected_once);
+    connected_once = true;
+    loop {
+        let mut decoder = rnode_kiss::RNodeDecoder::new();
+        let mut buf = [0u8; 4096];
+        let disconnected = loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    log::warn!("[{}] serial port closed", config.name);
+                    signal_interface_down(&tx, &config);
+                    break true;
+                }
+                Ok(n) => {
+                    for event in decoder.feed(&buf[..n]) {
+                        match event {
+                            rnode_kiss::RNodeEvent::DataFrame { index, data } => {
+                                let sub_id = InterfaceId(config.base_interface_id.0 + index as u64);
+                                if tx
+                                    .send(Event::Frame {
+                                        interface_id: sub_id,
+                                        data,
+                                    })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            rnode_kiss::RNodeEvent::Ready => {
+                                // Flow control: unlock all subinterfaces that have flow_control
+                                for (i, fs) in flow_states.iter().enumerate() {
+                                    if config.subinterfaces[i].flow_control {
+                                        process_flow_queue(fs, &writer, i as u8);
+                                    }
+                                }
+                            }
+                            rnode_kiss::RNodeEvent::Error(code) => {
+                                log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
+                            }
+                            _ => {
+                                // Status updates logged but not acted on
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("[{}] serial read error: {}", config.name, e);
+                    signal_interface_down(&tx, &config);
+                    break true;
+                }
+            }
+        };
 
-    // Send detect request
-    {
-        let detect_cmd = rnode_kiss::detect_request();
-        // Also request FW version, platform, MCU (matches Python detect())
-        let mut cmd = detect_cmd;
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(
-            rnode_kiss::CMD_FW_VERSION,
-            &[0x00],
-        ));
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(
-            rnode_kiss::CMD_FW_DETAIL,
-            &[0x00],
-        ));
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(
-            rnode_kiss::CMD_PLATFORM,
-            &[0x00],
-        ));
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_MCU, &[0x00]));
-
-        if let Err(e) = writer.lock().unwrap().write_all(&cmd) {
-            log::error!("[{}] failed to send detect: {}", config.name, e);
+        if !disconnected || config.pre_opened_fd.is_some() {
             return;
         }
+
+        let mut backoff = RECONNECT_INITIAL_DELAY;
+        loop {
+            match reopen_connection(&config, &writer) {
+                Ok(new_reader) => {
+                    reset_flow_states(&flow_states);
+                    reader = new_reader;
+                    if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
+                        log::warn!("[{}] reconnect configure failed: {}", config.name, e);
+                        thread::sleep(backoff);
+                        backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
+                        continue;
+                    }
+                    signal_interface_up(&tx, &config, &writer, &flow_states, connected_once);
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("[{}] reconnect open failed: {}", config.name, e);
+                    thread::sleep(backoff);
+                    backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
+                }
+            }
+        }
     }
+}
+
+fn detect_and_configure(
+    reader: &mut std::fs::File,
+    writer: &Arc<Mutex<std::fs::File>>,
+    config: &RNodeConfig,
+) -> io::Result<()> {
+    let detect_cmd = rnode_kiss::detect_request();
+    let mut cmd = detect_cmd;
+    cmd.extend_from_slice(&rnode_kiss::rnode_command(
+        rnode_kiss::CMD_FW_VERSION,
+        &[0x00],
+    ));
+    cmd.extend_from_slice(&rnode_kiss::rnode_command(
+        rnode_kiss::CMD_FW_DETAIL,
+        &[0x00],
+    ));
+    cmd.extend_from_slice(&rnode_kiss::rnode_command(
+        rnode_kiss::CMD_PLATFORM,
+        &[0x00],
+    ));
+    cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_MCU, &[0x00]));
+
+    writer.lock().unwrap().write_all(&cmd)?;
 
     let mut decoder = rnode_kiss::RNodeDecoder::new();
     let mut buf = [0u8; 4096];
     let mut detected = false;
-
-    // Detection phase: read until we get Detected or timeout
     let detect_start = std::time::Instant::now();
     let detect_timeout = Duration::from_secs(5);
 
     while !detected && detect_start.elapsed() < detect_timeout {
         match reader.read(&mut buf) {
             Ok(0) => {
-                log::warn!("[{}] serial port closed during detect", config.name);
-                return;
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "serial port closed during detect",
+                ));
             }
             Ok(n) => {
                 for event in decoder.feed(&buf[..n]) {
@@ -387,101 +479,86 @@ fn reader_loop(
                 }
             }
             Err(e) => {
-                log::error!("[{}] serial read error during detect: {}", config.name, e);
-                return;
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("serial read error during detect: {}", e),
+                ));
             }
         }
     }
 
     if !detected {
-        log::error!("[{}] RNode detection timed out", config.name);
-        return;
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "RNode detection timed out",
+        ));
     }
 
-    // Configure each subinterface
     for (i, sub) in config.subinterfaces.iter().enumerate() {
-        if let Err(e) =
-            configure_subinterface(&writer, i as u8, sub, config.subinterfaces.len() > 1)
-        {
-            log::error!(
-                "[{}] failed to configure subinterface {}: {}",
-                config.name,
-                i,
-                e
-            );
-            return;
-        }
+        configure_subinterface(writer, i as u8, sub, config.subinterfaces.len() > 1)?;
     }
 
-    // Brief delay for configuration to settle (matches Python: sleep(0.3))
     thread::sleep(Duration::from_millis(300));
-
-    // Signal all subinterfaces as online
-    for i in 0..config.subinterfaces.len() {
-        let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
-        let _ = tx.send(Event::InterfaceUp(sub_id, None, None));
-    }
-
     log::info!(
         "[{}] RNode configured with {} subinterface(s)",
         config.name,
         config.subinterfaces.len()
     );
+    Ok(())
+}
 
-    // Data relay loop
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) => {
-                log::warn!("[{}] serial port closed", config.name);
-                for i in 0..config.subinterfaces.len() {
-                    let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
-                    let _ = tx.send(Event::InterfaceDown(sub_id));
-                }
-                // TODO: reconnect logic
-                return;
-            }
-            Ok(n) => {
-                for event in decoder.feed(&buf[..n]) {
-                    match event {
-                        rnode_kiss::RNodeEvent::DataFrame { index, data } => {
-                            let sub_id = InterfaceId(config.base_interface_id.0 + index as u64);
-                            if tx
-                                .send(Event::Frame {
-                                    interface_id: sub_id,
-                                    data,
-                                })
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                        rnode_kiss::RNodeEvent::Ready => {
-                            // Flow control: unlock all subinterfaces that have flow_control
-                            for (i, fs) in flow_states.iter().enumerate() {
-                                if config.subinterfaces[i].flow_control {
-                                    process_flow_queue(fs, &writer, i as u8);
-                                }
-                            }
-                        }
-                        rnode_kiss::RNodeEvent::Error(code) => {
-                            log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
-                        }
-                        _ => {
-                            // Status updates logged but not acted on
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("[{}] serial read error: {}", config.name, e);
-                for i in 0..config.subinterfaces.len() {
-                    let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
-                    let _ = tx.send(Event::InterfaceDown(sub_id));
-                }
-                return;
-            }
-        }
+fn signal_interface_down(tx: &EventSender, config: &RNodeConfig) {
+    for i in 0..config.subinterfaces.len() {
+        let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
+        let _ = tx.send(Event::InterfaceDown(sub_id));
     }
+}
+
+fn signal_interface_up(
+    tx: &EventSender,
+    config: &RNodeConfig,
+    writer: &Arc<Mutex<std::fs::File>>,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+    reconnected: bool,
+) {
+    for (i, flow_state) in flow_states.iter().enumerate() {
+        let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
+        let new_writer = reconnected.then(|| {
+            make_sub_writer(
+                writer.clone(),
+                i as u8,
+                config.subinterfaces[i].flow_control,
+                flow_state.clone(),
+            )
+        });
+        let _ = tx.send(Event::InterfaceUp(sub_id, new_writer, None));
+    }
+}
+
+fn reset_flow_states(flow_states: &[Arc<Mutex<SubFlowState>>]) {
+    for flow_state in flow_states {
+        let mut state = flow_state.lock().unwrap();
+        state.ready = true;
+        state.queue.clear();
+    }
+}
+
+fn reopen_connection(
+    config: &RNodeConfig,
+    writer: &Arc<Mutex<std::fs::File>>,
+) -> io::Result<std::fs::File> {
+    let serial_config = SerialConfig {
+        path: config.port.clone(),
+        baud: config.speed,
+        data_bits: 8,
+        parity: Parity::None,
+        stop_bits: 1,
+    };
+    let port = SerialPort::open(&serial_config)?;
+    let reader = port.reader()?;
+    let new_writer = port.writer()?;
+    *writer.lock().unwrap() = new_writer;
+    Ok(reader)
 }
 
 /// Configure a single subinterface on the RNode device.
@@ -805,9 +882,13 @@ pub(crate) fn rnode_runtime_handle_from_config(config: &RNodeConfig) -> RNodeRun
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event;
     use crate::kiss;
     use crate::serial::open_pty_pair;
     use std::os::unix::io::{AsRawFd, FromRawFd};
+    use std::path::PathBuf;
+    use std::sync::mpsc::RecvTimeoutError;
+    use tempfile::tempdir;
     /// Helper: poll an fd for reading with timeout (ms).
     fn poll_read(fd: i32, timeout_ms: i32) -> bool {
         let mut pfd = libc::pollfd {
@@ -830,6 +911,34 @@ mod tests {
             }
         }
         all
+    }
+
+    fn slave_tty_path(fd: i32) -> PathBuf {
+        let mut buf = [0u8; 256];
+        let rc = unsafe { libc::ttyname_r(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(rc, 0, "ttyname_r failed for fd {}", fd);
+        let nul = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+        PathBuf::from(std::str::from_utf8(&buf[..nul]).unwrap())
+    }
+
+    fn wait_for_interface_event<F>(
+        rx: &std::sync::mpsc::Receiver<Event>,
+        timeout: Duration,
+        predicate: F,
+    ) -> Event
+    where
+        F: Fn(&Event) -> bool,
+    {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(event) if predicate(&event) => return event,
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => panic!("timed out waiting for interface event"),
+                Err(RecvTimeoutError::Disconnected) => panic!("event channel disconnected"),
+            }
+        }
     }
 
     /// Mock RNode: respond to detect with DETECT_RESP, FW version, platform
@@ -1133,5 +1242,88 @@ mod tests {
         bad = good.clone();
         bad.txpower = 50;
         assert!(validate_sub_config(&bad).is_some());
+    }
+
+    #[test]
+    fn rnode_reconnects_after_serial_disconnect() {
+        let tempdir = tempdir().unwrap();
+        let port_path = tempdir.path().join("rnode-port");
+
+        let (master1_fd, slave1_fd) = open_pty_pair().unwrap();
+        let slave1_path = slave_tty_path(slave1_fd);
+        std::os::unix::fs::symlink(&slave1_path, &port_path).unwrap();
+
+        let mut master1 = unsafe { std::fs::File::from_raw_fd(master1_fd) };
+        let slave1 = unsafe { std::fs::File::from_raw_fd(slave1_fd) };
+
+        let (tx, rx) = event::channel();
+        let sub = RNodeSubConfig {
+            name: "test-rnode".into(),
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        };
+        let mut config = RNodeConfig {
+            name: "test-rnode".into(),
+            port: port_path.display().to_string(),
+            speed: 115200,
+            subinterfaces: vec![sub],
+            id_interval: None,
+            id_callsign: None,
+            base_interface_id: InterfaceId(41),
+            pre_opened_fd: None,
+            runtime: Arc::new(Mutex::new(RNodeRuntime {
+                sub: RNodeSubConfig {
+                    name: String::new(),
+                    frequency: 868_000_000,
+                    bandwidth: 125_000,
+                    txpower: 7,
+                    spreading_factor: 8,
+                    coding_rate: 5,
+                    flow_control: false,
+                    st_alock: None,
+                    lt_alock: None,
+                },
+                writer: None,
+            })),
+        };
+        config.runtime = Arc::new(Mutex::new(RNodeRuntime::from_config(&config)));
+
+        let _writers = start(config, tx).unwrap();
+
+        thread::sleep(Duration::from_secs(3));
+        mock_respond_detect(&mut master1);
+        let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
+            matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
+        });
+        assert!(matches!(up, Event::InterfaceUp(InterfaceId(41), None, None)));
+
+        drop(master1);
+        drop(slave1);
+
+        let down = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
+            matches!(event, Event::InterfaceDown(InterfaceId(41)))
+        });
+        assert!(matches!(down, Event::InterfaceDown(InterfaceId(41))));
+
+        let (master2_fd, slave2_fd) = open_pty_pair().unwrap();
+        let slave2_path = slave_tty_path(slave2_fd);
+        std::fs::remove_file(&port_path).unwrap();
+        std::os::unix::fs::symlink(&slave2_path, &port_path).unwrap();
+
+        let mut master2 = unsafe { std::fs::File::from_raw_fd(master2_fd) };
+        let _slave2 = unsafe { std::fs::File::from_raw_fd(slave2_fd) };
+
+        thread::sleep(Duration::from_secs(3));
+        mock_respond_detect(&mut master2);
+        let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
+            matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
+        });
+        assert!(matches!(up, Event::InterfaceUp(InterfaceId(41), Some(_), None)));
     }
 }
