@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
@@ -17,7 +18,7 @@ use rns_ctl::state::{
 };
 use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Rnsd,
     Sentineld,
@@ -125,6 +126,7 @@ impl Supervisor {
             .iter()
             .map(|spec| spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone()))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut unexpected_restart_counts = HashMap::new();
 
         on_started()?;
 
@@ -146,6 +148,14 @@ impl Supervisor {
 
             if let Some((role, status)) = check_exits(&mut children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
+                if self.restart_unexpected_exit(
+                    role,
+                    status,
+                    &mut children,
+                    &mut unexpected_restart_counts,
+                )? {
+                    continue;
+                }
                 if let Some(state) = self.shared_state.as_ref() {
                     mark_process_stopped(state, role.display_name(), status.code());
                 }
@@ -159,6 +169,50 @@ impl Supervisor {
 }
 
 impl Supervisor {
+    fn restart_unexpected_exit(
+        &self,
+        role: Role,
+        status: ExitStatus,
+        children: &mut [ManagedChild],
+        unexpected_restart_counts: &mut HashMap<Role, usize>,
+    ) -> Result<bool, String> {
+        const MAX_UNEXPECTED_RESTARTS: usize = 3;
+        const UNEXPECTED_RESTART_BACKOFF: Duration = Duration::from_millis(200);
+
+        let Some(index) = children.iter().position(|child| child.role == role) else {
+            return Ok(false);
+        };
+        let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
+            return Ok(false);
+        };
+
+        let attempts = unexpected_restart_counts.entry(role).or_insert(0);
+        if *attempts >= MAX_UNEXPECTED_RESTARTS {
+            return Ok(false);
+        }
+        *attempts += 1;
+
+        if let Some(state) = self.shared_state.as_ref() {
+            mark_process_stopped(state, role.display_name(), status.code());
+            bump_process_restart_count(state, role.display_name());
+            push_process_log(
+                state,
+                role.display_name(),
+                "supervisor",
+                format!(
+                    "unexpected exit with status {}; restarting ({}/{})",
+                    exit_code(status),
+                    *attempts,
+                    MAX_UNEXPECTED_RESTARTS
+                ),
+            );
+        }
+
+        thread::sleep(UNEXPECTED_RESTART_BACKOFF);
+        children[index] = spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
+        Ok(true)
+    }
+
     fn next_control_command(&self) -> Option<ProcessControlCommand> {
         self.control_rx.as_ref().and_then(|rx| rx.try_recv().ok())
     }
@@ -976,6 +1030,7 @@ mod tests {
         probe_ready_file, ready_file_path_for_role, reflect_rnsd_drain_status, request_rnsd_drain,
         role_from_name, shutdown_priority, wait_for_rnsd_drain, ProcessCommand, ProcessReadiness,
         ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role, Supervisor, SupervisorConfig,
+        STOP_TX,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{
@@ -984,6 +1039,7 @@ mod tests {
         HookInfo, RpcAddr, RpcServer,
     };
     use std::net::TcpListener;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::mpsc;
@@ -1622,6 +1678,80 @@ mod tests {
 
         let _ = children[0].child.kill();
         let _ = children[0].child.wait();
+    }
+
+    #[test]
+    fn supervisor_restarts_unexpectedly_exited_child_instead_of_exiting() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rns-server-supervisor-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let count_path = temp_root.join("count");
+        let script_path = temp_root.join("restart-once.sh");
+        std::fs::write(
+            &script_path,
+            format!(
+                "#!/usr/bin/env bash\nset -eu\ncount_file=\"{}\"\ncount=$(cat \"$count_file\" 2>/dev/null || echo 0)\ncount=$((count+1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$count\" -eq 1 ]; then\n  exit 7\nfi\nsleep 60\n",
+                count_path.display()
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        let state: SharedState = Arc::new(RwLock::new(CtlState::new()));
+        ensure_process(&state, "rns-sentineld");
+        let supervisor = Supervisor::new(SupervisorConfig {
+            specs: vec![ProcessSpec {
+                role: Role::Sentineld,
+                command: ProcessCommand::External(script_path.clone()),
+                args: Vec::new(),
+            }],
+            shared_state: Some(state.clone()),
+            control_rx: None,
+            readiness: Vec::new(),
+            log_dir: None,
+            rnsd_drain: None,
+        });
+        let (result_tx, result_rx) = mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let result = supervisor.run();
+            let _ = result_tx.send(result);
+        });
+
+        match result_rx.recv_timeout(Duration::from_secs(2)) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(result) => panic!("supervisor exited unexpectedly: {:?}", result),
+            Err(err) => panic!("failed waiting for supervisor result: {}", err),
+        }
+
+        let restart_count = {
+            let s = state.read().unwrap();
+            let process = s.processes.get("rns-sentineld").cloned().unwrap();
+            assert!(process.pid.is_some(), "expected restarted child to be running");
+            process.restart_count
+        };
+        assert_eq!(restart_count, 1);
+        assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "2");
+
+        STOP_TX
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .send(())
+            .unwrap();
+        let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(result.unwrap(), 0);
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     fn unique_temp_path(prefix: &str) -> PathBuf {
