@@ -164,6 +164,10 @@ impl AnnounceVerifyQueue {
         self.pending.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     pub fn queued_bytes(&self) -> usize {
         self.queued_bytes
     }

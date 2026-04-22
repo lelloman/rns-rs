@@ -46,6 +46,38 @@ use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, T
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 
+struct InboundPacketCtx {
+    packet: RawPacket,
+    original_raw: Vec<u8>,
+    iface: InterfaceId,
+    now: f64,
+    from_local_client: bool,
+}
+
+struct VerifiedAnnounceCtx<'a> {
+    packet: &'a RawPacket,
+    original_raw: &'a [u8],
+    iface: InterfaceId,
+    now: f64,
+    validated: crate::announce::ValidatedAnnounce,
+    received_from: [u8; 16],
+    random_blob: [u8; 10],
+    announce_emitted: u64,
+}
+
+struct TickCtx<'a> {
+    now: f64,
+    rng: &'a mut dyn Rng,
+    actions: Vec<TransportAction>,
+}
+
+struct PathRequestCtx<'a> {
+    data: &'a [u8],
+    interface_id: InterfaceId,
+    now: f64,
+    destination_hash: [u8; 16],
+}
+
 /// The core transport/routing engine.
 ///
 /// Maintains routing tables and processes packets without performing any I/O.
@@ -661,213 +693,236 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
     ) -> Vec<TransportAction> {
+        let Some(ctx) = self.prepare_inbound_packet(raw, iface, now) else {
+            return Vec::new();
+        };
         let mut actions = Vec::new();
 
-        // 1. Unpack
-        let mut packet = match RawPacket::unpack(raw) {
-            Ok(p) => p,
-            Err(_) => return actions, // silent drop
-        };
+        self.remember_inbound_packet_hash(&ctx.packet);
+        self.bridge_plain_broadcast(&ctx, &mut actions);
+        self.handle_transport_forwarding(&ctx, &mut actions);
+        self.handle_link_table_routing(&ctx, &mut actions);
+        self.handle_inbound_announce(&ctx, rng, announce_queue, &mut actions);
 
-        // Save original raw (pre-hop-increment) for announce caching
-        let original_raw = raw.to_vec();
+        if ctx.packet.flags.packet_type == constants::PACKET_TYPE_PROOF {
+            self.process_inbound_proof(&ctx.packet, ctx.iface, ctx.now, &mut actions);
+        }
 
-        // 2. Increment hops
-        packet.hops += 1;
+        self.handle_inbound_local_delivery(&ctx, &mut actions);
+        actions
+    }
 
-        // 2a. If from a local client, decrement hops to cancel the +1
-        // (local clients are attached via shared instance, not a real hop)
+    fn prepare_inbound_packet(
+        &self,
+        raw: &[u8],
+        iface: InterfaceId,
+        now: f64,
+    ) -> Option<InboundPacketCtx> {
+        let mut packet = RawPacket::unpack(raw).ok()?;
         let from_local_client = self
             .interfaces
             .get(&iface)
             .map(|i| i.is_local_client)
             .unwrap_or(false);
+        packet.hops += 1;
         if from_local_client {
             packet.hops = packet.hops.saturating_sub(1);
         }
-
-        // 3. Packet filter
         if !self.packet_filter(&packet) {
-            return actions;
+            return None;
         }
+        Some(InboundPacketCtx {
+            packet,
+            original_raw: raw.to_vec(),
+            iface,
+            now,
+            from_local_client,
+        })
+    }
 
-        // 4. Determine whether to add to hashlist now or defer
-        let mut remember_hash = true;
-
-        if self.link_table.contains_key(&packet.destination_hash) {
-            remember_hash = false;
-        }
-        if packet.flags.packet_type == constants::PACKET_TYPE_PROOF
-            && packet.context == constants::CONTEXT_LRPROOF
-        {
-            remember_hash = false;
-        }
-
+    fn remember_inbound_packet_hash(&mut self, packet: &RawPacket) {
+        let remember_hash = !(self.link_table.contains_key(&packet.destination_hash)
+            || (packet.flags.packet_type == constants::PACKET_TYPE_PROOF
+                && packet.context == constants::CONTEXT_LRPROOF));
         if remember_hash {
             self.packet_hashlist.add(packet.packet_hash);
         }
+    }
 
-        // 4a. PLAIN broadcast bridging between local clients and external interfaces
-        if packet.flags.destination_type == constants::DESTINATION_PLAIN
-            && packet.flags.transport_type == constants::TRANSPORT_BROADCAST
-            && self.has_local_clients()
+    fn bridge_plain_broadcast(&self, ctx: &InboundPacketCtx, actions: &mut Vec<TransportAction>) {
+        if ctx.packet.flags.destination_type != constants::DESTINATION_PLAIN
+            || ctx.packet.flags.transport_type != constants::TRANSPORT_BROADCAST
+            || !self.has_local_clients()
         {
-            if from_local_client {
-                // From local client → forward to all external interfaces
-                actions.push(TransportAction::ForwardPlainBroadcast {
-                    raw: packet.raw.clone(),
-                    to_local: false,
-                    exclude: Some(iface),
-                });
-            } else {
-                // From external → forward to all local clients
-                actions.push(TransportAction::ForwardPlainBroadcast {
-                    raw: packet.raw.clone(),
-                    to_local: true,
-                    exclude: None,
-                });
-            }
+            return;
         }
 
-        // 5. Transport forwarding: if we are the designated next hop
-        if self.config.transport_enabled || self.config.identity_hash.is_some() {
-            if packet.transport_id.is_some()
-                && packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
-            {
-                if let Some(ref identity_hash) = self.config.identity_hash {
-                    if packet.transport_id.as_ref() == Some(identity_hash) {
-                        if let Some(path_entry) = self
-                            .path_table
-                            .get(&packet.destination_hash)
-                            .and_then(|ps| ps.primary())
-                        {
-                            let next_hop = path_entry.next_hop;
-                            let remaining_hops = path_entry.hops;
-                            let outbound_interface = path_entry.receiving_interface;
-
-                            let new_raw = forward_transport_packet(
-                                &packet,
-                                next_hop,
-                                remaining_hops,
-                                outbound_interface,
-                            );
-
-                            // Create link table or reverse table entry
-                            if packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
-                                let proof_timeout = now
-                                    + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP
-                                        * (remaining_hops.max(1) as f64);
-
-                                let (link_id, link_entry) = create_link_entry(
-                                    &packet,
-                                    next_hop,
-                                    outbound_interface,
-                                    remaining_hops,
-                                    iface,
-                                    now,
-                                    proof_timeout,
-                                );
-                                self.link_table.insert(link_id, link_entry);
-                                actions.push(TransportAction::LinkRequestReceived {
-                                    link_id,
-                                    destination_hash: packet.destination_hash,
-                                    receiving_interface: iface,
-                                });
-                            } else {
-                                let (trunc_hash, reverse_entry) =
-                                    create_reverse_entry(&packet, outbound_interface, iface, now);
-                                self.reverse_table.insert(trunc_hash, reverse_entry);
-                            }
-
-                            actions.push(TransportAction::SendOnInterface {
-                                interface: outbound_interface,
-                                raw: new_raw,
-                            });
-
-                            // Update path timestamp
-                            if let Some(entry) = self
-                                .path_table
-                                .get_mut(&packet.destination_hash)
-                                .and_then(|ps| ps.primary_mut())
-                            {
-                                entry.timestamp = now;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 6. Link table routing for non-announce, non-linkrequest, non-lrproof
-            if packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
-                && packet.flags.packet_type != constants::PACKET_TYPE_LINKREQUEST
-                && packet.context != constants::CONTEXT_LRPROOF
-            {
-                if let Some(link_entry) = self.link_table.get(&packet.destination_hash).cloned() {
-                    if let Some((outbound_iface, new_raw)) =
-                        route_via_link_table(&packet, &link_entry, iface)
-                    {
-                        // Add to hashlist now that we know it's for us
-                        self.packet_hashlist.add(packet.packet_hash);
-
-                        actions.push(TransportAction::SendOnInterface {
-                            interface: outbound_iface,
-                            raw: new_raw,
-                        });
-
-                        // Update link timestamp
-                        if let Some(entry) = self.link_table.get_mut(&packet.destination_hash) {
-                            entry.timestamp = now;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 7. Announce handling
-        if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE {
-            if let Some(queue) = announce_queue {
-                self.try_enqueue_announce(
-                    &packet,
-                    &original_raw,
-                    iface,
-                    now,
-                    rng,
-                    queue,
-                    &mut actions,
-                );
-            } else {
-                self.process_inbound_announce(
-                    &packet,
-                    &original_raw,
-                    iface,
-                    now,
-                    rng,
-                    &mut actions,
-                );
-            }
-        }
-
-        // 8. Proof handling
-        if packet.flags.packet_type == constants::PACKET_TYPE_PROOF {
-            self.process_inbound_proof(&packet, iface, now, &mut actions);
-        }
-
-        // 9. Local delivery for LINKREQUEST and DATA
-        if (packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
-            || packet.flags.packet_type == constants::PACKET_TYPE_DATA)
-            && self
-                .local_destinations
-                .contains_key(&packet.destination_hash)
-        {
-            actions.push(TransportAction::DeliverLocal {
-                destination_hash: packet.destination_hash,
-                raw: packet.raw.clone(),
-                packet_hash: packet.packet_hash,
-                receiving_interface: iface,
+        if ctx.from_local_client {
+            actions.push(TransportAction::ForwardPlainBroadcast {
+                raw: ctx.packet.raw.clone(),
+                to_local: false,
+                exclude: Some(ctx.iface),
+            });
+        } else {
+            actions.push(TransportAction::ForwardPlainBroadcast {
+                raw: ctx.packet.raw.clone(),
+                to_local: true,
+                exclude: None,
             });
         }
+    }
 
-        actions
+    fn handle_transport_forwarding(
+        &mut self,
+        ctx: &InboundPacketCtx,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if !(self.config.transport_enabled || self.config.identity_hash.is_some()) {
+            return;
+        }
+        if ctx.packet.transport_id.is_none()
+            || ctx.packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+        {
+            return;
+        }
+
+        let Some(identity_hash) = self.config.identity_hash else {
+            return;
+        };
+        if ctx.packet.transport_id != Some(identity_hash) {
+            return;
+        }
+
+        let Some(path_entry) = self
+            .path_table
+            .get(&ctx.packet.destination_hash)
+            .and_then(|ps| ps.primary())
+        else {
+            return;
+        };
+
+        let next_hop = path_entry.next_hop;
+        let remaining_hops = path_entry.hops;
+        let outbound_interface = path_entry.receiving_interface;
+        let new_raw =
+            forward_transport_packet(&ctx.packet, next_hop, remaining_hops, outbound_interface);
+
+        if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
+            let proof_timeout = ctx.now
+                + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP * (remaining_hops.max(1) as f64);
+            let (link_id, link_entry) = create_link_entry(
+                &ctx.packet,
+                next_hop,
+                outbound_interface,
+                remaining_hops,
+                ctx.iface,
+                ctx.now,
+                proof_timeout,
+            );
+            self.link_table.insert(link_id, link_entry);
+            actions.push(TransportAction::LinkRequestReceived {
+                link_id,
+                destination_hash: ctx.packet.destination_hash,
+                receiving_interface: ctx.iface,
+            });
+        } else {
+            let (trunc_hash, reverse_entry) =
+                create_reverse_entry(&ctx.packet, outbound_interface, ctx.iface, ctx.now);
+            self.reverse_table.insert(trunc_hash, reverse_entry);
+        }
+
+        actions.push(TransportAction::SendOnInterface {
+            interface: outbound_interface,
+            raw: new_raw,
+        });
+
+        if let Some(entry) = self
+            .path_table
+            .get_mut(&ctx.packet.destination_hash)
+            .and_then(|ps| ps.primary_mut())
+        {
+            entry.timestamp = ctx.now;
+        }
+    }
+
+    fn handle_link_table_routing(
+        &mut self,
+        ctx: &InboundPacketCtx,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if !self.config.transport_enabled && self.config.identity_hash.is_none() {
+            return;
+        }
+        if ctx.packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+            || ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
+            || ctx.packet.context == constants::CONTEXT_LRPROOF
+        {
+            return;
+        }
+
+        let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
+            return;
+        };
+        let Some((outbound_iface, new_raw)) =
+            route_via_link_table(&ctx.packet, &link_entry, ctx.iface)
+        else {
+            return;
+        };
+
+        self.packet_hashlist.add(ctx.packet.packet_hash);
+        actions.push(TransportAction::SendOnInterface {
+            interface: outbound_iface,
+            raw: new_raw,
+        });
+
+        if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
+            entry.timestamp = ctx.now;
+        }
+    }
+
+    fn handle_inbound_announce(
+        &mut self,
+        ctx: &InboundPacketCtx,
+        rng: &mut dyn Rng,
+        announce_queue: Option<&mut AnnounceVerifyQueue>,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if ctx.packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE {
+            return;
+        }
+
+        if let Some(queue) = announce_queue {
+            self.try_enqueue_announce(ctx, rng, queue, actions);
+        } else {
+            self.process_inbound_announce(
+                &ctx.packet,
+                &ctx.original_raw,
+                ctx.iface,
+                ctx.now,
+                rng,
+                actions,
+            );
+        }
+    }
+
+    fn handle_inbound_local_delivery(
+        &self,
+        ctx: &InboundPacketCtx,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if (ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
+            || ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA)
+            && self
+                .local_destinations
+                .contains_key(&ctx.packet.destination_hash)
+        {
+            actions.push(TransportAction::DeliverLocal {
+                destination_hash: ctx.packet.destination_hash,
+                raw: ctx.packet.raw.clone(),
+                packet_hash: ctx.packet.packet_hash,
+                receiving_interface: ctx.iface,
+            });
+        }
     }
 
     // =========================================================================
@@ -918,15 +973,17 @@ impl TransportEngine {
         let announce_emitted = timebase_from_random_blob(&random_blob);
 
         self.process_verified_announce(
-            packet,
-            original_raw,
-            iface,
-            now,
+            VerifiedAnnounceCtx {
+                packet,
+                original_raw,
+                iface,
+                now,
+                validated,
+                received_from,
+                random_blob,
+                announce_emitted,
+            },
             rng,
-            validated,
-            received_from,
-            random_blob,
-            announce_emitted,
             actions,
         );
     }
@@ -1015,110 +1072,111 @@ impl TransportEngine {
 
     fn try_enqueue_announce(
         &mut self,
-        packet: &RawPacket,
-        original_raw: &[u8],
-        iface: InterfaceId,
-        now: f64,
+        ctx: &InboundPacketCtx,
         rng: &mut dyn Rng,
         announce_queue: &mut AnnounceVerifyQueue,
         actions: &mut Vec<TransportAction>,
     ) {
-        if packet.flags.destination_type != constants::DESTINATION_SINGLE {
+        if ctx.packet.flags.destination_type != constants::DESTINATION_SINGLE {
             return;
         }
 
-        let has_ratchet = packet.flags.context_flag == constants::FLAG_SET;
-        let announce = match AnnounceData::unpack(&packet.data, has_ratchet) {
+        let has_ratchet = ctx.packet.flags.context_flag == constants::FLAG_SET;
+        let announce = match AnnounceData::unpack(&ctx.packet.data, has_ratchet) {
             Ok(a) => a,
             Err(_) => return,
         };
 
-        let received_from = self.announce_received_from(packet, now);
+        let received_from = self.announce_received_from(&ctx.packet, ctx.now);
 
         if self
             .local_destinations
-            .contains_key(&packet.destination_hash)
+            .contains_key(&ctx.packet.destination_hash)
         {
             log::debug!(
                 "Announce:skipping local destination {:02x}{:02x}{:02x}{:02x}..",
-                packet.destination_hash[0],
-                packet.destination_hash[1],
-                packet.destination_hash[2],
-                packet.destination_hash[3],
+                ctx.packet.destination_hash[0],
+                ctx.packet.destination_hash[1],
+                ctx.packet.destination_hash[2],
+                ctx.packet.destination_hash[3],
             );
             return;
         }
 
-        if self.should_hold_announce(packet, original_raw, iface, now) {
+        if self.should_hold_announce(&ctx.packet, &ctx.original_raw, ctx.iface, ctx.now) {
             return;
         }
 
         let sig_cache_key =
-            Self::announce_sig_cache_key(packet.destination_hash, &announce.signature);
+            Self::announce_sig_cache_key(ctx.packet.destination_hash, &announce.signature);
         if self.announce_sig_cache.contains(&sig_cache_key) {
             let validated = announce.to_validated_unchecked();
-            let random_blob = match extract_random_blob(&packet.data) {
+            let random_blob = match extract_random_blob(&ctx.packet.data) {
                 Some(b) => b,
                 None => return,
             };
             let announce_emitted = timebase_from_random_blob(&random_blob);
             self.process_verified_announce(
-                packet,
-                original_raw,
-                iface,
-                now,
+                VerifiedAnnounceCtx {
+                    packet: &ctx.packet,
+                    original_raw: &ctx.original_raw,
+                    iface: ctx.iface,
+                    now: ctx.now,
+                    validated,
+                    received_from,
+                    random_blob,
+                    announce_emitted,
+                },
                 rng,
-                validated,
-                received_from,
-                random_blob,
-                announce_emitted,
                 actions,
             );
             return;
         }
 
-        if packet.context == constants::CONTEXT_PATH_RESPONSE {
-            let Ok(validated) = announce.validate(&packet.destination_hash) else {
+        if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
+            let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
                 return;
             };
-            self.announce_sig_cache.insert(sig_cache_key, now);
-            let random_blob = match extract_random_blob(&packet.data) {
+            self.announce_sig_cache.insert(sig_cache_key, ctx.now);
+            let random_blob = match extract_random_blob(&ctx.packet.data) {
                 Some(b) => b,
                 None => return,
             };
             let announce_emitted = timebase_from_random_blob(&random_blob);
             self.process_verified_announce(
-                packet,
-                original_raw,
-                iface,
-                now,
+                VerifiedAnnounceCtx {
+                    packet: &ctx.packet,
+                    original_raw: &ctx.original_raw,
+                    iface: ctx.iface,
+                    now: ctx.now,
+                    validated,
+                    received_from,
+                    random_blob,
+                    announce_emitted,
+                },
                 rng,
-                validated,
-                received_from,
-                random_blob,
-                announce_emitted,
                 actions,
             );
             return;
         }
 
-        let random_blob = match extract_random_blob(&packet.data) {
+        let random_blob = match extract_random_blob(&ctx.packet.data) {
             Some(b) => b,
             None => return,
         };
         let announce_emitted = timebase_from_random_blob(&random_blob);
         let key = AnnounceVerifyKey {
-            destination_hash: packet.destination_hash,
+            destination_hash: ctx.packet.destination_hash,
             random_blob,
             received_from,
         };
         let pending = PendingAnnounce {
-            original_raw: original_raw.to_vec(),
-            packet: packet.clone(),
-            interface: iface,
+            original_raw: ctx.original_raw.clone(),
+            packet: ctx.packet.clone(),
+            interface: ctx.iface,
             received_from,
-            queued_at: now,
-            best_hops: packet.hops,
+            queued_at: ctx.now,
+            best_hops: ctx.packet.hops,
             emission_ts: announce_emitted,
             random_blob,
         };
@@ -1136,15 +1194,17 @@ impl TransportEngine {
         self.announce_sig_cache.insert(sig_cache_key, now);
         let mut actions = Vec::new();
         self.process_verified_announce(
-            &pending.packet,
-            &pending.original_raw,
-            pending.interface,
-            now,
+            VerifiedAnnounceCtx {
+                packet: &pending.packet,
+                original_raw: &pending.original_raw,
+                iface: pending.interface,
+                now,
+                validated,
+                received_from: pending.received_from,
+                random_blob: pending.random_blob,
+                announce_emitted: pending.emission_ts,
+            },
             rng,
-            validated,
-            pending.received_from,
-            pending.random_blob,
-            pending.emission_ts,
             &mut actions,
         );
         actions
@@ -1154,56 +1214,49 @@ impl TransportEngine {
 
     fn process_verified_announce(
         &mut self,
-        packet: &RawPacket,
-        original_raw: &[u8],
-        iface: InterfaceId,
-        now: f64,
+        ctx: VerifiedAnnounceCtx<'_>,
         rng: &mut dyn Rng,
-        validated: crate::announce::ValidatedAnnounce,
-        received_from: [u8; 16],
-        random_blob: [u8; 10],
-        announce_emitted: u64,
         actions: &mut Vec<TransportAction>,
     ) {
-        if self.is_blackholed(&validated.identity_hash, now) {
+        if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
             return;
         }
-        if packet.hops > constants::PATHFINDER_M {
+        if ctx.packet.hops > constants::PATHFINDER_M {
             return;
         }
 
         // Multi-path aware decision
-        let existing_set = self.path_table.get(&packet.destination_hash);
-        let is_unresponsive = self.path_is_unresponsive(&packet.destination_hash);
+        let existing_set = self.path_table.get(&ctx.packet.destination_hash);
+        let is_unresponsive = self.path_is_unresponsive(&ctx.packet.destination_hash);
 
         let mp_decision = decide_announce_multipath(
             existing_set,
-            packet.hops,
-            announce_emitted,
-            &random_blob,
-            &received_from,
+            ctx.packet.hops,
+            ctx.announce_emitted,
+            &ctx.random_blob,
+            &ctx.received_from,
             is_unresponsive,
-            now,
+            ctx.now,
             self.config.prefer_shorter_path,
         );
 
         if mp_decision == MultiPathDecision::Reject {
             log::debug!(
                 "Announce:path decision REJECT for dest={:02x}{:02x}{:02x}{:02x}..",
-                packet.destination_hash[0],
-                packet.destination_hash[1],
-                packet.destination_hash[2],
-                packet.destination_hash[3],
+                ctx.packet.destination_hash[0],
+                ctx.packet.destination_hash[1],
+                ctx.packet.destination_hash[2],
+                ctx.packet.destination_hash[3],
             );
             return;
         }
 
         // Rate limiting
-        let rate_blocked = if packet.context != constants::CONTEXT_PATH_RESPONSE {
-            if let Some(iface_info) = self.interfaces.get(&iface) {
+        let rate_blocked = if ctx.packet.context != constants::CONTEXT_PATH_RESPONSE {
+            if let Some(iface_info) = self.interfaces.get(&ctx.iface) {
                 self.rate_limiter.check_and_update(
-                    &packet.destination_hash,
-                    now,
+                    &ctx.packet.destination_hash,
+                    ctx.now,
                     iface_info.announce_rate_target,
                     iface_info.announce_rate_grace,
                     iface_info.announce_rate_penalty,
@@ -1218,17 +1271,17 @@ impl TransportEngine {
         // Get interface mode for expiry calculation
         let interface_mode = self
             .interfaces
-            .get(&iface)
+            .get(&ctx.iface)
             .map(|i| i.mode)
             .unwrap_or(constants::MODE_FULL);
 
-        let expires = compute_path_expires(now, interface_mode);
+        let expires = compute_path_expires(ctx.now, interface_mode);
 
         // Get existing random blobs from the matching path (same next_hop) or empty
         let existing_blobs = self
             .path_table
-            .get(&packet.destination_hash)
-            .and_then(|ps| ps.find_by_next_hop(&received_from))
+            .get(&ctx.packet.destination_hash)
+            .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
             .map(|e| e.random_blobs.clone())
             .unwrap_or_default();
 
@@ -1237,115 +1290,115 @@ impl TransportEngine {
         rng.fill_bytes(&mut rng_bytes);
         let rng_value = (u64::from_le_bytes(rng_bytes) as f64) / (u64::MAX as f64);
 
-        let is_path_response = packet.context == constants::CONTEXT_PATH_RESPONSE;
+        let is_path_response = ctx.packet.context == constants::CONTEXT_PATH_RESPONSE;
 
         let (path_entry, announce_entry) = announce_proc::process_validated_announce(
-            packet.destination_hash,
-            packet.hops,
-            &packet.data,
-            &packet.raw,
-            packet.packet_hash,
-            packet.flags.context_flag,
-            received_from,
-            iface,
-            now,
+            ctx.packet.destination_hash,
+            ctx.packet.hops,
+            &ctx.packet.data,
+            &ctx.packet.raw,
+            ctx.packet.packet_hash,
+            ctx.packet.flags.context_flag,
+            ctx.received_from,
+            ctx.iface,
+            ctx.now,
             existing_blobs,
-            random_blob,
+            ctx.random_blob,
             expires,
             rng_value,
             self.config.transport_enabled,
             is_path_response,
             rate_blocked,
-            Some(original_raw.to_vec()),
+            Some(ctx.original_raw.to_vec()),
         );
 
         // Emit CacheAnnounce for disk caching (pre-hop-increment raw)
         actions.push(TransportAction::CacheAnnounce {
-            packet_hash: packet.packet_hash,
-            raw: original_raw.to_vec(),
+            packet_hash: ctx.packet.packet_hash,
+            raw: ctx.original_raw.to_vec(),
         });
 
         // Store path via upsert into PathSet
-        self.upsert_path_destination(packet.destination_hash, path_entry, now);
+        self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now);
 
         // If receiving interface has a tunnel_id, store path in tunnel table too
-        if let Some(tunnel_id) = self.interfaces.get(&iface).and_then(|i| i.tunnel_id) {
+        if let Some(tunnel_id) = self.interfaces.get(&ctx.iface).and_then(|i| i.tunnel_id) {
             let blobs = self
                 .path_table
-                .get(&packet.destination_hash)
-                .and_then(|ps| ps.find_by_next_hop(&received_from))
+                .get(&ctx.packet.destination_hash)
+                .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
                 .map(|e| e.random_blobs.clone())
                 .unwrap_or_default();
             self.tunnel_table.store_tunnel_path(
                 &tunnel_id,
-                packet.destination_hash,
+                ctx.packet.destination_hash,
                 tunnel::TunnelPath {
-                    timestamp: now,
-                    received_from,
-                    hops: packet.hops,
+                    timestamp: ctx.now,
+                    received_from: ctx.received_from,
+                    hops: ctx.packet.hops,
                     expires,
                     random_blobs: blobs,
-                    packet_hash: packet.packet_hash,
+                    packet_hash: ctx.packet.packet_hash,
                 },
-                now,
+                ctx.now,
                 self.config.destination_timeout_secs,
                 self.config.max_tunnel_destinations_total,
             );
         }
 
         // Mark path as unknown state on update
-        self.path_states.remove(&packet.destination_hash);
+        self.path_states.remove(&ctx.packet.destination_hash);
 
         // Store announce for retransmission
         if let Some(ann) = announce_entry {
-            self.insert_announce_entry(packet.destination_hash, ann, now);
+            self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
         }
 
         // Emit actions
         actions.push(TransportAction::AnnounceReceived {
-            destination_hash: packet.destination_hash,
-            identity_hash: validated.identity_hash,
-            public_key: validated.public_key,
-            name_hash: validated.name_hash,
-            random_hash: validated.random_hash,
-            app_data: validated.app_data,
-            hops: packet.hops,
-            receiving_interface: iface,
+            destination_hash: ctx.packet.destination_hash,
+            identity_hash: ctx.validated.identity_hash,
+            public_key: ctx.validated.public_key,
+            name_hash: ctx.validated.name_hash,
+            random_hash: ctx.validated.random_hash,
+            app_data: ctx.validated.app_data,
+            hops: ctx.packet.hops,
+            receiving_interface: ctx.iface,
         });
 
         actions.push(TransportAction::PathUpdated {
-            destination_hash: packet.destination_hash,
-            hops: packet.hops,
-            next_hop: received_from,
-            interface: iface,
+            destination_hash: ctx.packet.destination_hash,
+            hops: ctx.packet.hops,
+            next_hop: ctx.received_from,
+            interface: ctx.iface,
         });
 
         // Forward announce to local clients if any are connected
         if self.has_local_clients() {
             actions.push(TransportAction::ForwardToLocalClients {
-                raw: packet.raw.clone(),
-                exclude: Some(iface),
+                raw: ctx.packet.raw.clone(),
+                exclude: Some(ctx.iface),
             });
         }
 
         // Check for discovery path requests waiting for this announce
-        if let Some(pr_entry) = self.discovery_path_requests_waiting(&packet.destination_hash) {
+        if let Some(pr_entry) = self.discovery_path_requests_waiting(&ctx.packet.destination_hash) {
             // Build a path response announce and queue it
             let entry = AnnounceEntry {
-                timestamp: now,
-                retransmit_timeout: now,
+                timestamp: ctx.now,
+                retransmit_timeout: ctx.now,
                 retries: constants::PATHFINDER_R,
-                received_from,
-                hops: packet.hops,
-                packet_raw: packet.raw.clone(),
-                packet_data: packet.data.clone(),
-                destination_hash: packet.destination_hash,
-                context_flag: packet.flags.context_flag,
+                received_from: ctx.received_from,
+                hops: ctx.packet.hops,
+                packet_raw: ctx.packet.raw.clone(),
+                packet_data: ctx.packet.data.clone(),
+                destination_hash: ctx.packet.destination_hash,
+                context_flag: ctx.packet.flags.context_flag,
                 local_rebroadcasts: 0,
                 block_rebroadcasts: true,
                 attached_interface: Some(pr_entry),
             };
-            self.insert_announce_entry(packet.destination_hash, entry, now);
+            self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
         }
     }
 
@@ -1507,34 +1560,44 @@ impl TransportEngine {
 
     /// Periodic maintenance. Call regularly (e.g., every 250ms).
     pub fn tick(&mut self, now: f64, rng: &mut dyn Rng) -> Vec<TransportAction> {
-        let mut actions = Vec::new();
+        let mut ctx = TickCtx {
+            now,
+            rng,
+            actions: Vec::new(),
+        };
+        self.process_tick_pending_announces(&mut ctx);
 
-        // Process pending announces
-        if now > self.announces_last_checked + constants::ANNOUNCES_CHECK_INTERVAL {
-            self.cull_expired_announce_entries(now);
-            self.enforce_announce_retention_cap(now);
-            if let Some(ref identity_hash) = self.config.identity_hash {
-                let ih = *identity_hash;
-                let announce_actions = jobs::process_pending_announces(
-                    &mut self.announce_table,
-                    &mut self.held_announces,
-                    &ih,
-                    now,
-                );
-                // Gate retransmitted announces through bandwidth queues
-                let gated = self.gate_retransmit_actions(announce_actions, now);
-                actions.extend(gated);
-            }
-            self.cull_expired_announce_entries(now);
-            self.enforce_announce_retention_cap(now);
-            self.announces_last_checked = now;
+        let mut queue_actions = self.announce_queues.process_queues(now, &self.interfaces);
+        ctx.actions.append(&mut queue_actions);
+
+        self.process_tick_ingress_release(&mut ctx);
+        self.cull_tick_tables(&mut ctx);
+        ctx.actions
+    }
+
+    fn process_tick_pending_announces(&mut self, ctx: &mut TickCtx<'_>) {
+        if ctx.now <= self.announces_last_checked + constants::ANNOUNCES_CHECK_INTERVAL {
+            return;
         }
 
-        // Process announce queues — dequeue waiting announces when bandwidth available
-        let mut queue_actions = self.announce_queues.process_queues(now, &self.interfaces);
-        actions.append(&mut queue_actions);
+        self.cull_expired_announce_entries(ctx.now);
+        self.enforce_announce_retention_cap(ctx.now);
+        if let Some(identity_hash) = self.config.identity_hash {
+            let announce_actions = jobs::process_pending_announces(
+                &mut self.announce_table,
+                &mut self.held_announces,
+                &identity_hash,
+                ctx.now,
+            );
+            let gated = self.gate_retransmit_actions(announce_actions, ctx.now);
+            ctx.actions.extend(gated);
+        }
+        self.cull_expired_announce_entries(ctx.now);
+        self.enforce_announce_retention_cap(ctx.now);
+        self.announces_last_checked = ctx.now;
+    }
 
-        // Process ingress control: release held announces
+    fn process_tick_ingress_release(&mut self, ctx: &mut TickCtx<'_>) {
         let ic_interfaces = self.ingress_control.interfaces_with_held();
         for iface_id in ic_interfaces {
             let (ia_freq, started, ingress_config) = match self.interfaces.get(&iface_id) {
@@ -1549,35 +1612,34 @@ impl TransportEngine {
                 &ingress_config,
                 ia_freq,
                 started,
-                now,
+                ctx.now,
             ) {
                 let released_actions =
-                    self.handle_inbound(&held.raw, held.receiving_interface, now, rng);
-                actions.extend(released_actions);
+                    self.handle_inbound(&held.raw, held.receiving_interface, ctx.now, ctx.rng);
+                ctx.actions.extend(released_actions);
             }
         }
+    }
 
-        // Cull tables
-        if now > self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
-            jobs::cull_path_table(&mut self.path_table, &self.interfaces, now);
-            jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, now);
-            let (_culled, link_closed_actions) =
-                jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
-            actions.extend(link_closed_actions);
-            jobs::cull_path_states(&mut self.path_states, &self.path_table);
-            self.cull_blackholed(now);
-            // Cull expired discovery path requests
-            self.discovery_path_requests
-                .retain(|_, req| now - req.timestamp < constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
-            // Cull tunnels: void missing interfaces, then remove expired
-            self.tunnel_table
-                .void_missing_interfaces(|id| self.interfaces.contains_key(id));
-            self.tunnel_table.cull(now);
-            self.announce_sig_cache.cull(now);
-            self.tables_last_culled = now;
+    fn cull_tick_tables(&mut self, ctx: &mut TickCtx<'_>) {
+        if ctx.now <= self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
+            return;
         }
 
-        actions
+        jobs::cull_path_table(&mut self.path_table, &self.interfaces, ctx.now);
+        jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
+        let (_culled, link_closed_actions) =
+            jobs::cull_link_table(&mut self.link_table, &self.interfaces, ctx.now);
+        ctx.actions.extend(link_closed_actions);
+        jobs::cull_path_states(&mut self.path_states, &self.path_table);
+        self.cull_blackholed(ctx.now);
+        self.discovery_path_requests
+            .retain(|_, req| ctx.now - req.timestamp < constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
+        self.tunnel_table
+            .void_missing_interfaces(|id| self.interfaces.contains_key(id));
+        self.tunnel_table.cull(ctx.now);
+        self.announce_sig_cache.cull(ctx.now);
+        self.tables_last_culled = ctx.now;
     }
 
     /// Gate retransmitted announce actions through per-interface bandwidth queues.
@@ -1701,147 +1763,142 @@ impl TransportEngine {
         interface_id: InterfaceId,
         now: f64,
     ) -> Vec<TransportAction> {
-        let mut actions = Vec::new();
+        let Some(ctx) = self.parse_path_request(data, interface_id, now) else {
+            return Vec::new();
+        };
+        if self.local_destinations.contains_key(&ctx.destination_hash) {
+            return Vec::new();
+        }
+        if self.config.transport_enabled && self.has_path(&ctx.destination_hash) {
+            self.handle_known_path_request(&ctx);
+            return Vec::new();
+        }
+        if self.config.transport_enabled {
+            return self.handle_discovery_path_request(&ctx);
+        }
+        Vec::new()
+    }
 
+    fn parse_path_request<'a>(
+        &mut self,
+        data: &'a [u8],
+        interface_id: InterfaceId,
+        now: f64,
+    ) -> Option<PathRequestCtx<'a>> {
         if data.len() < 16 {
-            return actions;
+            return None;
         }
 
         let mut destination_hash = [0u8; 16];
         destination_hash.copy_from_slice(&data[..16]);
 
-        // Extract requesting transport instance
-        let _requesting_transport_id = if data.len() > 32 {
-            let mut id = [0u8; 16];
-            id.copy_from_slice(&data[16..32]);
-            Some(id)
-        } else {
-            None
-        };
-
-        // Extract tag
         let tag_bytes = if data.len() > 32 {
             Some(&data[32..])
         } else if data.len() > 16 {
             Some(&data[16..])
         } else {
             None
+        }?;
+
+        let tag_len = tag_bytes.len().min(16);
+        let mut unique_tag = [0u8; 32];
+        unique_tag[..16].copy_from_slice(&destination_hash);
+        unique_tag[16..16 + tag_len].copy_from_slice(&tag_bytes[..tag_len]);
+        if !self.insert_discovery_pr_tag(unique_tag) {
+            return None;
+        }
+
+        Some(PathRequestCtx {
+            data,
+            interface_id,
+            now,
+            destination_hash,
+        })
+    }
+
+    fn handle_known_path_request(&mut self, ctx: &PathRequestCtx<'_>) {
+        let Some(path) = self
+            .path_table
+            .get(&ctx.destination_hash)
+            .and_then(|ps| ps.primary())
+            .cloned()
+        else {
+            return;
         };
 
-        if let Some(tag) = tag_bytes {
-            let tag_len = tag.len().min(16);
-            let mut unique_tag = [0u8; 32];
-            unique_tag[..16].copy_from_slice(&destination_hash);
-            unique_tag[16..16 + tag_len].copy_from_slice(&tag[..tag_len]);
+        if let Some(recv_info) = self.interfaces.get(&ctx.interface_id) {
+            if recv_info.mode == constants::MODE_ROAMING
+                && path.receiving_interface == ctx.interface_id
+            {
+                return;
+            }
+        }
 
-            if !self.insert_discovery_pr_tag(unique_tag) {
-                return actions; // Duplicate tag
+        let Some(raw) = path.announce_raw.as_ref() else {
+            return;
+        };
+        if let Some(existing) = self.announce_table.remove(&ctx.destination_hash) {
+            self.insert_held_announce(ctx.destination_hash, existing, ctx.now);
+        }
+        let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&ctx.interface_id) {
+            let base = ctx.now + constants::PATH_REQUEST_GRACE;
+            if iface_info.mode == constants::MODE_ROAMING {
+                base + constants::PATH_REQUEST_RG
+            } else {
+                base
             }
         } else {
-            return actions; // Tagless request
+            ctx.now + constants::PATH_REQUEST_GRACE
+        };
+
+        let Ok(parsed) = RawPacket::unpack(raw) else {
+            return;
+        };
+
+        let entry = AnnounceEntry {
+            timestamp: ctx.now,
+            retransmit_timeout,
+            retries: constants::PATHFINDER_R,
+            received_from: path.next_hop,
+            hops: path.hops,
+            packet_raw: raw.clone(),
+            packet_data: parsed.data,
+            destination_hash: ctx.destination_hash,
+            context_flag: parsed.flags.context_flag,
+            local_rebroadcasts: 0,
+            block_rebroadcasts: true,
+            attached_interface: Some(ctx.interface_id),
+        };
+
+        self.insert_announce_entry(ctx.destination_hash, entry, ctx.now);
+    }
+
+    fn handle_discovery_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> Vec<TransportAction> {
+        let should_discover = self
+            .interfaces
+            .get(&ctx.interface_id)
+            .map(|info| constants::DISCOVER_PATHS_FOR.contains(&info.mode))
+            .unwrap_or(false);
+        if !should_discover {
+            return Vec::new();
         }
 
-        // If destination is local, the caller should handle the announce
-        if self.local_destinations.contains_key(&destination_hash) {
-            return actions;
-        }
+        self.discovery_path_requests.insert(
+            ctx.destination_hash,
+            DiscoveryPathRequest {
+                timestamp: ctx.now,
+                requesting_interface: ctx.interface_id,
+            },
+        );
 
-        // If we know the path and transport is enabled, queue retransmit
-        if self.config.transport_enabled && self.has_path(&destination_hash) {
-            let path = self
-                .path_table
-                .get(&destination_hash)
-                .unwrap()
-                .primary()
-                .unwrap()
-                .clone();
-
-            // ROAMING loop prevention (Python Transport.py:2731-2732):
-            // If the receiving interface is ROAMING and the known path's next-hop
-            // is on the same interface, don't answer — it would loop.
-            if let Some(recv_info) = self.interfaces.get(&interface_id) {
-                if recv_info.mode == constants::MODE_ROAMING
-                    && path.receiving_interface == interface_id
-                {
-                    return actions;
-                }
-            }
-
-            // We need the original announce raw bytes to build a valid retransmit.
-            // Without them we can't populate packet_raw/packet_data and the response
-            // would be a header-only packet that Python RNS discards.
-            if let Some(ref raw) = path.announce_raw {
-                // Check if there's already an announce in the table
-                if let Some(existing) = self.announce_table.remove(&destination_hash) {
-                    self.insert_held_announce(destination_hash, existing, now);
-                }
-                let retransmit_timeout =
-                    if let Some(iface_info) = self.interfaces.get(&interface_id) {
-                        let base = now + constants::PATH_REQUEST_GRACE;
-                        if iface_info.mode == constants::MODE_ROAMING {
-                            base + constants::PATH_REQUEST_RG
-                        } else {
-                            base
-                        }
-                    } else {
-                        now + constants::PATH_REQUEST_GRACE
-                    };
-
-                let (packet_data, context_flag) = match RawPacket::unpack(raw) {
-                    Ok(parsed) => (parsed.data, parsed.flags.context_flag),
-                    Err(_) => {
-                        return actions;
-                    }
-                };
-
-                let entry = AnnounceEntry {
-                    timestamp: now,
-                    retransmit_timeout,
-                    retries: constants::PATHFINDER_R,
-                    received_from: path.next_hop,
-                    hops: path.hops,
-                    packet_raw: raw.clone(),
-                    packet_data,
-                    destination_hash,
-                    context_flag,
-                    local_rebroadcasts: 0,
-                    block_rebroadcasts: true,
-                    attached_interface: Some(interface_id),
-                };
-
-                self.insert_announce_entry(destination_hash, entry, now);
-            }
-        } else if self.config.transport_enabled {
-            // Unknown path: check if receiving interface is in DISCOVER_PATHS_FOR
-            let should_discover = self
-                .interfaces
-                .get(&interface_id)
-                .map(|info| constants::DISCOVER_PATHS_FOR.contains(&info.mode))
-                .unwrap_or(false);
-
-            if should_discover {
-                // Store discovery request so we can respond when the announce arrives
-                self.discovery_path_requests.insert(
-                    destination_hash,
-                    DiscoveryPathRequest {
-                        timestamp: now,
-                        requesting_interface: interface_id,
-                    },
-                );
-
-                // Forward the raw path request data on all other OUT-capable interfaces
-                for (_, iface_info) in self.interfaces.iter() {
-                    if iface_info.id != interface_id && iface_info.out_capable {
-                        actions.push(TransportAction::SendOnInterface {
-                            interface: iface_info.id,
-                            raw: data.to_vec(),
-                        });
-                    }
-                }
-            }
-        }
-
-        actions
+        self.interfaces
+            .values()
+            .filter(|iface_info| iface_info.id != ctx.interface_id && iface_info.out_capable)
+            .map(|iface_info| TransportAction::SendOnInterface {
+                interface: iface_info.id,
+                raw: ctx.data.to_vec(),
+            })
+            .collect()
     }
 
     // =========================================================================
