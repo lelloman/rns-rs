@@ -5,6 +5,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
+use rusqlite::Connection;
 
 use rns_net::{
     InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
@@ -303,6 +305,177 @@ fn sample_server_config_snapshot() -> ServerConfigSnapshot {
     }
 }
 
+fn unique_temp_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "rns-ctl-{}-{}-{}",
+        name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ))
+}
+
+fn seed_stats_db(path: &PathBuf) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE packet_counters (
+            interface_key TEXT NOT NULL,
+            interface_id INTEGER NULL,
+            direction TEXT NOT NULL,
+            packet_type TEXT NOT NULL,
+            packets INTEGER NOT NULL,
+            bytes INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (interface_key, direction, packet_type)
+        );
+        CREATE TABLE seen_announces (
+            destination_hash BLOB NOT NULL,
+            random_hash BLOB NOT NULL,
+            identity_hash BLOB NOT NULL,
+            name_hash BLOB NOT NULL,
+            hops INTEGER NOT NULL,
+            interface_id INTEGER NULL,
+            seen_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (destination_hash, random_hash)
+        );
+        CREATE TABLE seen_destinations (
+            destination_hash BLOB NOT NULL PRIMARY KEY,
+            identity_hash BLOB NOT NULL,
+            name_hash BLOB NOT NULL,
+            first_seen_ms INTEGER NOT NULL,
+            last_seen_ms INTEGER NOT NULL,
+            announce_count INTEGER NOT NULL DEFAULT 1,
+            last_hops INTEGER NOT NULL,
+            last_interface_id INTEGER NULL
+        );
+        CREATE TABLE process_samples (
+            ts_ms INTEGER NOT NULL PRIMARY KEY,
+            pid INTEGER NOT NULL,
+            rss_bytes INTEGER NOT NULL,
+            cpu_user_ms INTEGER NOT NULL,
+            cpu_system_ms INTEGER NOT NULL,
+            threads INTEGER NOT NULL,
+            fds INTEGER NOT NULL
+        );
+        CREATE TABLE provider_drop_samples (
+            ts_ms INTEGER NOT NULL PRIMARY KEY,
+            dropped_events INTEGER NOT NULL
+        );",
+    )
+    .unwrap();
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let bucket_2h = now_ms - 2 * 60 * 60 * 1000;
+    let bucket_1h = now_ms - 60 * 60 * 1000;
+    let d1 = [0x11u8; 16];
+    let d2 = [0x22u8; 16];
+    let r1 = [0x31u8; 16];
+    let r2 = [0x32u8; 16];
+    let r3 = [0x33u8; 16];
+    let i1 = [0x41u8; 16];
+    let i2 = [0x42u8; 16];
+    let n1 = [0x51u8; 10];
+    let n2 = [0x52u8; 10];
+
+    conn.execute(
+        "INSERT INTO seen_announces (
+            destination_hash, random_hash, identity_hash, name_hash, hops, interface_id, seen_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (&d1[..], &r1[..], &i1[..], &n1[..], 1, 7, bucket_2h),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO seen_announces (
+            destination_hash, random_hash, identity_hash, name_hash, hops, interface_id, seen_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (&d1[..], &r2[..], &i1[..], &n1[..], 1, 7, bucket_1h),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO seen_announces (
+            destination_hash, random_hash, identity_hash, name_hash, hops, interface_id, seen_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (&d2[..], &r3[..], &i2[..], &n2[..], 2, 8, bucket_1h + 1000),
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO seen_destinations (
+            destination_hash, identity_hash, name_hash, first_seen_ms, last_seen_ms,
+            announce_count, last_hops, last_interface_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        (&d1[..], &i1[..], &n1[..], bucket_2h, bucket_1h, 2, 1, 7),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO seen_destinations (
+            destination_hash, identity_hash, name_hash, first_seen_ms, last_seen_ms,
+            announce_count, last_hops, last_interface_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        (
+            &d2[..],
+            &i2[..],
+            &n2[..],
+            bucket_1h,
+            bucket_1h + 1000,
+            1,
+            2,
+            8,
+        ),
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO packet_counters (
+            interface_key, interface_id, direction, packet_type, packets, bytes, updated_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        ("iface:7", 7, "in", "announce", 12, 1200, bucket_1h),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO packet_counters (
+            interface_key, interface_id, direction, packet_type, packets, bytes, updated_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        ("iface:8", 8, "out", "data", 5, 900, bucket_1h + 1000),
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO process_samples (
+            ts_ms, pid, rss_bytes, cpu_user_ms, cpu_system_ms, threads, fds
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (bucket_2h, 999, 10_000_000i64, 100i64, 50i64, 4i64, 12i64),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO process_samples (
+            ts_ms, pid, rss_bytes, cpu_user_ms, cpu_system_ms, threads, fds
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (bucket_1h, 999, 12_000_000i64, 180i64, 70i64, 5i64, 14i64),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO provider_drop_samples (ts_ms, dropped_events) VALUES (?1, ?2)",
+        (bucket_1h, 3i64),
+    )
+    .unwrap();
+}
+
+fn configure_stats_db(server: &TestServer, stats_db_path: &PathBuf) {
+    let mut snapshot = sample_server_config_snapshot();
+    snapshot.stats_db_path = stats_db_path.display().to_string();
+    let mut state = server.ctx.state.write().unwrap();
+    state.server_config = Some(snapshot);
+}
+
 fn sample_server_config_schema() -> ServerConfigSchemaSnapshot {
     ServerConfigSchemaSnapshot {
         format: "rns-server.json".into(),
@@ -426,10 +599,12 @@ fn test_get_node_reports_drain_status() {
     assert_eq!(json["drain"]["state"], "draining");
     assert_eq!(json["drain"]["drain_complete"], true);
     assert!(json["drain"]["drain_age_seconds"].as_f64().unwrap() >= 0.0);
-    assert!(json["drain"]["deadline_remaining_seconds"]
-        .as_f64()
-        .unwrap()
-        > 0.0);
+    assert!(
+        json["drain"]["deadline_remaining_seconds"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
     assert_eq!(json["drain"]["interface_writer_queued_frames"], 0);
     assert_eq!(json["drain"]["provider_backlog_events"], 0);
     assert_eq!(json["drain"]["provider_consumer_queued_events"], 0);
@@ -555,6 +730,87 @@ fn test_get_packets_empty() {
     let packets = json["packets"].as_array().unwrap();
     assert!(packets.is_empty());
     server.shutdown();
+}
+
+#[test]
+fn test_stats_summary_and_rankings() {
+    let server = start_test_server();
+    let stats_db_path = unique_temp_path("stats-summary.db");
+    seed_stats_db(&stats_db_path);
+    configure_stats_db(&server, &stats_db_path);
+
+    let summary = http_get(server.port, "/api/stats/summary?window=24h");
+    assert_eq!(summary.status, 200);
+    let summary_json = summary.json();
+    assert_eq!(summary_json["announces"]["total"], 3);
+    assert_eq!(summary_json["announces"]["unique_destinations"], 2);
+    assert_eq!(summary_json["announces"]["unique_identities"], 2);
+    assert_eq!(summary_json["packets"]["rx_packets"], 12);
+    assert_eq!(summary_json["packets"]["tx_packets"], 5);
+    assert_eq!(summary_json["system"]["provider_dropped_events"], 3);
+    assert_eq!(summary_json["system"]["latest_process_sample"]["pid"], 999);
+
+    let interfaces = http_get(server.port, "/api/stats/interfaces?window=24h&limit=5");
+    assert_eq!(interfaces.status, 200);
+    let interfaces_json = interfaces.json();
+    let interface_rows = interfaces_json["interfaces"].as_array().unwrap();
+    assert_eq!(interface_rows.len(), 2);
+    assert_eq!(interface_rows[0]["interface_id"], 7);
+    assert_eq!(interface_rows[0]["announce_count"], 2);
+
+    let destinations = http_get(server.port, "/api/stats/destinations?window=24h&limit=1");
+    assert_eq!(destinations.status, 200);
+    let destinations_json = destinations.json();
+    let destination_rows = destinations_json["destinations"].as_array().unwrap();
+    assert_eq!(destination_rows.len(), 1);
+    assert_eq!(destination_rows[0]["announce_count"], 2);
+    assert_eq!(
+        destination_rows[0]["destination_hash"].as_str().unwrap(),
+        "11111111111111111111111111111111"
+    );
+
+    let packets = http_get(server.port, "/api/stats/packets?window=24h&limit=10");
+    assert_eq!(packets.status, 200);
+    let packets_json = packets.json();
+    let counters = packets_json["counters"].as_array().unwrap();
+    assert_eq!(counters.len(), 2);
+
+    server.shutdown();
+    let _ = std::fs::remove_file(stats_db_path);
+}
+
+#[test]
+fn test_stats_timeseries_and_system_anomalies() {
+    let server = start_test_server();
+    let stats_db_path = unique_temp_path("stats-series.db");
+    seed_stats_db(&stats_db_path);
+    configure_stats_db(&server, &stats_db_path);
+
+    let announces = http_get(server.port, "/api/stats/announces?window=6h&bucket=1h");
+    assert_eq!(announces.status, 200);
+    let announces_json = announces.json();
+    let series = announces_json["series"].as_array().unwrap();
+    assert!(series.len() >= 6);
+    assert!(
+        series
+            .iter()
+            .map(|bucket| bucket["announce_count"].as_i64().unwrap_or(0))
+            .sum::<i64>()
+            >= 3
+    );
+
+    let system = http_get(server.port, "/api/stats/system?window=6h&bucket=1h");
+    assert_eq!(system.status, 200);
+    let system_json = system.json();
+    assert_eq!(system_json["latest_process_sample"]["fds"], 14);
+    let anomaly_buckets = system_json["anomalies"]["provider_drop_buckets"]
+        .as_array()
+        .unwrap();
+    assert_eq!(anomaly_buckets.len(), 1);
+    assert_eq!(anomaly_buckets[0]["provider_dropped_events"], 3);
+
+    server.shutdown();
+    let _ = std::fs::remove_file(stats_db_path);
 }
 
 #[test]

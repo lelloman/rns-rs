@@ -2004,6 +2004,7 @@ dependencies = [
  "rns-core",
  "rns-crypto",
  "rns-net",
+ "rusqlite",
  "rustls",
  "rustls-pemfile",
  "serde",

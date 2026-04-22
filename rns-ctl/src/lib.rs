@@ -11,6 +11,7 @@ pub mod remote;
 pub mod server;
 pub mod sha1;
 pub mod state;
+pub mod stats_api;
 #[cfg(feature = "tls")]
 pub mod tls;
 pub mod ws;

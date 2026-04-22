@@ -10,6 +10,7 @@ use crate::auth::check_auth;
 use crate::encode::{from_base64, hex_to_array, to_base64, to_hex};
 use crate::http::{parse_query, HttpRequest, HttpResponse};
 use crate::state::{ControlPlaneConfigHandle, DestinationEntry, SharedState};
+use crate::stats_api;
 
 /// Handle for the node, wrapped so shutdown() can consume it.
 pub type NodeHandle = std::sync::Arc<std::sync::Mutex<Option<RnsNode>>>;
@@ -90,6 +91,12 @@ pub fn handle_request(
         ("GET", "/api/config/status") => handle_config_status(state),
         ("GET", "/api/processes") => handle_processes(state),
         ("GET", "/api/process_events") => handle_process_events(state),
+        ("GET", "/api/stats/summary") => stats_api::handle_summary(req, state),
+        ("GET", "/api/stats/announces") => stats_api::handle_announces(req, state),
+        ("GET", "/api/stats/interfaces") => stats_api::handle_interfaces(req, state),
+        ("GET", "/api/stats/destinations") => stats_api::handle_destinations(req, state),
+        ("GET", "/api/stats/packets") => stats_api::handle_packets(req, state),
+        ("GET", "/api/stats/system") => stats_api::handle_system(req, state),
         ("GET", path) if path.starts_with("/api/processes/") && path.ends_with("/logs") => {
             handle_process_logs(path, req, state)
         }
