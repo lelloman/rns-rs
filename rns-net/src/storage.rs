@@ -27,10 +27,15 @@ pub struct StoragePaths {
 /// A known destination entry.
 #[derive(Debug, Clone)]
 pub struct KnownDestination {
-    pub timestamp: f64,
-    pub packet_hash: [u8; 32],
+    pub identity_hash: [u8; 16],
     pub public_key: [u8; 64],
     pub app_data: Option<Vec<u8>>,
+    pub hops: u8,
+    pub received_at: f64,
+    pub receiving_interface: u64,
+    pub was_used: bool,
+    pub last_used_at: Option<f64>,
+    pub retained: bool,
 }
 
 /// Ensure all storage directories exist. Creates them if missing.
@@ -80,7 +85,10 @@ pub fn load_identity(path: &Path) -> io::Result<Identity> {
 
 /// Save known destinations to a msgpack file.
 ///
-/// Format matches Python: `{bytes(16): [timestamp, packet_hash, public_key, app_data], ...}`
+/// Format: `{bytes(16): [received_at, public_key, app_data, identity_hash, hops,
+/// receiving_interface, was_used, last_used_at, retained], ...}`
+///
+/// Legacy 4-element arrays are still accepted on load.
 pub fn save_known_destinations(
     destinations: &HashMap<[u8; 16], KnownDestination>,
     path: &Path,
@@ -96,14 +104,18 @@ pub fn save_known_destinations(
                 None => Value::Nil,
             };
             let value = Value::Array(vec![
-                // Python uses float for timestamp
-                // msgpack doesn't have native float in our codec, use uint (seconds)
-                // Actually Python stores as float via umsgpack. We'll store the integer
-                // part as uint for now (lossy but functional for interop basics).
-                Value::UInt(dest.timestamp as u64),
-                Value::Bin(dest.packet_hash.to_vec()),
+                Value::UInt(dest.received_at as u64),
                 Value::Bin(dest.public_key.to_vec()),
                 app_data,
+                Value::Bin(dest.identity_hash.to_vec()),
+                Value::UInt(dest.hops as u64),
+                Value::UInt(dest.receiving_interface),
+                Value::Bool(dest.was_used),
+                match dest.last_used_at {
+                    Some(last_used_at) => Value::UInt(last_used_at as u64),
+                    None => Value::Nil,
+                },
+                Value::Bool(dest.retained),
             ]);
             (key, value)
         })
@@ -151,18 +163,9 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             continue;
         }
 
-        let timestamp = arr[0].as_uint().unwrap_or(0) as f64;
+        let received_at = arr[0].as_uint().unwrap_or(0) as f64;
 
-        let pkt_hash_bytes = arr[1].as_bin().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected bin packet_hash")
-        })?;
-        if pkt_hash_bytes.len() != 32 {
-            continue;
-        }
-        let mut packet_hash = [0u8; 32];
-        packet_hash.copy_from_slice(pkt_hash_bytes);
-
-        let pub_key_bytes = arr[2]
+        let pub_key_bytes = arr[1]
             .as_bin()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin public_key"))?;
         if pub_key_bytes.len() != 64 {
@@ -171,19 +174,50 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
         let mut public_key = [0u8; 64];
         public_key.copy_from_slice(pub_key_bytes);
 
-        let app_data = if arr.len() > 3 {
-            arr[3].as_bin().map(|b| b.to_vec())
+        let app_data = if arr.len() > 2 {
+            arr[2].as_bin().map(|b| b.to_vec())
         } else {
             None
         };
 
+        let identity_hash = if arr.len() > 3 {
+            let hash_bytes = arr[3]
+                .as_bin()
+                .filter(|bytes| bytes.len() == 16)
+                .map(|bytes| {
+                    let mut hash = [0u8; 16];
+                    hash.copy_from_slice(bytes);
+                    hash
+                });
+            hash_bytes.unwrap_or_else(|| {
+                let identity = Identity::from_public_key(&public_key);
+                *identity.hash()
+            })
+        } else {
+            let identity = Identity::from_public_key(&public_key);
+            *identity.hash()
+        };
+        let hops = arr
+            .get(4)
+            .and_then(|value| value.as_uint())
+            .unwrap_or(0) as u8;
+        let receiving_interface = arr.get(5).and_then(|value| value.as_uint()).unwrap_or(0);
+        let was_used = arr.get(6).and_then(|value| value.as_bool()).unwrap_or(false);
+        let last_used_at = arr.get(7).and_then(|value| value.as_uint()).map(|value| value as f64);
+        let retained = arr.get(8).and_then(|value| value.as_bool()).unwrap_or(false);
+
         result.insert(
             dest_hash,
             KnownDestination {
-                timestamp,
-                packet_hash,
+                identity_hash,
                 public_key,
                 app_data,
+                hops,
+                received_at,
+                receiving_interface,
+                was_used,
+                last_used_at,
+                retained,
             },
         );
     }
@@ -288,19 +322,29 @@ mod tests {
         dests.insert(
             [0x01u8; 16],
             KnownDestination {
-                timestamp: 1700000000.0,
-                packet_hash: [0x42u8; 32],
+                identity_hash: [0x11u8; 16],
                 public_key: [0xABu8; 64],
                 app_data: Some(vec![0x01, 0x02, 0x03]),
+                hops: 2,
+                received_at: 1700000000.0,
+                receiving_interface: 7,
+                was_used: true,
+                last_used_at: Some(1700000010.0),
+                retained: true,
             },
         );
         dests.insert(
             [0x02u8; 16],
             KnownDestination {
-                timestamp: 1700000001.0,
-                packet_hash: [0x43u8; 32],
+                identity_hash: [0x22u8; 16],
                 public_key: [0xCDu8; 64],
                 app_data: None,
+                hops: 1,
+                received_at: 1700000001.0,
+                receiving_interface: 0,
+                was_used: false,
+                last_used_at: None,
+                retained: false,
             },
         );
 
@@ -310,13 +354,21 @@ mod tests {
         assert_eq!(loaded.len(), 2);
 
         let d1 = &loaded[&[0x01u8; 16]];
-        assert_eq!(d1.timestamp as u64, 1700000000);
-        assert_eq!(d1.packet_hash, [0x42u8; 32]);
+        assert_eq!(d1.identity_hash, [0x11u8; 16]);
         assert_eq!(d1.public_key, [0xABu8; 64]);
         assert_eq!(d1.app_data, Some(vec![0x01, 0x02, 0x03]));
+        assert_eq!(d1.hops, 2);
+        assert_eq!(d1.received_at as u64, 1700000000);
+        assert_eq!(d1.receiving_interface, 7);
+        assert!(d1.was_used);
+        assert_eq!(d1.last_used_at, Some(1700000010.0));
+        assert!(d1.retained);
 
         let d2 = &loaded[&[0x02u8; 16]];
         assert_eq!(d2.app_data, None);
+        assert!(!d2.was_used);
+        assert_eq!(d2.last_used_at, None);
+        assert!(!d2.retained);
 
         let _ = fs::remove_dir_all(&dir);
     }

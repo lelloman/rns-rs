@@ -365,6 +365,20 @@ pub struct BackboneInterfaceEntry {
     pub interface_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnownDestinationEntry {
+    pub dest_hash: [u8; 16],
+    pub identity_hash: [u8; 16],
+    pub public_key: [u8; 64],
+    pub app_data: Option<Vec<u8>>,
+    pub hops: u8,
+    pub received_at: f64,
+    pub receiving_interface: InterfaceId,
+    pub was_used: bool,
+    pub last_used_at: Option<f64>,
+    pub retained: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderBridgeConsumerStats {
     pub id: u64,
@@ -430,6 +444,8 @@ pub enum QueryRequest {
     HopsTo { dest_hash: [u8; 16] },
     /// Recall identity info for a destination.
     RecallIdentity { dest_hash: [u8; 16] },
+    /// List known-destination lifecycle state.
+    KnownDestinations,
     /// Get locally registered destinations.
     LocalDestinations,
     /// Get active links.
@@ -454,6 +470,14 @@ pub enum QueryRequest {
         hops: u8,
         received_at: f64,
     },
+    /// Restore a known destination with full lifecycle state.
+    RestoreKnownDestination(KnownDestinationEntry),
+    /// Mark a known destination as explicitly retained.
+    RetainKnownDestination { dest_hash: [u8; 16] },
+    /// Clear the retained flag on a known destination.
+    UnretainKnownDestination { dest_hash: [u8; 16] },
+    /// Mark a known destination as used.
+    MarkKnownDestinationUsed { dest_hash: [u8; 16] },
     /// Get discovered interfaces.
     DiscoveredInterfaces {
         only_available: bool,
@@ -519,11 +543,16 @@ pub enum QueryResponse {
     HasPath(bool),
     HopsTo(Option<u8>),
     RecallIdentity(Option<crate::common::destination::AnnouncedIdentity>),
+    KnownDestinations(Vec<KnownDestinationEntry>),
     LocalDestinations(Vec<LocalDestinationEntry>),
     Links(Vec<LinkInfoEntry>),
     Resources(Vec<ResourceInfoEntry>),
     InjectPath(bool),
     InjectIdentity(bool),
+    RestoreKnownDestination(bool),
+    RetainKnownDestination(bool),
+    UnretainKnownDestination(bool),
+    MarkKnownDestinationUsed(bool),
     /// List of discovered interfaces.
     DiscoveredInterfaces(Vec<crate::common::discovery::DiscoveredInterface>),
     /// Probe sent: (packet_hash, hops) or None if identity unknown.

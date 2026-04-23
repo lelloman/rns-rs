@@ -21,10 +21,11 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo,
-    DrainStatus, Event, EventReceiver, InterfaceStatsResponse, LifecycleState,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    DrainStatus, Event, EventReceiver, InterfaceStatsResponse, KnownDestinationEntry,
+    LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
+    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -443,6 +444,14 @@ struct SharedAnnounceRecord {
     app_data: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct KnownDestinationState {
+    announced: crate::destination::AnnouncedIdentity,
+    was_used: bool,
+    last_used_at: Option<f64>,
+    retained: bool,
+}
+
 /// The driver loop. Owns the engine and all interface entries.
 pub struct Driver {
     pub(crate) engine: TransportEngine,
@@ -468,8 +477,8 @@ pub struct Driver {
     pub(crate) last_management_announce: f64,
     /// Whether initial management announce has been sent (delayed 5s after start).
     pub(crate) initial_announce_sent: bool,
-    /// Cache of known announced identities, keyed by destination hash.
-    pub(crate) known_destinations: HashMap<[u8; 16], crate::destination::AnnouncedIdentity>,
+    /// Cache of known announced identities and lifecycle state, keyed by destination hash.
+    pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
     /// TTL for known destinations without an active path, in seconds.
     pub(crate) known_destinations_ttl: f64,
     /// Maximum number of retained known destinations.
@@ -794,12 +803,86 @@ impl Driver {
         announced: crate::destination::AnnouncedIdentity,
     ) {
         if let Some(existing) = self.known_destinations.get_mut(&dest_hash) {
-            *existing = announced;
+            existing.announced = announced;
             return;
         }
 
         self.enforce_known_destination_cap(true);
-        self.known_destinations.insert(dest_hash, announced);
+        self.known_destinations.insert(
+            dest_hash,
+            KnownDestinationState {
+                announced,
+                was_used: false,
+                last_used_at: None,
+                retained: false,
+            },
+        );
+    }
+
+    fn known_destination_entry(
+        dest_hash: [u8; 16],
+        state: &KnownDestinationState,
+    ) -> KnownDestinationEntry {
+        KnownDestinationEntry {
+            dest_hash,
+            identity_hash: state.announced.identity_hash.0,
+            public_key: state.announced.public_key,
+            app_data: state.announced.app_data.clone(),
+            hops: state.announced.hops,
+            received_at: state.announced.received_at,
+            receiving_interface: state.announced.receiving_interface,
+            was_used: state.was_used,
+            last_used_at: state.last_used_at,
+            retained: state.retained,
+        }
+    }
+
+    fn known_destination_entries(&self) -> Vec<KnownDestinationEntry> {
+        let mut entries: Vec<_> = self
+            .known_destinations
+            .iter()
+            .map(|(dest_hash, state)| Self::known_destination_entry(*dest_hash, state))
+            .collect();
+        entries.sort_by(|a, b| a.dest_hash.cmp(&b.dest_hash));
+        entries
+    }
+
+    fn mark_known_destination_used(&mut self, dest_hash: &[u8; 16]) -> bool {
+        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+            return false;
+        };
+        state.was_used = true;
+        state.last_used_at = Some(time::now());
+        true
+    }
+
+    fn retain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
+        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+            return false;
+        };
+        state.retained = true;
+        true
+    }
+
+    fn unretain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
+        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+            return false;
+        };
+        state.retained = false;
+        true
+    }
+
+    fn known_destination_announced(
+        &self,
+        dest_hash: &[u8; 16],
+    ) -> Option<crate::destination::AnnouncedIdentity> {
+        self.known_destinations
+            .get(dest_hash)
+            .map(|state| state.announced.clone())
+    }
+
+    fn known_destination_relevance_time(state: &KnownDestinationState) -> f64 {
+        state.last_used_at.unwrap_or(state.announced.received_at)
     }
 
     fn begin_drain(&mut self, timeout: Duration) {
@@ -1018,14 +1101,15 @@ impl Driver {
     ) -> Option<[u8; 16]> {
         self.known_destinations
             .iter()
-            .filter(|(dest_hash, _)| {
+            .filter(|(dest_hash, state)| {
                 include_protected
                     || (!active_dests.contains(*dest_hash)
-                        && !self.local_destinations.contains_key(*dest_hash))
+                        && !self.local_destinations.contains_key(*dest_hash)
+                        && !state.retained)
             })
             .min_by(|a, b| {
-                a.1.received_at
-                    .partial_cmp(&b.1.received_at)
+                Self::known_destination_relevance_time(a.1)
+                    .partial_cmp(&Self::known_destination_relevance_time(b.1))
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| a.0.cmp(b.0))
             })
@@ -4778,10 +4862,11 @@ impl Driver {
             let active_dests = self.engine.active_destination_hashes();
             let ttl = self.known_destinations_ttl;
             let kd_before = self.known_destinations.len();
-            self.known_destinations.retain(|k, announced| {
+            self.known_destinations.retain(|k, state| {
                 active_dests.contains(k)
                     || self.local_destinations.contains_key(k)
-                    || now - announced.received_at < ttl
+                    || state.retained
+                    || now - Self::known_destination_relevance_time(state) < ttl
             });
             let kd_removed = kd_before - self.known_destinations.len();
             let kd_evicted = self.enforce_known_destination_cap(false);
@@ -5043,7 +5128,7 @@ impl Driver {
     }
 
     fn known_destination_route_hint(&self, dest_hash: &[u8; 16]) -> Option<(InterfaceId, u8)> {
-        let announced = self.known_destinations.get(dest_hash)?;
+        let announced = &self.known_destinations.get(dest_hash)?.announced;
         let iface = announced.receiving_interface;
         if iface.0 == 0 {
             return None;
@@ -5238,6 +5323,9 @@ impl Driver {
                     } else {
                         None
                     };
+                    if recalled_route_hint.is_some() {
+                        let _ = self.mark_known_destination_used(&dest_hash);
+                    }
                     let attached_interface =
                         next_hop_interface.or(recalled_route_hint.map(|(iface, _)| iface));
                     let hops = self
@@ -6085,6 +6173,39 @@ impl Driver {
                 );
                 Some(QueryResponse::InjectIdentity(true))
             }
+            QueryRequest::RestoreKnownDestination(entry) => {
+                self.known_destinations.insert(
+                    entry.dest_hash,
+                    KnownDestinationState {
+                        announced: crate::destination::AnnouncedIdentity {
+                            dest_hash: rns_core::types::DestHash(entry.dest_hash),
+                            identity_hash: rns_core::types::IdentityHash(entry.identity_hash),
+                            public_key: entry.public_key,
+                            app_data: entry.app_data,
+                            hops: entry.hops,
+                            received_at: entry.received_at,
+                            receiving_interface: entry.receiving_interface,
+                        },
+                        was_used: entry.was_used,
+                        last_used_at: entry.last_used_at,
+                        retained: entry.retained,
+                    },
+                );
+                Some(QueryResponse::RestoreKnownDestination(true))
+            }
+            QueryRequest::RetainKnownDestination { dest_hash } => Some(
+                QueryResponse::RetainKnownDestination(self.retain_known_destination(&dest_hash)),
+            ),
+            QueryRequest::UnretainKnownDestination { dest_hash } => Some(
+                QueryResponse::UnretainKnownDestination(
+                    self.unretain_known_destination(&dest_hash),
+                ),
+            ),
+            QueryRequest::MarkKnownDestinationUsed { dest_hash } => Some(
+                QueryResponse::MarkKnownDestinationUsed(
+                    self.mark_known_destination_used(&dest_hash),
+                ),
+            ),
             _ => None,
         }
     }
@@ -6137,6 +6258,18 @@ impl Driver {
             }
             QueryRequest::InjectPath { .. } => QueryResponse::InjectPath(false),
             QueryRequest::InjectIdentity { .. } => QueryResponse::InjectIdentity(false),
+            QueryRequest::RestoreKnownDestination(..) => {
+                QueryResponse::RestoreKnownDestination(false)
+            }
+            QueryRequest::RetainKnownDestination { .. } => {
+                QueryResponse::RetainKnownDestination(false)
+            }
+            QueryRequest::UnretainKnownDestination { .. } => {
+                QueryResponse::UnretainKnownDestination(false)
+            }
+            QueryRequest::MarkKnownDestinationUsed { .. } => {
+                QueryResponse::MarkKnownDestinationUsed(false)
+            }
             _ => QueryResponse::InjectIdentity(false),
         }
     }
@@ -6238,14 +6371,27 @@ impl Driver {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::InjectIdentity(false)
             }
+            QueryRequest::RestoreKnownDestination(..) => {
+                QueryResponse::RestoreKnownDestination(false)
+            }
+            QueryRequest::RetainKnownDestination { .. } => {
+                QueryResponse::RetainKnownDestination(false)
+            }
+            QueryRequest::UnretainKnownDestination { .. } => {
+                QueryResponse::UnretainKnownDestination(false)
+            }
+            QueryRequest::MarkKnownDestinationUsed { .. } => {
+                QueryResponse::MarkKnownDestinationUsed(false)
+            }
             QueryRequest::HasPath { dest_hash } => {
                 QueryResponse::HasPath(self.engine.has_path(&dest_hash))
             }
             QueryRequest::HopsTo { dest_hash } => {
                 QueryResponse::HopsTo(self.engine.hops_to(&dest_hash))
             }
-            QueryRequest::RecallIdentity { dest_hash } => {
-                QueryResponse::RecallIdentity(self.known_destinations.get(&dest_hash).cloned())
+            QueryRequest::RecallIdentity { .. } => QueryResponse::RecallIdentity(None),
+            QueryRequest::KnownDestinations => {
+                QueryResponse::KnownDestinations(self.known_destination_entries())
             }
             QueryRequest::LocalDestinations => {
                 let entries: Vec<LocalDestinationEntry> = self
@@ -6307,12 +6453,23 @@ impl Driver {
             | QueryRequest::ClearBackbonePeerState { .. }
             | QueryRequest::BlacklistBackbonePeer { .. }
             | QueryRequest::InjectPath { .. }
-            | QueryRequest::InjectIdentity { .. }) => {
+            | QueryRequest::InjectIdentity { .. }
+            | QueryRequest::RestoreKnownDestination(..)
+            | QueryRequest::RetainKnownDestination { .. }
+            | QueryRequest::UnretainKnownDestination { .. }
+            | QueryRequest::MarkKnownDestinationUsed { .. }) => {
                 let fallback = Self::mutation_query_fallback(&request);
                 self.handle_mutation_query(request).unwrap_or_else(|| {
                     log::error!("mutation query branch unexpectedly returned no response");
                     fallback
                 })
+            }
+            QueryRequest::RecallIdentity { dest_hash } => {
+                let recalled = self.known_destination_announced(&dest_hash);
+                if recalled.is_some() {
+                    let _ = self.mark_known_destination_used(&dest_hash);
+                }
+                QueryResponse::RecallIdentity(recalled)
             }
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
             QueryRequest::SendProbe {
@@ -6320,9 +6477,10 @@ impl Driver {
                 payload_size,
             } => {
                 // Look up the identity for this destination hash
-                let announced = self.known_destinations.get(&dest_hash).cloned();
+                let announced = self.known_destination_announced(&dest_hash);
                 match announced {
                     Some(recalled) => {
+                        let _ = self.mark_known_destination_used(&dest_hash);
                         // Encrypt random payload with remote public key
                         let remote_id =
                             rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
@@ -6917,7 +7075,7 @@ impl Driver {
         if let Some((tracked_dest, sent_time)) = self.sent_packets.remove(&tracked_hash) {
             // Validate the proof signature using the destination's public key
             // (matches Python's PacketReceipt.validate_proof behavior)
-            if let Some(announced) = self.known_destinations.get(&tracked_dest) {
+            if let Some(announced) = self.known_destination_announced(&tracked_dest) {
                 let identity =
                     rns_crypto::identity::Identity::from_public_key(&announced.public_key);
                 let mut sig = [0u8; 64];
@@ -6926,6 +7084,7 @@ impl Driver {
                     log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4],);
                     return;
                 }
+                let _ = self.mark_known_destination_used(&tracked_dest);
             } else {
                 log::debug!(
                     "No known identity for dest {:02x?}, accepting proof without signature check",
@@ -7425,6 +7584,7 @@ impl Driver {
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = interface;
 
+                    let _ = self.mark_known_destination_used(&destination_hash);
                     self.callbacks
                         .on_path_updated(rns_core::types::DestHash(destination_hash), hops);
                 }
@@ -8783,6 +8943,19 @@ mod tests {
             hops: 1,
             received_at,
             receiving_interface,
+        }
+    }
+
+    fn make_known_destination_state(
+        dest_hash: [u8; 16],
+        received_at: f64,
+        receiving_interface: InterfaceId,
+    ) -> KnownDestinationState {
+        KnownDestinationState {
+            announced: make_announced_identity(dest_hash, received_at, receiving_interface),
+            was_used: false,
+            last_used_at: None,
+            retained: false,
         }
     }
 
@@ -11425,7 +11598,7 @@ mod tests {
         let dest_hash = [0xD1; 16];
         driver.known_destinations.insert(
             dest_hash,
-            make_announced_identity(dest_hash, 10.0, InterfaceId(2)),
+            make_known_destination_state(dest_hash, 10.0, InterfaceId(2)),
         );
 
         let dummy_sig_pub = [0xA1; 32];
@@ -11497,7 +11670,7 @@ mod tests {
         let dest_hash = [0xD2; 16];
         driver.known_destinations.insert(
             dest_hash,
-            make_announced_identity(dest_hash, 10.0, InterfaceId(0)),
+            make_known_destination_state(dest_hash, 10.0, InterfaceId(0)),
         );
 
         let dummy_sig_pub = [0xA2; 32];
@@ -13135,10 +13308,10 @@ mod tests {
         // known_destinations should be populated
         assert!(driver.known_destinations.contains_key(&dest_hash));
         let recalled = &driver.known_destinations[&dest_hash];
-        assert_eq!(recalled.dest_hash.0, dest_hash);
-        assert_eq!(recalled.identity_hash.0, *identity.hash());
-        assert_eq!(&recalled.public_key, &identity.get_public_key().unwrap());
-        assert_eq!(recalled.hops, 1);
+        assert_eq!(recalled.announced.dest_hash.0, dest_hash);
+        assert_eq!(recalled.announced.identity_hash.0, *identity.hash());
+        assert_eq!(&recalled.announced.public_key, &identity.get_public_key().unwrap());
+        assert_eq!(recalled.announced.hops, 1);
     }
 
     #[test]
@@ -13176,26 +13349,36 @@ mod tests {
         let fresh_dest = [0x22; 16];
         driver.known_destinations.insert(
             stale_dest,
-            crate::destination::AnnouncedIdentity {
-                dest_hash: rns_core::types::DestHash(stale_dest),
-                identity_hash: rns_core::types::IdentityHash([0x33; 16]),
-                public_key: [0x44; 64],
-                app_data: None,
-                hops: 1,
-                received_at: time::now() - 20.0,
-                receiving_interface: InterfaceId(1),
+            KnownDestinationState {
+                announced: crate::destination::AnnouncedIdentity {
+                    dest_hash: rns_core::types::DestHash(stale_dest),
+                    identity_hash: rns_core::types::IdentityHash([0x33; 16]),
+                    public_key: [0x44; 64],
+                    app_data: None,
+                    hops: 1,
+                    received_at: time::now() - 20.0,
+                    receiving_interface: InterfaceId(1),
+                },
+                was_used: false,
+                last_used_at: None,
+                retained: false,
             },
         );
         driver.known_destinations.insert(
             fresh_dest,
-            crate::destination::AnnouncedIdentity {
-                dest_hash: rns_core::types::DestHash(fresh_dest),
-                identity_hash: rns_core::types::IdentityHash([0x55; 16]),
-                public_key: [0x66; 64],
-                app_data: None,
-                hops: 1,
-                received_at: time::now() - 5.0,
-                receiving_interface: InterfaceId(1),
+            KnownDestinationState {
+                announced: crate::destination::AnnouncedIdentity {
+                    dest_hash: rns_core::types::DestHash(fresh_dest),
+                    identity_hash: rns_core::types::IdentityHash([0x55; 16]),
+                    public_key: [0x66; 64],
+                    app_data: None,
+                    hops: 1,
+                    received_at: time::now() - 5.0,
+                    receiving_interface: InterfaceId(1),
+                },
+                was_used: false,
+                last_used_at: None,
+                retained: false,
             },
         );
 
@@ -13295,7 +13478,7 @@ mod tests {
 
         assert_eq!(driver.known_destinations.len(), 1);
         assert_eq!(
-            driver.known_destinations[&dest].receiving_interface,
+            driver.known_destinations[&dest].announced.receiving_interface,
             InterfaceId(2)
         );
         assert_eq!(driver.known_destinations_cap_evict_count, 0);
@@ -13335,15 +13518,15 @@ mod tests {
         let now = time::now();
         driver.known_destinations.insert(
             [0x71; 16],
-            make_announced_identity([0x71; 16], now - 30.0, InterfaceId(1)),
+            make_known_destination_state([0x71; 16], now - 30.0, InterfaceId(1)),
         );
         driver.known_destinations.insert(
             [0x72; 16],
-            make_announced_identity([0x72; 16], now - 20.0, InterfaceId(1)),
+            make_known_destination_state([0x72; 16], now - 20.0, InterfaceId(1)),
         );
         driver.known_destinations.insert(
             [0x73; 16],
-            make_announced_identity([0x73; 16], now - 10.0, InterfaceId(1)),
+            make_known_destination_state([0x73; 16], now - 10.0, InterfaceId(1)),
         );
 
         tx.send(Event::Tick).unwrap();
@@ -13353,6 +13536,109 @@ mod tests {
         assert_eq!(driver.known_destinations.len(), 2);
         assert!(!driver.known_destinations.contains_key(&[0x71; 16]));
         assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    }
+
+    #[test]
+    fn recall_identity_marks_known_destination_used() {
+        let mut driver = new_test_driver();
+        let dest = [0x81; 16];
+        driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
+
+        let response = driver.handle_query_mut(QueryRequest::RecallIdentity { dest_hash: dest });
+        assert!(matches!(response, QueryResponse::RecallIdentity(Some(_))));
+
+        let entry = driver.known_destinations.get(&dest).unwrap();
+        assert!(entry.was_used);
+        assert!(entry.last_used_at.is_some());
+    }
+
+    #[test]
+    fn retained_known_destination_survives_cleanup() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        driver.known_destinations_ttl = 10.0;
+        driver.cache_cleanup_counter = 3599;
+
+        let dest = [0x82; 16];
+        driver.upsert_known_destination(dest, make_announced_identity(dest, time::now() - 30.0, InterfaceId(1)));
+        assert!(driver.retain_known_destination(&dest));
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(driver.known_destinations.contains_key(&dest));
+    }
+
+    #[test]
+    fn used_known_destination_cleanup_uses_last_used_time() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        driver.known_destinations_ttl = 10.0;
+        driver.cache_cleanup_counter = 3599;
+
+        let dest = [0x83; 16];
+        driver.known_destinations.insert(
+            dest,
+            KnownDestinationState {
+                announced: make_announced_identity(dest, time::now() - 50.0, InterfaceId(1)),
+                was_used: true,
+                last_used_at: Some(time::now() - 5.0),
+                retained: false,
+            },
+        );
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(driver.known_destinations.contains_key(&dest));
     }
 
     #[test]
@@ -14609,14 +14895,19 @@ mod tests {
         let pub_key = identity.get_public_key();
         driver.known_destinations.insert(
             dest,
-            crate::destination::AnnouncedIdentity {
-                dest_hash: DestHash(dest),
-                identity_hash: IdentityHash(*identity.hash()),
-                public_key: pub_key.unwrap(),
-                app_data: None,
-                hops: 0,
-                received_at: time::now(),
-                receiving_interface: InterfaceId(0),
+            KnownDestinationState {
+                announced: crate::destination::AnnouncedIdentity {
+                    dest_hash: DestHash(dest),
+                    identity_hash: IdentityHash(*identity.hash()),
+                    public_key: pub_key.unwrap(),
+                    app_data: None,
+                    hops: 0,
+                    received_at: time::now(),
+                    receiving_interface: InterfaceId(0),
+                },
+                was_used: false,
+                last_used_at: None,
+                retained: false,
             },
         );
 
@@ -14719,14 +15010,19 @@ mod tests {
         let pub_key = identity.get_public_key();
         driver.known_destinations.insert(
             dest,
-            crate::destination::AnnouncedIdentity {
-                dest_hash: DestHash(dest),
-                identity_hash: IdentityHash(*identity.hash()),
-                public_key: pub_key.unwrap(),
-                app_data: None,
-                hops: 0,
-                received_at: time::now(),
-                receiving_interface: InterfaceId(0),
+            KnownDestinationState {
+                announced: crate::destination::AnnouncedIdentity {
+                    dest_hash: DestHash(dest),
+                    identity_hash: IdentityHash(*identity.hash()),
+                    public_key: pub_key.unwrap(),
+                    app_data: None,
+                    hops: 0,
+                    received_at: time::now(),
+                    receiving_interface: InterfaceId(0),
+                },
+                was_used: false,
+                last_used_at: None,
+                retained: false,
             },
         );
 
@@ -15741,7 +16037,7 @@ mod tests {
         assert_eq!(driver.known_destinations.len(), 1);
         let (_, announced) = driver.known_destinations.iter().next().unwrap();
         assert_eq!(
-            announced.receiving_interface,
+            announced.announced.receiving_interface,
             InterfaceId(1),
             "receiving_interface should match the interface the announce arrived on"
         );
@@ -15798,7 +16094,7 @@ mod tests {
 
         assert_eq!(driver.known_destinations.len(), 1);
         let (_, announced) = driver.known_destinations.iter().next().unwrap();
-        assert_eq!(announced.receiving_interface, InterfaceId(2));
+        assert_eq!(announced.announced.receiving_interface, InterfaceId(2));
     }
 
     #[test]
@@ -15861,16 +16157,16 @@ mod tests {
             .get(&dest_hash)
             .expect("identity should be cached");
         assert_eq!(
-            announced.receiving_interface,
+            announced.announced.receiving_interface,
             InterfaceId(0),
             "injected identity should have sentinel InterfaceId(0)"
         );
-        assert_eq!(announced.dest_hash.0, dest_hash);
-        assert_eq!(announced.identity_hash.0, *identity.hash());
-        assert_eq!(announced.public_key, identity.get_public_key().unwrap());
-        assert_eq!(announced.app_data, Some(b"restored".to_vec()));
-        assert_eq!(announced.hops, 2);
-        assert_eq!(announced.received_at, 99.0);
+        assert_eq!(announced.announced.dest_hash.0, dest_hash);
+        assert_eq!(announced.announced.identity_hash.0, *identity.hash());
+        assert_eq!(announced.announced.public_key, identity.get_public_key().unwrap());
+        assert_eq!(announced.announced.app_data, Some(b"restored".to_vec()));
+        assert_eq!(announced.announced.hops, 2);
+        assert_eq!(announced.announced.received_at, 99.0);
     }
 
     #[test]
@@ -15950,9 +16246,9 @@ mod tests {
 
         // Should have the second injection's data
         let announced = driver.known_destinations.get(&dest_hash).unwrap();
-        assert_eq!(announced.app_data, Some(b"second".to_vec()));
-        assert_eq!(announced.hops, 3);
-        assert_eq!(announced.received_at, 20.0);
+        assert_eq!(announced.announced.app_data, Some(b"second".to_vec()));
+        assert_eq!(announced.announced.hops, 3);
+        assert_eq!(announced.announced.received_at, 20.0);
     }
 
     #[test]
@@ -16019,15 +16315,15 @@ mod tests {
         for (_, announced) in &driver.known_destinations {
             // We can't predict ordering, but each should have a valid non-zero interface
             assert!(
-                announced.receiving_interface == InterfaceId(1)
-                    || announced.receiving_interface == InterfaceId(2)
+                announced.announced.receiving_interface == InterfaceId(1)
+                    || announced.announced.receiving_interface == InterfaceId(2)
             );
         }
         // Verify we actually got both interfaces represented
         let ifaces: Vec<_> = driver
             .known_destinations
             .values()
-            .map(|a| a.receiving_interface)
+            .map(|a| a.announced.receiving_interface)
             .collect();
         assert!(ifaces.contains(&InterfaceId(1)));
         assert!(ifaces.contains(&InterfaceId(2)));

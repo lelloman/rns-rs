@@ -472,6 +472,7 @@ pub struct RnsNode {
     tick_interval_ms: Arc<AtomicU64>,
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
+    known_destinations_path: Option<std::path::PathBuf>,
 }
 
 impl RnsNode {
@@ -483,6 +484,7 @@ impl RnsNode {
     ) -> io::Result<Self> {
         let config_dir = storage::resolve_config_dir(config_path);
         let paths = storage::ensure_storage_dirs(&config_dir)?;
+        let known_destinations_path = paths.storage.join("known_destinations");
 
         // Parse config file
         let config_file = config_dir.join("config");
@@ -757,7 +759,7 @@ impl RnsNode {
             },
         };
 
-        Self::start_with_announce_queue_max_entries(
+        let mut node = Self::start_with_announce_queue_max_entries(
             node_config,
             callbacks,
             rns_config.reticulum.announce_queue_max_entries,
@@ -769,7 +771,31 @@ impl RnsNode {
                 "drop_oldest" => AnnounceQueueOverflowPolicy::DropOldest,
                 _ => AnnounceQueueOverflowPolicy::DropWorst,
             },
-        )
+        )?;
+
+        node.known_destinations_path = Some(known_destinations_path.clone());
+        if let Ok(known_destinations) = storage::load_known_destinations(&known_destinations_path) {
+            for (dest_hash, known) in known_destinations {
+                let _ = node.query(QueryRequest::RestoreKnownDestination(
+                    crate::event::KnownDestinationEntry {
+                        dest_hash,
+                        identity_hash: known.identity_hash,
+                        public_key: known.public_key,
+                        app_data: known.app_data,
+                        hops: known.hops,
+                        received_at: known.received_at,
+                        receiving_interface: rns_core::transport::types::InterfaceId(
+                            known.receiving_interface,
+                        ),
+                        was_used: known.was_used,
+                        last_used_at: known.last_used_at,
+                        retained: known.retained,
+                    },
+                ));
+            }
+        }
+
+        Ok(node)
     }
 
     /// Start the node. Connects all interfaces, starts driver and timer threads.
@@ -832,7 +858,6 @@ impl RnsNode {
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
-
         #[cfg(feature = "rns-hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
             driver.runtime_config_defaults.provider_queue_max_events =
@@ -1571,6 +1596,7 @@ impl RnsNode {
             rpc_server,
             tick_interval_ms,
             probe_server,
+            known_destinations_path: None,
         })
     }
 
@@ -2059,6 +2085,89 @@ impl RnsNode {
         }
     }
 
+    /// List known destinations and their lifecycle state.
+    pub fn known_destinations(
+        &self,
+    ) -> Result<Vec<crate::event::KnownDestinationEntry>, SendError> {
+        match self.query(QueryRequest::KnownDestinations)? {
+            QueryResponse::KnownDestinations(entries) => Ok(entries),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Mark a known destination as retained.
+    pub fn retain_known_destination(
+        &self,
+        dest_hash: &rns_core::types::DestHash,
+    ) -> Result<bool, SendError> {
+        match self.query(QueryRequest::RetainKnownDestination {
+            dest_hash: dest_hash.0,
+        })? {
+            QueryResponse::RetainKnownDestination(ok) => Ok(ok),
+            _ => Ok(false),
+        }
+    }
+
+    /// Clear the retained flag on a known destination.
+    pub fn unretain_known_destination(
+        &self,
+        dest_hash: &rns_core::types::DestHash,
+    ) -> Result<bool, SendError> {
+        match self.query(QueryRequest::UnretainKnownDestination {
+            dest_hash: dest_hash.0,
+        })? {
+            QueryResponse::UnretainKnownDestination(ok) => Ok(ok),
+            _ => Ok(false),
+        }
+    }
+
+    /// Mark a known destination as used.
+    pub fn mark_known_destination_used(
+        &self,
+        dest_hash: &rns_core::types::DestHash,
+    ) -> Result<bool, SendError> {
+        match self.query(QueryRequest::MarkKnownDestinationUsed {
+            dest_hash: dest_hash.0,
+        })? {
+            QueryResponse::MarkKnownDestinationUsed(ok) => Ok(ok),
+            _ => Ok(false),
+        }
+    }
+
+    fn persist_known_destinations(&self) {
+        let Some(path) = self.known_destinations_path.as_ref() else {
+            return;
+        };
+
+        let Ok(entries) = self.known_destinations() else {
+            return;
+        };
+
+        let destinations: std::collections::HashMap<[u8; 16], storage::KnownDestination> = entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.dest_hash,
+                    storage::KnownDestination {
+                        identity_hash: entry.identity_hash,
+                        public_key: entry.public_key,
+                        app_data: entry.app_data,
+                        hops: entry.hops,
+                        received_at: entry.received_at,
+                        receiving_interface: entry.receiving_interface.0,
+                        was_used: entry.was_used,
+                        last_used_at: entry.last_used_at,
+                        retained: entry.retained,
+                    },
+                )
+            })
+            .collect();
+
+        if let Err(err) = storage::save_known_destinations(&destinations, path) {
+            log::warn!("failed to persist known destinations: {}", err);
+        }
+    }
+
     /// Load a WASM hook at runtime.
     pub fn load_hook(
         &self,
@@ -2179,6 +2288,7 @@ impl RnsNode {
             rpc_server,
             tick_interval_ms,
             probe_server: None,
+            known_destinations_path: None,
         }
     }
 
@@ -2215,6 +2325,7 @@ impl RnsNode {
         if let Some(mut rpc) = self.rpc_server.take() {
             rpc.stop();
         }
+        self.persist_known_destinations();
         self.verify_shutdown.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Event::Shutdown);
         if let Some(handle) = self.driver_handle.take() {
@@ -2230,6 +2341,7 @@ impl RnsNode {
 mod tests {
     use super::*;
     use std::fs;
+    use tempfile::tempdir;
 
     struct NoopCallbacks;
 
@@ -2371,6 +2483,60 @@ mod tests {
         )
         .unwrap();
         node.shutdown();
+    }
+
+    #[test]
+    fn known_destinations_persist_across_restart() {
+        let dir = tempdir().unwrap();
+        let dest_hash = [0x91; 16];
+        let identity = Identity::new(&mut OsRng);
+        let last_used_at = 77.0;
+        let receiving_interface = rns_core::transport::types::InterfaceId(42);
+
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        node.event_sender()
+            .send(crate::event::Event::Query(
+                QueryRequest::RestoreKnownDestination(crate::event::KnownDestinationEntry {
+                    dest_hash,
+                    identity_hash: *identity.hash(),
+                    public_key: identity.get_public_key().unwrap(),
+                    app_data: Some(b"persisted".to_vec()),
+                    hops: 2,
+                    received_at: 55.0,
+                    receiving_interface,
+                    was_used: true,
+                    last_used_at: Some(last_used_at),
+                    retained: true,
+                }),
+                response_tx,
+            ))
+            .unwrap();
+        assert!(matches!(
+            response_rx.recv().unwrap(),
+            QueryResponse::RestoreKnownDestination(true)
+        ));
+        node.shutdown();
+
+        let restarted = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let entries = restarted.known_destinations().unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.dest_hash == dest_hash)
+            .expect("reloaded destination should appear in lifecycle listing");
+        assert!(entry.retained);
+        assert!(entry.was_used);
+        assert_eq!(entry.hops, 2);
+        assert_eq!(entry.receiving_interface, receiving_interface);
+        assert_eq!(entry.last_used_at, Some(last_used_at));
+
+        let recalled = restarted
+            .recall_identity(&rns_core::types::DestHash(dest_hash))
+            .unwrap()
+            .expect("known destination should reload from storage");
+        assert_eq!(recalled.identity_hash.0, *identity.hash());
+        assert_eq!(recalled.app_data, Some(b"persisted".to_vec()));
+        restarted.shutdown();
     }
 
     #[test]

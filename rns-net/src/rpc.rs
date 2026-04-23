@@ -22,11 +22,11 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventSender,
-    HookInfo, InterfaceStatsResponse, LifecycleState, PathTableEntry, ProviderBridgeStats,
-    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event,
+    EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry, LifecycleState,
+    PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -381,6 +381,14 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "known_destinations" => {
+                    let resp = send_query(event_tx, QueryRequest::KnownDestinations)?;
+                    if let QueryResponse::KnownDestinations(entries) = resp {
+                        Ok(known_destinations_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 "runtime_config_entry" => {
                     let key = request
                         .get("key")
@@ -454,6 +462,24 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
     }
 
     if let Some(set_val) = request.get("set").and_then(|v| v.as_str()) {
+        if set_val == "known_destination_retained" {
+            let dest_hash = extract_dest_hash(request, "dest_hash")?;
+            let resp = send_query(event_tx, QueryRequest::RetainKnownDestination { dest_hash })?;
+            return if let QueryResponse::RetainKnownDestination(ok) = resp {
+                Ok(PickleValue::Bool(ok))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
+        if set_val == "known_destination_used" {
+            let dest_hash = extract_dest_hash(request, "dest_hash")?;
+            let resp = send_query(event_tx, QueryRequest::MarkKnownDestinationUsed { dest_hash })?;
+            return if let QueryResponse::MarkKnownDestinationUsed(ok) = resp {
+                Ok(PickleValue::Bool(ok))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
         if set_val == "runtime_config" {
             let key = request
                 .get("key")
@@ -495,6 +521,16 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
     }
 
     if let Some(clear_val) = request.get("clear").and_then(|v| v.as_str()) {
+        if clear_val == "known_destination_retained" {
+            let dest_hash = extract_dest_hash(request, "dest_hash")?;
+            let resp =
+                send_query(event_tx, QueryRequest::UnretainKnownDestination { dest_hash })?;
+            return if let QueryResponse::UnretainKnownDestination(ok) = resp {
+                Ok(PickleValue::Bool(ok))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
         if clear_val == "backbone_peer_state" {
             let interface_name = required_string(request, "interface")?;
             let peer_ip = required_string(request, "ip")?;
@@ -1693,6 +1729,129 @@ fn runtime_config_result_to_pickle(
     }
 }
 
+fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleValue {
+    PickleValue::Dict(vec![
+        (
+            PickleValue::String("dest_hash".into()),
+            PickleValue::Bytes(entry.dest_hash.to_vec()),
+        ),
+        (
+            PickleValue::String("identity_hash".into()),
+            PickleValue::Bytes(entry.identity_hash.to_vec()),
+        ),
+        (
+            PickleValue::String("public_key".into()),
+            PickleValue::Bytes(entry.public_key.to_vec()),
+        ),
+        (
+            PickleValue::String("app_data".into()),
+            entry
+                .app_data
+                .as_ref()
+                .map(|data: &Vec<u8>| PickleValue::Bytes(data.clone()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("hops".into()),
+            PickleValue::Int(entry.hops as i64),
+        ),
+        (
+            PickleValue::String("received_at".into()),
+            PickleValue::Float(entry.received_at),
+        ),
+        (
+            PickleValue::String("receiving_interface".into()),
+            PickleValue::Int(entry.receiving_interface.0 as i64),
+        ),
+        (
+            PickleValue::String("was_used".into()),
+            PickleValue::Bool(entry.was_used),
+        ),
+        (
+            PickleValue::String("last_used_at".into()),
+            entry
+                .last_used_at
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("retained".into()),
+            PickleValue::Bool(entry.retained),
+        ),
+    ])
+}
+
+fn known_destinations_to_pickle(entries: &[KnownDestinationEntry]) -> PickleValue {
+    PickleValue::List(entries.iter().map(known_destination_entry_to_pickle).collect())
+}
+
+fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestinationEntry> {
+    let get_bytes = |key: &str, len: usize| -> io::Result<Vec<u8>> {
+        let value = value
+            .get(key)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("missing {}", key)))?;
+        let bytes = value
+            .as_bytes()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key)))?;
+        if bytes.len() != len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid {} length", key),
+            ));
+        }
+        Ok(bytes.to_vec())
+    };
+    let get_int = |key: &str| -> io::Result<i64> {
+        value
+            .get(key)
+            .and_then(|v| v.as_int())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key)))
+    };
+    let get_float = |key: &str| -> io::Result<f64> {
+        value
+            .get(key)
+            .and_then(|v| v.as_float())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key)))
+    };
+    let get_bool = |key: &str| -> io::Result<bool> {
+        value
+            .get(key)
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key)))
+    };
+
+    let mut dest_hash = [0u8; 16];
+    dest_hash.copy_from_slice(&get_bytes("dest_hash", 16)?);
+    let mut identity_hash = [0u8; 16];
+    identity_hash.copy_from_slice(&get_bytes("identity_hash", 16)?);
+    let mut public_key = [0u8; 64];
+    public_key.copy_from_slice(&get_bytes("public_key", 64)?);
+    let app_data = value.get("app_data").and_then(|v| v.as_bytes()).map(|bytes| bytes.to_vec());
+    let last_used_at = value.get("last_used_at").and_then(|v| v.as_float());
+
+    Ok(KnownDestinationEntry {
+        dest_hash,
+        identity_hash,
+        public_key,
+        app_data,
+        hops: get_int("hops")? as u8,
+        received_at: get_float("received_at")?,
+        receiving_interface: rns_core::transport::types::InterfaceId(
+            get_int("receiving_interface")? as u64,
+        ),
+        was_used: get_bool("was_used")?,
+        last_used_at,
+        retained: get_bool("retained")?,
+    })
+}
+
+fn parse_known_destination_list(value: &PickleValue) -> io::Result<Vec<KnownDestinationEntry>> {
+    let list = value
+        .as_list()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "expected list"))?;
+    list.iter().map(parse_known_destination_entry).collect()
+}
+
 // --- RPC Client ---
 
 /// RPC client for connecting to a running daemon.
@@ -1901,6 +2060,56 @@ impl RpcClient {
             ));
         }
         let response = self.call(&PickleValue::Dict(request))?;
+        Ok(response.as_bool().unwrap_or(false))
+    }
+
+    pub fn known_destinations(&mut self) -> io::Result<Vec<KnownDestinationEntry>> {
+        let response = self.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("known_destinations".into()),
+        )]))?;
+        parse_known_destination_list(&response)
+    }
+
+    pub fn retain_known_destination(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("known_destination_retained".into()),
+            ),
+            (
+                PickleValue::String("dest_hash".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+        ]))?;
+        Ok(response.as_bool().unwrap_or(false))
+    }
+
+    pub fn unretain_known_destination(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("clear".into()),
+                PickleValue::String("known_destination_retained".into()),
+            ),
+            (
+                PickleValue::String("dest_hash".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+        ]))?;
+        Ok(response.as_bool().unwrap_or(false))
+    }
+
+    pub fn mark_known_destination_used(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("known_destination_used".into()),
+            ),
+            (
+                PickleValue::String("dest_hash".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+        ]))?;
         Ok(response.as_bool().unwrap_or(false))
     }
 }
