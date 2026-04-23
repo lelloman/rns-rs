@@ -197,14 +197,20 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             let identity = Identity::from_public_key(&public_key);
             *identity.hash()
         };
-        let hops = arr
-            .get(4)
-            .and_then(|value| value.as_uint())
-            .unwrap_or(0) as u8;
+        let hops = arr.get(4).and_then(|value| value.as_uint()).unwrap_or(0) as u8;
         let receiving_interface = arr.get(5).and_then(|value| value.as_uint()).unwrap_or(0);
-        let was_used = arr.get(6).and_then(|value| value.as_bool()).unwrap_or(false);
-        let last_used_at = arr.get(7).and_then(|value| value.as_uint()).map(|value| value as f64);
-        let retained = arr.get(8).and_then(|value| value.as_bool()).unwrap_or(false);
+        let was_used = arr
+            .get(6)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let last_used_at = arr
+            .get(7)
+            .and_then(|value| value.as_uint())
+            .map(|value| value as f64);
+        let retained = arr
+            .get(8)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
 
         result.insert(
             dest_hash,

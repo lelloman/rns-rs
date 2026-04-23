@@ -22,11 +22,11 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event,
-    EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry, LifecycleState,
-    PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
-    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventSender,
+    HookInfo, InterfaceStatsResponse, KnownDestinationEntry, LifecycleState, PathTableEntry,
+    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -473,7 +473,10 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
         }
         if set_val == "known_destination_used" {
             let dest_hash = extract_dest_hash(request, "dest_hash")?;
-            let resp = send_query(event_tx, QueryRequest::MarkKnownDestinationUsed { dest_hash })?;
+            let resp = send_query(
+                event_tx,
+                QueryRequest::MarkKnownDestinationUsed { dest_hash },
+            )?;
             return if let QueryResponse::MarkKnownDestinationUsed(ok) = resp {
                 Ok(PickleValue::Bool(ok))
             } else {
@@ -523,8 +526,10 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
     if let Some(clear_val) = request.get("clear").and_then(|v| v.as_str()) {
         if clear_val == "known_destination_retained" {
             let dest_hash = extract_dest_hash(request, "dest_hash")?;
-            let resp =
-                send_query(event_tx, QueryRequest::UnretainKnownDestination { dest_hash })?;
+            let resp = send_query(
+                event_tx,
+                QueryRequest::UnretainKnownDestination { dest_hash },
+            )?;
             return if let QueryResponse::UnretainKnownDestination(ok) = resp {
                 Ok(PickleValue::Bool(ok))
             } else {
@@ -1782,17 +1787,22 @@ fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -> PickleVal
 }
 
 fn known_destinations_to_pickle(entries: &[KnownDestinationEntry]) -> PickleValue {
-    PickleValue::List(entries.iter().map(known_destination_entry_to_pickle).collect())
+    PickleValue::List(
+        entries
+            .iter()
+            .map(known_destination_entry_to_pickle)
+            .collect(),
+    )
 }
 
 fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestinationEntry> {
     let get_bytes = |key: &str, len: usize| -> io::Result<Vec<u8>> {
-        let value = value
-            .get(key)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("missing {}", key)))?;
-        let bytes = value
-            .as_bytes()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key)))?;
+        let value = value.get(key).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("missing {}", key))
+        })?;
+        let bytes = value.as_bytes().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("invalid {}", key))
+        })?;
         if bytes.len() != len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1826,7 +1836,10 @@ fn parse_known_destination_entry(value: &PickleValue) -> io::Result<KnownDestina
     identity_hash.copy_from_slice(&get_bytes("identity_hash", 16)?);
     let mut public_key = [0u8; 64];
     public_key.copy_from_slice(&get_bytes("public_key", 64)?);
-    let app_data = value.get("app_data").and_then(|v| v.as_bytes()).map(|bytes| bytes.to_vec());
+    let app_data = value
+        .get("app_data")
+        .and_then(|v| v.as_bytes())
+        .map(|bytes| bytes.to_vec());
     let last_used_at = value.get("last_used_at").and_then(|v| v.as_float());
 
     Ok(KnownDestinationEntry {

@@ -23,9 +23,8 @@ use crate::event::{
     BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo,
     DrainStatus, Event, EventReceiver, InterfaceStatsResponse, KnownDestinationEntry,
     LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
-    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -6196,16 +6195,16 @@ impl Driver {
             QueryRequest::RetainKnownDestination { dest_hash } => Some(
                 QueryResponse::RetainKnownDestination(self.retain_known_destination(&dest_hash)),
             ),
-            QueryRequest::UnretainKnownDestination { dest_hash } => Some(
-                QueryResponse::UnretainKnownDestination(
+            QueryRequest::UnretainKnownDestination { dest_hash } => {
+                Some(QueryResponse::UnretainKnownDestination(
                     self.unretain_known_destination(&dest_hash),
-                ),
-            ),
-            QueryRequest::MarkKnownDestinationUsed { dest_hash } => Some(
-                QueryResponse::MarkKnownDestinationUsed(
+                ))
+            }
+            QueryRequest::MarkKnownDestinationUsed { dest_hash } => {
+                Some(QueryResponse::MarkKnownDestinationUsed(
                     self.mark_known_destination_used(&dest_hash),
-                ),
-            ),
+                ))
+            }
             _ => None,
         }
     }
@@ -13310,7 +13309,10 @@ mod tests {
         let recalled = &driver.known_destinations[&dest_hash];
         assert_eq!(recalled.announced.dest_hash.0, dest_hash);
         assert_eq!(recalled.announced.identity_hash.0, *identity.hash());
-        assert_eq!(&recalled.announced.public_key, &identity.get_public_key().unwrap());
+        assert_eq!(
+            &recalled.announced.public_key,
+            &identity.get_public_key().unwrap()
+        );
         assert_eq!(recalled.announced.hops, 1);
     }
 
@@ -13478,7 +13480,9 @@ mod tests {
 
         assert_eq!(driver.known_destinations.len(), 1);
         assert_eq!(
-            driver.known_destinations[&dest].announced.receiving_interface,
+            driver.known_destinations[&dest]
+                .announced
+                .receiving_interface,
             InterfaceId(2)
         );
         assert_eq!(driver.known_destinations_cap_evict_count, 0);
@@ -13583,7 +13587,10 @@ mod tests {
         driver.cache_cleanup_counter = 3599;
 
         let dest = [0x82; 16];
-        driver.upsert_known_destination(dest, make_announced_identity(dest, time::now() - 30.0, InterfaceId(1)));
+        driver.upsert_known_destination(
+            dest,
+            make_announced_identity(dest, time::now() - 30.0, InterfaceId(1)),
+        );
         assert!(driver.retain_known_destination(&dest));
 
         tx.send(Event::Tick).unwrap();
@@ -16163,7 +16170,10 @@ mod tests {
         );
         assert_eq!(announced.announced.dest_hash.0, dest_hash);
         assert_eq!(announced.announced.identity_hash.0, *identity.hash());
-        assert_eq!(announced.announced.public_key, identity.get_public_key().unwrap());
+        assert_eq!(
+            announced.announced.public_key,
+            identity.get_public_key().unwrap()
+        );
         assert_eq!(announced.announced.app_data, Some(b"restored".to_vec()));
         assert_eq!(announced.announced.hops, 2);
         assert_eq!(announced.announced.received_at, 99.0);
