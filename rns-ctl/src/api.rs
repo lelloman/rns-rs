@@ -9,7 +9,9 @@ use rns_net::{
 use crate::auth::check_auth;
 use crate::encode::{from_base64, hex_to_array, to_base64, to_hex};
 use crate::http::{parse_query, HttpRequest, HttpResponse};
-use crate::state::{ControlPlaneConfigHandle, DestinationEntry, SharedState};
+use crate::state::{
+    lock_node_handle, read_state, ControlPlaneConfigHandle, DestinationEntry, SharedState,
+};
 use crate::stats_api;
 
 /// Handle for the node, wrapped so shutdown() can consume it.
@@ -20,7 +22,7 @@ fn with_node<F>(node: &NodeHandle, f: F) -> HttpResponse
 where
     F: FnOnce(&RnsNode) -> HttpResponse,
 {
-    let guard = node.lock().unwrap();
+    let guard = lock_node_handle(node);
     match guard.as_ref() {
         Some(n) => f(n),
         None => HttpResponse::internal_error("Node is shutting down"),
@@ -172,7 +174,7 @@ fn index_html(_config: &ControlPlaneConfigHandle) -> &'static str {
 
 fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
     let (transport_id, drain_status) = {
-        let guard = node.lock().unwrap();
+        let guard = lock_node_handle(node);
         let Some(node) = guard.as_ref() else {
             return HttpResponse::internal_error("Node is shutting down");
         };
@@ -187,7 +189,7 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
         (transport_id, drain_status)
     };
 
-    let s = state.read().unwrap();
+    let s = read_state(state);
     HttpResponse::ok(json!({
         "server_mode": s.server_mode,
         "uptime_seconds": s.uptime_seconds(),
@@ -210,7 +212,7 @@ fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpResponse {
 }
 
 fn handle_config(state: &SharedState) -> HttpResponse {
-    let s = state.read().unwrap();
+    let s = read_state(state);
     match &s.server_config {
         Some(config) => HttpResponse::ok(json!({ "config": config })),
         None => HttpResponse::ok(json!({ "config": null })),
@@ -218,7 +220,7 @@ fn handle_config(state: &SharedState) -> HttpResponse {
 }
 
 fn handle_config_schema(state: &SharedState) -> HttpResponse {
-    let s = state.read().unwrap();
+    let s = read_state(state);
     match &s.server_config_schema {
         Some(schema) => HttpResponse::ok(json!({ "schema": schema })),
         None => HttpResponse::ok(json!({ "schema": null })),
@@ -226,7 +228,7 @@ fn handle_config_schema(state: &SharedState) -> HttpResponse {
 }
 
 fn handle_config_status(state: &SharedState) -> HttpResponse {
-    let s = state.read().unwrap();
+    let s = read_state(state);
     HttpResponse::ok(json!({
         "status": s.server_config_status.snapshot(),
     }))
@@ -234,7 +236,7 @@ fn handle_config_status(state: &SharedState) -> HttpResponse {
 
 fn handle_config_validate(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let validator = {
-        let s = state.read().unwrap();
+        let s = read_state(state);
         s.server_config_validator.clone()
     };
 
@@ -253,7 +255,7 @@ fn handle_config_mutation(
     mode: crate::state::ServerConfigMutationMode,
 ) -> HttpResponse {
     let mutator = {
-        let s = state.read().unwrap();
+        let s = read_state(state);
         s.server_config_mutator.clone()
     };
 
@@ -272,7 +274,7 @@ fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
             Ok(QueryResponse::TransportIdentity(id)) => id,
             _ => None,
         };
-        let s = state.read().unwrap();
+        let s = read_state(state);
         HttpResponse::ok(json!({
             "transport_id": transport_id.map(|h| to_hex(&h)),
             "identity_hash": s.identity_hash.map(|h| to_hex(&h)),
@@ -282,7 +284,7 @@ fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
 }
 
 fn handle_processes(state: &SharedState) -> HttpResponse {
-    let s = state.read().unwrap();
+    let s = read_state(state);
     let mut processes: Vec<&crate::state::ManagedProcessState> = s.processes.values().collect();
     processes.sort_by(|a, b| a.name.cmp(&b.name));
     HttpResponse::ok(json!({
@@ -311,7 +313,7 @@ fn handle_processes(state: &SharedState) -> HttpResponse {
 }
 
 fn handle_process_events(state: &SharedState) -> HttpResponse {
-    let s = state.read().unwrap();
+    let s = read_state(state);
     let events: Vec<Value> = s
         .process_events
         .iter()
@@ -343,7 +345,7 @@ fn handle_process_logs(path: &str, req: &HttpRequest, state: &SharedState) -> Ht
         .map(|value| value.min(500))
         .unwrap_or(200);
 
-    let s = state.read().unwrap();
+    let s = read_state(state);
     let Some(logs) = s.process_logs.get(name) else {
         return HttpResponse::not_found();
     };
@@ -381,7 +383,7 @@ fn handle_process_control(path: &str, state: &SharedState, action: &str) -> Http
     };
 
     let tx = {
-        let s = state.read().unwrap();
+        let s = read_state(state);
         s.control_tx.clone()
     };
 
@@ -467,7 +469,7 @@ fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
 fn handle_destinations(node: &NodeHandle, state: &SharedState) -> HttpResponse {
     with_node(node, |n| match n.query(QueryRequest::LocalDestinations) {
         Ok(QueryResponse::LocalDestinations(dests)) => {
-            let s = state.read().unwrap();
+            let s = read_state(state);
             let list: Vec<Value> = dests
                 .iter()
                 .map(|d| {
@@ -574,7 +576,7 @@ fn handle_event_list(req: &HttpRequest, state: &SharedState, kind: &str) -> Http
     let params = parse_query(&req.query);
     let clear = params.get("clear").map_or(false, |v| v == "true");
 
-    let mut s = state.write().unwrap();
+    let mut s = crate::state::write_state(state);
     let items: Vec<Value> = match kind {
         "announces" => {
             let v: Vec<Value> = s
@@ -687,7 +689,7 @@ fn handle_post_destination(
         .unwrap_or_default();
 
     let (identity_hash, identity_prv_key, identity_pub_key) = {
-        let s = state.read().unwrap();
+        let s = read_state(state);
         let ih = s.identity_hash;
         let prv = s.identity.as_ref().and_then(|i| i.get_private_key());
         let pubk = s.identity.as_ref().and_then(|i| i.get_public_key());
@@ -726,7 +728,7 @@ fn handle_post_destination(
                                 let dest = Destination::single_out(app_name, &aspects, &recalled);
                                 // Register in state
                                 let full_name = format_dest_name(app_name, &aspects);
-                                let mut s = state.write().unwrap();
+                                let mut s = crate::state::write_state(state);
                                 s.destinations.insert(
                                     dest.hash.0,
                                     DestinationEntry {
@@ -794,7 +796,7 @@ fn handle_post_destination(
                 let full_name = format_dest_name(app_name, &aspects);
                 let hash_hex = to_hex(&dest.hash.0);
                 let group_key_b64 = dest.get_private_key().map(to_base64);
-                let mut s = state.write().unwrap();
+                let mut s = crate::state::write_state(state);
                 s.destinations.insert(
                     dest.hash.0,
                     DestinationEntry {
@@ -835,7 +837,7 @@ fn handle_post_announce(req: &HttpRequest, node: &NodeHandle, state: &SharedStat
     let app_data: Option<Vec<u8>> = body["app_data"].as_str().and_then(from_base64);
 
     let (dest, identity) = {
-        let s = state.read().unwrap();
+        let s = read_state(state);
         let dest = match s.destinations.get(&dh) {
             Some(entry) => entry.destination.clone(),
             None => return HttpResponse::bad_request("Destination not registered via API"),
@@ -874,7 +876,7 @@ fn handle_post_send(req: &HttpRequest, node: &NodeHandle, state: &SharedState) -
         None => return HttpResponse::bad_request("Missing or invalid base64 data"),
     };
 
-    let s = state.read().unwrap();
+    let s = read_state(state);
     let dest = match s.destinations.get(&dh) {
         Some(entry) => entry.destination.clone(),
         None => return HttpResponse::bad_request("Destination not registered via API"),

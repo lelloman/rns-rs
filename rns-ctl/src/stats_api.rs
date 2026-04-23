@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 
 use crate::http::{parse_query, HttpRequest, HttpResponse};
-use crate::state::SharedState;
+use crate::state::{read_state, SharedState};
 
 const DEFAULT_WINDOW_SECONDS: i64 = 24 * 60 * 60;
 const MAX_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
@@ -456,7 +456,7 @@ where
 }
 
 fn stats_db_path(state: &SharedState) -> Result<PathBuf, String> {
-    let state = state.read().unwrap();
+    let state = read_state(state);
     let config = state
         .server_config
         .as_ref()

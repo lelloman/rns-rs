@@ -94,6 +94,16 @@ fn inject_transport_header(raw: &[u8], next_hop: &[u8; 16]) -> Vec<u8> {
     new_raw
 }
 
+fn recover_mutex_guard<'a, T>(mutex: &'a Mutex<T>, label: &str) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned mutex: {}", label);
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuntimeConfigDefaults {
     pub(crate) tick_interval_ms: u64,
@@ -1594,7 +1604,9 @@ impl Driver {
         let mut entries = Vec::new();
         for name in names {
             if let Some(handle) = self.backbone_peer_state.get(name) {
-                entries.extend(handle.peer_state.lock().unwrap().list(name));
+                entries.extend(
+                    recover_mutex_guard(&handle.peer_state, "backbone peer state").list(name),
+                );
             }
         }
         entries.sort_by(|a, b| {
@@ -1627,7 +1639,9 @@ impl Driver {
     ) -> bool {
         self.backbone_peer_state
             .get(interface_name)
-            .map(|handle| handle.peer_state.lock().unwrap().clear(peer_ip))
+            .map(|handle| {
+                recover_mutex_guard(&handle.peer_state, "backbone peer state").clear(peer_ip)
+            })
             .unwrap_or(false)
     }
 
@@ -1655,11 +1669,11 @@ impl Driver {
         let Some(handle) = self.backbone_peer_state.get(interface_name) else {
             return false;
         };
-        let ok = handle
-            .peer_state
-            .lock()
-            .unwrap()
-            .blacklist(peer_ip, capped_duration, reason);
+        let ok = recover_mutex_guard(&handle.peer_state, "backbone peer state").blacklist(
+            peer_ip,
+            capped_duration,
+            reason,
+        );
         if ok {
             #[cfg(feature = "rns-hooks")]
             self.run_backbone_peer_hook(
@@ -2154,7 +2168,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("backbone interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "backbone runtime");
         match setting {
             "idle_timeout_secs" => {
                 runtime.idle_timeout = Self::set_optional_duration(value, key)?;
@@ -2315,7 +2329,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("backbone interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "backbone runtime");
         let startup = handle.startup.clone();
         match setting {
             "idle_timeout_secs" => runtime.idle_timeout = startup.idle_timeout,
@@ -2359,7 +2373,7 @@ impl Driver {
         let rest = key.strip_prefix("backbone_client.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.backbone_client_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "backbone client runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -2429,7 +2443,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("backbone client interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "backbone client runtime");
         match setting {
             "connect_timeout_secs" => {
                 runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
@@ -2466,7 +2480,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("backbone client interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "backbone client runtime");
         let startup = handle.startup.clone();
         match setting {
             "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
@@ -2533,7 +2547,7 @@ impl Driver {
         let rest = key.strip_prefix("tcp_client.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.tcp_client_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "tcp client runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -2601,7 +2615,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("tcp client interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "tcp client runtime");
         match setting {
             "connect_timeout_secs" => {
                 runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
@@ -2635,7 +2649,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("tcp client interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "tcp client runtime");
         let startup = handle.startup.clone();
         match setting {
             "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
@@ -2672,7 +2686,7 @@ impl Driver {
         let rest = key.strip_prefix("udp.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.udp_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "udp runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -2746,7 +2760,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("udp interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "udp runtime");
         match setting {
             "forward_ip" => {
                 runtime.forward_ip = Self::expect_optional_string(value, key)?;
@@ -2773,7 +2787,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("udp interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "udp runtime");
         let startup = handle.startup.clone();
         match setting {
             "forward_ip" => runtime.forward_ip = startup.forward_ip,
@@ -2813,7 +2827,7 @@ impl Driver {
         let rest = key.strip_prefix("auto.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.auto_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "auto runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -2878,7 +2892,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("auto interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         match setting {
             "announce_interval_secs" => {
                 runtime.announce_interval_secs = Self::expect_f64(value, key)?.max(0.1)
@@ -2906,7 +2920,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("auto interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         let startup = handle.startup.clone();
         match setting {
             "announce_interval_secs" => {
@@ -2945,7 +2959,7 @@ impl Driver {
         let rest = key.strip_prefix("i2p.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.i2p_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "i2p runtime").clone();
         let startup = handle.startup.clone();
         match setting {
             "reconnect_wait_secs" => Some(RuntimeConfigEntry {
@@ -2992,7 +3006,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("i2p interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "i2p runtime");
         match setting {
             "reconnect_wait_secs" => {
                 runtime.reconnect_wait =
@@ -3013,7 +3027,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("i2p interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "i2p runtime");
         let startup = handle.startup.clone();
         match setting {
             "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
@@ -3046,7 +3060,7 @@ impl Driver {
         let rest = key.strip_prefix("pipe.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.pipe_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "pipe runtime").clone();
         let startup = handle.startup.clone();
         match setting {
             "respawn_delay_secs" => Some(RuntimeConfigEntry {
@@ -3093,7 +3107,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("pipe interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "pipe runtime");
         match setting {
             "respawn_delay_secs" => {
                 runtime.respawn_delay =
@@ -3114,7 +3128,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("pipe interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "pipe runtime");
         let startup = handle.startup.clone();
         match setting {
             "respawn_delay_secs" => runtime.respawn_delay = startup.respawn_delay,
@@ -3157,7 +3171,7 @@ impl Driver {
         let rest = key.strip_prefix("rnode.")?;
         let (name, setting) = rest.split_once('.')?;
         let handle = self.rnode_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "rnode runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -3276,7 +3290,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("rnode interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
         let old = runtime.sub.clone();
         match setting {
             "frequency_hz" => runtime.sub.frequency = Self::expect_u64(value, key)? as u32,
@@ -3319,7 +3333,7 @@ impl Driver {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("rnode interface '{}' not found", name),
         })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
         let old = runtime.sub.clone();
         let startup = handle.startup.clone();
         match setting {
@@ -3694,7 +3708,10 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("interface '{}' not found", name),
             })?;
-        let entry = self.interfaces.get_mut(&id).unwrap();
+        let entry = self.interfaces.get_mut(&id).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("interface '{}' not found", name),
+        })?;
         match setting {
             "enabled" => {
                 entry.enabled = Self::expect_bool(value, key)?;
@@ -4064,7 +4081,7 @@ impl Driver {
         }
 
         let handle = self.tcp_server_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
+        let current = recover_mutex_guard(&handle.runtime, "tcp server runtime").clone();
         let startup = handle.startup.clone();
         match setting {
             "max_connections" => Some(RuntimeConfigEntry {
@@ -4128,7 +4145,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("tcp server interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "tcp server runtime");
         match setting {
             "max_connections" => {
                 runtime.max_connections = Self::set_optional_usize(value, key)?;
@@ -4164,7 +4181,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("tcp server interface '{}' not found", name),
             })?;
-        let mut runtime = handle.runtime.lock().unwrap();
+        let mut runtime = recover_mutex_guard(&handle.runtime, "tcp server runtime");
         let startup = handle.startup.clone();
         match setting {
             "max_connections" => runtime.max_connections = startup.max_connections,
@@ -4430,7 +4447,7 @@ impl Driver {
         }
 
         if let Some(handle) = self.backbone_runtime.get(name) {
-            let current = handle.runtime.lock().unwrap().clone();
+            let current = recover_mutex_guard(&handle.runtime, "backbone runtime").clone();
             let startup = handle.startup.clone();
             return match setting {
                 "idle_timeout_secs" => Some(make_entry(
@@ -4805,7 +4822,10 @@ impl Driver {
             }
 
             if let Some(ref cache) = self.announce_cache {
-                let active_hashes = self.cache_cleanup_active_hashes.as_ref().unwrap();
+                let Some(active_hashes) = self.cache_cleanup_active_hashes.as_ref() else {
+                    self.cache_cleanup_entries = None;
+                    return;
+                };
                 let entries = match self.cache_cleanup_entries.as_mut() {
                     Some(entries) => entries,
                     None => return,
@@ -4981,7 +5001,15 @@ impl Driver {
                 self.interfaces.remove(&id);
             } else {
                 log::info!("[{}] interface offline", id.0);
-                self.interfaces.get_mut(&id).unwrap().online = false;
+                if let Some(entry) = self.interfaces.get_mut(&id) {
+                    entry.online = false;
+                } else {
+                    log::warn!(
+                        "interface {} disappeared while handling interface-down",
+                        id.0
+                    );
+                    return;
+                }
                 if is_local_client {
                     self.handle_shared_interface_down(id);
                 }
@@ -5552,17 +5580,23 @@ impl Driver {
                             program.priority = priority;
                         });
                         if result.is_ok() {
-                            let point_idx = crate::config::parse_hook_point(&attach_point)
-                                .expect("validated hook point");
-                            self.hook_slots[point_idx]
-                                .programs
-                                .sort_by(|a, b| b.priority.cmp(&a.priority));
-                            log::info!(
-                                "Updated hook '{}' at point {} to priority {}",
-                                name,
-                                attach_point,
-                                priority,
-                            );
+                            if let Some(point_idx) = crate::config::parse_hook_point(&attach_point)
+                            {
+                                self.hook_slots[point_idx]
+                                    .programs
+                                    .sort_by(|a, b| b.priority.cmp(&a.priority));
+                                log::info!(
+                                    "Updated hook '{}' at point {} to priority {}",
+                                    name,
+                                    attach_point,
+                                    priority,
+                                );
+                            } else {
+                                log::error!(
+                                    "hook point '{}' became invalid during priority update",
+                                    attach_point
+                                );
+                            }
                         }
                         let _ = response_tx.send(result);
                     }
@@ -6014,6 +6048,58 @@ impl Driver {
         }
     }
 
+    fn runtime_config_query_fallback(request: &QueryRequest) -> QueryResponse {
+        match request {
+            QueryRequest::ListRuntimeConfig => QueryResponse::RuntimeConfigList(Vec::new()),
+            QueryRequest::GetRuntimeConfig { .. } => QueryResponse::RuntimeConfigEntry(None),
+            QueryRequest::BackbonePeerState { .. } => QueryResponse::BackbonePeerState(Vec::new()),
+            QueryRequest::SetRuntimeConfig { key, .. } => {
+                QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::ApplyFailed,
+                    message: format!(
+                        "internal error: no response generated for runtime-config set '{}'",
+                        key
+                    ),
+                }))
+            }
+            QueryRequest::ResetRuntimeConfig { key } => {
+                QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::ApplyFailed,
+                    message: format!(
+                        "internal error: no response generated for runtime-config reset '{}'",
+                        key
+                    ),
+                }))
+            }
+            QueryRequest::ClearBackbonePeerState { .. } => {
+                QueryResponse::ClearBackbonePeerState(false)
+            }
+            QueryRequest::BlacklistBackbonePeer { .. } => {
+                QueryResponse::BlacklistBackbonePeer(false)
+            }
+            _ => QueryResponse::RuntimeConfigEntry(None),
+        }
+    }
+
+    fn mutation_query_fallback(request: &QueryRequest) -> QueryResponse {
+        match request {
+            QueryRequest::BlackholeIdentity { .. } => QueryResponse::BlackholeResult(false),
+            QueryRequest::UnblackholeIdentity { .. } => QueryResponse::UnblackholeResult(false),
+            QueryRequest::DropPath { .. } => QueryResponse::DropPath(false),
+            QueryRequest::DropAllVia { .. } => QueryResponse::DropAllVia(0),
+            QueryRequest::DropAnnounceQueues => QueryResponse::DropAnnounceQueues,
+            QueryRequest::ClearBackbonePeerState { .. } => {
+                QueryResponse::ClearBackbonePeerState(false)
+            }
+            QueryRequest::BlacklistBackbonePeer { .. } => {
+                QueryResponse::BlacklistBackbonePeer(false)
+            }
+            QueryRequest::InjectPath { .. } => QueryResponse::InjectPath(false),
+            QueryRequest::InjectIdentity { .. } => QueryResponse::InjectIdentity(false),
+            _ => QueryResponse::InjectIdentity(false),
+        }
+    }
+
     /// Handle a query request and produce a response.
     fn handle_query(&self, request: QueryRequest) -> QueryResponse {
         match request {
@@ -6147,15 +6233,22 @@ impl Driver {
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
-            QueryRequest::ListRuntimeConfig
+            request @ (QueryRequest::ListRuntimeConfig
             | QueryRequest::GetRuntimeConfig { .. }
             | QueryRequest::BackbonePeerState { .. }
             | QueryRequest::SetRuntimeConfig { .. }
             | QueryRequest::ResetRuntimeConfig { .. }
             | QueryRequest::ClearBackbonePeerState { .. }
-            | QueryRequest::BlacklistBackbonePeer { .. } => self
-                .handle_runtime_config_query(request)
-                .expect("runtime config query branch should return a response"),
+            | QueryRequest::BlacklistBackbonePeer { .. }) => {
+                let fallback = Self::runtime_config_query_fallback(&request);
+                self.handle_runtime_config_query(request)
+                    .unwrap_or_else(|| {
+                        log::error!(
+                            "runtime-config query branch unexpectedly returned no response"
+                        );
+                        fallback
+                    })
+            }
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
@@ -6165,7 +6258,7 @@ impl Driver {
     /// Handle a mutating query request.
     fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
-            QueryRequest::BlackholeIdentity { .. }
+            request @ (QueryRequest::BlackholeIdentity { .. }
             | QueryRequest::UnblackholeIdentity { .. }
             | QueryRequest::DropPath { .. }
             | QueryRequest::DropAllVia { .. }
@@ -6173,9 +6266,13 @@ impl Driver {
             | QueryRequest::ClearBackbonePeerState { .. }
             | QueryRequest::BlacklistBackbonePeer { .. }
             | QueryRequest::InjectPath { .. }
-            | QueryRequest::InjectIdentity { .. } => self
-                .handle_mutation_query(request)
-                .expect("mutation query branch should return a response"),
+            | QueryRequest::InjectIdentity { .. }) => {
+                let fallback = Self::mutation_query_fallback(&request);
+                self.handle_mutation_query(request).unwrap_or_else(|| {
+                    log::error!("mutation query branch unexpectedly returned no response");
+                    fallback
+                })
+            }
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
             QueryRequest::SendProbe {
                 dest_hash,

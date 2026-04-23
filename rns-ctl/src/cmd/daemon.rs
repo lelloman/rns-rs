@@ -140,7 +140,15 @@ pub fn run(args: Args) {
         );
     }
     // Store the channel sender in a static so the signal handler can use it
-    STOP_TX.lock().unwrap().replace(stop_tx);
+    match STOP_TX.lock() {
+        Ok(mut guard) => {
+            guard.replace(stop_tx);
+        }
+        Err(poisoned) => {
+            log::error!("recovering from poisoned daemon stop-channel lock");
+            poisoned.into_inner().replace(stop_tx);
+        }
+    }
 
     log::info!("rnsd started");
 

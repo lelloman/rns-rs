@@ -69,11 +69,11 @@ impl Callbacks for CtlCallbacks {
     ) {
         // Set resource strategy to AcceptAll so this node can receive resources on this link
         let node_handle = {
-            let s = self.state.read().unwrap();
+            let s = read_state(&self.state);
             s.node_handle.clone()
         };
         if let Some(nh) = node_handle {
-            if let Some(node) = nh.lock().unwrap().as_ref() {
+            if let Some(node) = lock_node_handle(&nh).as_ref() {
                 let _ = node.set_resource_strategy(link_id.0, 1); // 1 = AcceptAll
             }
         }

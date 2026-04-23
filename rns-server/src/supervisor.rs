@@ -89,6 +89,18 @@ pub struct Supervisor {
     rnsd_drain: Option<RnsdDrainConfig>,
 }
 
+fn read_shared_state<'a>(
+    state: &'a SharedState,
+) -> std::sync::RwLockReadGuard<'a, rns_ctl::state::CtlState> {
+    match state.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned supervisor shared state read lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RnsdDrainConfig {
     pub rpc_addr: RpcAddr,
@@ -432,7 +444,7 @@ impl ProcessReadiness {
             },
             ReadinessTarget::ProcessAge(min_age) => {
                 let started_at = {
-                    let s = state.read().unwrap();
+                    let s = read_shared_state(state);
                     s.processes
                         .get(self.name())
                         .and_then(|process| process.started_at)
@@ -499,7 +511,7 @@ fn inspect_ready_file(
     }
 
     let expected_pid = {
-        let s = state.read().unwrap();
+        let s = read_shared_state(state);
         s.processes
             .get(process_name)
             .and_then(|process| process.pid)
@@ -1013,7 +1025,15 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
 
 fn install_signal_handlers() -> mpsc::Receiver<()> {
     let (stop_tx, stop_rx) = mpsc::channel();
-    STOP_TX.lock().unwrap().replace(stop_tx);
+    match STOP_TX.lock() {
+        Ok(mut guard) => {
+            guard.replace(stop_tx);
+        }
+        Err(poisoned) => {
+            log::error!("recovering from poisoned supervisor stop-channel lock");
+            poisoned.into_inner().replace(stop_tx);
+        }
+    }
     #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGINT, signal_handler as *const () as usize);
@@ -1025,12 +1045,12 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_spec, format_drain_status_detail, inspect_ready_file, log_rnsd_drain_progress,
-        drain_complete_for_shutdown, missing_required_hooks, observe_sidecar_draining,
-        probe_ready_file, ready_file_path_for_role, reflect_rnsd_drain_status, request_rnsd_drain,
-        role_from_name, shutdown_priority, wait_for_rnsd_drain, ProcessCommand, ProcessReadiness,
-        ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role, Supervisor, SupervisorConfig,
-        STOP_TX,
+        command_for_spec, drain_complete_for_shutdown, format_drain_status_detail,
+        inspect_ready_file, log_rnsd_drain_progress, missing_required_hooks,
+        observe_sidecar_draining, probe_ready_file, ready_file_path_for_role,
+        reflect_rnsd_drain_status, request_rnsd_drain, role_from_name, shutdown_priority,
+        wait_for_rnsd_drain, ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget,
+        RnsdDrainConfig, Role, Supervisor, SupervisorConfig, STOP_TX,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{
@@ -1509,27 +1529,25 @@ mod tests {
         mark_process_running(&state, "rnsd", 777);
         let (stop_tx, stop_rx) = mpsc::channel();
 
-        let driver = std::thread::spawn(move || {
-            loop {
-                match event_rx.recv_timeout(Duration::from_millis(250)) {
-                    Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) => {
-                        let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
-                            state: LifecycleState::Draining,
-                            drain_age_seconds: Some(0.05),
-                            deadline_remaining_seconds: Some(0.05),
-                            drain_complete: false,
-                            interface_writer_queued_frames: 1,
-                            provider_backlog_events: 2,
-                            provider_consumer_queued_events: 3,
-                            detail: Some("still draining queued work".into()),
-                        }));
-                    }
-                    Ok(_) => {}
-                    Err(_) => break,
+        let driver = std::thread::spawn(move || loop {
+            match event_rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(Event::Query(QueryRequest::DrainStatus, resp_tx)) => {
+                    let _ = resp_tx.send(QueryResponse::DrainStatus(DrainStatus {
+                        state: LifecycleState::Draining,
+                        drain_age_seconds: Some(0.05),
+                        deadline_remaining_seconds: Some(0.05),
+                        drain_complete: false,
+                        interface_writer_queued_frames: 1,
+                        provider_backlog_events: 2,
+                        provider_consumer_queued_events: 3,
+                        detail: Some("still draining queued work".into()),
+                    }));
                 }
-                if stop_rx.try_recv().is_ok() {
-                    break;
-                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            if stop_rx.try_recv().is_ok() {
+                break;
             }
         });
 
@@ -1735,19 +1753,16 @@ mod tests {
         let restart_count = {
             let s = state.read().unwrap();
             let process = s.processes.get("rns-sentineld").cloned().unwrap();
-            assert!(process.pid.is_some(), "expected restarted child to be running");
+            assert!(
+                process.pid.is_some(),
+                "expected restarted child to be running"
+            );
             process.restart_count
         };
         assert_eq!(restart_count, 1);
         assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "2");
 
-        STOP_TX
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .send(())
-            .unwrap();
+        STOP_TX.lock().unwrap().as_ref().unwrap().send(()).unwrap();
         let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(result.unwrap(), 0);
         handle.join().unwrap();

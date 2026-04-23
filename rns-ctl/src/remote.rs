@@ -11,6 +11,18 @@ use std::time::Duration;
 use rns_net::shared_client::SharedClientConfig;
 use rns_net::{Callbacks, RnsNode};
 
+fn lock_response_data<'a>(
+    response_data: &'a Arc<Mutex<Option<Vec<u8>>>>,
+) -> std::sync::MutexGuard<'a, Option<Vec<u8>>> {
+    match response_data.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned remote response buffer");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Parse a 32-hex-char destination hash.
 pub fn parse_hex_hash(s: &str) -> Option<[u8; 16]> {
     let s = s.trim();
@@ -66,7 +78,7 @@ impl Callbacks for RemoteCallbacks {
     }
 
     fn on_response(&mut self, _link_id: rns_net::LinkId, _request_id: [u8; 16], data: Vec<u8>) {
-        *self.response_data.lock().unwrap() = Some(data);
+        *lock_response_data(&self.response_data) = Some(data);
         let _ = self.response_tx.send(());
     }
 }
@@ -135,7 +147,7 @@ pub fn remote_query(
     // Wait for response
     resp_rx.recv_timeout(timeout).ok()?;
 
-    let data = response_data.lock().unwrap().take()?;
+    let data = lock_response_data(&response_data).take()?;
     node.shutdown();
 
     Some(RemoteQueryResult { data })

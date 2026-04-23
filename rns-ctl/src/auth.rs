@@ -1,5 +1,5 @@
 use crate::http::{HttpRequest, HttpResponse};
-use crate::state::ControlPlaneConfigHandle;
+use crate::state::{read_control_plane_config, ControlPlaneConfigHandle};
 
 /// Check authentication on an HTTP request.
 /// Returns Ok(()) if authenticated, Err(response) with 401 if not.
@@ -7,7 +7,7 @@ pub fn check_auth(
     req: &HttpRequest,
     config: &ControlPlaneConfigHandle,
 ) -> Result<(), HttpResponse> {
-    let config = config.read().unwrap();
+    let config = read_control_plane_config(config);
     if config.disable_auth {
         return Ok(());
     }
@@ -36,7 +36,7 @@ pub fn check_auth(
 
 /// Check WebSocket auth via query parameter `?token=...`.
 pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(), HttpResponse> {
-    let config = config.read().unwrap();
+    let config = read_control_plane_config(config);
     if config.disable_auth {
         return Ok(());
     }

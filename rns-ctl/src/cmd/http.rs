@@ -114,7 +114,7 @@ pub fn prepare_embedded_with_state(
 
     // Store node handle in shared state so callbacks can access it
     {
-        let mut s = shared_state.write().unwrap();
+        let mut s = state::write_state(&shared_state);
         s.node_handle = Some(node_handle.clone());
     }
 
@@ -133,7 +133,7 @@ pub fn prepare_embedded_with_state(
         log::info!("Starting RNS node...");
         let node = rns_net::RnsNode::from_config(config_path, callbacks)
             .map_err(|e| format!("failed to start node: {}", e))?;
-        *node_handle.lock().unwrap() = Some(node);
+        *state::lock_node_handle(&node_handle) = Some(node);
     }
 
     // Set up ctrl-c handler
@@ -146,7 +146,7 @@ pub fn prepare_embedded_with_state(
                 std::process::exit(1);
             }
             log::info!("Shutting down...");
-            if let Some(node) = node_for_shutdown.lock().unwrap().take() {
+            if let Some(node) = state::lock_node_handle(&node_for_shutdown).take() {
                 node.shutdown();
             }
             std::process::exit(0);
@@ -197,7 +197,7 @@ pub fn prepare_embedded_with_state(
         tls_config,
     });
 
-    let cfg = config_handle.read().unwrap();
+    let cfg = state::read_control_plane_config(&config_handle);
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .map_err(|_| "invalid bind address".to_string())?;
@@ -212,7 +212,7 @@ fn load_identity_into_state(config_path: Option<&Path>, shared_state: &state::Sh
         .as_ref()
         .and_then(|p| rns_net::storage::load_or_create_identity(&p.identities).ok());
 
-    let mut s = shared_state.write().unwrap();
+    let mut s = state::write_state(shared_state);
     if let Some(ref id) = identity {
         s.identity_hash = Some(*id.hash());
         // Identity doesn't impl Clone; copy via private key.
@@ -243,7 +243,7 @@ fn start_shared_node_connector(
 
                 match rns_net::RnsNode::connect_shared_from_config(config_path, callbacks) {
                     Ok(node) => {
-                        *node_handle.lock().unwrap() = Some(node);
+                        *state::lock_node_handle(&node_handle) = Some(node);
                         log::info!("connected embedded HTTP control plane to shared rnsd");
                         return;
                     }
@@ -273,7 +273,15 @@ fn start_shared_node_connector(
 fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
     let handler = Mutex::new(Some(handler));
     libc_signal(move || {
-        if let Some(f) = handler.lock().unwrap().take() {
+        if let Some(f) = match handler.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                log::error!("recovering from poisoned signal handler lock");
+                poisoned.into_inner()
+            }
+        }
+        .take()
+        {
             f();
         }
     });

@@ -366,7 +366,15 @@ pub fn generate_discovery_stamp(packed_data: &[u8], stamp_cost: u8) -> ([u8; STA
                     }
                     rng.fill_bytes(&mut nonce);
                     if stamp_valid(&nonce, stamp_cost, workblock) {
-                        let mut r = result.lock().unwrap();
+                        let mut r = match result.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => {
+                                log::error!(
+                                    "recovering from poisoned discovery stamp result buffer"
+                                );
+                                poisoned.into_inner()
+                            }
+                        };
                         if r.is_none() {
                             *r = Some(nonce);
                         }
@@ -378,11 +386,24 @@ pub fn generate_discovery_stamp(packed_data: &[u8], stamp_cost: u8) -> ([u8; STA
         }
     });
 
-    let stamp = result
-        .lock()
-        .unwrap()
-        .take()
-        .expect("stamp search must find result");
+    let stamp = match result.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => {
+            log::error!("recovering from poisoned discovery stamp result buffer");
+            poisoned.into_inner().take()
+        }
+    }
+    .unwrap_or_else(|| {
+        log::error!("parallel discovery stamp search returned no result; retrying synchronously");
+        let mut rng = OsRng;
+        let mut nonce = [0u8; STAMP_SIZE];
+        loop {
+            rng.fill_bytes(&mut nonce);
+            if stamp_valid(&nonce, stamp_cost, &workblock) {
+                return nonce;
+            }
+        }
+    });
     let value = rns_core::stamp::stamp_value(&workblock, &stamp);
     (stamp, value)
 }

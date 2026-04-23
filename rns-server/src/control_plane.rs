@@ -11,6 +11,18 @@ use crate::config::ServerConfig;
 
 const MANAGED_PROCESSES: [&str; 3] = ["rnsd", "rns-sentineld", "rns-statsd"];
 
+fn read_shared_state<'a>(
+    state: &'a SharedState,
+) -> std::sync::RwLockReadGuard<'a, rns_ctl::state::CtlState> {
+    match state.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned control-plane shared state read lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn new_supervised_state() -> (
     SharedState,
     mpsc::Sender<ProcessControlCommand>,
@@ -44,7 +56,7 @@ pub fn install_config_bridge(shared_state: &SharedState, args: &Args, config: &S
             let shared_state = shared_state.clone();
             move |mode, body| {
                 let control_tx = {
-                    let s = shared_state.read().unwrap();
+                    let s = read_shared_state(&shared_state);
                     s.control_tx.clone()
                 };
                 let result = config.mutate_json_with_current_context(mode, body, control_tx)?;
@@ -89,14 +101,20 @@ fn reload_embedded_http_auth_if_needed(
     }
 
     let config_handle = {
-        let s = shared_state.read().unwrap();
+        let s = read_shared_state(shared_state);
         s.control_plane_config.clone()
     };
     let Some(config_handle) = config_handle else {
         return;
     };
 
-    let mut config = config_handle.write().unwrap();
+    let mut config = match config_handle.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned embedded control-plane config write lock");
+            poisoned.into_inner()
+        }
+    };
     config.auth_token = next.http.auth_token.clone();
     config.disable_auth = next.http.disable_auth;
     log::info!("reloaded embedded control-plane auth settings in place");

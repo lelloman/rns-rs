@@ -7,7 +7,9 @@ use std::time::Duration;
 use crate::api::{handle_request, NodeHandle};
 use crate::auth::check_ws_auth;
 use crate::http::{parse_request, write_response};
-use crate::state::{ControlPlaneConfigHandle, SharedState, WsBroadcast, WsEvent};
+use crate::state::{
+    lock_ws_broadcast, ControlPlaneConfigHandle, SharedState, WsBroadcast, WsEvent,
+};
 use crate::ws;
 
 /// A connection stream that is either plain TCP or TLS-wrapped.
@@ -170,7 +172,7 @@ fn handle_ws_connection(
 
     // Register in broadcast list
     {
-        let mut senders = ctx.ws_broadcast.lock().unwrap();
+        let mut senders = lock_ws_broadcast(&ctx.ws_broadcast);
         senders.push(event_tx);
     }
 

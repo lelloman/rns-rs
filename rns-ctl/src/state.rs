@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -95,54 +95,110 @@ fn push_capped<T>(deque: &mut VecDeque<T>, item: T) {
     deque.push_back(item);
 }
 
+pub(crate) fn read_state<'a>(state: &'a SharedState) -> RwLockReadGuard<'a, CtlState> {
+    match state.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned control-plane shared state read lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
+pub(crate) fn write_state<'a>(state: &'a SharedState) -> RwLockWriteGuard<'a, CtlState> {
+    match state.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned control-plane shared state write lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
+pub(crate) fn read_control_plane_config<'a>(
+    config: &'a ControlPlaneConfigHandle,
+) -> RwLockReadGuard<'a, crate::config::CtlConfig> {
+    match config.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned control-plane config read lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
+pub(crate) fn lock_ws_broadcast<'a>(
+    ws: &'a WsBroadcast,
+) -> MutexGuard<'a, Vec<std::sync::mpsc::Sender<WsEvent>>> {
+    match ws.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned WebSocket broadcast registry");
+            poisoned.into_inner()
+        }
+    }
+}
+
+pub(crate) fn lock_node_handle<'a>(
+    node: &'a Arc<Mutex<Option<RnsNode>>>,
+) -> MutexGuard<'a, Option<RnsNode>> {
+    match node.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned node handle lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn push_announce(state: &SharedState, record: AnnounceRecord) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     push_capped(&mut s.announces, record);
 }
 
 pub fn push_packet(state: &SharedState, record: PacketRecord) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     push_capped(&mut s.packets, record);
 }
 
 pub fn push_proof(state: &SharedState, record: ProofRecord) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     push_capped(&mut s.proofs, record);
 }
 
 pub fn push_link_event(state: &SharedState, record: LinkEventRecord) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     push_capped(&mut s.link_events, record);
 }
 
 pub fn push_resource_event(state: &SharedState, record: ResourceEventRecord) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     push_capped(&mut s.resource_events, record);
 }
 
 /// Broadcast a WsEvent to all connected WebSocket clients.
 pub fn broadcast(ws: &WsBroadcast, event: WsEvent) {
-    let mut senders = ws.lock().unwrap();
+    let mut senders = lock_ws_broadcast(ws);
     senders.retain(|tx| tx.send(event.clone()).is_ok());
 }
 
 pub fn set_server_mode(state: &SharedState, mode: impl Into<String>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_mode = mode.into();
 }
 
 pub fn set_server_config(state: &SharedState, config: ServerConfigSnapshot) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_config = Some(config);
 }
 
 pub fn set_server_config_schema(state: &SharedState, schema: ServerConfigSchemaSnapshot) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_config_schema = Some(schema);
 }
 
 pub fn note_server_config_saved(state: &SharedState, apply_plan: &ServerConfigApplyPlan) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_config_status.last_saved_at = Some(Instant::now());
     s.server_config_status.last_action = Some("save".into());
     s.server_config_status.last_action_at = Some(Instant::now());
@@ -157,7 +213,7 @@ pub fn note_server_config_saved(state: &SharedState, apply_plan: &ServerConfigAp
 }
 
 pub fn note_server_config_applied(state: &SharedState, apply_plan: &ServerConfigApplyPlan) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let now = Instant::now();
     s.server_config_status.last_saved_at = Some(now);
     s.server_config_status.last_apply_at = Some(now);
@@ -179,7 +235,7 @@ pub fn reconcile_config_status_for_process(
     ready: bool,
     status: &str,
 ) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     if ready {
         s.server_config_status
             .pending_process_restarts
@@ -196,17 +252,17 @@ pub fn reconcile_config_status_for_process(
 }
 
 pub fn set_server_config_validator(state: &SharedState, validator: ServerConfigValidator) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_config_validator = Some(validator);
 }
 
 pub fn set_server_config_mutator(state: &SharedState, mutator: ServerConfigMutator) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.server_config_mutator = Some(mutator);
 }
 
 pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let name = name.into();
     s.processes
         .entry(name.clone())
@@ -219,7 +275,7 @@ pub fn ensure_process(state: &SharedState, name: impl Into<String>) {
 }
 
 pub fn push_process_log(state: &SharedState, name: &str, stream: &str, line: impl Into<String>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let recent_log_lines = {
         let logs = s.process_logs.entry(name.to_string()).or_default();
         if logs.len() >= MAX_RECORDS {
@@ -242,7 +298,7 @@ pub fn push_process_log(state: &SharedState, name: &str, stream: &str, line: imp
 }
 
 pub fn set_process_log_path(state: &SharedState, name: &str, path: impl Into<String>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let process = s
         .processes
         .entry(name.to_string())
@@ -251,17 +307,17 @@ pub fn set_process_log_path(state: &SharedState, name: &str, path: impl Into<Str
 }
 
 pub fn set_control_tx(state: &SharedState, tx: mpsc::Sender<ProcessControlCommand>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.control_tx = Some(tx);
 }
 
 pub fn set_control_plane_config(state: &SharedState, config: ControlPlaneConfigHandle) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     s.control_plane_config = Some(config);
 }
 
 pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let process = s
         .processes
         .entry(name.to_string())
@@ -283,7 +339,7 @@ pub fn mark_process_running(state: &SharedState, name: &str, pid: u32) {
 }
 
 pub fn bump_process_restart_count(state: &SharedState, name: &str) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let restart_count = {
         let process = s
             .processes
@@ -308,7 +364,7 @@ pub fn record_process_termination_observation(
     drain_acknowledged: bool,
     forced_kill: bool,
 ) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let detail = {
         let process = s
             .processes
@@ -340,7 +396,7 @@ pub fn record_process_termination_observation(
 }
 
 pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i32>) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let process = s
         .processes
         .entry(name.to_string())
@@ -371,7 +427,7 @@ pub fn mark_process_stopped(state: &SharedState, name: &str, exit_code: Option<i
 }
 
 pub fn mark_process_failed_spawn(state: &SharedState, name: &str, error: String) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let detail = {
         let process = s
             .processes
@@ -402,7 +458,7 @@ pub fn set_process_readiness(
     ready_state: &str,
     status_detail: Option<String>,
 ) {
-    let mut s = state.write().unwrap();
+    let mut s = write_state(state);
     let detail_clone = {
         let process = s
             .processes
