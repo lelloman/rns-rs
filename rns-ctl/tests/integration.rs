@@ -1664,7 +1664,7 @@ mod tls_tests {
 
         let port = find_free_port();
 
-        let cfg = CtlConfig {
+        let cfg = Arc::new(RwLock::new(CtlConfig {
             host: "127.0.0.1".into(),
             port,
             auth_token: None,
@@ -1673,7 +1673,7 @@ mod tls_tests {
             daemon_mode: false,
             tls_cert: Some(cert_path.to_str().unwrap().into()),
             tls_key: Some(key_path.to_str().unwrap().into()),
-        };
+        }));
 
         let shared_state: SharedState = Arc::new(RwLock::new(CtlState::new()));
         let ws_broadcast: WsBroadcast = Arc::new(Mutex::new(Vec::new()));

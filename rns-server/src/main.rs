@@ -1,5 +1,5 @@
-use std::thread;
 use std::net::TcpListener;
+use std::thread;
 
 use rns_cli::args::Args as CliArgs;
 use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
@@ -135,8 +135,12 @@ fn start_control_http(
         HttpRunOptions::embedded(),
         Some(shared_state.clone()),
     )?;
-    let listener = TcpListener::bind(prepared.addr)
-        .map_err(|e| format!("failed to bind embedded control plane {}: {}", prepared.addr, e))?;
+    let listener = TcpListener::bind(prepared.addr).map_err(|e| {
+        format!(
+            "failed to bind embedded control plane {}: {}",
+            prepared.addr, e
+        )
+    })?;
 
     thread::Builder::new()
         .name("rns-server-http".into())
@@ -179,8 +183,8 @@ OPTIONS:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rns_server::control_plane::new_supervised_state;
     use rns_server::config::{HttpConfig, ServerConfig, ServerConfigFile};
+    use rns_server::control_plane::new_supervised_state;
     use std::path::PathBuf;
 
     fn test_server_config(http_port: u16) -> ServerConfig {

@@ -34,6 +34,64 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
+  cargo-test-hooks:
+    name: Cargo Test (rns-hooks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build hook WASM examples
+        run: ./rns-hooks/build-examples.sh
+
+      - name: Run workspace tests with rns-hooks
+        run: cargo test --workspace --features rns-hooks
+
+  cargo-test-rns-ctl-tls:
+    name: Cargo Test (rns-ctl tls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run rns-ctl tests with tls
+        run: cargo test -p rns-ctl --features tls
+
+  rns-ctl-web-smoke:
+    name: rns-ctl-web-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run app smoke test
+        run: node --test rns-ctl/assets/app.smoke.test.js
+
   docker-e2e:
     name: Docker E2E
     runs-on: ubuntu-latest
@@ -45,6 +103,23 @@ jobs:
 
       - name: Run Docker end-to-end suite
         run: ./tests/docker/run-all.sh
+
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust with rustfmt
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt
+
+      - name: Run rustfmt check
+        run: cargo fmt --check
 
   clippy:
     name: Clippy

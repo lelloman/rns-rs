@@ -1415,12 +1415,7 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         let mut actions = self.build_response_packet(link_id, request_id, response_data, rng);
         if actions.is_empty() {
-            actions.extend(self.send_response_resource(
-                link_id,
-                request_id,
-                response_data,
-                rng,
-            ));
+            actions.extend(self.send_response_resource(link_id, request_id, response_data, rng));
         }
         actions
     }
@@ -2088,7 +2083,8 @@ impl LinkManager {
             .get(link_id)
             .map(|l| l.engine.mtu() as usize)
             .unwrap_or(constants::MTU);
-        if let Ok(pkt) = RawPacket::pack_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+        if let Ok(pkt) =
+            RawPacket::pack_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
         {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
@@ -4064,8 +4060,7 @@ mod tests {
         let mut rng = OsRng;
 
         let large_payload: Vec<u8> = (0..5000u32).map(|i| (i & 0xFF) as u8).collect();
-        let response_value =
-            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(large_payload));
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(large_payload));
         resp_mgr.register_request_handler("/large", None, {
             let response_value = response_value.clone();
             move |_link_id, _path, _data, _remote| Some(response_value.clone())
@@ -4159,8 +4154,7 @@ mod tests {
         resp_mgr.set_link_mtu(&link_id, 300);
 
         let payload = vec![0xAB; 350];
-        let response_value =
-            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
         resp_mgr.register_request_handler("/mtu", None, {
             let response_value = response_value.clone();
             move |_link_id, _path, _data, _remote| Some(response_value.clone())
@@ -4206,14 +4200,9 @@ mod tests {
         let mut rng = OsRng;
 
         let payload = vec![0xBC; 5000];
-        let response_value =
-            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
-        let actions = resp_mgr.send_management_response(
-            &link_id,
-            &[0x55; 16],
-            &response_value,
-            &mut rng,
-        );
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+        let actions =
+            resp_mgr.send_management_response(&link_id, &[0x55; 16], &response_value, &mut rng);
 
         let mut has_resource_adv = false;
         let mut has_direct_response = false;
