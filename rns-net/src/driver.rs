@@ -5042,6 +5042,19 @@ impl Driver {
         self.handle_backbone_peer_pool_down(id);
     }
 
+    fn known_destination_route_hint(&self, dest_hash: &[u8; 16]) -> Option<(InterfaceId, u8)> {
+        let announced = self.known_destinations.get(dest_hash)?;
+        let iface = announced.receiving_interface;
+        if iface.0 == 0 {
+            return None;
+        }
+
+        self.interfaces
+            .get(&iface)
+            .filter(|entry| entry.online)
+            .map(|_| (iface, announced.hops))
+    }
+
     fn handle_send_outbound_event(
         &mut self,
         raw: Vec<u8>,
@@ -5219,20 +5232,48 @@ impl Driver {
                         let _ = response_tx.send([0u8; 16]);
                         continue;
                     }
-                    let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
-                    let mtu = self
+                    let next_hop_interface = self.engine.next_hop_interface(&dest_hash);
+                    let recalled_route_hint = if next_hop_interface.is_none() {
+                        self.known_destination_route_hint(&dest_hash)
+                    } else {
+                        None
+                    };
+                    let attached_interface =
+                        next_hop_interface.or(recalled_route_hint.map(|(iface, _)| iface));
+                    let hops = self
                         .engine
-                        .next_hop_interface(&dest_hash)
+                        .hops_to(&dest_hash)
+                        .or_else(|| recalled_route_hint.map(|(_, hops)| hops))
+                        .unwrap_or(0);
+                    let mtu = attached_interface
                         .and_then(|iface_id| self.interfaces.get(&iface_id))
                         .map(|entry| entry.info.mtu)
                         .unwrap_or(rns_core::constants::MTU as u32);
-                    let (link_id, link_actions) = self.link_manager.create_link(
+                    let (link_id, mut link_actions) = self.link_manager.create_link(
                         &dest_hash,
                         &dest_sig_pub_bytes,
                         hops,
                         mtu,
                         &mut self.rng,
                     );
+                    if next_hop_interface.is_none() {
+                        if let Some(iface) = attached_interface {
+                            for action in &mut link_actions {
+                                if let LinkManagerAction::SendPacket {
+                                    dest_type,
+                                    attached_interface,
+                                    ..
+                                } = action
+                                {
+                                    if *dest_type == rns_core::constants::DESTINATION_LINK
+                                        && attached_interface.is_none()
+                                    {
+                                        *attached_interface = Some(iface);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let _ = response_tx.send(link_id);
                     self.dispatch_link_actions(link_actions);
                 }
@@ -11340,6 +11381,148 @@ mod tests {
         // to the destination (DESTINATION_LINK requires a known path or
         // attached_interface). In a real scenario, the path would exist from
         // an announce received earlier.
+    }
+
+    #[test]
+    fn create_link_uses_known_destination_interface_without_path() {
+        let (tx, rx) = event::channel();
+        let (cbs, _link_established, _, _) = MockCallbacks::with_link_tracking();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        for id in [1, 2] {
+            driver.engine.register_interface(make_interface_info(id));
+        }
+        let (writer, sent) = MockWriter::new();
+        let (writer2, sent2) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(writer2), true));
+
+        let dest_hash = [0xD1; 16];
+        driver.known_destinations.insert(
+            dest_hash,
+            make_announced_identity(dest_hash, 10.0, InterfaceId(2)),
+        );
+
+        let dummy_sig_pub = [0xA1; 32];
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::CreateLink {
+            dest_hash,
+            dest_sig_pub_bytes: dummy_sig_pub,
+            response_tx: resp_tx,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let link_id = resp_rx.recv().unwrap();
+        assert_ne!(link_id, [0u8; 16]);
+        assert_eq!(driver.link_manager.link_count(), 1);
+
+        let sent_packets = sent.lock().unwrap();
+        let sent_packets2 = sent2.lock().unwrap();
+        assert!(
+            sent_packets.is_empty(),
+            "LINKREQUEST should not broadcast to unrelated interfaces when a known destination interface exists"
+        );
+        assert_eq!(sent_packets2.len(), 1);
+        let flags = PacketFlags::unpack(sent_packets2[0][0] & 0x7F);
+        assert_eq!(flags.packet_type, constants::PACKET_TYPE_LINKREQUEST);
+        assert_eq!(extract_dest_hash(&sent_packets2[0]), dest_hash);
+    }
+
+    #[test]
+    fn create_link_ignores_sentinel_known_destination_interface() {
+        let (tx, rx) = event::channel();
+        let (cbs, _link_established, _, _) = MockCallbacks::with_link_tracking();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+                max_path_destinations: usize::MAX,
+                max_tunnel_destinations_total: usize::MAX,
+                destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+                announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+                announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+                announce_sig_cache_enabled: true,
+                announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+                announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+                announce_queue_max_entries: 256,
+                announce_queue_max_interfaces: 1024,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        for id in [1, 2] {
+            driver.engine.register_interface(make_interface_info(id));
+        }
+        let (writer, sent) = MockWriter::new();
+        let (writer2, sent2) = MockWriter::new();
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(writer2), true));
+
+        let dest_hash = [0xD2; 16];
+        driver.known_destinations.insert(
+            dest_hash,
+            make_announced_identity(dest_hash, 10.0, InterfaceId(0)),
+        );
+
+        let dummy_sig_pub = [0xA2; 32];
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(Event::CreateLink {
+            dest_hash,
+            dest_sig_pub_bytes: dummy_sig_pub,
+            response_tx: resp_tx,
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let link_id = resp_rx.recv().unwrap();
+        assert_ne!(link_id, [0u8; 16]);
+        assert_eq!(driver.link_manager.link_count(), 1);
+
+        let sent_packets = sent.lock().unwrap();
+        let sent_packets2 = sent2.lock().unwrap();
+        assert!(
+            sent_packets.len() == 1 && sent_packets2.len() == 1,
+            "sentinel InterfaceId(0) must not suppress the default broadcast behavior"
+        );
+        let flags = PacketFlags::unpack(sent_packets[0][0] & 0x7F);
+        assert_eq!(flags.packet_type, constants::PACKET_TYPE_LINKREQUEST);
     }
 
     #[test]
