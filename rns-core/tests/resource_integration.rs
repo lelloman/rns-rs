@@ -15,6 +15,13 @@ fn identity_decrypt(data: &[u8]) -> Result<Vec<u8>, ()> {
     Ok(data.to_vec())
 }
 
+fn request_data_from(actions: &[ResourceAction]) -> Option<Vec<u8>> {
+    actions.iter().find_map(|a| match a {
+        ResourceAction::SendRequest(d) => Some(d.clone()),
+        _ => None,
+    })
+}
+
 /// Full sender↔receiver cycle for small data (single part).
 #[test]
 fn test_full_cycle_single_part() {
@@ -494,6 +501,103 @@ fn test_simulated_packet_loss() {
         })
         .unwrap();
     assert_eq!(received_data, data);
+}
+
+/// Large multipart flow that reaches a real HMU wait boundary and verifies
+/// the receiver does not retry at the pre-1.1.7 timeout threshold.
+#[test]
+fn test_hmu_wait_timeout_boundary_in_real_flow() {
+    // Force more than one hashmap segment: 75+ parts are required.
+    let data: Vec<u8> = (0..40000u32).map(|i| (i ^ (i >> 8) ^ (i >> 16)) as u8).collect();
+    let seed: Vec<u8> = (0..=255).collect();
+    let mut rng = rns_crypto::FixedRng::new(&seed);
+
+    let mut sender = ResourceSender::new(
+        &data,
+        None,
+        RESOURCE_SDU,
+        &identity_encrypt,
+        &NoopCompressor,
+        &mut rng,
+        1000.0,
+        false,
+        false,
+        None,
+        1,
+        1,
+        None,
+        0.5,
+        6.0,
+    )
+    .unwrap();
+
+    assert!(sender.total_parts() > RESOURCE_HASHMAP_MAX_LEN);
+
+    let adv_data = sender.get_advertisement(0);
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
+
+    let mut current_request = request_data_from(&receiver.accept(1001.0)).unwrap();
+    let mut now = 1002.0;
+
+    // Drive the real sender/receiver exchange until the receiver requests
+    // beyond the initial advertisement hashmap and enters HMU wait state.
+    loop {
+        let send_actions = sender.handle_request(&current_request, now);
+        receiver.req_sent = now - 1.0;
+
+        let mut next_request = None;
+        for action in &send_actions {
+            if let ResourceAction::SendPart(part_data) = action {
+                let actions = receiver.receive_part(part_data, now + 0.1);
+                if let Some(request) = request_data_from(&actions) {
+                    next_request = Some(request);
+                    if receiver.waiting_for_hmu {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if receiver.waiting_for_hmu {
+            break;
+        }
+
+        current_request = next_request.expect("expected receiver to request more parts");
+        now += 1.0;
+        assert!(now < 1100.0, "receiver never entered HMU wait state");
+    }
+
+    // Prime the real timeout path once so the receiver computes the same EIFR
+    // it will use for timeout decisions in this HMU-wait state.
+    let prime_actions =
+        receiver.tick(receiver.last_activity + 0.0001, &identity_decrypt, &NoopCompressor);
+    assert!(prime_actions.is_empty());
+
+    let eifr = receiver.eifr.expect("receiver should compute EIFR when ticking in HMU wait");
+    let old_timeout = receiver.last_activity
+        + RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT * ((3.0 * RESOURCE_SDU as f64 * 8.0) / eifr)
+        + RESOURCE_RETRY_GRACE_TIME;
+    let guaranteed_timeout = receiver.last_activity
+        + RESOURCE_PART_TIMEOUT_FACTOR * ((3.0 * RESOURCE_SDU as f64 * 8.0) / eifr)
+        + (RESOURCE_SDU as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
+        + RESOURCE_RETRY_GRACE_TIME;
+    let retries_before = receiver.retries_left;
+
+    // At the old threshold we should still be waiting for HMU.
+    let actions_before_extension =
+        receiver.tick(old_timeout + 0.01, &identity_decrypt, &NoopCompressor);
+    assert!(actions_before_extension.is_empty());
+    assert_eq!(receiver.retries_left, retries_before);
+    assert!(receiver.waiting_for_hmu);
+
+    // Once the extension is exceeded, retry logic should kick in.
+    let actions_after_extension =
+        receiver.tick(guaranteed_timeout + 0.01, &identity_decrypt, &NoopCompressor);
+    assert_eq!(receiver.retries_left, retries_before - 1);
+    let retry_request = request_data_from(&actions_after_extension).expect("expected retry request");
+    assert_eq!(retry_request[0], RESOURCE_HASHMAP_IS_EXHAUSTED);
 }
 
 /// Test with request_id (is_response flow).

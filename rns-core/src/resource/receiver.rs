@@ -537,6 +537,12 @@ impl ResourceReceiver {
             let eifr = self.compute_eifr();
             let retries_used = self.max_retries - self.retries_left;
             let extra_wait = retries_used as f64 * RESOURCE_PER_RETRY_DELAY;
+            let expected_hmu_wait = if eifr > 0.0 && (self.waiting_for_hmu || self.outstanding_parts == 0)
+            {
+                (self.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
+            } else {
+                0.0
+            };
             let expected_tof = if self.outstanding_parts > 0 && eifr > 0.0 {
                 (self.outstanding_parts as f64 * self.sdu as f64 * 8.0) / eifr
             } else if eifr > 0.0 {
@@ -547,6 +553,7 @@ impl ResourceReceiver {
 
             let sleep_time = self.last_activity
                 + self.part_timeout_factor * expected_tof
+                + expected_hmu_wait
                 + RESOURCE_RETRY_GRACE_TIME
                 + extra_wait;
 
@@ -609,6 +616,23 @@ mod tests {
 
     fn identity_decrypt(data: &[u8]) -> Result<Vec<u8>, ()> {
         Ok(data.to_vec())
+    }
+
+    fn base_timeout(receiver: &ResourceReceiver, eifr: f64) -> f64 {
+        let expected_tof = if receiver.outstanding_parts > 0 {
+            (receiver.outstanding_parts as f64 * receiver.sdu as f64 * 8.0) / eifr
+        } else {
+            (3.0 * receiver.sdu as f64) / eifr
+        };
+
+        receiver.last_activity
+            + receiver.part_timeout_factor * expected_tof
+            + RESOURCE_RETRY_GRACE_TIME
+    }
+
+    fn hmu_timeout(receiver: &ResourceReceiver, eifr: f64) -> f64 {
+        let expected_hmu_wait = (receiver.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr;
+        base_timeout(receiver, eifr) + expected_hmu_wait
     }
 
     fn make_sender_receiver() -> (ResourceSender, ResourceReceiver) {
@@ -932,6 +956,82 @@ mod tests {
         let actions = receiver.tick(9999.0, &identity_decrypt, &NoopCompressor);
         // Should have retried (window decreased, request_next called)
         assert!(!actions.is_empty() || receiver.retries_left < RESOURCE_MAX_RETRIES);
+    }
+
+    #[test]
+    fn test_tick_waiting_for_hmu_gets_extra_timeout() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = true;
+        receiver.outstanding_parts = 0;
+        let eifr = 10_000.0;
+        receiver.previous_eifr = Some(eifr);
+        receiver.last_activity = 1000.0;
+
+        let old_timeout = base_timeout(&receiver, eifr);
+        let now = old_timeout + 0.01;
+
+        let actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
+
+        assert!(actions.is_empty(), "receiver should keep waiting for HMU");
+        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES);
+        assert_eq!(receiver.status, ResourceStatus::Transferring);
+    }
+
+    #[test]
+    fn test_tick_zero_outstanding_parts_gets_extra_timeout_without_hmu_flag() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = false;
+        receiver.outstanding_parts = 0;
+        let eifr = 10_000.0;
+        receiver.previous_eifr = Some(eifr);
+        receiver.last_activity = 1000.0;
+
+        let old_timeout = base_timeout(&receiver, eifr);
+        let now = old_timeout + 0.01;
+
+        let actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
+
+        assert!(
+            actions.is_empty(),
+            "receiver should keep waiting for follow-up hashmap data"
+        );
+        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES);
+        assert_eq!(receiver.status, ResourceStatus::Transferring);
+    }
+
+    #[test]
+    fn test_tick_waiting_for_hmu_retries_after_extended_timeout() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = true;
+        receiver.outstanding_parts = 0;
+        let eifr = 10_000.0;
+        receiver.previous_eifr = Some(eifr);
+        receiver.last_activity = 1000.0;
+
+        let now = hmu_timeout(&receiver, eifr) + 0.01;
+        let _actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
+
+        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES - 1);
+        assert!(!receiver.waiting_for_hmu);
+    }
+
+    #[test]
+    fn test_tick_inflight_parts_do_not_get_hmu_timeout_extension() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        receiver.waiting_for_hmu = false;
+        receiver.outstanding_parts = 2;
+        let eifr = 10_000.0;
+        receiver.previous_eifr = Some(eifr);
+        receiver.last_activity = 1000.0;
+
+        let now = base_timeout(&receiver, eifr) + 0.01;
+        let _actions = receiver.tick(now, &identity_decrypt, &NoopCompressor);
+
+        assert_eq!(receiver.retries_left, RESOURCE_MAX_RETRIES - 1);
     }
 
     #[test]

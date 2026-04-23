@@ -4005,6 +4005,201 @@ mod tests {
     }
 
     #[test]
+    fn test_resource_hmu_timeout_extension_in_link_manager_flow() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+
+        // Large and incompressible enough to require multiple hashmap segments
+        // even with the live Bzip2Compressor in the LinkManager path.
+        let mut state = 0x1234_5678u32;
+        let data: Vec<u8> = (0..50000)
+            .map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                (state >> 16) as u8
+            })
+            .collect();
+        let adv_actions = init_mgr.send_resource(&link_id, &data, None, &mut rng);
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            adv_actions.into_iter().map(|a| ('i', a)).collect();
+
+        let mut rounds = 0;
+
+        // Drive the real link-manager exchange until the receiver is genuinely
+        // waiting for an HMU after exhausting the advertised hashmap segment.
+        while rounds < 300 {
+            rounds += 1;
+            let mut next: Vec<(char, LinkManagerAction)> = Vec::new();
+
+            for (source, action) in pending.drain(..) {
+                let LinkManagerAction::SendPacket { raw, .. } = action else {
+                    continue;
+                };
+
+                let pkt = match RawPacket::unpack(&raw) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let target_actions = if source == 'i' {
+                    resp_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                } else {
+                    init_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                };
+
+                let target_source = if source == 'i' { 'r' } else { 'i' };
+                next.extend(target_actions.into_iter().map(|a| (target_source, a)));
+            }
+
+            if resp_mgr
+                .links
+                .get(&link_id)
+                .and_then(|managed| managed.incoming_resources.first())
+                .is_some_and(|receiver| receiver.waiting_for_hmu)
+            {
+                break;
+            }
+
+            pending = next;
+        }
+
+        assert!(
+            resp_mgr
+                .links
+                .get(&link_id)
+                .and_then(|managed| managed.incoming_resources.first())
+                .is_some_and(|receiver| receiver.waiting_for_hmu),
+            "expected receiver to reach a live HMU wait state"
+        );
+
+        // Prime the live receiver once so it computes the same EIFR it will use
+        // for timeout decisions in this HMU-wait state.
+        let prime_actions = {
+            let managed = resp_mgr.links.get_mut(&link_id).unwrap();
+            let receiver = managed.incoming_resources.first_mut().unwrap();
+            let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
+                managed.engine.decrypt(ciphertext).map_err(|_| ())
+            };
+            receiver.tick(receiver.last_activity + 0.0001, &decrypt_fn, &Bzip2Compressor)
+        };
+        assert!(
+            !prime_actions
+                .iter()
+                .any(|a| matches!(a, ResourceAction::SendRequest(_))),
+            "fresh HMU wait state should not immediately emit a retry request"
+        );
+
+        let (late_delta, retries_before) = {
+            let managed = resp_mgr
+                .links
+                .get_mut(&link_id)
+                .expect("receiver link should still exist");
+            let receiver = managed
+                .incoming_resources
+                .first_mut()
+                .expect("receiver should have an active incoming resource");
+
+            assert!(receiver.waiting_for_hmu, "receiver should be waiting for HMU");
+
+            let eifr = receiver
+                .eifr
+                .unwrap_or_else(|| (constants::RESOURCE_SDU as f64 * 8.0) / receiver.rtt.unwrap_or(0.5));
+            let expected_tof = if receiver.outstanding_parts > 0 {
+                (receiver.outstanding_parts as f64 * constants::RESOURCE_SDU as f64 * 8.0) / eifr
+            } else {
+                (3.0 * constants::RESOURCE_SDU as f64) / eifr
+            };
+            let expected_hmu_wait =
+                (constants::RESOURCE_SDU as f64 * 8.0 * constants::RESOURCE_HMU_WAIT_FACTOR)
+                    / eifr;
+            let old_delta =
+                constants::RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT * expected_tof
+                    + constants::RESOURCE_RETRY_GRACE_TIME;
+            (
+                old_delta + expected_hmu_wait + expected_hmu_wait.max(1.0),
+                receiver.retries_left,
+            )
+        };
+        {
+            let managed = resp_mgr.links.get(&link_id).unwrap();
+            let receiver = managed.incoming_resources.first().unwrap();
+            assert_eq!(receiver.retries_left, retries_before);
+            assert!(receiver.eifr.is_some(), "receiver tick should have populated EIFR");
+        }
+
+        let late_resource_actions = {
+            let managed = resp_mgr.links.get_mut(&link_id).unwrap();
+            let receiver = managed.incoming_resources.first_mut().unwrap();
+            let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
+                managed.engine.decrypt(ciphertext).map_err(|_| ())
+            };
+            receiver.tick(
+                receiver.last_activity + late_delta,
+                &decrypt_fn,
+                &Bzip2Compressor,
+            )
+        };
+        let late_actions = resp_mgr.process_resource_actions(&link_id, late_resource_actions, &mut rng);
+        let retry_raw = late_actions.iter().find_map(|a| match a {
+            LinkManagerAction::SendPacket { raw, .. } => {
+                let pkt = RawPacket::unpack(raw).ok()?;
+                (pkt.context == constants::CONTEXT_RESOURCE_REQ).then_some(raw.clone())
+            }
+            _ => None,
+        }).expect("receiver should emit a resource retry request after extended timeout");
+
+        {
+            let managed = resp_mgr.links.get(&link_id).unwrap();
+            let receiver = managed.incoming_resources.first().unwrap();
+            assert_eq!(receiver.retries_left, retries_before - 1);
+        }
+
+        let retry_pkt = RawPacket::unpack(&retry_raw).unwrap();
+        let retry_plaintext = resp_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .engine
+            .decrypt(&retry_pkt.data)
+            .expect("retry request should decrypt");
+        assert_eq!(retry_plaintext[0], constants::RESOURCE_HASHMAP_IS_EXHAUSTED);
+
+        // Deliver the retry request to the sender and verify it turns into a
+        // real HMU packet in the live LinkManager flow.
+        let retry_to_sender = init_mgr.handle_local_delivery(
+            retry_pkt.destination_hash,
+            &retry_raw,
+            retry_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert!(
+            retry_to_sender
+                .iter()
+                .any(|a| match a {
+                    LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                        .map(|pkt| pkt.context == constants::CONTEXT_RESOURCE_HMU)
+                        .unwrap_or(false),
+                    _ => false,
+                }),
+            "sender should answer the exhausted retry request with a live HMU packet"
+        );
+    }
+
+    #[test]
     fn test_process_resource_actions_mapping() {
         let (init_mgr, _resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;

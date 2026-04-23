@@ -452,6 +452,9 @@ pub const RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT: f64 = 2.0;
 /// Proof timeout factor (reduced when awaiting proof)
 pub const RESOURCE_PROOF_TIMEOUT_FACTOR: f64 = 3.0;
 
+/// Additional wait allowance, in SDU-sized transfer units, while waiting for HMU data.
+pub const RESOURCE_HMU_WAIT_FACTOR: f64 = 3.5;
+
 /// Maximum retries for part transfers
 pub const RESOURCE_MAX_RETRIES: usize = 16;
 
