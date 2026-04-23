@@ -4513,6 +4513,564 @@ impl Driver {
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
     }
 
+    fn handle_frame_event(&mut self, interface_id: InterfaceId, data: Vec<u8>) {
+        if data.len() > 2 && (data[0] & 0x03) == 0x01 {
+            log::debug!(
+                "Announce:frame from iface {} (len={}, flags=0x{:02x})",
+                interface_id.0,
+                data.len(),
+                data[0]
+            );
+        }
+        if let Some(entry) = self.interfaces.get(&interface_id) {
+            if !entry.enabled || !entry.online {
+                return;
+            }
+        }
+        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+            entry.stats.rxb += data.len() as u64;
+            entry.stats.rx_packets += 1;
+        }
+
+        let packet = if let Some(entry) = self.interfaces.get(&interface_id) {
+            if let Some(ref ifac_state) = entry.ifac {
+                match ifac::unmask_inbound(&data, ifac_state) {
+                    Some(unmasked) => unmasked,
+                    None => {
+                        log::debug!("[{}] IFAC rejected packet", interface_id.0);
+                        return;
+                    }
+                }
+            } else {
+                if data.len() > 2 && data[0] & 0x80 == 0x80 {
+                    log::debug!(
+                        "[{}] dropping packet with IFAC flag on non-IFAC interface",
+                        interface_id.0
+                    );
+                    return;
+                }
+                data
+            }
+        } else {
+            data
+        };
+
+        #[cfg(feature = "rns-hooks")]
+        {
+            let pkt_ctx = rns_hooks::PacketContext {
+                flags: if packet.is_empty() { 0 } else { packet[0] },
+                hops: if packet.len() > 1 { packet[1] } else { 0 },
+                destination_hash: extract_dest_hash(&packet),
+                context: 0,
+                packet_hash: [0; 32],
+                interface_id: interface_id.0,
+                data_offset: 0,
+                data_len: packet.len() as u32,
+            };
+            let ctx = HookContext::Packet {
+                ctx: &pkt_ctx,
+                raw: &packet,
+            };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::PreIngress as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.forward_hook_side_effects("PreIngress", e);
+                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
+                    return;
+                }
+            }
+        }
+
+        if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
+            let now = time::now();
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.record_incoming_announce(now);
+            }
+        }
+
+        if let Some(entry) = self.interfaces.get(&interface_id) {
+            self.engine
+                .update_interface_freq(interface_id, entry.stats.incoming_announce_freq());
+        }
+
+        let actions = if self.async_announce_verification {
+            let mut announce_queue = self
+                .announce_verify_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.engine.handle_inbound_with_announce_queue(
+                &packet,
+                interface_id,
+                time::now(),
+                &mut self.rng,
+                Some(&mut announce_queue),
+            )
+        } else {
+            self.engine
+                .handle_inbound(&packet, interface_id, time::now(), &mut self.rng)
+        };
+
+        #[cfg(feature = "rns-hooks")]
+        {
+            let pkt_ctx = rns_hooks::PacketContext {
+                flags: if packet.is_empty() { 0 } else { packet[0] },
+                hops: if packet.len() > 1 { packet[1] } else { 0 },
+                destination_hash: extract_dest_hash(&packet),
+                context: 0,
+                packet_hash: [0; 32],
+                interface_id: interface_id.0,
+                data_offset: 0,
+                data_len: packet.len() as u32,
+            };
+            let ctx = HookContext::Packet {
+                ctx: &pkt_ctx,
+                raw: &packet,
+            };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::PreDispatch as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.forward_hook_side_effects("PreDispatch", e);
+            }
+        }
+
+        self.dispatch_all(actions);
+    }
+
+    fn handle_announce_verified_event(
+        &mut self,
+        key: rns_core::transport::announce_verify_queue::AnnounceVerifyKey,
+        validated: rns_core::announce::ValidatedAnnounce,
+        sig_cache_key: [u8; 32],
+    ) {
+        let pending = {
+            let mut announce_queue = self
+                .announce_verify_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            announce_queue.complete_success(&key)
+        };
+        if let Some(pending) = pending {
+            let actions = self.engine.complete_verified_announce(
+                pending,
+                validated,
+                sig_cache_key,
+                time::now(),
+                &mut self.rng,
+            );
+            self.dispatch_all(actions);
+        }
+    }
+
+    fn handle_tick_event(&mut self) {
+        #[cfg(feature = "rns-hooks")]
+        {
+            let ctx = HookContext::Tick;
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::Tick as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.forward_hook_side_effects("Tick", e);
+            }
+        }
+
+        let now = time::now();
+        for (id, entry) in &self.interfaces {
+            self.engine
+                .update_interface_freq(*id, entry.stats.incoming_announce_freq());
+        }
+        let actions = self.engine.tick(now, &mut self.rng);
+        self.dispatch_all(actions);
+        let link_actions = self.link_manager.tick(&mut self.rng);
+        self.dispatch_link_actions(link_actions);
+        self.enforce_drain_deadline();
+        {
+            let tx = self.get_event_sender();
+            let hp_actions = self.holepunch_manager.tick(&tx);
+            self.dispatch_holepunch_actions(hp_actions);
+        }
+        self.tick_management_announces(now);
+        self.sent_packets
+            .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
+        self.completed_proofs
+            .retain(|_, (_, received)| now - *received < 120.0);
+
+        self.tick_discovery_announcer(now);
+        #[cfg(feature = "iface-backbone")]
+        self.maintain_backbone_peer_pool();
+
+        self.memory_stats_counter += 1;
+        if self.memory_stats_counter >= 300 {
+            self.memory_stats_counter = 0;
+            self.log_memory_stats();
+        }
+
+        if self.discover_interfaces {
+            self.discovery_cleanup_counter += 1;
+            if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
+                self.discovery_cleanup_counter = 0;
+                if let Ok(removed) = self.discovered_interfaces.cleanup() {
+                    if removed > 0 {
+                        log::info!("Discovery cleanup: removed {} stale entries", removed);
+                    }
+                }
+            }
+        }
+
+        self.cache_cleanup_counter += 1;
+        if self.cache_cleanup_counter >= self.known_destinations_cleanup_interval_ticks {
+            self.cache_cleanup_counter = 0;
+
+            let active_dests = self.engine.active_destination_hashes();
+            let ttl = self.known_destinations_ttl;
+            let kd_before = self.known_destinations.len();
+            self.known_destinations.retain(|k, announced| {
+                active_dests.contains(k)
+                    || self.local_destinations.contains_key(k)
+                    || now - announced.received_at < ttl
+            });
+            let kd_removed = kd_before - self.known_destinations.len();
+            let kd_evicted = self.enforce_known_destination_cap(false);
+            let rl_removed =
+                self.engine
+                    .cull_rate_limiter(&active_dests, now, self.rate_limiter_ttl_secs);
+
+            if kd_removed > 0 || kd_evicted > 0 || rl_removed > 0 {
+                log::info!(
+                    "Memory cleanup: removed {} known_destinations, evicted {} known_destinations, {} rate_limiter entries",
+                    kd_removed, kd_evicted, rl_removed
+                );
+            }
+        }
+
+        self.announce_cache_cleanup_counter += 1;
+        if self.announce_cache_cleanup_counter >= self.announce_cache_cleanup_interval_ticks {
+            self.announce_cache_cleanup_counter = 0;
+            if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
+                self.cache_cleanup_active_hashes = Some(self.engine.active_packet_hashes());
+                self.cache_cleanup_entries = None;
+                self.cache_cleanup_removed = 0;
+            }
+        }
+
+        if self.cache_cleanup_active_hashes.is_some() {
+            if let Some(ref cache) = self.announce_cache {
+                if self.cache_cleanup_entries.is_none() {
+                    match cache.entries() {
+                        Ok(entries) => self.cache_cleanup_entries = Some(entries),
+                        Err(e) => {
+                            log::warn!("Announce cache cleanup failed to open directory: {}", e);
+                            self.cache_cleanup_active_hashes = None;
+                            self.cache_cleanup_entries = None;
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref cache) = self.announce_cache {
+                let active_hashes = self.cache_cleanup_active_hashes.as_ref().unwrap();
+                let entries = match self.cache_cleanup_entries.as_mut() {
+                    Some(entries) => entries,
+                    None => return,
+                };
+                match cache.clean_batch(
+                    active_hashes,
+                    entries,
+                    self.announce_cache_cleanup_batch_size,
+                ) {
+                    Ok((removed, finished)) => {
+                        self.cache_cleanup_removed += removed;
+                        if finished {
+                            if self.cache_cleanup_removed > 0 {
+                                log::info!(
+                                    "Announce cache cleanup complete: removed {} stale files",
+                                    self.cache_cleanup_removed
+                                );
+                            }
+                            self.cache_cleanup_active_hashes = None;
+                            self.cache_cleanup_entries = None;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Announce cache cleanup failed: {}", e);
+                        self.cache_cleanup_active_hashes = None;
+                        self.cache_cleanup_entries = None;
+                    }
+                }
+            } else {
+                self.cache_cleanup_active_hashes = None;
+                self.cache_cleanup_entries = None;
+            }
+        }
+    }
+
+    fn handle_interface_up_event(
+        &mut self,
+        id: InterfaceId,
+        new_writer: Option<Box<dyn crate::interface::Writer>>,
+        info: Option<rns_core::transport::types::InterfaceInfo>,
+    ) {
+        let wants_tunnel;
+        let mut replay_shared_announces = false;
+        if let Some(mut info) = info {
+            log::info!("[{}] dynamic interface registered", id.0);
+            wants_tunnel = info.wants_tunnel;
+            let iface_type = infer_interface_type(&info.name);
+            info.started = time::now();
+            self.register_interface_runtime_defaults(&info);
+            self.engine.register_interface(info.clone());
+            if let Some(writer) = new_writer {
+                let (writer, async_writer_metrics) =
+                    self.wrap_interface_writer(id, &info.name, writer);
+                self.interfaces.insert(
+                    id,
+                    InterfaceEntry {
+                        id,
+                        info,
+                        writer,
+                        async_writer_metrics: Some(async_writer_metrics),
+                        enabled: true,
+                        online: true,
+                        dynamic: true,
+                        ifac: None,
+                        stats: InterfaceStats {
+                            started: time::now(),
+                            ..Default::default()
+                        },
+                        interface_type: iface_type,
+                        send_retry_at: None,
+                        send_retry_backoff: Duration::ZERO,
+                    },
+                );
+            }
+            self.callbacks.on_interface_up(id);
+            #[cfg(feature = "rns-hooks")]
+            {
+                let ctx = HookContext::Interface { interface_id: id.0 };
+                let now = time::now();
+                let engine_ref = EngineRef {
+                    engine: &self.engine,
+                    interfaces: &self.interfaces,
+                    link_manager: &self.link_manager,
+                    now,
+                };
+                let provider_events_enabled = self.provider_events_enabled();
+                if let Some(ref e) = run_hook_inner(
+                    &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                    &self.hook_manager,
+                    &engine_ref,
+                    &ctx,
+                    now,
+                    provider_events_enabled,
+                ) {
+                    self.forward_hook_side_effects("InterfaceUp", e);
+                }
+            }
+        } else {
+            let is_local_client = self
+                .interfaces
+                .get(&id)
+                .map(|entry| entry.info.is_local_client)
+                .unwrap_or(false);
+            replay_shared_announces =
+                is_local_client && self.shared_reconnect_pending.remove(&id).unwrap_or(false);
+            let interface_name = self
+                .interfaces
+                .get(&id)
+                .map(|entry| entry.info.name.clone())
+                .unwrap_or_else(|| format!("iface-{}", id.0));
+            let wrapped_writer =
+                new_writer.map(|writer| self.wrap_interface_writer(id, &interface_name, writer));
+            if let Some(entry) = self.interfaces.get_mut(&id) {
+                log::info!("[{}] interface online", id.0);
+                wants_tunnel = entry.info.wants_tunnel;
+                entry.online = true;
+                if let Some((writer, async_writer_metrics)) = wrapped_writer {
+                    log::info!("[{}] writer refreshed after reconnect", id.0);
+                    entry.writer = writer;
+                    entry.async_writer_metrics = Some(async_writer_metrics);
+                }
+                self.callbacks.on_interface_up(id);
+                #[cfg(feature = "rns-hooks")]
+                {
+                    let ctx = HookContext::Interface { interface_id: id.0 };
+                    let now = time::now();
+                    let engine_ref = EngineRef {
+                        engine: &self.engine,
+                        interfaces: &self.interfaces,
+                        link_manager: &self.link_manager,
+                        now,
+                    };
+                    let provider_events_enabled = self.provider_events_enabled();
+                    if let Some(ref e) = run_hook_inner(
+                        &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                        &self.hook_manager,
+                        &engine_ref,
+                        &ctx,
+                        now,
+                        provider_events_enabled,
+                    ) {
+                        self.forward_hook_side_effects("InterfaceUp", e);
+                    }
+                }
+            } else {
+                wants_tunnel = false;
+            }
+        }
+
+        if wants_tunnel {
+            self.synthesize_tunnel_for_interface(id);
+        }
+        if replay_shared_announces {
+            self.replay_shared_announces();
+        }
+    }
+
+    fn handle_interface_down_event(&mut self, id: InterfaceId) {
+        if let Some(entry) = self.interfaces.get(&id) {
+            if let Some(tunnel_id) = entry.info.tunnel_id {
+                self.engine.void_tunnel_interface(&tunnel_id);
+            }
+        }
+
+        if let Some(entry) = self.interfaces.get(&id) {
+            let is_dynamic = entry.dynamic;
+            let is_local_client = entry.info.is_local_client;
+            let interface_name = entry.info.name.clone();
+            if is_dynamic {
+                log::info!("[{}] dynamic interface removed", id.0);
+                self.interface_runtime_defaults.remove(&interface_name);
+                self.engine.deregister_interface(id);
+                self.interfaces.remove(&id);
+            } else {
+                log::info!("[{}] interface offline", id.0);
+                self.interfaces.get_mut(&id).unwrap().online = false;
+                if is_local_client {
+                    self.handle_shared_interface_down(id);
+                }
+            }
+            self.callbacks.on_interface_down(id);
+            #[cfg(feature = "rns-hooks")]
+            {
+                let ctx = HookContext::Interface { interface_id: id.0 };
+                let now = time::now();
+                let engine_ref = EngineRef {
+                    engine: &self.engine,
+                    interfaces: &self.interfaces,
+                    link_manager: &self.link_manager,
+                    now,
+                };
+                let provider_events_enabled = self.provider_events_enabled();
+                if let Some(ref e) = run_hook_inner(
+                    &mut self.hook_slots[HookPoint::InterfaceDown as usize].programs,
+                    &self.hook_manager,
+                    &engine_ref,
+                    &ctx,
+                    now,
+                    provider_events_enabled,
+                ) {
+                    self.forward_hook_side_effects("InterfaceDown", e);
+                }
+            }
+        }
+        #[cfg(feature = "iface-backbone")]
+        self.handle_backbone_peer_pool_down(id);
+    }
+
+    fn handle_send_outbound_event(
+        &mut self,
+        raw: Vec<u8>,
+        dest_type: u8,
+        attached_interface: Option<InterfaceId>,
+    ) {
+        if self.is_draining() {
+            self.reject_new_work("send outbound packet");
+            return;
+        }
+        match RawPacket::unpack(&raw) {
+            Ok(packet) => {
+                let is_announce =
+                    packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE;
+                if is_announce {
+                    log::debug!(
+                        "SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
+                        &packet.destination_hash[..4],
+                        raw.len(),
+                        dest_type,
+                        attached_interface
+                    );
+                }
+                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                    self.sent_packets
+                        .insert(packet.packet_hash, (packet.destination_hash, time::now()));
+                }
+                let actions = self.engine.handle_outbound(
+                    &packet,
+                    dest_type,
+                    attached_interface,
+                    time::now(),
+                );
+                if is_announce {
+                    log::debug!(
+                        "SendOutbound: announce routed to {} actions: {:?}",
+                        actions.len(),
+                        actions
+                            .iter()
+                            .map(|a| match a {
+                                TransportAction::SendOnInterface { interface, .. } =>
+                                    format!("SendOn({})", interface.0),
+                                TransportAction::BroadcastOnAllInterfaces { .. } =>
+                                    "BroadcastAll".to_string(),
+                                _ => "other".to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                }
+                self.dispatch_all(actions);
+            }
+            Err(e) => {
+                log::warn!("SendOutbound: failed to unpack packet: {:?}", e);
+            }
+        }
+    }
+
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
     pub fn run(&mut self) {
         loop {
@@ -4523,193 +5081,14 @@ impl Driver {
 
             match event {
                 Event::Frame { interface_id, data } => {
-                    // Log incoming announces
-                    if data.len() > 2 && (data[0] & 0x03) == 0x01 {
-                        log::debug!(
-                            "Announce:frame from iface {} (len={}, flags=0x{:02x})",
-                            interface_id.0,
-                            data.len(),
-                            data[0]
-                        );
-                    }
-                    if let Some(entry) = self.interfaces.get(&interface_id) {
-                        if !entry.enabled || !entry.online {
-                            continue;
-                        }
-                    }
-                    // Update rx stats
-                    if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                        entry.stats.rxb += data.len() as u64;
-                        entry.stats.rx_packets += 1;
-                    }
-
-                    // IFAC inbound processing
-                    let packet = if let Some(entry) = self.interfaces.get(&interface_id) {
-                        if let Some(ref ifac_state) = entry.ifac {
-                            // Interface has IFAC enabled — unmask
-                            match ifac::unmask_inbound(&data, ifac_state) {
-                                Some(unmasked) => unmasked,
-                                None => {
-                                    log::debug!("[{}] IFAC rejected packet", interface_id.0);
-                                    continue;
-                                }
-                            }
-                        } else {
-                            // No IFAC — drop if IFAC flag is set
-                            if data.len() > 2 && data[0] & 0x80 == 0x80 {
-                                log::debug!(
-                                    "[{}] dropping packet with IFAC flag on non-IFAC interface",
-                                    interface_id.0
-                                );
-                                continue;
-                            }
-                            data
-                        }
-                    } else {
-                        data
-                    };
-
-                    // PreIngress hook: after IFAC, before engine processing
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let pkt_ctx = rns_hooks::PacketContext {
-                            flags: if packet.is_empty() { 0 } else { packet[0] },
-                            hops: if packet.len() > 1 { packet[1] } else { 0 },
-                            destination_hash: extract_dest_hash(&packet),
-                            context: 0,
-                            packet_hash: [0; 32],
-                            interface_id: interface_id.0,
-                            data_offset: 0,
-                            data_len: packet.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx,
-                            raw: &packet,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::PreIngress as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.forward_hook_side_effects("PreIngress", e);
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-
-                    // Record incoming announce for frequency tracking (before engine processing)
-                    if packet.len() > 2 && (packet[0] & 0x03) == 0x01 {
-                        let now = time::now();
-                        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                            entry.stats.record_incoming_announce(now);
-                        }
-                    }
-
-                    // Sync announce frequency to engine before processing
-                    if let Some(entry) = self.interfaces.get(&interface_id) {
-                        self.engine.update_interface_freq(
-                            interface_id,
-                            entry.stats.incoming_announce_freq(),
-                        );
-                    }
-
-                    let actions = if self.async_announce_verification {
-                        let mut announce_queue = self
-                            .announce_verify_queue
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        self.engine.handle_inbound_with_announce_queue(
-                            &packet,
-                            interface_id,
-                            time::now(),
-                            &mut self.rng,
-                            Some(&mut announce_queue),
-                        )
-                    } else {
-                        self.engine.handle_inbound(
-                            &packet,
-                            interface_id,
-                            time::now(),
-                            &mut self.rng,
-                        )
-                    };
-
-                    // PreDispatch hook: after engine, before action dispatch
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let pkt_ctx2 = rns_hooks::PacketContext {
-                            flags: if packet.is_empty() { 0 } else { packet[0] },
-                            hops: if packet.len() > 1 { packet[1] } else { 0 },
-                            destination_hash: extract_dest_hash(&packet),
-                            context: 0,
-                            packet_hash: [0; 32],
-                            interface_id: interface_id.0,
-                            data_offset: 0,
-                            data_len: packet.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx2,
-                            raw: &packet,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::PreDispatch as usize].programs,
-                            &self.hook_manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.forward_hook_side_effects("PreDispatch", e);
-                        }
-                    }
-
-                    self.dispatch_all(actions);
+                    self.handle_frame_event(interface_id, data);
                 }
                 Event::AnnounceVerified {
                     key,
                     validated,
                     sig_cache_key,
                 } => {
-                    let pending = {
-                        let mut announce_queue = self
-                            .announce_verify_queue
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        announce_queue.complete_success(&key)
-                    };
-                    if let Some(pending) = pending {
-                        let actions = self.engine.complete_verified_announce(
-                            pending,
-                            validated,
-                            sig_cache_key,
-                            time::now(),
-                            &mut self.rng,
-                        );
-                        self.dispatch_all(actions);
-                    }
+                    self.handle_announce_verified_event(key, validated, sig_cache_key);
                 }
                 Event::AnnounceVerifyFailed { key, .. } => {
                     let mut announce_queue = self
@@ -4718,425 +5097,19 @@ impl Driver {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let _ = announce_queue.complete_failure(&key);
                 }
-                Event::Tick => {
-                    // Tick hook
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let ctx = HookContext::Tick;
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::Tick as usize].programs,
-                            &self.hook_manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.forward_hook_side_effects("Tick", e);
-                        }
-                    }
-
-                    let now = time::now();
-                    // Sync announce frequency to engine for all interfaces before tick
-                    for (id, entry) in &self.interfaces {
-                        self.engine
-                            .update_interface_freq(*id, entry.stats.incoming_announce_freq());
-                    }
-                    let actions = self.engine.tick(now, &mut self.rng);
-                    self.dispatch_all(actions);
-                    // Tick link manager (keepalive, stale, timeout)
-                    let link_actions = self.link_manager.tick(&mut self.rng);
-                    self.dispatch_link_actions(link_actions);
-                    self.enforce_drain_deadline();
-                    // Tick hole-punch manager
-                    {
-                        let tx = self.get_event_sender();
-                        let hp_actions = self.holepunch_manager.tick(&tx);
-                        self.dispatch_holepunch_actions(hp_actions);
-                    }
-                    // Emit management announces
-                    self.tick_management_announces(now);
-                    // Cull expired sent packet tracking entries (no proof received within 60s)
-                    self.sent_packets
-                        .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
-                    // Cull old completed proof entries (older than 120s)
-                    self.completed_proofs
-                        .retain(|_, (_, received)| now - *received < 120.0);
-
-                    self.tick_discovery_announcer(now);
-                    #[cfg(feature = "iface-backbone")]
-                    self.maintain_backbone_peer_pool();
-
-                    // Periodic MEMSTATS logging (~every 5 min / 300 ticks)
-                    self.memory_stats_counter += 1;
-                    if self.memory_stats_counter >= 300 {
-                        self.memory_stats_counter = 0;
-                        self.log_memory_stats();
-                    }
-
-                    // Periodic discovery cleanup
-                    if self.discover_interfaces {
-                        self.discovery_cleanup_counter += 1;
-                        if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
-                            self.discovery_cleanup_counter = 0;
-                            if let Ok(removed) = self.discovered_interfaces.cleanup() {
-                                if removed > 0 {
-                                    log::info!(
-                                        "Discovery cleanup: removed {} stale entries",
-                                        removed
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Periodic known-destinations cleanup
-                    self.cache_cleanup_counter += 1;
-                    if self.cache_cleanup_counter >= self.known_destinations_cleanup_interval_ticks
-                    {
-                        self.cache_cleanup_counter = 0;
-
-                        let active_dests = self.engine.active_destination_hashes();
-
-                        // Retain known destinations while their path is active, while they are
-                        // locally registered, or until their configured TTL expires.
-                        let now = time::now();
-                        let ttl = self.known_destinations_ttl;
-                        let kd_before = self.known_destinations.len();
-                        self.known_destinations.retain(|k, announced| {
-                            active_dests.contains(k)
-                                || self.local_destinations.contains_key(k)
-                                || now - announced.received_at < ttl
-                        });
-                        let kd_removed = kd_before - self.known_destinations.len();
-                        let kd_evicted = self.enforce_known_destination_cap(false);
-
-                        // Cull rate limiter entries while keeping active or recently used ones.
-                        let rl_removed = self.engine.cull_rate_limiter(
-                            &active_dests,
-                            now,
-                            self.rate_limiter_ttl_secs,
-                        );
-
-                        if kd_removed > 0 || kd_evicted > 0 || rl_removed > 0 {
-                            log::info!(
-                                "Memory cleanup: removed {} known_destinations, evicted {} known_destinations, {} rate_limiter entries",
-                                kd_removed, kd_evicted, rl_removed
-                            );
-                        }
-                    }
-
-                    // Periodic announce-cache cleanup scheduling
-                    self.announce_cache_cleanup_counter += 1;
-                    if self.announce_cache_cleanup_counter
-                        >= self.announce_cache_cleanup_interval_ticks
-                    {
-                        self.announce_cache_cleanup_counter = 0;
-                        if self.announce_cache.is_some()
-                            && self.cache_cleanup_active_hashes.is_none()
-                        {
-                            self.cache_cleanup_active_hashes =
-                                Some(self.engine.active_packet_hashes());
-                            self.cache_cleanup_entries = None;
-                            self.cache_cleanup_removed = 0;
-                        }
-                    }
-
-                    // Incremental announce cache cleanup
-                    if self.cache_cleanup_active_hashes.is_some() {
-                        if let Some(ref cache) = self.announce_cache {
-                            if self.cache_cleanup_entries.is_none() {
-                                match cache.entries() {
-                                    Ok(entries) => self.cache_cleanup_entries = Some(entries),
-                                    Err(e) => {
-                                        log::warn!(
-                                            "Announce cache cleanup failed to open directory: {}",
-                                            e
-                                        );
-                                        self.cache_cleanup_active_hashes = None;
-                                        self.cache_cleanup_entries = None;
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Some(ref cache) = self.announce_cache {
-                            let active_hashes = self.cache_cleanup_active_hashes.as_ref().unwrap();
-                            let entries = match self.cache_cleanup_entries.as_mut() {
-                                Some(entries) => entries,
-                                None => continue,
-                            };
-                            match cache.clean_batch(
-                                active_hashes,
-                                entries,
-                                self.announce_cache_cleanup_batch_size,
-                            ) {
-                                Ok((removed, finished)) => {
-                                    self.cache_cleanup_removed += removed;
-                                    if finished {
-                                        if self.cache_cleanup_removed > 0 {
-                                            log::info!(
-                                                "Announce cache cleanup complete: removed {} stale files",
-                                                self.cache_cleanup_removed
-                                            );
-                                        }
-                                        self.cache_cleanup_active_hashes = None;
-                                        self.cache_cleanup_entries = None;
-                                    }
-                                }
-                                Err(e) => {
-                                    log::warn!("Announce cache cleanup failed: {}", e);
-                                    self.cache_cleanup_active_hashes = None;
-                                    self.cache_cleanup_entries = None;
-                                }
-                            }
-                        } else {
-                            self.cache_cleanup_active_hashes = None;
-                            self.cache_cleanup_entries = None;
-                        }
-                    }
-                }
+                Event::Tick => self.handle_tick_event(),
                 Event::BeginDrain { timeout } => {
                     self.begin_drain(timeout);
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
-                    let wants_tunnel;
-                    let mut replay_shared_announces = false;
-                    if let Some(mut info) = info {
-                        // New dynamic interface (e.g., TCP server client connection)
-                        log::info!("[{}] dynamic interface registered", id.0);
-                        wants_tunnel = info.wants_tunnel;
-                        let iface_type = infer_interface_type(&info.name);
-                        // Set started time for ingress control age tracking
-                        info.started = time::now();
-                        self.register_interface_runtime_defaults(&info);
-                        self.engine.register_interface(info.clone());
-                        if let Some(writer) = new_writer {
-                            let (writer, async_writer_metrics) =
-                                self.wrap_interface_writer(id, &info.name, writer);
-                            self.interfaces.insert(
-                                id,
-                                InterfaceEntry {
-                                    id,
-                                    info,
-                                    writer,
-                                    async_writer_metrics: Some(async_writer_metrics),
-                                    enabled: true,
-                                    online: true,
-                                    dynamic: true,
-                                    ifac: None,
-                                    stats: InterfaceStats {
-                                        started: time::now(),
-                                        ..Default::default()
-                                    },
-                                    interface_type: iface_type,
-                                    send_retry_at: None,
-                                    send_retry_backoff: Duration::ZERO,
-                                },
-                            );
-                        }
-                        self.callbacks.on_interface_up(id);
-                        #[cfg(feature = "rns-hooks")]
-                        {
-                            let ctx = HookContext::Interface { interface_id: id.0 };
-                            let now = time::now();
-                            let engine_ref = EngineRef {
-                                engine: &self.engine,
-                                interfaces: &self.interfaces,
-                                link_manager: &self.link_manager,
-                                now,
-                            };
-                            let provider_events_enabled = self.provider_events_enabled();
-                            if let Some(ref e) = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            ) {
-                                self.forward_hook_side_effects("InterfaceUp", e);
-                            }
-                        }
-                    } else {
-                        // Existing interface reconnected
-                        let is_local_client = self
-                            .interfaces
-                            .get(&id)
-                            .map(|entry| entry.info.is_local_client)
-                            .unwrap_or(false);
-                        replay_shared_announces = is_local_client
-                            && self.shared_reconnect_pending.remove(&id).unwrap_or(false);
-                        let interface_name = self
-                            .interfaces
-                            .get(&id)
-                            .map(|entry| entry.info.name.clone())
-                            .unwrap_or_else(|| format!("iface-{}", id.0));
-                        let wrapped_writer = if let Some(writer) = new_writer {
-                            Some(self.wrap_interface_writer(id, &interface_name, writer))
-                        } else {
-                            None
-                        };
-                        if let Some(entry) = self.interfaces.get_mut(&id) {
-                            log::info!("[{}] interface online", id.0);
-                            wants_tunnel = entry.info.wants_tunnel;
-                            entry.online = true;
-                            if let Some((writer, async_writer_metrics)) = wrapped_writer {
-                                log::info!("[{}] writer refreshed after reconnect", id.0);
-                                entry.writer = writer;
-                                entry.async_writer_metrics = Some(async_writer_metrics);
-                            }
-                            self.callbacks.on_interface_up(id);
-                            #[cfg(feature = "rns-hooks")]
-                            {
-                                let ctx = HookContext::Interface { interface_id: id.0 };
-                                let now = time::now();
-                                let engine_ref = EngineRef {
-                                    engine: &self.engine,
-                                    interfaces: &self.interfaces,
-                                    link_manager: &self.link_manager,
-                                    now,
-                                };
-                                let provider_events_enabled = self.provider_events_enabled();
-                                if let Some(ref e) = run_hook_inner(
-                                    &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
-                                    &self.hook_manager,
-                                    &engine_ref,
-                                    &ctx,
-                                    now,
-                                    provider_events_enabled,
-                                ) {
-                                    self.forward_hook_side_effects("InterfaceUp", e);
-                                }
-                            }
-                        } else {
-                            wants_tunnel = false;
-                        }
-                    }
-
-                    // Trigger tunnel synthesis if the interface wants it
-                    if wants_tunnel {
-                        self.synthesize_tunnel_for_interface(id);
-                    }
-                    if replay_shared_announces {
-                        self.replay_shared_announces();
-                    }
+                    self.handle_interface_up_event(id, new_writer, info);
                 }
-                Event::InterfaceDown(id) => {
-                    // Void tunnel if interface had one
-                    if let Some(entry) = self.interfaces.get(&id) {
-                        if let Some(tunnel_id) = entry.info.tunnel_id {
-                            self.engine.void_tunnel_interface(&tunnel_id);
-                        }
-                    }
-
-                    if let Some(entry) = self.interfaces.get(&id) {
-                        let is_dynamic = entry.dynamic;
-                        let is_local_client = entry.info.is_local_client;
-                        let interface_name = entry.info.name.clone();
-                        if is_dynamic {
-                            // Dynamic interfaces are removed entirely
-                            log::info!("[{}] dynamic interface removed", id.0);
-                            self.interface_runtime_defaults.remove(&interface_name);
-                            self.engine.deregister_interface(id);
-                            self.interfaces.remove(&id);
-                        } else {
-                            // Static interfaces are just marked offline
-                            log::info!("[{}] interface offline", id.0);
-                            self.interfaces.get_mut(&id).unwrap().online = false;
-                            if is_local_client {
-                                self.handle_shared_interface_down(id);
-                            }
-                        }
-                        self.callbacks.on_interface_down(id);
-                        #[cfg(feature = "rns-hooks")]
-                        {
-                            let ctx = HookContext::Interface { interface_id: id.0 };
-                            let now = time::now();
-                            let engine_ref = EngineRef {
-                                engine: &self.engine,
-                                interfaces: &self.interfaces,
-                                link_manager: &self.link_manager,
-                                now,
-                            };
-                            let provider_events_enabled = self.provider_events_enabled();
-                            if let Some(ref e) = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::InterfaceDown as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            ) {
-                                self.forward_hook_side_effects("InterfaceDown", e);
-                            }
-                        }
-                    }
-                    #[cfg(feature = "iface-backbone")]
-                    self.handle_backbone_peer_pool_down(id);
-                }
+                Event::InterfaceDown(id) => self.handle_interface_down_event(id),
                 Event::SendOutbound {
                     raw,
                     dest_type,
                     attached_interface,
-                } => {
-                    if self.is_draining() {
-                        self.reject_new_work("send outbound packet");
-                        continue;
-                    }
-                    match RawPacket::unpack(&raw) {
-                        Ok(packet) => {
-                            let is_announce = packet.flags.packet_type
-                                == rns_core::constants::PACKET_TYPE_ANNOUNCE;
-                            if is_announce {
-                                log::debug!("SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
-                                    &packet.destination_hash[..4], raw.len(), dest_type, attached_interface);
-                            }
-                            // Track sent DATA packets for proof matching
-                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
-                                self.sent_packets.insert(
-                                    packet.packet_hash,
-                                    (packet.destination_hash, time::now()),
-                                );
-                            }
-                            let actions = self.engine.handle_outbound(
-                                &packet,
-                                dest_type,
-                                attached_interface,
-                                time::now(),
-                            );
-                            if is_announce {
-                                log::debug!(
-                                    "SendOutbound: announce routed to {} actions: {:?}",
-                                    actions.len(),
-                                    actions
-                                        .iter()
-                                        .map(|a| match a {
-                                            TransportAction::SendOnInterface {
-                                                interface, ..
-                                            } => format!("SendOn({})", interface.0),
-                                            TransportAction::BroadcastOnAllInterfaces {
-                                                ..
-                                            } => "BroadcastAll".to_string(),
-                                            _ => "other".to_string(),
-                                        })
-                                        .collect::<Vec<_>>()
-                                );
-                            }
-                            self.dispatch_all(actions);
-                        }
-                        Err(e) => {
-                            log::warn!("SendOutbound: failed to unpack packet: {:?}", e);
-                        }
-                    }
-                }
+                } => self.handle_send_outbound_event(raw, dest_type, attached_interface),
                 Event::RegisterDestination {
                     dest_hash,
                     dest_type,
@@ -5833,49 +5806,218 @@ impl Driver {
         }
     }
 
+    fn handle_interface_stats_query(&self) -> QueryResponse {
+        let mut interfaces = Vec::new();
+        let mut total_rxb: u64 = 0;
+        let mut total_txb: u64 = 0;
+        for entry in self.interfaces.values() {
+            total_rxb += entry.stats.rxb;
+            total_txb += entry.stats.txb;
+            interfaces.push(SingleInterfaceStat {
+                id: entry.info.id.0,
+                name: entry.info.name.clone(),
+                status: entry.online && entry.enabled,
+                mode: entry.info.mode,
+                rxb: entry.stats.rxb,
+                txb: entry.stats.txb,
+                rx_packets: entry.stats.rx_packets,
+                tx_packets: entry.stats.tx_packets,
+                bitrate: entry.info.bitrate,
+                ifac_size: entry.ifac.as_ref().map(|s| s.size),
+                started: entry.stats.started,
+                ia_freq: entry.stats.incoming_announce_freq(),
+                oa_freq: entry.stats.outgoing_announce_freq(),
+                interface_type: entry.interface_type.clone(),
+            });
+        }
+        interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+        QueryResponse::InterfaceStats(InterfaceStatsResponse {
+            interfaces,
+            transport_id: self.engine.identity_hash().copied(),
+            transport_enabled: self.engine.transport_enabled(),
+            transport_uptime: time::now() - self.started,
+            total_rxb,
+            total_txb,
+            probe_responder: self.probe_responder_hash,
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: self.backbone_peer_pool_status(),
+            #[cfg(not(feature = "iface-backbone"))]
+            backbone_peer_pool: None,
+        })
+    }
+
+    fn handle_path_table_query(&self, max_hops: Option<u8>) -> QueryResponse {
+        let entries: Vec<PathTableEntry> = self
+            .engine
+            .path_table_entries()
+            .filter(|(_, entry)| max_hops.is_none_or(|max| entry.hops <= max))
+            .map(|(hash, entry)| {
+                let iface_name = self
+                    .interfaces
+                    .get(&entry.receiving_interface)
+                    .map(|e| e.info.name.clone())
+                    .or_else(|| {
+                        self.engine
+                            .interface_info(&entry.receiving_interface)
+                            .map(|i| i.name.clone())
+                    })
+                    .unwrap_or_default();
+                PathTableEntry {
+                    hash: *hash,
+                    timestamp: entry.timestamp,
+                    via: entry.next_hop,
+                    hops: entry.hops,
+                    expires: entry.expires,
+                    interface: entry.receiving_interface,
+                    interface_name: iface_name,
+                }
+            })
+            .collect();
+        QueryResponse::PathTable(entries)
+    }
+
+    fn handle_runtime_config_query(&self, request: QueryRequest) -> Option<QueryResponse> {
+        match request {
+            QueryRequest::ListRuntimeConfig => {
+                Some(QueryResponse::RuntimeConfigList(self.list_runtime_config()))
+            }
+            QueryRequest::GetRuntimeConfig { key } => Some(QueryResponse::RuntimeConfigEntry(
+                self.runtime_config_entry(&key),
+            )),
+            QueryRequest::BackbonePeerState { interface_name } => {
+                Some(QueryResponse::BackbonePeerState(
+                    self.list_backbone_peer_state(interface_name.as_deref()),
+                ))
+            }
+            QueryRequest::SetRuntimeConfig { .. } => {
+                Some(QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                })))
+            }
+            QueryRequest::ResetRuntimeConfig { .. } => {
+                Some(QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                })))
+            }
+            QueryRequest::ClearBackbonePeerState { .. } => {
+                Some(QueryResponse::ClearBackbonePeerState(false))
+            }
+            QueryRequest::BlacklistBackbonePeer { .. } => {
+                Some(QueryResponse::BlacklistBackbonePeer(false))
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_mutation_query(&mut self, request: QueryRequest) -> Option<QueryResponse> {
+        match request {
+            QueryRequest::BlackholeIdentity {
+                identity_hash,
+                duration_hours,
+                reason,
+            } => {
+                let now = time::now();
+                self.engine
+                    .blackhole_identity(identity_hash, now, duration_hours, reason);
+                Some(QueryResponse::BlackholeResult(true))
+            }
+            QueryRequest::UnblackholeIdentity { identity_hash } => Some(
+                QueryResponse::UnblackholeResult(self.engine.unblackhole_identity(&identity_hash)),
+            ),
+            QueryRequest::DropPath { dest_hash } => {
+                Some(QueryResponse::DropPath(self.engine.drop_path(&dest_hash)))
+            }
+            QueryRequest::DropAllVia { transport_hash } => Some(QueryResponse::DropAllVia(
+                self.engine.drop_all_via(&transport_hash),
+            )),
+            QueryRequest::DropAnnounceQueues => {
+                self.engine.drop_announce_queues();
+                Some(QueryResponse::DropAnnounceQueues)
+            }
+            QueryRequest::ClearBackbonePeerState {
+                interface_name,
+                peer_ip,
+            } => Some(QueryResponse::ClearBackbonePeerState(
+                self.clear_backbone_peer_state(&interface_name, peer_ip),
+            )),
+            QueryRequest::BlacklistBackbonePeer {
+                interface_name,
+                peer_ip,
+                duration,
+                reason,
+                penalty_level,
+            } => Some(QueryResponse::BlacklistBackbonePeer(
+                self.blacklist_backbone_peer(
+                    &interface_name,
+                    peer_ip,
+                    duration,
+                    reason,
+                    penalty_level,
+                ),
+            )),
+            QueryRequest::InjectPath {
+                dest_hash,
+                next_hop,
+                hops,
+                expires,
+                interface_name,
+                packet_hash,
+            } => {
+                let iface_id = self
+                    .interfaces
+                    .iter()
+                    .find(|(_, entry)| entry.info.name == interface_name)
+                    .map(|(id, _)| *id);
+                Some(match iface_id {
+                    Some(id) => {
+                        let entry = PathEntry {
+                            timestamp: time::now(),
+                            next_hop,
+                            hops,
+                            expires,
+                            random_blobs: Vec::new(),
+                            receiving_interface: id,
+                            packet_hash,
+                            announce_raw: None,
+                        };
+                        self.engine.inject_path(dest_hash, entry);
+                        QueryResponse::InjectPath(true)
+                    }
+                    None => QueryResponse::InjectPath(false),
+                })
+            }
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash,
+                public_key,
+                app_data,
+                hops,
+                received_at,
+            } => {
+                self.upsert_known_destination(
+                    dest_hash,
+                    crate::destination::AnnouncedIdentity {
+                        dest_hash: rns_core::types::DestHash(dest_hash),
+                        identity_hash: rns_core::types::IdentityHash(identity_hash),
+                        public_key,
+                        app_data,
+                        hops,
+                        received_at,
+                        receiving_interface: rns_core::transport::types::InterfaceId(0),
+                    },
+                );
+                Some(QueryResponse::InjectIdentity(true))
+            }
+            _ => None,
+        }
+    }
+
     /// Handle a query request and produce a response.
     fn handle_query(&self, request: QueryRequest) -> QueryResponse {
         match request {
-            QueryRequest::InterfaceStats => {
-                let mut interfaces = Vec::new();
-                let mut total_rxb: u64 = 0;
-                let mut total_txb: u64 = 0;
-                for entry in self.interfaces.values() {
-                    total_rxb += entry.stats.rxb;
-                    total_txb += entry.stats.txb;
-                    interfaces.push(SingleInterfaceStat {
-                        id: entry.info.id.0,
-                        name: entry.info.name.clone(),
-                        status: entry.online && entry.enabled,
-                        mode: entry.info.mode,
-                        rxb: entry.stats.rxb,
-                        txb: entry.stats.txb,
-                        rx_packets: entry.stats.rx_packets,
-                        tx_packets: entry.stats.tx_packets,
-                        bitrate: entry.info.bitrate,
-                        ifac_size: entry.ifac.as_ref().map(|s| s.size),
-                        started: entry.stats.started,
-                        ia_freq: entry.stats.incoming_announce_freq(),
-                        oa_freq: entry.stats.outgoing_announce_freq(),
-                        interface_type: entry.interface_type.clone(),
-                    });
-                }
-                // Sort by name for consistent output
-                interfaces.sort_by(|a, b| a.name.cmp(&b.name));
-                QueryResponse::InterfaceStats(InterfaceStatsResponse {
-                    interfaces,
-                    transport_id: self.engine.identity_hash().copied(),
-                    transport_enabled: self.engine.transport_enabled(),
-                    transport_uptime: time::now() - self.started,
-                    total_rxb,
-                    total_txb,
-                    probe_responder: self.probe_responder_hash,
-                    #[cfg(feature = "iface-backbone")]
-                    backbone_peer_pool: self.backbone_peer_pool_status(),
-                    #[cfg(not(feature = "iface-backbone"))]
-                    backbone_peer_pool: None,
-                })
-            }
+            QueryRequest::InterfaceStats => self.handle_interface_stats_query(),
             QueryRequest::BackboneInterfaces => {
                 QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
             }
@@ -5892,35 +6034,7 @@ impl Driver {
                 }
             }
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
-            QueryRequest::PathTable { max_hops } => {
-                let entries: Vec<PathTableEntry> = self
-                    .engine
-                    .path_table_entries()
-                    .filter(|(_, entry)| max_hops.map_or(true, |max| entry.hops <= max))
-                    .map(|(hash, entry)| {
-                        let iface_name = self
-                            .interfaces
-                            .get(&entry.receiving_interface)
-                            .map(|e| e.info.name.clone())
-                            .or_else(|| {
-                                self.engine
-                                    .interface_info(&entry.receiving_interface)
-                                    .map(|i| i.name.clone())
-                            })
-                            .unwrap_or_default();
-                        PathTableEntry {
-                            hash: *hash,
-                            timestamp: entry.timestamp,
-                            via: entry.next_hop,
-                            hops: entry.hops,
-                            expires: entry.expires,
-                            interface: entry.receiving_interface,
-                            interface_name: iface_name,
-                        }
-                    })
-                    .collect();
-                QueryResponse::PathTable(entries)
-            }
+            QueryRequest::PathTable { max_hops } => self.handle_path_table_query(max_hops),
             QueryRequest::RateTable => {
                 let entries: Vec<RateTableEntry> = self
                     .engine
@@ -6033,140 +6147,36 @@ impl Driver {
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
-            QueryRequest::ListRuntimeConfig => {
-                QueryResponse::RuntimeConfigList(self.list_runtime_config())
-            }
-            QueryRequest::GetRuntimeConfig { key } => {
-                QueryResponse::RuntimeConfigEntry(self.runtime_config_entry(&key))
-            }
-            QueryRequest::BackbonePeerState { interface_name } => QueryResponse::BackbonePeerState(
-                self.list_backbone_peer_state(interface_name.as_deref()),
-            ),
+            QueryRequest::ListRuntimeConfig
+            | QueryRequest::GetRuntimeConfig { .. }
+            | QueryRequest::BackbonePeerState { .. }
+            | QueryRequest::SetRuntimeConfig { .. }
+            | QueryRequest::ResetRuntimeConfig { .. }
+            | QueryRequest::ClearBackbonePeerState { .. }
+            | QueryRequest::BlacklistBackbonePeer { .. } => self
+                .handle_runtime_config_query(request)
+                .expect("runtime config query branch should return a response"),
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
-            QueryRequest::SetRuntimeConfig { .. } => {
-                QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::Unsupported,
-                    message: "mutating runtime config is handled separately".to_string(),
-                }))
-            }
-            QueryRequest::ResetRuntimeConfig { .. } => {
-                QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::Unsupported,
-                    message: "mutating runtime config is handled separately".to_string(),
-                }))
-            }
-            QueryRequest::ClearBackbonePeerState { .. } => {
-                QueryResponse::ClearBackbonePeerState(false)
-            }
-            QueryRequest::BlacklistBackbonePeer { .. } => {
-                QueryResponse::BlacklistBackbonePeer(false)
-            }
         }
     }
 
     /// Handle a mutating query request.
     fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
-            QueryRequest::BlackholeIdentity {
-                identity_hash,
-                duration_hours,
-                reason,
-            } => {
-                let now = time::now();
-                self.engine
-                    .blackhole_identity(identity_hash, now, duration_hours, reason);
-                QueryResponse::BlackholeResult(true)
-            }
-            QueryRequest::UnblackholeIdentity { identity_hash } => {
-                let result = self.engine.unblackhole_identity(&identity_hash);
-                QueryResponse::UnblackholeResult(result)
-            }
-            QueryRequest::DropPath { dest_hash } => {
-                QueryResponse::DropPath(self.engine.drop_path(&dest_hash))
-            }
-            QueryRequest::DropAllVia { transport_hash } => {
-                QueryResponse::DropAllVia(self.engine.drop_all_via(&transport_hash))
-            }
-            QueryRequest::DropAnnounceQueues => {
-                self.engine.drop_announce_queues();
-                QueryResponse::DropAnnounceQueues
-            }
-            QueryRequest::ClearBackbonePeerState {
-                interface_name,
-                peer_ip,
-            } => QueryResponse::ClearBackbonePeerState(
-                self.clear_backbone_peer_state(&interface_name, peer_ip),
-            ),
-            QueryRequest::BlacklistBackbonePeer {
-                interface_name,
-                peer_ip,
-                duration,
-                reason,
-                penalty_level,
-            } => QueryResponse::BlacklistBackbonePeer(self.blacklist_backbone_peer(
-                &interface_name,
-                peer_ip,
-                duration,
-                reason,
-                penalty_level,
-            )),
+            QueryRequest::BlackholeIdentity { .. }
+            | QueryRequest::UnblackholeIdentity { .. }
+            | QueryRequest::DropPath { .. }
+            | QueryRequest::DropAllVia { .. }
+            | QueryRequest::DropAnnounceQueues
+            | QueryRequest::ClearBackbonePeerState { .. }
+            | QueryRequest::BlacklistBackbonePeer { .. }
+            | QueryRequest::InjectPath { .. }
+            | QueryRequest::InjectIdentity { .. } => self
+                .handle_mutation_query(request)
+                .expect("mutation query branch should return a response"),
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
-            QueryRequest::InjectPath {
-                dest_hash,
-                next_hop,
-                hops,
-                expires,
-                interface_name,
-                packet_hash,
-            } => {
-                // Resolve interface_name → InterfaceId
-                let iface_id = self
-                    .interfaces
-                    .iter()
-                    .find(|(_, entry)| entry.info.name == interface_name)
-                    .map(|(id, _)| *id);
-                match iface_id {
-                    Some(id) => {
-                        let entry = PathEntry {
-                            timestamp: time::now(),
-                            next_hop,
-                            hops,
-                            expires,
-                            random_blobs: Vec::new(),
-                            receiving_interface: id,
-                            packet_hash,
-                            announce_raw: None,
-                        };
-                        self.engine.inject_path(dest_hash, entry);
-                        QueryResponse::InjectPath(true)
-                    }
-                    None => QueryResponse::InjectPath(false),
-                }
-            }
-            QueryRequest::InjectIdentity {
-                dest_hash,
-                identity_hash,
-                public_key,
-                app_data,
-                hops,
-                received_at,
-            } => {
-                self.upsert_known_destination(
-                    dest_hash,
-                    crate::destination::AnnouncedIdentity {
-                        dest_hash: rns_core::types::DestHash(dest_hash),
-                        identity_hash: rns_core::types::IdentityHash(identity_hash),
-                        public_key,
-                        app_data,
-                        hops,
-                        received_at,
-                        receiving_interface: rns_core::transport::types::InterfaceId(0),
-                    },
-                );
-                QueryResponse::InjectIdentity(true)
-            }
             QueryRequest::SendProbe {
                 dest_hash,
                 payload_size,
@@ -6845,179 +6855,278 @@ impl Driver {
         }
     }
 
+    fn dispatch_send_on_interface_action(
+        &mut self,
+        interface: InterfaceId,
+        raw: Vec<u8>,
+        _hook_injected: &mut Vec<TransportAction>,
+    ) {
+        #[cfg(feature = "rns-hooks")]
+        {
+            let pkt_ctx = rns_hooks::PacketContext {
+                flags: if raw.is_empty() { 0 } else { raw[0] },
+                hops: if raw.len() > 1 { raw[1] } else { 0 },
+                destination_hash: extract_dest_hash(&raw),
+                context: 0,
+                packet_hash: [0; 32],
+                interface_id: interface.0,
+                data_offset: 0,
+                data_len: raw.len() as u32,
+            };
+            let ctx = HookContext::Packet {
+                ctx: &pkt_ctx,
+                raw: &raw,
+            };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::SendOnInterface as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.collect_hook_side_effects("SendOnInterface", e, _hook_injected);
+                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
+                    return;
+                }
+            }
+        }
+
+        let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        if is_announce {
+            log::debug!(
+                "Announce:dispatching to iface {} (len={}, online={})",
+                interface.0,
+                raw.len(),
+                self.interfaces
+                    .get(&interface)
+                    .map(|e| e.online && e.enabled)
+                    .unwrap_or(false)
+            );
+        }
+        if let Some(entry) = self.interfaces.get_mut(&interface) {
+            if entry.online && entry.enabled {
+                if Self::interface_send_deferred(entry, Instant::now()) {
+                    return;
+                }
+                let data = if let Some(ref ifac_state) = entry.ifac {
+                    ifac::mask_outbound(&raw, ifac_state)
+                } else {
+                    raw
+                };
+                entry.stats.txb += data.len() as u64;
+                entry.stats.tx_packets += 1;
+                if is_announce {
+                    entry.stats.record_outgoing_announce(time::now());
+                }
+                let send_result = entry.writer.send_frame(&data);
+                let sent_ok = send_result.is_ok();
+                Self::record_send_result(entry, &send_result, "send", interface);
+                if sent_ok && is_announce {
+                    let header_type = (data[0] >> 6) & 0x03;
+                    let dest_start = if header_type == 1 { 18usize } else { 2usize };
+                    let dest_preview = if data.len() >= dest_start + 4 {
+                        format!("{:02x?}", &data[dest_start..dest_start + 4])
+                    } else {
+                        "??".into()
+                    };
+                    log::debug!(
+                        "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
+                        interface.0,
+                        data.len(),
+                        header_type,
+                        dest_preview
+                    );
+                }
+            }
+        }
+    }
+
+    fn dispatch_broadcast_action(
+        &mut self,
+        raw: Vec<u8>,
+        exclude: Option<InterfaceId>,
+        _hook_injected: &mut Vec<TransportAction>,
+    ) {
+        #[cfg(feature = "rns-hooks")]
+        {
+            let pkt_ctx = rns_hooks::PacketContext {
+                flags: if raw.is_empty() { 0 } else { raw[0] },
+                hops: if raw.len() > 1 { raw[1] } else { 0 },
+                destination_hash: extract_dest_hash(&raw),
+                context: 0,
+                packet_hash: [0; 32],
+                interface_id: 0,
+                data_offset: 0,
+                data_len: raw.len() as u32,
+            };
+            let ctx = HookContext::Packet {
+                ctx: &pkt_ctx,
+                raw: &raw,
+            };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.collect_hook_side_effects("BroadcastOnAllInterfaces", e, _hook_injected);
+                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
+                    return;
+                }
+            }
+        }
+
+        let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        for entry in self.interfaces.values_mut() {
+            if entry.online && entry.enabled && Some(entry.id) != exclude {
+                if Self::interface_send_deferred(entry, Instant::now()) {
+                    continue;
+                }
+                let data = if let Some(ref ifac_state) = entry.ifac {
+                    ifac::mask_outbound(&raw, ifac_state)
+                } else {
+                    raw.clone()
+                };
+                entry.stats.txb += data.len() as u64;
+                entry.stats.tx_packets += 1;
+                if is_announce {
+                    entry.stats.record_outgoing_announce(time::now());
+                }
+                let send_result = entry.writer.send_frame(&data);
+                Self::record_send_result(entry, &send_result, "broadcast", entry.id);
+            }
+        }
+    }
+
+    fn dispatch_deliver_local_action(
+        &mut self,
+        destination_hash: [u8; 16],
+        raw: Vec<u8>,
+        packet_hash: [u8; 32],
+        receiving_interface: InterfaceId,
+        _hook_injected: &mut Vec<TransportAction>,
+    ) {
+        #[cfg(feature = "rns-hooks")]
+        {
+            let pkt_ctx = rns_hooks::PacketContext {
+                flags: 0,
+                hops: 0,
+                destination_hash,
+                context: 0,
+                packet_hash,
+                interface_id: receiving_interface.0,
+                data_offset: 0,
+                data_len: raw.len() as u32,
+            };
+            let ctx = HookContext::Packet {
+                ctx: &pkt_ctx,
+                raw: &raw,
+            };
+            let now = time::now();
+            let engine_ref = EngineRef {
+                engine: &self.engine,
+                interfaces: &self.interfaces,
+                link_manager: &self.link_manager,
+                now,
+            };
+            let provider_events_enabled = self.provider_events_enabled();
+            if let Some(ref e) = run_hook_inner(
+                &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
+                &self.hook_manager,
+                &engine_ref,
+                &ctx,
+                now,
+                provider_events_enabled,
+            ) {
+                self.collect_hook_side_effects("DeliverLocal", e, _hook_injected);
+                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
+                    return;
+                }
+            }
+        }
+
+        if destination_hash == self.tunnel_synth_dest {
+            self.handle_tunnel_synth_delivery(&raw);
+        } else if destination_hash == self.path_request_dest {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                let actions =
+                    self.engine
+                        .handle_path_request(&packet.data, receiving_interface, time::now());
+                self.dispatch_all(actions);
+            }
+        } else if self.link_manager.is_link_destination(&destination_hash) {
+            let link_actions = self.link_manager.handle_local_delivery(
+                destination_hash,
+                &raw,
+                packet_hash,
+                receiving_interface,
+                &mut self.rng,
+            );
+            if link_actions.is_empty() {
+                if let Ok(packet) = RawPacket::unpack(&raw) {
+                    if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
+                        self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                        return;
+                    }
+                }
+                self.maybe_generate_proof(destination_hash, &packet_hash);
+                self.callbacks.on_local_delivery(
+                    rns_core::types::DestHash(destination_hash),
+                    raw,
+                    rns_core::types::PacketHash(packet_hash),
+                );
+            } else {
+                self.dispatch_link_actions(link_actions);
+            }
+        } else {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
+                    self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                    return;
+                }
+            }
+            self.maybe_generate_proof(destination_hash, &packet_hash);
+            self.callbacks.on_local_delivery(
+                rns_core::types::DestHash(destination_hash),
+                raw,
+                rns_core::types::PacketHash(packet_hash),
+            );
+        }
+    }
+
     /// Dispatch a list of transport actions.
     fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
         #[cfg(feature = "rns-hooks")]
+        let mut hook_injected: Vec<TransportAction> = Vec::new();
+        #[cfg(not(feature = "rns-hooks"))]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let pkt_ctx = rns_hooks::PacketContext {
-                            flags: if raw.is_empty() { 0 } else { raw[0] },
-                            hops: if raw.len() > 1 { raw[1] } else { 0 },
-                            destination_hash: extract_dest_hash(&raw),
-                            context: 0,
-                            packet_hash: [0; 32],
-                            interface_id: interface.0,
-                            data_offset: 0,
-                            data_len: raw.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx,
-                            raw: &raw,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::SendOnInterface as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.collect_hook_side_effects(
-                                    "SendOnInterface",
-                                    e,
-                                    &mut hook_injected,
-                                );
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
-                    if is_announce {
-                        log::debug!(
-                            "Announce:dispatching to iface {} (len={}, online={})",
-                            interface.0,
-                            raw.len(),
-                            self.interfaces
-                                .get(&interface)
-                                .map(|e| e.online && e.enabled)
-                                .unwrap_or(false)
-                        );
-                    }
-                    if let Some(entry) = self.interfaces.get_mut(&interface) {
-                        if entry.online && entry.enabled {
-                            if Self::interface_send_deferred(entry, Instant::now()) {
-                                continue;
-                            }
-                            let data = if let Some(ref ifac_state) = entry.ifac {
-                                ifac::mask_outbound(&raw, ifac_state)
-                            } else {
-                                raw
-                            };
-                            // Update tx stats
-                            entry.stats.txb += data.len() as u64;
-                            entry.stats.tx_packets += 1;
-                            if is_announce {
-                                entry.stats.record_outgoing_announce(time::now());
-                            }
-                            let send_result = entry.writer.send_frame(&data);
-                            let sent_ok = send_result.is_ok();
-                            Self::record_send_result(entry, &send_result, "send", interface);
-                            if sent_ok && is_announce {
-                                // For HEADER_2 (transported), dest hash is at bytes 18-33
-                                // For HEADER_1 (original), dest hash is at bytes 2-17
-                                let header_type = (data[0] >> 6) & 0x03;
-                                let dest_start = if header_type == 1 { 18usize } else { 2usize };
-                                let dest_preview = if data.len() >= dest_start + 4 {
-                                    format!("{:02x?}", &data[dest_start..dest_start + 4])
-                                } else {
-                                    "??".into()
-                                };
-                                log::debug!(
-                                    "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
-                                    interface.0,
-                                    data.len(),
-                                    header_type,
-                                    dest_preview
-                                );
-                            }
-                        }
-                    }
+                    self.dispatch_send_on_interface_action(interface, raw, &mut hook_injected);
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let pkt_ctx = rns_hooks::PacketContext {
-                            flags: if raw.is_empty() { 0 } else { raw[0] },
-                            hops: if raw.len() > 1 { raw[1] } else { 0 },
-                            destination_hash: extract_dest_hash(&raw),
-                            context: 0,
-                            packet_hash: [0; 32],
-                            interface_id: 0,
-                            data_offset: 0,
-                            data_len: raw.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx,
-                            raw: &raw,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize]
-                                    .programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.collect_hook_side_effects(
-                                    "BroadcastOnAllInterfaces",
-                                    e,
-                                    &mut hook_injected,
-                                );
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
-                    for entry in self.interfaces.values_mut() {
-                        if entry.online && entry.enabled && Some(entry.id) != exclude {
-                            if Self::interface_send_deferred(entry, Instant::now()) {
-                                continue;
-                            }
-                            let data = if let Some(ref ifac_state) = entry.ifac {
-                                ifac::mask_outbound(&raw, ifac_state)
-                            } else {
-                                raw.clone()
-                            };
-                            // Update tx stats
-                            entry.stats.txb += data.len() as u64;
-                            entry.stats.tx_packets += 1;
-                            if is_announce {
-                                entry.stats.record_outgoing_announce(time::now());
-                            }
-                            let send_result = entry.writer.send_frame(&data);
-                            Self::record_send_result(entry, &send_result, "broadcast", entry.id);
-                        }
-                    }
+                    self.dispatch_broadcast_action(raw, exclude, &mut hook_injected);
                 }
                 TransportAction::DeliverLocal {
                     destination_hash,
@@ -7025,120 +7134,13 @@ impl Driver {
                     packet_hash,
                     receiving_interface,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
-                    {
-                        let pkt_ctx = rns_hooks::PacketContext {
-                            flags: 0,
-                            hops: 0,
-                            destination_hash,
-                            context: 0,
-                            packet_hash,
-                            interface_id: receiving_interface.0,
-                            data_offset: 0,
-                            data_len: raw.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx,
-                            raw: &raw,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.collect_hook_side_effects(
-                                    "DeliverLocal",
-                                    e,
-                                    &mut hook_injected,
-                                );
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    if destination_hash == self.tunnel_synth_dest {
-                        // Tunnel synthesis packet — validate and handle
-                        self.handle_tunnel_synth_delivery(&raw);
-                    } else if destination_hash == self.path_request_dest {
-                        // Path request packet — extract data and handle
-                        if let Ok(packet) = RawPacket::unpack(&raw) {
-                            let actions = self.engine.handle_path_request(
-                                &packet.data,
-                                receiving_interface,
-                                time::now(),
-                            );
-                            self.dispatch_all(actions);
-                        }
-                    } else if self.link_manager.is_link_destination(&destination_hash) {
-                        // Link-related packet — route to link manager
-                        let link_actions = self.link_manager.handle_local_delivery(
-                            destination_hash,
-                            &raw,
-                            packet_hash,
-                            receiving_interface,
-                            &mut self.rng,
-                        );
-                        if link_actions.is_empty() {
-                            // Link manager couldn't handle (e.g. opportunistic DATA
-                            // for a registered link destination). Fall back to
-                            // regular delivery.
-                            if let Ok(packet) = RawPacket::unpack(&raw) {
-                                if packet.flags.packet_type
-                                    == rns_core::constants::PACKET_TYPE_PROOF
-                                {
-                                    self.handle_inbound_proof(
-                                        destination_hash,
-                                        &packet.data,
-                                        &packet_hash,
-                                    );
-                                    continue;
-                                }
-                            }
-                            self.maybe_generate_proof(destination_hash, &packet_hash);
-                            self.callbacks.on_local_delivery(
-                                rns_core::types::DestHash(destination_hash),
-                                raw,
-                                rns_core::types::PacketHash(packet_hash),
-                            );
-                        } else {
-                            self.dispatch_link_actions(link_actions);
-                        }
-                    } else {
-                        // Check if this is a PROOF packet for a packet we sent
-                        if let Ok(packet) = RawPacket::unpack(&raw) {
-                            if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                                self.handle_inbound_proof(
-                                    destination_hash,
-                                    &packet.data,
-                                    &packet_hash,
-                                );
-                                continue;
-                            }
-                        }
-
-                        // Check if destination has a proof strategy — generate proof if needed
-                        self.maybe_generate_proof(destination_hash, &packet_hash);
-
-                        self.callbacks.on_local_delivery(
-                            rns_core::types::DestHash(destination_hash),
-                            raw,
-                            rns_core::types::PacketHash(packet_hash),
-                        );
-                    }
+                    self.dispatch_deliver_local_action(
+                        destination_hash,
+                        raw,
+                        packet_hash,
+                        receiving_interface,
+                        &mut hook_injected,
+                    );
                 }
                 TransportAction::AnnounceReceived {
                     destination_hash,
