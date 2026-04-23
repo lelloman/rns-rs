@@ -124,7 +124,9 @@ impl ResourceSender {
         let data_size = uncompressed_data.len();
 
         // Try compression
-        let (working_data, compressed) = if auto_compress {
+        let (working_data, compressed) = if auto_compress
+            && uncompressed_data.len() <= RESOURCE_AUTO_COMPRESS_MAX_SIZE
+        {
             match compressor.compress(&uncompressed_data) {
                 Some(compressed_data) if compressed_data.len() < uncompressed_data.len() => {
                     (compressed_data, true)

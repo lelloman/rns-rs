@@ -3,10 +3,23 @@ use core::fmt;
 
 pub type StreamId = u16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecompressError {
+    InvalidData,
+    TooLarge,
+}
+
 /// Compression trait for buffer operations (`no_std` compatible).
 pub trait Compressor {
     fn compress(&self, data: &[u8]) -> Option<Vec<u8>>;
-    fn decompress(&self, data: &[u8]) -> Option<Vec<u8>>;
+    fn decompress(&self, data: &[u8]) -> Option<Vec<u8>> {
+        self.decompress_bounded(data, usize::MAX).ok()
+    }
+    fn decompress_bounded(
+        &self,
+        data: &[u8],
+        max_output_size: usize,
+    ) -> Result<Vec<u8>, DecompressError>;
 }
 
 /// No-op compressor (default for `no_std`).
@@ -18,6 +31,13 @@ impl Compressor for NoopCompressor {
     }
     fn decompress(&self, _data: &[u8]) -> Option<Vec<u8>> {
         None
+    }
+    fn decompress_bounded(
+        &self,
+        _data: &[u8],
+        _max_output_size: usize,
+    ) -> Result<Vec<u8>, DecompressError> {
+        Err(DecompressError::InvalidData)
     }
 }
 
@@ -48,5 +68,9 @@ mod tests {
         let c = NoopCompressor;
         assert!(c.compress(b"test").is_none());
         assert!(c.decompress(b"test").is_none());
+        assert_eq!(
+            c.decompress_bounded(b"test", 8),
+            Err(DecompressError::InvalidData)
+        );
     }
 }

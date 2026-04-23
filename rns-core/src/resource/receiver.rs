@@ -86,6 +86,10 @@ pub struct ResourceReceiver {
     pub request_id: Option<Vec<u8>>,
     /// Window state
     pub window: WindowState,
+    /// Original advertisement bytes for this incoming transfer.
+    pub advertisement_packet: Vec<u8>,
+    /// Maximum allowed decompressed size for compressed resource payloads.
+    pub max_decompressed_size: usize,
 }
 
 impl ResourceReceiver {
@@ -165,6 +169,8 @@ impl ResourceReceiver {
             has_metadata: adv.flags.has_metadata,
             request_id: adv.request_id,
             window: window_state,
+            advertisement_packet: adv_data.to_vec(),
+            max_decompressed_size: RESOURCE_AUTO_COMPRESS_MAX_SIZE,
         })
     }
 
@@ -181,6 +187,15 @@ impl ResourceReceiver {
         vec![ResourceAction::SendCancelReceiver(
             self.resource_hash.clone(),
         )]
+    }
+
+    fn corrupt_actions(&mut self, error: ResourceError) -> Vec<ResourceAction> {
+        self.status = ResourceStatus::Corrupt;
+        vec![
+            ResourceAction::SendCancelReceiver(self.resource_hash.clone()),
+            ResourceAction::Failed(error),
+            ResourceAction::TeardownLink,
+        ]
     }
 
     /// Receive a part. Matches by map hash and stores it.
@@ -455,18 +470,19 @@ impl ResourceReceiver {
 
         // Strip random hash prefix
         if decrypted.len() < RESOURCE_RANDOM_HASH_SIZE {
-            self.status = ResourceStatus::Corrupt;
-            return vec![ResourceAction::Failed(ResourceError::InvalidPart)];
+            return self.corrupt_actions(ResourceError::InvalidPart);
         }
         let data_after_random = &decrypted[RESOURCE_RANDOM_HASH_SIZE..];
 
         // Decompress
         let decompressed = if self.flags.compressed {
-            match compressor.decompress(data_after_random) {
-                Some(d) => d,
-                None => {
-                    self.status = ResourceStatus::Corrupt;
-                    return vec![ResourceAction::Failed(ResourceError::DecompressionFailed)];
+            match compressor.decompress_bounded(data_after_random, self.max_decompressed_size) {
+                Ok(d) => d,
+                Err(crate::buffer::types::DecompressError::TooLarge) => {
+                    return self.corrupt_actions(ResourceError::TooLarge);
+                }
+                Err(crate::buffer::types::DecompressError::InvalidData) => {
+                    return self.corrupt_actions(ResourceError::DecompressionFailed);
                 }
             }
         } else {
@@ -476,8 +492,7 @@ impl ResourceReceiver {
         // Verify hash
         let calculated_hash = compute_resource_hash(&decompressed, &self.random_hash);
         if calculated_hash.as_slice() != self.resource_hash.as_slice() {
-            self.status = ResourceStatus::Corrupt;
-            return vec![ResourceAction::Failed(ResourceError::HashMismatch)];
+            return self.corrupt_actions(ResourceError::HashMismatch);
         }
 
         // Compute proof before metadata extraction (proof uses full decompressed data)
@@ -488,10 +503,7 @@ impl ResourceReceiver {
         let (data, metadata) = if self.has_metadata && self.segment_index == 1 {
             match extract_metadata(&decompressed) {
                 Some((meta, rest)) => (rest, Some(meta)),
-                None => {
-                    self.status = ResourceStatus::Corrupt;
-                    return vec![ResourceAction::Failed(ResourceError::InvalidPart)];
-                }
+                None => return self.corrupt_actions(ResourceError::InvalidPart),
             }
         } else {
             (decompressed, None)
@@ -607,7 +619,7 @@ impl ResourceReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::types::NoopCompressor;
+    use crate::buffer::types::{Compressor, DecompressError, NoopCompressor};
     use crate::resource::sender::ResourceSender;
 
     fn identity_encrypt(data: &[u8]) -> Vec<u8> {
@@ -616,6 +628,31 @@ mod tests {
 
     fn identity_decrypt(data: &[u8]) -> Result<Vec<u8>, ()> {
         Ok(data.to_vec())
+    }
+
+    struct ExpandingCompressor;
+
+    impl Compressor for ExpandingCompressor {
+        fn compress(&self, data: &[u8]) -> Option<Vec<u8>> {
+            Some(data[..data.len() / 2].to_vec())
+        }
+
+        fn decompress(&self, data: &[u8]) -> Option<Vec<u8>> {
+            self.decompress_bounded(data, usize::MAX).ok()
+        }
+
+        fn decompress_bounded(
+            &self,
+            data: &[u8],
+            max_output_size: usize,
+        ) -> Result<Vec<u8>, DecompressError> {
+            let mut out = data.to_vec();
+            out.extend_from_slice(data);
+            if out.len() > max_output_size {
+                return Err(DecompressError::TooLarge);
+            }
+            Ok(out)
+        }
     }
 
     fn base_timeout(receiver: &ResourceReceiver, eifr: f64) -> f64 {
@@ -672,6 +709,8 @@ mod tests {
         assert_eq!(receiver.total_parts, sender.total_parts());
         assert_eq!(receiver.transfer_size, sender.transfer_size as u64);
         assert_eq!(receiver.resource_hash, sender.resource_hash.to_vec());
+        assert!(!receiver.advertisement_packet.is_empty());
+        assert_eq!(receiver.max_decompressed_size, RESOURCE_AUTO_COMPRESS_MAX_SIZE);
     }
 
     #[test]
@@ -740,6 +779,66 @@ mod tests {
         receiver.accept(1000.0);
         let _actions = receiver.handle_cancel();
         assert_eq!(receiver.status, ResourceStatus::Failed);
+    }
+
+    #[test]
+    fn test_assemble_compressed_resource_rejects_oversized_decompression() {
+        let data = b"oversized!";
+        let mut rng = rns_crypto::FixedRng::new(&[0x93; 64]);
+
+        let mut sender = ResourceSender::new(
+            data,
+            None,
+            RESOURCE_SDU,
+            &identity_encrypt,
+            &ExpandingCompressor,
+            &mut rng,
+            1000.0,
+            true,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+
+        let adv = sender.get_advertisement(0);
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
+        receiver.max_decompressed_size = data.len() - 1;
+
+        let request_data = receiver
+            .accept(1001.0)
+            .into_iter()
+            .find_map(|a| match a {
+                ResourceAction::SendRequest(d) => Some(d),
+                _ => None,
+            })
+            .unwrap();
+
+        let send_actions = sender.handle_request(&request_data, 1002.0);
+        receiver.req_sent = 1001.0;
+        for action in &send_actions {
+            if let ResourceAction::SendPart(part_data) = action {
+                receiver.receive_part(part_data, 1003.0);
+            }
+        }
+
+        let assemble_actions = receiver.assemble(&identity_decrypt, &ExpandingCompressor);
+        assert_eq!(receiver.status, ResourceStatus::Corrupt);
+        assert!(assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
+        assert!(assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::Failed(ResourceError::TooLarge))));
+        assert!(assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::TeardownLink)));
     }
 
     #[test]

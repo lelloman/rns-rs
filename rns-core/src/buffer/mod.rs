@@ -6,7 +6,7 @@ use crate::constants::STREAM_DATA_OVERHEAD;
 #[cfg(test)]
 use crate::constants::STREAM_ID_MAX;
 
-pub use types::{BufferError, Compressor, NoopCompressor, StreamId};
+pub use types::{BufferError, Compressor, DecompressError, NoopCompressor, StreamId};
 
 /// Stream data message: 2-byte header + data.
 ///
@@ -48,6 +48,15 @@ impl StreamDataMessage {
 
     /// Unpack from raw bytes (decompresses if compressed flag is set).
     pub fn unpack(raw: &[u8], compressor: &dyn Compressor) -> Result<Self, BufferError> {
+        Self::unpack_bounded(raw, compressor, usize::MAX)
+    }
+
+    /// Unpack from raw bytes with an explicit decompressed size limit.
+    pub fn unpack_bounded(
+        raw: &[u8],
+        compressor: &dyn Compressor,
+        max_decompressed_size: usize,
+    ) -> Result<Self, BufferError> {
         if raw.len() < 2 {
             return Err(BufferError::InvalidData);
         }
@@ -61,8 +70,8 @@ impl StreamDataMessage {
 
         if compressed {
             data = compressor
-                .decompress(&data)
-                .ok_or(BufferError::DecompressionFailed)?;
+                .decompress_bounded(&data, max_decompressed_size)
+                .map_err(|_| BufferError::DecompressionFailed)?;
         }
 
         Ok(StreamDataMessage {
@@ -387,6 +396,17 @@ mod tests {
             out.extend_from_slice(data);
             Some(out)
         }
+        fn decompress_bounded(
+            &self,
+            data: &[u8],
+            max_output_size: usize,
+        ) -> Result<Vec<u8>, DecompressError> {
+            let out = self.decompress(data).ok_or(DecompressError::InvalidData)?;
+            if out.len() > max_output_size {
+                return Err(DecompressError::TooLarge);
+            }
+            Ok(out)
+        }
     }
 
     #[test]
@@ -405,6 +425,24 @@ mod tests {
         let packed = msg.pack();
         let unpacked = StreamDataMessage::unpack(&packed, &HalfCompressor).unwrap();
         // HalfCompressor doubles data on decompress
+        assert_eq!(unpacked.data, b"compressedcompressed");
+    }
+
+    #[test]
+    fn test_compressed_unpack_bounded_rejects_oversized_output() {
+        let msg = StreamDataMessage::new(1, b"compressed".to_vec(), false, true);
+        let packed = msg.pack();
+        assert_eq!(
+            StreamDataMessage::unpack_bounded(&packed, &HalfCompressor, 8),
+            Err(BufferError::DecompressionFailed)
+        );
+    }
+
+    #[test]
+    fn test_compressed_unpack_bounded_accepts_exact_limit() {
+        let msg = StreamDataMessage::new(1, b"compressed".to_vec(), false, true);
+        let packed = msg.pack();
+        let unpacked = StreamDataMessage::unpack_bounded(&packed, &HalfCompressor, 20).unwrap();
         assert_eq!(unpacked.data, b"compressedcompressed");
     }
 }

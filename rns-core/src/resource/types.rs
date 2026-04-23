@@ -88,6 +88,8 @@ pub enum ResourceAction {
     SendCancelInitiator(alloc::vec::Vec<u8>),
     /// Send cancel/reject from receiver (RESOURCE_RCL).
     SendCancelReceiver(alloc::vec::Vec<u8>),
+    /// Tear down the link due to an unrecoverable resource failure.
+    TeardownLink,
     /// Resource data received successfully (data, metadata).
     DataReceived {
         data: alloc::vec::Vec<u8>,
