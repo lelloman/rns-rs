@@ -5,6 +5,26 @@ const serverModeEl = document.getElementById("serverMode");
 const uptimeEl = document.getElementById("uptime");
 const runningEl = document.getElementById("running");
 const readyEl = document.getElementById("ready");
+const telemetryWindowLabelEl = document.getElementById("telemetryWindowLabel");
+const telemetryAnnounceTotalEl = document.getElementById("telemetryAnnounceTotal");
+const telemetryAnnounceDetailEl = document.getElementById("telemetryAnnounceDetail");
+const telemetryUniqueDestinationsEl = document.getElementById("telemetryUniqueDestinations");
+const telemetryDestinationDetailEl = document.getElementById("telemetryDestinationDetail");
+const telemetryPacketActivityEl = document.getElementById("telemetryPacketActivity");
+const telemetryPacketDetailEl = document.getElementById("telemetryPacketDetail");
+const telemetryDropTotalEl = document.getElementById("telemetryDropTotal");
+const telemetryDropDetailEl = document.getElementById("telemetryDropDetail");
+const announceTrendSummaryEl = document.getElementById("announceTrendSummary");
+const announceBurstBadgeEl = document.getElementById("announceBurstBadge");
+const announceTrendBarsEl = document.getElementById("announceTrendBars");
+const systemTrendSummaryEl = document.getElementById("systemTrendSummary");
+const systemAnomalyBadgeEl = document.getElementById("systemAnomalyBadge");
+const systemTrendBarsEl = document.getElementById("systemTrendBars");
+const telemetryInterfacesRowsEl = document.getElementById("telemetryInterfacesRows");
+const telemetryDestinationsRowsEl = document.getElementById("telemetryDestinationsRows");
+const telemetryPacketsRowsEl = document.getElementById("telemetryPacketsRows");
+const telemetryAlertListEl = document.getElementById("telemetryAlertList");
+const telemetryRestartListEl = document.getElementById("telemetryRestartList");
 const configConvergedEl = document.getElementById("configConverged");
 const configStatusSummaryEl = document.getElementById("configStatusSummary");
 const configRuntimeBadgeEl = document.getElementById("configRuntimeBadge");
@@ -85,6 +105,14 @@ let currentConfigJson = "";
 let schemaExampleJson = "";
 let latestProcesses = [];
 let latestProcessEvents = [];
+let latestTelemetry = {
+  summary: null,
+  announces: null,
+  interfaces: null,
+  destinations: null,
+  packets: null,
+  system: null,
+};
 
 const params = new URLSearchParams(window.location.search);
 const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
@@ -99,6 +127,37 @@ function fmtSeconds(value) {
   return `${hours}h ${minutes}m ${seconds}s`;
 }
 
+function fmtInteger(value) {
+  if (value == null || Number.isNaN(value)) return "-";
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function fmtBytes(value) {
+  if (value == null || Number.isNaN(value)) return "-";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let current = value;
+  let unit = units[0];
+  for (let i = 1; i < units.length && current >= 1024; i += 1) {
+    current /= 1024;
+    unit = units[i];
+  }
+  const digits = current >= 100 || unit === "B" ? 0 : 1;
+  return `${current.toFixed(digits)} ${unit}`;
+}
+
+function fmtWindow(seconds) {
+  if (seconds == null) return "-";
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+function fmtTimestamp(value) {
+  if (value == null) return "-";
+  return new Date(value).toLocaleString();
+}
+
 function fmtAge(value) {
   if (value == null) return "-";
   if (value < 1) return "<1s ago";
@@ -108,6 +167,224 @@ function fmtAge(value) {
 function setBadge(el, label, className) {
   el.textContent = label;
   el.className = `pill ${className}`;
+}
+
+function renderSimpleRows(container, rows, emptyMessage) {
+  container.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "rank-row";
+    empty.innerHTML = `<strong>No data</strong><div class="rank-meta">${emptyMessage}</div>`;
+    container.appendChild(empty);
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement("div");
+    item.className = row.className || "rank-row";
+    item.innerHTML = `<strong>${row.title}</strong><div class="${row.metaClass || "rank-meta"}">${row.meta}</div>`;
+    container.appendChild(item);
+  }
+}
+
+function renderSparkBars(container, items, options = {}) {
+  container.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "rank-row";
+    empty.innerHTML = `<strong>No samples</strong><div class="rank-meta">${options.emptyMessage || "No historical samples available for this window."}</div>`;
+    container.appendChild(empty);
+    return;
+  }
+
+  const maxValue = items.reduce((max, item) => Math.max(max, item.value || 0), 0);
+  const scaleMax = maxValue > 0 ? maxValue : 1;
+  for (const item of items) {
+    const bar = document.createElement("div");
+    const height = Math.max(8, Math.round(((item.value || 0) / scaleMax) * 120));
+    bar.className = `spark-bar${item.warn ? " warn-bar" : ""}`;
+    bar.style.height = `${height}px`;
+    bar.setAttribute("data-label", item.label);
+    bar.title = item.title;
+    container.appendChild(bar);
+  }
+}
+
+function renderTelemetry(summary, announces, interfaces, destinations, packets, system) {
+  latestTelemetry = { summary, announces, interfaces, destinations, packets, system };
+  const windowSeconds = summary?.window?.seconds || announces?.window?.seconds || system?.window?.seconds || null;
+  telemetryWindowLabelEl.textContent = fmtWindow(windowSeconds);
+
+  const announceTotal = summary?.announces?.total ?? null;
+  const uniqueDestinations = summary?.announces?.unique_destinations ?? null;
+  const packetCounters = summary?.packets?.active_counters_in_window ?? null;
+  const providerDrops = summary?.system?.provider_dropped_events ?? null;
+  const firstSeen = summary?.announces?.first_seen_ms;
+  const lastSeen = summary?.announces?.last_seen_ms;
+
+  telemetryAnnounceTotalEl.textContent = fmtInteger(announceTotal);
+  telemetryAnnounceDetailEl.textContent = announceTotal
+    ? `First seen ${fmtTimestamp(firstSeen)}. Last seen ${fmtTimestamp(lastSeen)}.`
+    : "No announces recorded in the current window.";
+  telemetryUniqueDestinationsEl.textContent = fmtInteger(uniqueDestinations);
+  telemetryDestinationDetailEl.textContent = uniqueDestinations
+    ? `${fmtInteger(summary?.announces?.unique_identities ?? 0)} unique identities and ${fmtInteger(summary?.announces?.unique_interfaces ?? 0)} interfaces participated.`
+    : "No active destination set in the current window.";
+  telemetryPacketActivityEl.textContent = fmtInteger(packetCounters);
+  telemetryPacketDetailEl.textContent = `RX ${fmtInteger(summary?.packets?.rx_packets ?? 0)} / ${fmtBytes(summary?.packets?.rx_bytes ?? 0)} | TX ${fmtInteger(summary?.packets?.tx_packets ?? 0)} / ${fmtBytes(summary?.packets?.tx_bytes ?? 0)}`;
+  telemetryDropTotalEl.textContent = fmtInteger(providerDrops);
+  telemetryDropDetailEl.textContent = providerDrops
+    ? `Provider drops were observed in ${fmtInteger(system?.anomalies?.provider_drop_buckets?.length ?? 0)} buckets.`
+    : "No provider drop samples were recorded in the current window.";
+
+  renderAnnounceTelemetry(announces);
+  renderSystemTelemetry(system);
+  renderTelemetryRankings(interfaces, destinations, packets);
+  renderTelemetryAlerts(announces, system);
+}
+
+function renderAnnounceTelemetry(announces) {
+  const series = announces?.series || [];
+  const burstBuckets = announces?.anomalies?.burst_buckets || [];
+  const peak = series.reduce((max, bucket) => Math.max(max, bucket.announce_count || 0), 0);
+  const average = announces?.anomalies?.average_announce_count_per_bucket || 0;
+  announceTrendSummaryEl.textContent = series.length
+    ? `Peak bucket ${fmtInteger(peak)} announces. Average ${average.toFixed(1)} per bucket.`
+    : "No announce buckets recorded in the current window.";
+  setBadge(
+    announceBurstBadgeEl,
+    burstBuckets.length ? `${burstBuckets.length} burst${burstBuckets.length === 1 ? "" : "s"}` : "steady",
+    burstBuckets.length ? "warn" : "ok",
+  );
+  renderSparkBars(
+    announceTrendBarsEl,
+    series.slice(-12).map((bucket) => ({
+      value: bucket.announce_count || 0,
+      warn: burstBuckets.some((burst) => burst.bucket_start_ms === bucket.bucket_start_ms),
+      label: new Date(bucket.bucket_start_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      title: `${fmtInteger(bucket.announce_count || 0)} announces, ${fmtInteger(bucket.unique_destinations || 0)} destinations`,
+    })),
+    { emptyMessage: "No announce trend data yet." },
+  );
+}
+
+function renderSystemTelemetry(system) {
+  const series = system?.series || [];
+  const dropBuckets = system?.anomalies?.provider_drop_buckets || [];
+  const peakRss = series.reduce((max, bucket) => Math.max(max, bucket.max_rss_bytes || 0), 0);
+  const latestSample = system?.latest_process_sample;
+  systemTrendSummaryEl.textContent = latestSample
+    ? `Latest RSS ${fmtBytes(latestSample.rss_bytes)} | threads ${fmtInteger(latestSample.threads)} | fds ${fmtInteger(latestSample.fds)} | peak RSS ${fmtBytes(peakRss)}`
+    : "No process samples recorded yet.";
+  setBadge(
+    systemAnomalyBadgeEl,
+    dropBuckets.length ? `${dropBuckets.length} drop bucket${dropBuckets.length === 1 ? "" : "s"}` : "stable",
+    dropBuckets.length ? "bad" : "ok",
+  );
+  renderSparkBars(
+    systemTrendBarsEl,
+    series.slice(-12).map((bucket) => ({
+      value: Math.max(bucket.max_rss_bytes || 0, (bucket.provider_dropped_events || 0) * 1024 * 1024),
+      warn: (bucket.provider_dropped_events || 0) > 0,
+      label: new Date(bucket.bucket_start_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      title: `max RSS ${fmtBytes(bucket.max_rss_bytes || 0)}, drops ${fmtInteger(bucket.provider_dropped_events || 0)}`,
+    })),
+    { emptyMessage: "No system pressure data yet." },
+  );
+}
+
+function renderTelemetryRankings(interfaces, destinations, packets) {
+  renderSimpleRows(
+    telemetryInterfacesRowsEl,
+    (interfaces?.interfaces || []).slice(0, 5).map((entry) => ({
+      title: `Interface ${entry.interface_id ?? "unknown"} · ${fmtInteger(entry.announce_count)} announces`,
+      meta: `${fmtInteger(entry.unique_destinations)} destinations | hops ${entry.min_hops}-${entry.max_hops} | last seen ${fmtTimestamp(entry.last_seen_ms)}`,
+    })),
+    "No interface telemetry yet.",
+  );
+  renderSimpleRows(
+    telemetryDestinationsRowsEl,
+    (destinations?.destinations || []).slice(0, 5).map((entry) => ({
+      title: `${entry.destination_hash.slice(0, 12)}… · ${fmtInteger(entry.announce_count)} announces`,
+      meta: `lifetime ${fmtInteger(entry.lifetime_announce_count ?? 0)} | interface ${entry.last_interface_id ?? "unknown"} | hops ${entry.min_hops}-${entry.max_hops}`,
+    })),
+    "No destination telemetry yet.",
+  );
+  renderSimpleRows(
+    telemetryPacketsRowsEl,
+    (packets?.counters || []).slice(0, 5).map((entry) => ({
+      title: `${entry.direction} ${entry.packet_type} · ${fmtInteger(entry.packets)} packets`,
+      meta: `${entry.interface_key} | ${fmtBytes(entry.bytes)} | updated ${fmtTimestamp(entry.updated_at_ms)}`,
+    })),
+    "No recently active packet counters yet.",
+  );
+}
+
+function renderTelemetryAlerts(announces, system) {
+  const burstBuckets = announces?.anomalies?.burst_buckets || [];
+  const dropBuckets = system?.anomalies?.provider_drop_buckets || [];
+  const announceAlerts = [];
+  if (burstBuckets.length) {
+    const hottest = burstBuckets.reduce((top, bucket) =>
+      (bucket.announce_count || 0) > (top.announce_count || 0) ? bucket : top, burstBuckets[0]);
+    announceAlerts.push({
+      className: "alert-row warn",
+      title: `Announce burst at ${fmtTimestamp(hottest.bucket_start_ms)}`,
+      metaClass: "alert-meta",
+      meta: `${fmtInteger(hottest.announce_count || 0)} announces in one bucket. ${fmtInteger(burstBuckets.length)} burst bucket(s) crossed the 2x average threshold.`,
+    });
+  }
+  if (dropBuckets.length) {
+    const worst = dropBuckets.reduce((top, bucket) =>
+      (bucket.provider_dropped_events || 0) > (top.provider_dropped_events || 0) ? bucket : top, dropBuckets[0]);
+    announceAlerts.push({
+      className: "alert-row bad",
+      title: `Provider drop spike at ${fmtTimestamp(worst.bucket_start_ms)}`,
+      metaClass: "alert-meta",
+      meta: `${fmtInteger(worst.provider_dropped_events || 0)} dropped events in one bucket. ${fmtInteger(dropBuckets.length)} bucket(s) showed provider backpressure.`,
+    });
+  }
+  if (!announceAlerts.length) {
+    announceAlerts.push({
+      className: "alert-row",
+      title: "No telemetry anomalies",
+      metaClass: "alert-meta",
+      meta: "The current historical window did not flag announce bursts or provider drop spikes.",
+    });
+  }
+  renderSimpleRows(telemetryAlertListEl, announceAlerts, "No telemetry anomalies.");
+
+  const restartSignals = [];
+  const unstableProcesses = latestProcesses
+    .filter((process) => (process.restart_count || 0) > 0 || process.last_error)
+    .sort((a, b) => (b.restart_count || 0) - (a.restart_count || 0));
+  for (const process of unstableProcesses.slice(0, 4)) {
+    restartSignals.push({
+      className: process.last_error ? "alert-row bad" : "alert-row warn",
+      title: `${process.name} · ${fmtInteger(process.restart_count || 0)} restart(s)`,
+      metaClass: "alert-meta",
+      meta: `${process.last_error || process.status_detail || "No additional detail"} | last transition ${fmtAge(process.last_transition_seconds)}`,
+    });
+  }
+  const restartEvents = latestProcessEvents
+    .filter((event) => /restart|exit|fail|crash|stop/i.test(event.event))
+    .slice(0, 4);
+  for (const event of restartEvents) {
+    restartSignals.push({
+      className: "alert-row warn",
+      title: `${event.process} · ${event.event}`,
+      metaClass: "alert-meta",
+      meta: `${fmtAge(event.age_seconds)} | ${event.detail || "No detail"}`,
+    });
+  }
+  if (!restartSignals.length) {
+    restartSignals.push({
+      className: "alert-row",
+      title: "No restart churn",
+      metaClass: "alert-meta",
+      meta: "Supervised processes show no recent restart or failure signals.",
+    });
+  }
+  renderSimpleRows(telemetryRestartListEl, restartSignals, "No restart diagnostics.");
 }
 
 function authHeaders() {
@@ -763,13 +1040,19 @@ async function refreshLogs() {
 
 async function refresh() {
   try {
-    const [node, config, configSchema, configStatus, processes, processEvents] = await Promise.all([
+    const [node, config, configSchema, configStatus, processes, processEvents, statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsSystem] = await Promise.all([
       fetchJson("/api/node"),
       fetchJson("/api/config"),
       fetchJson("/api/config/schema"),
       fetchJson("/api/config/status"),
       fetchJson("/api/processes"),
       fetchJson("/api/process_events"),
+      fetchJson("/api/stats/summary?window=24h"),
+      fetchJson("/api/stats/announces?window=24h&bucket=1h"),
+      fetchJson("/api/stats/interfaces?window=24h&limit=5"),
+      fetchJson("/api/stats/destinations?window=24h&limit=5"),
+      fetchJson("/api/stats/packets?window=24h&limit=5"),
+      fetchJson("/api/stats/system?window=24h&bucket=1h"),
     ]);
     serverModeEl.textContent = node.server_mode || "-";
     uptimeEl.textContent = fmtSeconds(node.uptime_seconds);
@@ -780,6 +1063,7 @@ async function refresh() {
     renderConfigStatus(configStatus.status);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
+    renderTelemetry(statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsSystem);
     await refreshLogs();
     statusEl.textContent = "Connected";
   } catch (error) {

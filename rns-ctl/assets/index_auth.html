@@ -42,6 +42,115 @@
       </article>
     </section>
 
+    <section class="panel telemetry-panel">
+      <div class="row telemetry-header">
+        <div>
+          <h2>Historical Telemetry</h2>
+          <p class="muted">24-hour operator view backed by <code>/api/stats/*</code>. Focuses on announce volume, active interfaces, packet activity, and system anomalies.</p>
+        </div>
+        <div class="telemetry-window">
+          <span class="pill info">Window</span>
+          <strong id="telemetryWindowLabel">24h</strong>
+        </div>
+      </div>
+      <div class="telemetry-summary-grid">
+        <article class="status-card">
+          <div class="status-label">Announces</div>
+          <div id="telemetryAnnounceTotal" class="stat">-</div>
+          <p id="telemetryAnnounceDetail" class="muted">No telemetry data yet.</p>
+        </article>
+        <article class="status-card">
+          <div class="status-label">Unique Destinations</div>
+          <div id="telemetryUniqueDestinations" class="stat">-</div>
+          <p id="telemetryDestinationDetail" class="muted">No destination ranking yet.</p>
+        </article>
+        <article class="status-card">
+          <div class="status-label">Packet Activity</div>
+          <div id="telemetryPacketActivity" class="stat">-</div>
+          <p id="telemetryPacketDetail" class="muted">No packet counter activity yet.</p>
+        </article>
+        <article class="status-card">
+          <div class="status-label">Provider Drops</div>
+          <div id="telemetryDropTotal" class="stat">-</div>
+          <p id="telemetryDropDetail" class="muted">No provider drop history yet.</p>
+        </article>
+      </div>
+
+      <div class="telemetry-chart-grid">
+        <article class="chart-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Announce Trend</h3>
+              <p id="announceTrendSummary" class="muted">No announce buckets yet.</p>
+            </div>
+            <div id="announceBurstBadge" class="pill info">no data</div>
+          </div>
+          <div id="announceTrendBars" class="sparkline-grid"></div>
+        </article>
+        <article class="chart-card">
+          <div class="row chart-head">
+            <div>
+              <h3>System Pressure</h3>
+              <p id="systemTrendSummary" class="muted">No system samples yet.</p>
+            </div>
+            <div id="systemAnomalyBadge" class="pill info">no data</div>
+          </div>
+          <div id="systemTrendBars" class="sparkline-grid system-bars"></div>
+        </article>
+      </div>
+
+      <div class="telemetry-rank-grid">
+        <article class="rank-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Top Interfaces</h3>
+              <p class="muted">Interfaces ranked by announce activity in the current window.</p>
+            </div>
+          </div>
+          <div id="telemetryInterfacesRows" class="rank-list"></div>
+        </article>
+        <article class="rank-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Top Destinations</h3>
+              <p class="muted">Most frequently announced destinations in the current window.</p>
+            </div>
+          </div>
+          <div id="telemetryDestinationsRows" class="rank-list"></div>
+        </article>
+        <article class="rank-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Packet Counters</h3>
+              <p class="muted">Recently updated packet counters with cumulative packet and byte counts.</p>
+            </div>
+          </div>
+          <div id="telemetryPacketsRows" class="rank-list"></div>
+        </article>
+      </div>
+
+      <div class="telemetry-alert-grid">
+        <article class="alert-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Operator Anomalies</h3>
+              <p class="muted">Burst and drop signals extracted from the historical telemetry stream.</p>
+            </div>
+          </div>
+          <div id="telemetryAlertList" class="alert-list"></div>
+        </article>
+        <article class="alert-card">
+          <div class="row chart-head">
+            <div>
+              <h3>Restart Diagnostics</h3>
+              <p class="muted">Process churn and recent lifecycle events pulled from the supervised runtime.</p>
+            </div>
+          </div>
+          <div id="telemetryRestartList" class="alert-list"></div>
+        </article>
+      </div>
+    </section>
+
     <section class="panel" style="margin-top: 18px;">
       <h2>Config Runtime Status</h2>
       <div class="status-grid">

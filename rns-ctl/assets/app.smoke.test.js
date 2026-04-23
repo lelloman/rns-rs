@@ -68,7 +68,11 @@ class FakeElement {
   }
 
   get textContent() {
-    return this._textContent;
+    const childText = this.children.map((child) => child.textContent).join(" ").trim();
+    if (this._textContent && childText) {
+      return `${this._textContent} ${childText}`.trim();
+    }
+    return this._textContent || childText;
   }
 
   set innerHTML(value) {
@@ -104,6 +108,10 @@ class FakeElement {
 
   getAttribute(name) {
     return this.attributes[name] ?? null;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
   }
 
   querySelectorAll(selector) {
@@ -296,6 +304,72 @@ function makeUiHarness() {
         { process: "rns-statsd", event: "restart", age_seconds: 1, detail: "config apply" },
       ],
     },
+    statsSummary: {
+      window: { seconds: 86400 },
+      announces: {
+        total: 274321,
+        unique_destinations: 1432,
+        unique_identities: 1399,
+        unique_interfaces: 7,
+        first_seen_ms: 1713820800000,
+        last_seen_ms: 1713907199000,
+      },
+      packets: {
+        rx_packets: 140230,
+        tx_packets: 138992,
+        rx_bytes: 145230912,
+        tx_bytes: 131902448,
+        active_counters_in_window: 5,
+      },
+      system: {
+        provider_dropped_events: 12,
+      },
+    },
+    statsAnnounces: {
+      anomalies: {
+        average_announce_count_per_bucket: 1000,
+        burst_buckets: [
+          { bucket_start_ms: 1713892800000, announce_count: 2450 },
+        ],
+      },
+      series: [
+        { bucket_start_ms: 1713889200000, announce_count: 980, unique_destinations: 120 },
+        { bucket_start_ms: 1713892800000, announce_count: 2450, unique_destinations: 250 },
+        { bucket_start_ms: 1713896400000, announce_count: 1100, unique_destinations: 132 },
+      ],
+    },
+    statsInterfaces: {
+      interfaces: [
+        { interface_id: 3, announce_count: 12000, unique_destinations: 900, min_hops: 1, max_hops: 4, last_seen_ms: 1713907199000 },
+      ],
+    },
+    statsDestinations: {
+      destinations: [
+        { destination_hash: "abcdef0123456789fedcba9876543210", announce_count: 230, lifetime_announce_count: 900, last_interface_id: 3, min_hops: 1, max_hops: 2 },
+      ],
+    },
+    statsPackets: {
+      counters: [
+        { interface_key: "if-3", direction: "in", packet_type: "announce", packets: 9910, bytes: 8123400, updated_at_ms: 1713907199000 },
+      ],
+    },
+    statsSystem: {
+      latest_process_sample: {
+        rss_bytes: 73400320,
+        threads: 12,
+        fds: 31,
+      },
+      anomalies: {
+        provider_drop_buckets: [
+          { bucket_start_ms: 1713896400000, provider_dropped_events: 12 },
+        ],
+      },
+      series: [
+        { bucket_start_ms: 1713889200000, max_rss_bytes: 62914560, provider_dropped_events: 0 },
+        { bucket_start_ms: 1713892800000, max_rss_bytes: 67108864, provider_dropped_events: 0 },
+        { bucket_start_ms: 1713896400000, max_rss_bytes: 73400320, provider_dropped_events: 12 },
+      ],
+    },
     logs: {
       process: "rnsd",
       durable_log_path: "/data/logs/rnsd.log",
@@ -337,6 +411,12 @@ function makeUiHarness() {
       if (url === "/api/config/status") return createJsonResponse(state.configStatus);
       if (url === "/api/processes") return createJsonResponse(state.processes);
       if (url.startsWith("/api/process_events")) return createJsonResponse(state.processEvents);
+      if (url.startsWith("/api/stats/summary")) return createJsonResponse(state.statsSummary);
+      if (url.startsWith("/api/stats/announces")) return createJsonResponse(state.statsAnnounces);
+      if (url.startsWith("/api/stats/interfaces")) return createJsonResponse(state.statsInterfaces);
+      if (url.startsWith("/api/stats/destinations")) return createJsonResponse(state.statsDestinations);
+      if (url.startsWith("/api/stats/packets")) return createJsonResponse(state.statsPackets);
+      if (url.startsWith("/api/stats/system")) return createJsonResponse(state.statsSystem);
       if (url.startsWith("/api/processes/") && url.includes("/logs")) {
         const process = url.split("/")[3];
         return createJsonResponse({ ...state.logs, process });
@@ -408,6 +488,10 @@ test("app.js renders operator state on initial refresh", async () => {
   assert.equal(document.getElementById("serverMode").textContent, "supervised");
   assert.equal(document.getElementById("running").textContent, "3/3");
   assert.equal(document.getElementById("ready").textContent, "3/3");
+  assert.equal(document.getElementById("telemetryWindowLabel").textContent, "1d");
+  assert.equal(document.getElementById("telemetryAnnounceTotal").textContent, "274,321");
+  assert.match(document.getElementById("telemetryAlertList").textContent, /Announce burst/);
+  assert.match(document.getElementById("telemetryRestartList").textContent, /rns-statsd/);
   assert.equal(document.getElementById("selectedProcessName").textContent, "rnsd");
   assert.match(
     document.getElementById("selectedProcessSummary").textContent,
