@@ -1959,22 +1959,21 @@ impl LinkManager {
 
     /// Convert ResourceActions to LinkManagerActions.
     fn process_resource_actions(
-        &self,
+        &mut self,
         link_id: &LinkId,
         actions: Vec<ResourceAction>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let link = match self.links.get(link_id) {
-            Some(l) => l,
-            None => return Vec::new(),
-        };
-
         let mut result = Vec::new();
         for action in actions {
             match action {
                 ResourceAction::SendAdvertisement(data) => {
                     // Link-encrypt and send as CONTEXT_RESOURCE_ADV
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_ADV,
@@ -1991,7 +1990,11 @@ impl LinkManager {
                     ));
                 }
                 ResourceAction::SendRequest(data) => {
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_REQ,
@@ -2000,7 +2003,11 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendHmu(data) => {
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_HMU,
@@ -2009,7 +2016,11 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendProof(data) => {
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_PRF,
@@ -2018,7 +2029,11 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendCancelInitiator(data) => {
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_ICL,
@@ -2027,7 +2042,11 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendCancelReceiver(data) => {
-                    if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
+                    let encrypted = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
+                    if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
                             link_id,
                             constants::CONTEXT_RESOURCE_RCL,
@@ -2050,6 +2069,13 @@ impl LinkManager {
                         link_id: *link_id,
                         error: format!("{}", e),
                     });
+                }
+                ResourceAction::TeardownLink => {
+                    let teardown_actions = match self.links.get_mut(link_id) {
+                        Some(link) => link.engine.handle_teardown(),
+                        None => Vec::new(),
+                    };
+                    result.extend(self.process_link_actions(link_id, &teardown_actions));
                 }
                 ResourceAction::ProgressUpdate { received, total } => {
                     result.push(LinkManagerAction::ResourceProgress {
@@ -4005,6 +4031,155 @@ mod tests {
     }
 
     #[test]
+    fn test_resource_receiver_stores_original_advertisement_plaintext() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+
+        let data = vec![0x41; 256];
+        let adv_actions = init_mgr.send_resource(&link_id, &data, None, &mut rng);
+
+        let adv_raw = adv_actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    let pkt = RawPacket::unpack(raw).ok()?;
+                    (pkt.context == constants::CONTEXT_RESOURCE_ADV).then_some(raw.clone())
+                }
+                _ => None,
+            })
+            .expect("sender should emit a resource advertisement");
+
+        let adv_pkt = RawPacket::unpack(&adv_raw).unwrap();
+        let adv_plaintext = resp_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .engine
+            .decrypt(&adv_pkt.data)
+            .unwrap();
+
+        let _resp_actions = resp_mgr.handle_local_delivery(
+            adv_pkt.destination_hash,
+            &adv_raw,
+            adv_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let receiver = resp_mgr
+            .links
+            .get(&link_id)
+            .and_then(|managed| managed.incoming_resources.first())
+            .expect("advertisement should create an incoming receiver");
+        assert_eq!(receiver.advertisement_packet, adv_plaintext);
+        assert_eq!(
+            receiver.max_decompressed_size,
+            constants::RESOURCE_AUTO_COMPRESS_MAX_SIZE
+        );
+    }
+
+    #[test]
+    fn test_corrupt_compressed_resource_rejects_and_tears_down_link() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+
+        let data = vec![b'A'; 4096];
+        let adv_actions = init_mgr.send_resource(&link_id, &data, None, &mut rng);
+
+        let mut request_actions = Vec::new();
+        for action in &adv_actions {
+            let LinkManagerAction::SendPacket { raw, .. } = action else {
+                continue;
+            };
+            let pkt = RawPacket::unpack(raw).unwrap();
+            let actions = resp_mgr.handle_local_delivery(
+                pkt.destination_hash,
+                raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            );
+            request_actions.extend(actions);
+        }
+
+        {
+            let receiver = resp_mgr
+                .links
+                .get_mut(&link_id)
+                .and_then(|managed| managed.incoming_resources.first_mut())
+                .expect("receiver should exist after advertisement");
+            assert!(receiver.flags.compressed, "test data should be compressed");
+            receiver.max_decompressed_size = 64;
+        }
+
+        let mut responder_actions = Vec::new();
+        for action in request_actions {
+            let LinkManagerAction::SendPacket { raw, .. } = action else {
+                continue;
+            };
+            let pkt = RawPacket::unpack(&raw).unwrap();
+            let actions = init_mgr.handle_local_delivery(
+                pkt.destination_hash,
+                &raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            );
+
+            for action in actions {
+                let LinkManagerAction::SendPacket { raw, .. } = &action else {
+                    continue;
+                };
+                let pkt = RawPacket::unpack(raw).unwrap();
+                let delivered = resp_mgr.handle_local_delivery(
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
+                );
+                responder_actions.extend(delivered);
+            }
+        }
+
+        assert!(
+            responder_actions.iter().any(|action| matches!(
+                action,
+                LinkManagerAction::ResourceFailed { error, .. }
+                    if error == "Resource too large"
+            )),
+            "corrupt oversized resource should fail with TooLarge"
+        );
+        assert!(
+            responder_actions.iter().any(|action| matches!(
+                action,
+                LinkManagerAction::LinkClosed { link_id: closed_id, .. } if *closed_id == link_id
+            )),
+            "corrupt oversized resource should tear down the link"
+        );
+        assert!(
+            responder_actions.iter().any(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                    .map(|pkt| pkt.context == constants::CONTEXT_RESOURCE_RCL)
+                    .unwrap_or(false),
+                _ => false,
+            }),
+            "corrupt oversized resource should send a receiver cancel/reject packet"
+        );
+        assert_eq!(
+            resp_mgr
+                .links
+                .get(&link_id)
+                .map(|managed| managed.engine.state()),
+            Some(LinkState::Closed)
+        );
+    }
+
+    #[test]
     fn test_resource_hmu_timeout_extension_in_link_manager_flow() {
         let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
@@ -4201,7 +4376,7 @@ mod tests {
 
     #[test]
     fn test_process_resource_actions_mapping() {
-        let (init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
 
         // Test that various ResourceActions map to correct LinkManagerActions
@@ -4216,6 +4391,7 @@ mod tests {
                 received: 10,
                 total: 20,
             },
+            ResourceAction::TeardownLink,
         ];
 
         let result = init_mgr.process_resource_actions(&link_id, actions, &mut rng);
@@ -4240,6 +4416,9 @@ mod tests {
                 ..
             }
         ));
+        assert!(result
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::LinkClosed { .. })));
     }
 
     #[test]
