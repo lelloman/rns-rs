@@ -1225,8 +1225,16 @@ impl TransportEngine {
             return;
         }
 
-        // Multi-path aware decision
         let existing_set = self.path_table.get(&ctx.packet.destination_hash);
+        let was_unknown_destination = existing_set.map_or(true, |ps| ps.is_empty());
+
+        // Reset stale path state before first-path installation so path-state handling
+        // cannot race ahead of the path table for previously unknown destinations.
+        if was_unknown_destination {
+            self.path_states.remove(&ctx.packet.destination_hash);
+        }
+
+        // Multi-path aware decision
         let is_unresponsive = self.path_is_unresponsive(&ctx.packet.destination_hash);
 
         let mp_decision = decide_announce_multipath(
@@ -1346,7 +1354,8 @@ impl TransportEngine {
             );
         }
 
-        // Mark path as unknown state on update
+        // Re-apply the path-state reset after storing the path entry so any transient
+        // stale state is also cleared once the destination exists in the path table.
         self.path_states.remove(&ctx.packet.destination_hash);
 
         // Store announce for retransmission
@@ -2512,6 +2521,61 @@ mod tests {
 
         engine.mark_path_responsive(&dest);
         assert!(!engine.path_is_unresponsive(&dest));
+    }
+
+    #[test]
+    fn test_announce_clears_stale_path_state_for_unknown_destination() {
+        use crate::announce::AnnounceData;
+        use crate::destination::{destination_hash, name_hash};
+
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x61; 32]));
+        let dest_hash = destination_hash("pathfix", &["announce"], Some(identity.hash()));
+        let name_h = name_hash("pathfix", &["announce"]);
+        let random_hash = [0x24u8; 10];
+
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
+
+        engine.mark_path_unresponsive(&dest_hash, None);
+        assert!(engine.path_is_unresponsive(&dest_hash));
+        assert!(!engine.has_path(&dest_hash));
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x62; 32]);
+        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+
+        assert!(engine.has_path(&dest_hash));
+        assert!(
+            !engine.path_is_unresponsive(&dest_hash),
+            "stale path state should be cleared for newly installed paths"
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::PathUpdated {
+                destination_hash,
+                interface,
+                ..
+            } if *destination_hash == dest_hash && *interface == InterfaceId(1)
+        )));
     }
 
     #[test]
