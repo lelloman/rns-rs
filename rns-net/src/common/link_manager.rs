@@ -4268,7 +4268,11 @@ mod tests {
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 managed.engine.decrypt(ciphertext).map_err(|_| ())
             };
-            receiver.tick(receiver.last_activity + 0.0001, &decrypt_fn, &Bzip2Compressor)
+            receiver.tick(
+                receiver.last_activity + 0.0001,
+                &decrypt_fn,
+                &Bzip2Compressor,
+            )
         };
         assert!(
             !prime_actions
@@ -4287,22 +4291,23 @@ mod tests {
                 .first_mut()
                 .expect("receiver should have an active incoming resource");
 
-            assert!(receiver.waiting_for_hmu, "receiver should be waiting for HMU");
+            assert!(
+                receiver.waiting_for_hmu,
+                "receiver should be waiting for HMU"
+            );
 
-            let eifr = receiver
-                .eifr
-                .unwrap_or_else(|| (constants::RESOURCE_SDU as f64 * 8.0) / receiver.rtt.unwrap_or(0.5));
+            let eifr = receiver.eifr.unwrap_or_else(|| {
+                (constants::RESOURCE_SDU as f64 * 8.0) / receiver.rtt.unwrap_or(0.5)
+            });
             let expected_tof = if receiver.outstanding_parts > 0 {
                 (receiver.outstanding_parts as f64 * constants::RESOURCE_SDU as f64 * 8.0) / eifr
             } else {
                 (3.0 * constants::RESOURCE_SDU as f64) / eifr
             };
             let expected_hmu_wait =
-                (constants::RESOURCE_SDU as f64 * 8.0 * constants::RESOURCE_HMU_WAIT_FACTOR)
-                    / eifr;
-            let old_delta =
-                constants::RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT * expected_tof
-                    + constants::RESOURCE_RETRY_GRACE_TIME;
+                (constants::RESOURCE_SDU as f64 * 8.0 * constants::RESOURCE_HMU_WAIT_FACTOR) / eifr;
+            let old_delta = constants::RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT * expected_tof
+                + constants::RESOURCE_RETRY_GRACE_TIME;
             (
                 old_delta + expected_hmu_wait + expected_hmu_wait.max(1.0),
                 receiver.retries_left,
@@ -4312,7 +4317,10 @@ mod tests {
             let managed = resp_mgr.links.get(&link_id).unwrap();
             let receiver = managed.incoming_resources.first().unwrap();
             assert_eq!(receiver.retries_left, retries_before);
-            assert!(receiver.eifr.is_some(), "receiver tick should have populated EIFR");
+            assert!(
+                receiver.eifr.is_some(),
+                "receiver tick should have populated EIFR"
+            );
         }
 
         let late_resource_actions = {
@@ -4327,14 +4335,18 @@ mod tests {
                 &Bzip2Compressor,
             )
         };
-        let late_actions = resp_mgr.process_resource_actions(&link_id, late_resource_actions, &mut rng);
-        let retry_raw = late_actions.iter().find_map(|a| match a {
-            LinkManagerAction::SendPacket { raw, .. } => {
-                let pkt = RawPacket::unpack(raw).ok()?;
-                (pkt.context == constants::CONTEXT_RESOURCE_REQ).then_some(raw.clone())
-            }
-            _ => None,
-        }).expect("receiver should emit a resource retry request after extended timeout");
+        let late_actions =
+            resp_mgr.process_resource_actions(&link_id, late_resource_actions, &mut rng);
+        let retry_raw = late_actions
+            .iter()
+            .find_map(|a| match a {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    let pkt = RawPacket::unpack(raw).ok()?;
+                    (pkt.context == constants::CONTEXT_RESOURCE_REQ).then_some(raw.clone())
+                }
+                _ => None,
+            })
+            .expect("receiver should emit a resource retry request after extended timeout");
 
         {
             let managed = resp_mgr.links.get(&link_id).unwrap();
@@ -4362,14 +4374,12 @@ mod tests {
             &mut rng,
         );
         assert!(
-            retry_to_sender
-                .iter()
-                .any(|a| match a {
-                    LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
-                        .map(|pkt| pkt.context == constants::CONTEXT_RESOURCE_HMU)
-                        .unwrap_or(false),
-                    _ => false,
-                }),
+            retry_to_sender.iter().any(|a| match a {
+                LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                    .map(|pkt| pkt.context == constants::CONTEXT_RESOURCE_HMU)
+                    .unwrap_or(false),
+                _ => false,
+            }),
             "sender should answer the exhausted retry request with a live HMU packet"
         );
     }

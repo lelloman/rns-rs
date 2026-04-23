@@ -508,7 +508,9 @@ fn test_simulated_packet_loss() {
 #[test]
 fn test_hmu_wait_timeout_boundary_in_real_flow() {
     // Force more than one hashmap segment: 75+ parts are required.
-    let data: Vec<u8> = (0..40000u32).map(|i| (i ^ (i >> 8) ^ (i >> 16)) as u8).collect();
+    let data: Vec<u8> = (0..40000u32)
+        .map(|i| (i ^ (i >> 8) ^ (i >> 16)) as u8)
+        .collect();
     let seed: Vec<u8> = (0..=255).collect();
     let mut rng = rns_crypto::FixedRng::new(&seed);
 
@@ -571,11 +573,16 @@ fn test_hmu_wait_timeout_boundary_in_real_flow() {
 
     // Prime the real timeout path once so the receiver computes the same EIFR
     // it will use for timeout decisions in this HMU-wait state.
-    let prime_actions =
-        receiver.tick(receiver.last_activity + 0.0001, &identity_decrypt, &NoopCompressor);
+    let prime_actions = receiver.tick(
+        receiver.last_activity + 0.0001,
+        &identity_decrypt,
+        &NoopCompressor,
+    );
     assert!(prime_actions.is_empty());
 
-    let eifr = receiver.eifr.expect("receiver should compute EIFR when ticking in HMU wait");
+    let eifr = receiver
+        .eifr
+        .expect("receiver should compute EIFR when ticking in HMU wait");
     let old_timeout = receiver.last_activity
         + RESOURCE_PART_TIMEOUT_FACTOR_AFTER_RTT * ((3.0 * RESOURCE_SDU as f64 * 8.0) / eifr)
         + RESOURCE_RETRY_GRACE_TIME;
@@ -593,10 +600,14 @@ fn test_hmu_wait_timeout_boundary_in_real_flow() {
     assert!(receiver.waiting_for_hmu);
 
     // Once the extension is exceeded, retry logic should kick in.
-    let actions_after_extension =
-        receiver.tick(guaranteed_timeout + 0.01, &identity_decrypt, &NoopCompressor);
+    let actions_after_extension = receiver.tick(
+        guaranteed_timeout + 0.01,
+        &identity_decrypt,
+        &NoopCompressor,
+    );
     assert_eq!(receiver.retries_left, retries_before - 1);
-    let retry_request = request_data_from(&actions_after_extension).expect("expected retry request");
+    let retry_request =
+        request_data_from(&actions_after_extension).expect("expected retry request");
     assert_eq!(retry_request[0], RESOURCE_HASHMAP_IS_EXHAUSTED);
 }
 

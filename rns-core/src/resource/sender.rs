@@ -124,18 +124,17 @@ impl ResourceSender {
         let data_size = uncompressed_data.len();
 
         // Try compression
-        let (working_data, compressed) = if auto_compress
-            && uncompressed_data.len() <= RESOURCE_AUTO_COMPRESS_MAX_SIZE
-        {
-            match compressor.compress(&uncompressed_data) {
-                Some(compressed_data) if compressed_data.len() < uncompressed_data.len() => {
-                    (compressed_data, true)
+        let (working_data, compressed) =
+            if auto_compress && uncompressed_data.len() <= RESOURCE_AUTO_COMPRESS_MAX_SIZE {
+                match compressor.compress(&uncompressed_data) {
+                    Some(compressed_data) if compressed_data.len() < uncompressed_data.len() => {
+                        (compressed_data, true)
+                    }
+                    _ => (uncompressed_data.clone(), false),
                 }
-                _ => (uncompressed_data.clone(), false),
-            }
-        } else {
-            (uncompressed_data.clone(), false)
-        };
+            } else {
+                (uncompressed_data.clone(), false)
+            };
 
         // Prepend random hash (4 bytes)
         let random_prefix: [u8; RESOURCE_RANDOM_HASH_SIZE] = {

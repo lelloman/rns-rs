@@ -549,12 +549,12 @@ impl ResourceReceiver {
             let eifr = self.compute_eifr();
             let retries_used = self.max_retries - self.retries_left;
             let extra_wait = retries_used as f64 * RESOURCE_PER_RETRY_DELAY;
-            let expected_hmu_wait = if eifr > 0.0 && (self.waiting_for_hmu || self.outstanding_parts == 0)
-            {
-                (self.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
-            } else {
-                0.0
-            };
+            let expected_hmu_wait =
+                if eifr > 0.0 && (self.waiting_for_hmu || self.outstanding_parts == 0) {
+                    (self.sdu as f64 * 8.0 * RESOURCE_HMU_WAIT_FACTOR) / eifr
+                } else {
+                    0.0
+                };
             let expected_tof = if self.outstanding_parts > 0 && eifr > 0.0 {
                 (self.outstanding_parts as f64 * self.sdu as f64 * 8.0) / eifr
             } else if eifr > 0.0 {
@@ -710,7 +710,10 @@ mod tests {
         assert_eq!(receiver.transfer_size, sender.transfer_size as u64);
         assert_eq!(receiver.resource_hash, sender.resource_hash.to_vec());
         assert!(!receiver.advertisement_packet.is_empty());
-        assert_eq!(receiver.max_decompressed_size, RESOURCE_AUTO_COMPRESS_MAX_SIZE);
+        assert_eq!(
+            receiver.max_decompressed_size,
+            RESOURCE_AUTO_COMPRESS_MAX_SIZE
+        );
     }
 
     #[test]
