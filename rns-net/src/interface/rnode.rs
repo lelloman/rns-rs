@@ -272,7 +272,8 @@ pub fn start(
             queue: std::collections::VecDeque::new(),
         }));
         flow_states.push(flow_state.clone());
-        let sub_writer = make_sub_writer(shared_writer.clone(), i as u8, sub.flow_control, flow_state);
+        let sub_writer =
+            make_sub_writer(shared_writer.clone(), i as u8, sub.flow_control, flow_state);
         writers.push((sub_id, sub_writer));
     }
 
@@ -981,12 +982,34 @@ mod tests {
         // Write detect response to master
         mock_respond_detect(&mut master);
 
-        // Read from slave with RNode decoder
-        assert!(poll_read(slave.as_raw_fd(), 2000));
         let mut decoder = rnode_kiss::RNodeDecoder::new();
-        let mut buf = [0u8; 4096];
-        let n = slave.read(&mut buf).unwrap();
-        let events = decoder.feed(&buf[..n]);
+        let mut events = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+            if !poll_read(slave.as_raw_fd(), timeout_ms) {
+                break;
+            }
+
+            let chunk = read_available(&mut slave);
+            if chunk.is_empty() {
+                continue;
+            }
+
+            events.extend(decoder.feed(&chunk));
+
+            let saw_detect = events
+                .iter()
+                .any(|e| matches!(e, rnode_kiss::RNodeEvent::Detected(true)));
+            let saw_firmware = events
+                .iter()
+                .any(|e| matches!(e, rnode_kiss::RNodeEvent::FirmwareVersion { .. }));
+            if saw_detect && saw_firmware {
+                break;
+            }
+        }
 
         assert!(
             events
@@ -1301,7 +1324,10 @@ mod tests {
         let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
             matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
         });
-        assert!(matches!(up, Event::InterfaceUp(InterfaceId(41), None, None)));
+        assert!(matches!(
+            up,
+            Event::InterfaceUp(InterfaceId(41), None, None)
+        ));
 
         drop(master1);
         drop(slave1);
@@ -1324,6 +1350,9 @@ mod tests {
         let up = wait_for_interface_event(&rx, Duration::from_secs(4), |event| {
             matches!(event, Event::InterfaceUp(InterfaceId(41), _, _))
         });
-        assert!(matches!(up, Event::InterfaceUp(InterfaceId(41), Some(_), None)));
+        assert!(matches!(
+            up,
+            Event::InterfaceUp(InterfaceId(41), Some(_), None)
+        ));
     }
 }
