@@ -22,7 +22,7 @@ use std::time::Duration;
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 
 // ── Constants (matching Python AutoInterface) ──────────────────────────────
 
@@ -416,7 +416,7 @@ pub fn start(
     let ingress_control = config.ingress_control;
     {
         let startup = AutoRuntime::from_config(&config);
-        *config.runtime.lock().unwrap() = startup;
+        *lock_or_recover(&config.runtime, "auto runtime") = startup;
     }
     let runtime = Arc::clone(&config.runtime);
 
@@ -425,7 +425,7 @@ pub fn start(
 
     // Record our own link-local addresses
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = lock_or_recover(&shared, "auto shared state");
         for iface in &interfaces {
             state
                 .link_local_addresses
@@ -566,13 +566,13 @@ pub fn start(
     }
 
     // Wait for initial peering
-    let announce_interval = runtime.lock().unwrap().announce_interval_secs;
+    let announce_interval = lock_or_recover(&runtime, "auto runtime").announce_interval_secs;
     let peering_wait = Duration::from_secs_f64(announce_interval * 1.2);
     thread::sleep(peering_wait);
 
     // Mark as online
     {
-        let mut state = shared.lock().unwrap();
+        let mut state = lock_or_recover(&shared, "auto shared state");
         state.online = true;
     }
 
@@ -695,8 +695,11 @@ fn discovery_sender_loop(
             }
         }
 
-        let sleep_dur =
-            Duration::from_secs_f64(runtime.lock().unwrap().announce_interval_secs.max(0.1));
+        let sleep_dur = Duration::from_secs_f64(
+            lock_or_recover(&runtime, "auto runtime")
+                .announce_interval_secs
+                .max(0.1),
+        );
         thread::sleep(sleep_dur);
     }
 }
@@ -739,7 +742,7 @@ fn discovery_receiver_loop(
                 }
 
                 // Check if online
-                let state = shared.lock().unwrap();
+                let state = lock_or_recover(&shared, "auto shared state");
                 if !state.online {
                     // Not fully initialized yet, but still accept for initial peering
                     // (Python processes after final_init_done)
@@ -756,7 +759,7 @@ fn discovery_receiver_loop(
                 if state.peers.contains_key(&src_ip) {
                     let now = crate::time::now();
                     drop(state);
-                    let mut state = shared.lock().unwrap();
+                    let mut state = lock_or_recover(&shared, "auto shared state");
                     state.refresh_peer(&src_ip, now);
                     continue;
                 }
@@ -823,7 +826,7 @@ fn add_peer(
 
     let target = SocketAddrV6::new(peer_ip, data_port, 0, 0);
 
-    let mut state = shared.lock().unwrap();
+    let mut state = lock_or_recover(shared, "auto shared state");
 
     // Double-check not already added (race)
     if state.peers.contains_key(peer_addr) {
@@ -912,7 +915,7 @@ fn data_receiver_loop(
                 let now = crate::time::now();
                 let data_hash = rns_crypto::sha256::sha256(data);
 
-                let mut state = shared.lock().unwrap();
+                let mut state = lock_or_recover(&shared, "auto shared state");
 
                 if !state.online {
                     continue;
@@ -973,16 +976,19 @@ fn peer_jobs_loop(
     name: &str,
 ) {
     while running.load(Ordering::Relaxed) {
-        let interval =
-            Duration::from_secs_f64(runtime.lock().unwrap().peer_job_interval_secs.max(0.1));
+        let interval = Duration::from_secs_f64(
+            lock_or_recover(&runtime, "auto runtime")
+                .peer_job_interval_secs
+                .max(0.1),
+        );
         thread::sleep(interval);
 
         let now = crate::time::now();
         let mut timed_out = Vec::new();
-        let peer_timeout_secs = runtime.lock().unwrap().peer_timeout_secs;
+        let peer_timeout_secs = lock_or_recover(&runtime, "auto runtime").peer_timeout_secs;
 
         {
-            let state = shared.lock().unwrap();
+            let state = lock_or_recover(&shared, "auto shared state");
             for (addr, peer) in &state.peers {
                 if now > peer.last_heard + peer_timeout_secs {
                     timed_out.push((addr.clone(), peer.interface_id));
@@ -992,7 +998,7 @@ fn peer_jobs_loop(
 
         for (addr, iface_id) in &timed_out {
             log::info!("[{}] Peer timed out: {}", name, addr);
-            let mut state = shared.lock().unwrap();
+            let mut state = lock_or_recover(&shared, "auto shared state");
             state.peers.remove(addr.as_str());
             let _ = tx.send(Event::InterfaceDown(*iface_id));
         }

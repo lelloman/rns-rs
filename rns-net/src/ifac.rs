@@ -31,7 +31,11 @@ pub struct IfacState {
 /// ifac_key = hkdf(length=64, derive_from=ifac_origin_hash, salt=IFAC_SALT)
 /// ifac_identity = Identity.from_bytes(ifac_key)
 /// ```
-pub fn derive_ifac(netname: Option<&str>, netkey: Option<&str>, size: usize) -> IfacState {
+pub fn derive_ifac(
+    netname: Option<&str>,
+    netkey: Option<&str>,
+    size: usize,
+) -> Result<IfacState, String> {
     let mut ifac_origin = Vec::new();
 
     if let Some(name) = netname {
@@ -46,18 +50,18 @@ pub fn derive_ifac(netname: Option<&str>, netkey: Option<&str>, size: usize) -> 
 
     let ifac_origin_hash = sha256::sha256(&ifac_origin);
     let ifac_key_vec = hkdf::hkdf(64, &ifac_origin_hash, Some(&IFAC_SALT), None)
-        .expect("HKDF should not fail with valid inputs");
+        .map_err(|err| format!("failed to derive IFAC key: {}", err))?;
 
     let mut ifac_key = [0u8; 64];
     ifac_key.copy_from_slice(&ifac_key_vec);
 
     let identity = Identity::from_private_key(&ifac_key);
 
-    IfacState {
+    Ok(IfacState {
         size: size.max(IFAC_MIN_SIZE),
         key: ifac_key,
         identity,
-    }
+    })
 }
 
 /// Mask an outbound packet. Returns new packet with IFAC inserted and masked.
@@ -73,15 +77,23 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
     }
 
     // Calculate IFAC: last `size` bytes of the Ed25519 signature
-    let sig = state
-        .identity
-        .sign(raw)
-        .expect("IFAC identity must have private key");
+    let sig = match state.identity.sign(raw) {
+        Ok(sig) => sig,
+        Err(err) => {
+            log::warn!("failed to sign outbound IFAC packet: {}", err);
+            return raw.to_vec();
+        }
+    };
     let ifac = &sig[64 - state.size..];
 
     // Generate mask
-    let mask = hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None)
-        .expect("HKDF should not fail");
+    let mask = match hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None) {
+        Ok(mask) => mask,
+        Err(err) => {
+            log::warn!("failed to derive outbound IFAC mask: {}", err);
+            return raw.to_vec();
+        }
+    };
 
     // Build new_raw: [flags|0x80, hops] + ifac + raw[2..]
     let mut new_raw = Vec::with_capacity(raw.len() + state.size);
@@ -126,7 +138,13 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     let ifac = &raw[2..2 + state.size];
 
     // Generate mask
-    let mask = hkdf::hkdf(raw.len(), ifac, Some(&state.key), None).expect("HKDF should not fail");
+    let mask = match hkdf::hkdf(raw.len(), ifac, Some(&state.key), None) {
+        Ok(mask) => mask,
+        Err(err) => {
+            log::warn!("failed to derive inbound IFAC mask: {}", err);
+            return None;
+        }
+    };
 
     // Unmask: header bytes and payload are unmasked, IFAC is left as-is
     let mut unmasked = Vec::with_capacity(raw.len());
@@ -151,10 +169,13 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     new_raw.extend_from_slice(&unmasked[2 + state.size..]);
 
     // Verify IFAC: expected = identity.sign(new_raw)[-ifac_size:]
-    let expected_sig = state
-        .identity
-        .sign(&new_raw)
-        .expect("IFAC identity must have private key");
+    let expected_sig = match state.identity.sign(&new_raw) {
+        Ok(sig) => sig,
+        Err(err) => {
+            log::warn!("failed to verify inbound IFAC packet: {}", err);
+            return None;
+        }
+    };
     let expected_ifac = &expected_sig[64 - state.size..];
 
     if ifac == expected_ifac {
@@ -170,7 +191,7 @@ mod tests {
 
     #[test]
     fn derive_ifac_netname_only() {
-        let state = derive_ifac(Some("testnet"), None, 8);
+        let state = derive_ifac(Some("testnet"), None, 8).unwrap();
         assert_eq!(state.size, 8);
         assert_eq!(state.key.len(), 64);
         // Identity should be constructable
@@ -179,23 +200,23 @@ mod tests {
 
     #[test]
     fn derive_ifac_netkey_only() {
-        let state = derive_ifac(None, Some("secretpassword"), 16);
+        let state = derive_ifac(None, Some("secretpassword"), 16).unwrap();
         assert_eq!(state.size, 16);
         assert!(state.identity.get_private_key().is_some());
     }
 
     #[test]
     fn derive_ifac_both() {
-        let state = derive_ifac(Some("testnet"), Some("mypassword"), 8);
+        let state = derive_ifac(Some("testnet"), Some("mypassword"), 8).unwrap();
         assert_eq!(state.size, 8);
         // Verify deterministic: same inputs → same key
-        let state2 = derive_ifac(Some("testnet"), Some("mypassword"), 8);
+        let state2 = derive_ifac(Some("testnet"), Some("mypassword"), 8).unwrap();
         assert_eq!(state.key, state2.key);
     }
 
     #[test]
     fn mask_unmask_roundtrip() {
-        let state = derive_ifac(Some("testnet"), Some("password"), 8);
+        let state = derive_ifac(Some("testnet"), Some("password"), 8).unwrap();
 
         // Create a fake packet (flags + hops + 32 bytes payload)
         let mut raw = vec![0x00, 0x01]; // flags=0, hops=1
@@ -211,7 +232,7 @@ mod tests {
 
     #[test]
     fn mask_sets_ifac_flag() {
-        let state = derive_ifac(Some("testnet"), None, 8);
+        let state = derive_ifac(Some("testnet"), None, 8).unwrap();
 
         let raw = vec![0x00, 0x01, 0x42, 0x43, 0x44, 0x45];
         let masked = mask_outbound(&raw, &state);
@@ -222,7 +243,7 @@ mod tests {
 
     #[test]
     fn unmask_rejects_bad_ifac() {
-        let state = derive_ifac(Some("testnet"), Some("password"), 8);
+        let state = derive_ifac(Some("testnet"), Some("password"), 8).unwrap();
 
         let mut raw = vec![0x00, 0x01];
         raw.extend_from_slice(&[0x42u8; 32]);
@@ -238,7 +259,7 @@ mod tests {
 
     #[test]
     fn unmask_rejects_missing_flag() {
-        let state = derive_ifac(Some("testnet"), None, 8);
+        let state = derive_ifac(Some("testnet"), None, 8).unwrap();
 
         // Packet without 0x80 flag
         let raw = vec![
@@ -250,7 +271,7 @@ mod tests {
 
     #[test]
     fn unmask_rejects_too_short() {
-        let state = derive_ifac(Some("testnet"), None, 8);
+        let state = derive_ifac(Some("testnet"), None, 8).unwrap();
 
         // Packet too short: only 2 + 7 bytes (need at least 2 + ifac_size + 1)
         let raw = vec![0x80, 0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48];

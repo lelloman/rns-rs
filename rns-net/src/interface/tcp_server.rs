@@ -15,7 +15,7 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::{ListenerControl, Writer};
+use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
 /// Configuration for a TCP server interface.
 #[derive(Debug, Clone)]
@@ -149,7 +149,7 @@ fn listener_loop(
             }
         };
 
-        let max_connections = runtime.lock().unwrap().max_connections;
+        let max_connections = lock_or_recover(&runtime, "tcp server runtime").max_connections;
         if let Some(max) = max_connections {
             if active_connections.load(Ordering::Relaxed) >= max {
                 let peer = stream.peer_addr().ok();

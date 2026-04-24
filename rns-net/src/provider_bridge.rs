@@ -11,6 +11,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::event::{ProviderBridgeConsumerStats, ProviderBridgeStats};
 
+fn lock_bridge_state<'a>(shared: &'a Arc<BridgeShared>) -> std::sync::MutexGuard<'a, BridgeState> {
+    match shared.state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned provider bridge state lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_consumer_state<'a>(
+    shared: &'a Arc<ConsumerShared>,
+) -> std::sync::MutexGuard<'a, ConsumerState> {
+    match shared.state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned provider bridge consumer state lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
     DropNewest,
@@ -188,7 +210,7 @@ impl ProviderBridge {
         payload: Vec<u8>,
     ) {
         let (encoded, consumers) = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = lock_bridge_state(&self.shared);
             let envelope = ProviderEnvelope {
                 version: 1,
                 seq: take_seq(&mut state),
@@ -228,12 +250,12 @@ impl ProviderBridge {
     }
 
     pub fn queue_max_events(&self) -> usize {
-        self.shared.state.lock().unwrap().queue_max_events
+        lock_bridge_state(&self.shared).queue_max_events
     }
 
     pub fn set_queue_max_events(&self, value: usize) {
         let consumers = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = lock_bridge_state(&self.shared);
             state.queue_max_events = value;
             state
                 .consumers
@@ -242,17 +264,17 @@ impl ProviderBridge {
                 .collect::<Vec<_>>()
         };
         for consumer in consumers {
-            consumer.state.lock().unwrap().queue_max_events = value;
+            lock_consumer_state(&consumer).queue_max_events = value;
         }
     }
 
     pub fn queue_max_bytes(&self) -> usize {
-        self.shared.state.lock().unwrap().queue_max_bytes
+        lock_bridge_state(&self.shared).queue_max_bytes
     }
 
     pub fn set_queue_max_bytes(&self, value: usize) {
         let consumers = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = lock_bridge_state(&self.shared);
             state.queue_max_bytes = value;
             state
                 .consumers
@@ -261,7 +283,7 @@ impl ProviderBridge {
                 .collect::<Vec<_>>()
         };
         for consumer in consumers {
-            consumer.state.lock().unwrap().queue_max_bytes = value;
+            lock_consumer_state(&consumer).queue_max_bytes = value;
         }
     }
 
@@ -278,7 +300,7 @@ impl ProviderBridge {
             total_disconnect_count,
             consumers,
         ) = {
-            let state = self.shared.state.lock().unwrap();
+            let state = lock_bridge_state(&self.shared);
             (
                 state.connected,
                 state.consumers.len(),
@@ -300,7 +322,7 @@ impl ProviderBridge {
         let consumers = consumers
             .into_iter()
             .map(|consumer| {
-                let state = consumer.state.lock().unwrap();
+                let state = lock_consumer_state(&consumer);
                 ProviderBridgeConsumerStats {
                     id: consumer.id,
                     connected: state.connected,
@@ -329,7 +351,7 @@ impl ProviderBridge {
     }
 
     pub fn stop_accepting(&self) {
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = lock_bridge_state(&self.shared);
         if !state.accepting {
             return;
         }
@@ -342,7 +364,7 @@ impl ProviderBridge {
 impl Drop for ProviderBridge {
     fn drop(&mut self) {
         {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = lock_bridge_state(&self.shared);
             state.shutdown = true;
             state.accepting = false;
             self.shared.condvar.notify_all();
@@ -352,11 +374,11 @@ impl Drop for ProviderBridge {
         }
 
         let handles = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = lock_bridge_state(&self.shared);
             let mut handles = Vec::new();
             for consumer in &mut state.consumers {
                 {
-                    let mut consumer_state = consumer.shared.state.lock().unwrap();
+                    let mut consumer_state = lock_consumer_state(&consumer.shared);
                     consumer_state.shutdown = true;
                     consumer.shared.condvar.notify_all();
                 }
@@ -380,15 +402,14 @@ impl Drop for ProviderBridge {
 fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
     loop {
         {
-            let state = shared.state.lock().unwrap();
+            let state = lock_bridge_state(&shared);
             if state.shutdown {
                 break;
             }
             if !state.accepting {
                 let _ = shared
                     .condvar
-                    .wait_timeout(state, Duration::from_millis(100))
-                    .unwrap();
+                    .wait_timeout(state, Duration::from_millis(100));
                 continue;
             }
         }
@@ -401,7 +422,7 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
                     }
 
                     let (consumer_shared, backlog_seed) = {
-                        let mut state = shared.state.lock().unwrap();
+                        let mut state = lock_bridge_state(&shared);
                         let consumer_id = state.next_consumer_id;
                         state.next_consumer_id += 1;
 
@@ -430,7 +451,7 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
                     };
 
                     if let Some((dropped_count, queued)) = backlog_seed {
-                        let mut consumer_state = consumer_shared.state.lock().unwrap();
+                        let mut consumer_state = lock_consumer_state(&consumer_shared);
                         consumer_state.dropped_count = dropped_count;
                         for frame in queued {
                             consumer_state.queued_bytes += frame.encoded.len();
@@ -441,7 +462,7 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
                     match spawn_consumer_thread(shared.clone(), consumer_shared.clone(), accepted) {
                         Ok(thread) => {
                             let total = {
-                                let mut state = shared.state.lock().unwrap();
+                                let mut state = lock_bridge_state(&shared);
                                 state.consumers.push(ConsumerEntry {
                                     shared: consumer_shared,
                                     thread: Some(thread),
@@ -470,14 +491,13 @@ fn provider_bridge_loop(listener: UnixListener, shared: Arc<BridgeShared>) {
 
         prune_disconnected_consumers(&shared);
 
-        let state = shared.state.lock().unwrap();
+        let state = lock_bridge_state(&shared);
         if state.shutdown {
             break;
         }
         let _ = shared
             .condvar
-            .wait_timeout(state, Duration::from_millis(100))
-            .unwrap();
+            .wait_timeout(state, Duration::from_millis(100));
     }
 
     prune_disconnected_consumers(&shared);
@@ -499,11 +519,11 @@ fn spawn_consumer_thread(
                             consumer_shared.id,
                             err
                         );
-                        let mut state = consumer_shared.state.lock().unwrap();
+                        let mut state = lock_consumer_state(&consumer_shared);
                         state.connected = false;
                         state.shutdown = true;
                         drop(state);
-                        let mut bridge_state = bridge_shared.state.lock().unwrap();
+                        let mut bridge_state = lock_bridge_state(&bridge_shared);
                         bridge_state.total_disconnect_count =
                             bridge_state.total_disconnect_count.saturating_add(1);
                         bridge_shared.condvar.notify_all();
@@ -511,14 +531,13 @@ fn spawn_consumer_thread(
                     }
                 }
                 None => {
-                    let state = consumer_shared.state.lock().unwrap();
+                    let state = lock_consumer_state(&consumer_shared);
                     if state.shutdown {
                         break;
                     }
                     let _ = consumer_shared
                         .condvar
-                        .wait_timeout(state, Duration::from_millis(100))
-                        .unwrap();
+                        .wait_timeout(state, Duration::from_millis(100));
                 }
             }
         })
@@ -530,7 +549,7 @@ fn next_consumer_frame(
     consumer_shared: &Arc<ConsumerShared>,
 ) -> Option<Vec<u8>> {
     let dropped_count = {
-        let mut state = consumer_shared.state.lock().unwrap();
+        let mut state = lock_consumer_state(consumer_shared);
         if state.dropped_count > 0 {
             let count = state.dropped_count;
             state.dropped_count = 0;
@@ -541,7 +560,7 @@ fn next_consumer_frame(
     };
 
     if let Some(count) = dropped_count {
-        let mut bridge_state = bridge_shared.state.lock().unwrap();
+        let mut bridge_state = lock_bridge_state(bridge_shared);
         let envelope = ProviderEnvelope {
             version: 1,
             seq: take_seq(&mut bridge_state),
@@ -556,7 +575,7 @@ fn next_consumer_frame(
         };
     }
 
-    let mut state = consumer_shared.state.lock().unwrap();
+    let mut state = lock_consumer_state(consumer_shared);
     let queued = state.queue.pop_front()?;
     state.queued_bytes = state.queued_bytes.saturating_sub(queued.encoded.len());
     Some(queued.encoded)
@@ -564,12 +583,12 @@ fn next_consumer_frame(
 
 fn prune_disconnected_consumers(shared: &Arc<BridgeShared>) {
     let removed = {
-        let mut state = shared.state.lock().unwrap();
+        let mut state = lock_bridge_state(shared);
         let mut idx = 0;
         let mut removed = Vec::new();
 
         while idx < state.consumers.len() {
-            let is_connected = state.consumers[idx].shared.state.lock().unwrap().connected;
+            let is_connected = lock_consumer_state(&state.consumers[idx].shared).connected;
             if is_connected {
                 idx += 1;
                 continue;
@@ -587,7 +606,7 @@ fn prune_disconnected_consumers(shared: &Arc<BridgeShared>) {
         }
         log::info!(
             "provider bridge consumer disconnected (remaining: {})",
-            shared.state.lock().unwrap().consumers.len()
+            lock_bridge_state(shared).consumers.len()
         );
     }
 }
@@ -610,7 +629,7 @@ fn enqueue_consumer_frame(
     consumer_shared: &Arc<ConsumerShared>,
     encoded: Vec<u8>,
 ) {
-    let mut state = consumer_shared.state.lock().unwrap();
+    let mut state = lock_consumer_state(consumer_shared);
     if !state.connected || state.shutdown {
         return;
     }

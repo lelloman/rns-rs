@@ -32,10 +32,9 @@ impl PacketHashlist {
         }
 
         if self.queue.len() == self.queue.capacity() {
-            let evicted = self
-                .queue
-                .pop_front()
-                .expect("full dedup queue must have an oldest entry to evict");
+            let Some(evicted) = self.queue.pop_front() else {
+                return;
+            };
             let removed = self.set.remove(&evicted);
             debug_assert!(removed, "evicted hash must exist in dedup set");
         }

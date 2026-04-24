@@ -44,7 +44,7 @@ pub fn expand_name(
         name.push('.');
         for b in hash {
             use core::fmt::Write;
-            write!(name, "{:02x}", b).unwrap();
+            let _ = write!(name, "{:02x}", b);
         }
     }
 

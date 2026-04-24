@@ -14,7 +14,7 @@ use std::time::Duration;
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 use crate::rnode_kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
@@ -200,17 +200,17 @@ impl Writer for RNodeSubWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let frame = rnode_kiss::rnode_data_frame(self.index, data);
         if self.flow_control {
-            let mut state = self.flow_state.lock().unwrap();
+            let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
             if state.ready {
                 state.ready = false;
                 drop(state);
-                self.writer.lock().unwrap().write_all(&frame)
+                lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
             } else {
                 state.queue.push_back(data.to_vec());
                 Ok(())
             }
         } else {
-            self.writer.lock().unwrap().write_all(&frame)
+            lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
         }
     }
 }
@@ -280,7 +280,7 @@ pub fn start(
     // Spawn reader thread
     let reader_shared_writer = shared_writer.clone();
     {
-        let mut runtime = config.runtime.lock().unwrap();
+        let mut runtime = lock_or_recover(&config.runtime, "rnode runtime");
         runtime.writer = Some(shared_writer.clone());
         runtime.sub = config
             .subinterfaces
@@ -312,7 +312,9 @@ pub fn start(
             let detect = rnode_kiss::detect_request();
             loop {
                 thread::sleep(Duration::from_secs(15));
-                if let Err(e) = keepalive_writer.lock().unwrap().write_all(&detect) {
+                if let Err(e) =
+                    lock_or_recover(&keepalive_writer, "rnode shared writer").write_all(&detect)
+                {
                     log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
                 }
             }
@@ -440,7 +442,7 @@ fn detect_and_configure(
     ));
     cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_MCU, &[0x00]));
 
-    writer.lock().unwrap().write_all(&cmd)?;
+    lock_or_recover(writer, "rnode shared writer").write_all(&cmd)?;
 
     let mut decoder = rnode_kiss::RNodeDecoder::new();
     let mut buf = [0u8; 4096];
@@ -538,7 +540,7 @@ fn signal_interface_up(
 
 fn reset_flow_states(flow_states: &[Arc<Mutex<SubFlowState>>]) {
     for flow_state in flow_states {
-        let mut state = flow_state.lock().unwrap();
+        let mut state = lock_or_recover(flow_state, "rnode flow state");
         state.ready = true;
         state.queue.clear();
     }
@@ -558,7 +560,7 @@ fn reopen_connection(
     let port = SerialPort::open(&serial_config)?;
     let reader = port.reader()?;
     let new_writer = port.writer()?;
-    *writer.lock().unwrap() = new_writer;
+    *lock_or_recover(writer, "rnode shared writer") = new_writer;
     Ok(reader)
 }
 
@@ -569,7 +571,7 @@ pub(crate) fn configure_subinterface(
     sub: &RNodeSubConfig,
     multi: bool,
 ) -> io::Result<()> {
-    let mut w = writer.lock().unwrap();
+    let mut w = lock_or_recover(writer, "rnode shared writer");
 
     // For multi-radio, send select command before each parameter
     let freq_bytes = [
@@ -693,12 +695,12 @@ fn process_flow_queue(
     writer: &Arc<Mutex<std::fs::File>>,
     index: u8,
 ) {
-    let mut state = flow_state.lock().unwrap();
+    let mut state = lock_or_recover(flow_state, "rnode flow state");
     if let Some(data) = state.queue.pop_front() {
         state.ready = false;
         drop(state);
         let frame = rnode_kiss::rnode_data_frame(index, &data);
-        let _ = writer.lock().unwrap().write_all(&frame);
+        let _ = lock_or_recover(writer, "rnode shared writer").write_all(&frame);
     } else {
         state.ready = true;
     }

@@ -27,8 +27,9 @@ pub fn stamp_workblock(material: &[u8], expand_rounds: u32) -> Vec<u8> {
         salt_input.extend_from_slice(&packed_n);
         let salt = sha256(&salt_input);
 
-        let expanded =
-            hkdf(256, material, Some(&salt), None).expect("HKDF expansion should not fail");
+        let Ok(expanded) = hkdf(256, material, Some(&salt), None) else {
+            break;
+        };
         workblock.extend_from_slice(&expanded);
     }
     workblock

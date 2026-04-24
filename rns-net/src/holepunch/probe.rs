@@ -134,9 +134,9 @@ pub fn probe_endpoint(
         Some(s) => s,
         None => {
             let bind_addr: SocketAddr = if probe_server.is_ipv4() {
-                "0.0.0.0:0".parse().unwrap()
+                SocketAddr::from(([0, 0, 0, 0], 0))
             } else {
-                "[::]:0".parse().unwrap()
+                SocketAddr::from(([0u16; 8], 0))
             };
             let sock = UdpSocket::bind(bind_addr)?;
             #[cfg(target_os = "linux")]
@@ -218,9 +218,9 @@ pub fn stun_probe_endpoint(
         Some(s) => s,
         None => {
             let bind_addr: SocketAddr = if stun_server.is_ipv4() {
-                "0.0.0.0:0".parse().unwrap()
+                SocketAddr::from(([0, 0, 0, 0], 0))
             } else {
-                "[::]:0".parse().unwrap()
+                SocketAddr::from(([0u16; 8], 0))
             };
             let sock = UdpSocket::bind(bind_addr)?;
             #[cfg(target_os = "linux")]

@@ -133,7 +133,7 @@ pub fn main_entry_from(args: Args) {
             signal_handler as *const () as libc::sighandler_t,
         );
     }
-    STOP_TX.lock().unwrap().replace(stop_tx);
+    lock_stop_tx().replace(stop_tx);
 
     log::info!("rnsd started");
 
@@ -156,11 +156,20 @@ fn hex(bytes: &[u8]) -> String {
 
 static STOP_TX: std::sync::Mutex<Option<mpsc::Sender<()>>> = std::sync::Mutex::new(None);
 
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    if let Ok(guard) = STOP_TX.lock() {
-        if let Some(ref tx) = *guard {
-            let _ = tx.send(());
+fn lock_stop_tx() -> std::sync::MutexGuard<'static, Option<mpsc::Sender<()>>> {
+    match STOP_TX.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("recovering poisoned rnsd stop channel mutex");
+            poisoned.into_inner()
         }
+    }
+}
+
+extern "C" fn signal_handler(_sig: libc::c_int) {
+    let guard = lock_stop_tx();
+    if let Some(ref tx) = *guard {
+        let _ = tx.send(());
     }
 }
 

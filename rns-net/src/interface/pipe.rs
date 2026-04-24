@@ -16,7 +16,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 
 /// Configuration for a pipe interface.
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>>
     let id = config.interface_id;
     {
         let startup = PipeRuntime::from_config(&config);
-        *config.runtime.lock().unwrap() = startup;
+        *lock_or_recover(&config.runtime, "pipe runtime") = startup;
     }
 
     let mut child = spawn_child(&config.command)?;
@@ -192,7 +192,8 @@ fn respawn(
     tx: &EventSender,
 ) -> Option<(std::process::ChildStdout, std::process::Child)> {
     loop {
-        thread::sleep(config.runtime.lock().unwrap().respawn_delay);
+        let respawn_delay = lock_or_recover(&config.runtime, "pipe runtime").respawn_delay;
+        thread::sleep(respawn_delay);
         log::info!(
             "[{}] attempting to respawn subprocess: {}",
             config.name,

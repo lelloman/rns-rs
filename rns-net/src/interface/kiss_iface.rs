@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
@@ -75,7 +75,7 @@ struct KissWriter {
 impl Writer for KissWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         if self.flow_control {
-            let mut state = self.flow_state.lock().unwrap();
+            let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
             if state.ready {
                 state.ready = false;
                 state.lock_time = Instant::now();
@@ -240,7 +240,7 @@ fn reader_loop(
 
         // Flow control timeout check
         if config.flow_control {
-            let state = flow_state.lock().unwrap();
+            let state = lock_or_recover(&flow_state, "kiss flow state");
             if !state.ready && state.lock_time.elapsed() > Duration::from_secs(5) {
                 drop(state);
                 log::warn!("[{}] unlocking flow control due to timeout", config.name);
@@ -275,7 +275,7 @@ fn process_queue(
     first_tx: &mut Option<Instant>,
     _config: &KissIfaceConfig,
 ) {
-    let mut state = flow_state.lock().unwrap();
+    let mut state = lock_or_recover(flow_state, "kiss flow state");
     if let Some(data) = state.queue.pop_front() {
         state.ready = false;
         state.lock_time = Instant::now();
@@ -322,7 +322,7 @@ fn reconnect(
                             continue;
                         }
                         // Reset flow state
-                        let mut state = flow_state.lock().unwrap();
+                        let mut state = lock_or_recover(flow_state, "kiss flow state");
                         state.ready = true;
                         state.queue.clear();
                         drop(state);

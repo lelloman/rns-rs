@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -72,6 +72,16 @@ pub trait Writer: Send {
 }
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
+
+pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("recovering poisoned mutex: {}", label);
+            poisoned.into_inner()
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct ListenerControl {
@@ -159,10 +169,20 @@ pub fn wrap_async_writer(
     let metrics_thread = metrics.clone();
     let name = interface_name.to_string();
 
-    thread::Builder::new()
+    let spawn_result = thread::Builder::new()
         .name(format!("iface-writer-{}", interface_id.0))
-        .spawn(move || async_writer_loop(writer, rx, interface_id, name, event_tx, metrics_thread))
-        .expect("failed to spawn interface writer thread");
+        .spawn(move || async_writer_loop(writer, rx, interface_id, name, event_tx, metrics_thread));
+
+    if let Err(err) = spawn_result {
+        metrics.worker_alive.store(false, Ordering::Relaxed);
+        log::error!(
+            "[{}:{}] failed to spawn async writer thread: {}",
+            interface_name,
+            interface_id.0,
+            err
+        );
+        return (Box::new(DirectWriterFallback), metrics);
+    }
 
     (
         Box::new(AsyncWriter {
@@ -171,6 +191,14 @@ pub fn wrap_async_writer(
         }),
         metrics,
     )
+}
+
+struct DirectWriterFallback;
+
+impl Writer for DirectWriterFallback {
+    fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+        Err(io::Error::other("interface writer worker unavailable"))
+    }
 }
 
 fn async_writer_loop(

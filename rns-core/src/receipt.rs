@@ -26,21 +26,22 @@ pub fn validate_proof(proof: &[u8], packet_hash: &[u8; 32], identity: &Identity)
             return ProofResult::InvalidHash;
         }
 
-        let signature: &[u8; 64] = proof
-            [constants::HASHLENGTH / 8..constants::HASHLENGTH / 8 + constants::SIGLENGTH / 8]
-            .try_into()
-            .unwrap();
+        let mut signature = [0u8; 64];
+        signature.copy_from_slice(
+            &proof[constants::HASHLENGTH / 8..constants::HASHLENGTH / 8 + constants::SIGLENGTH / 8],
+        );
 
-        if identity.verify(signature, packet_hash) {
+        if identity.verify(&signature, packet_hash) {
             ProofResult::Valid
         } else {
             ProofResult::InvalidSignature
         }
     } else if proof.len() == constants::IMPL_LENGTH {
         // Implicit proof: [signature:64]
-        let signature: &[u8; 64] = proof[..constants::SIGLENGTH / 8].try_into().unwrap();
+        let mut signature = [0u8; 64];
+        signature.copy_from_slice(&proof[..constants::SIGLENGTH / 8]);
 
-        if identity.verify(signature, packet_hash) {
+        if identity.verify(&signature, packet_hash) {
             ProofResult::Valid
         } else {
             ProofResult::InvalidSignature

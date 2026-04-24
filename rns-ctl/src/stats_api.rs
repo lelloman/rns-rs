@@ -902,7 +902,10 @@ fn parse_duration_seconds(raw: &str) -> Result<i64, String> {
         }
         return Ok(seconds);
     }
-    let (digits, multiplier) = match raw.chars().last().unwrap() {
+    let Some(last) = raw.chars().last() else {
+        return Err("duration cannot be empty".into());
+    };
+    let (digits, multiplier) = match last {
         's' => (&raw[..raw.len() - 1], 1),
         'm' => (&raw[..raw.len() - 1], 60),
         'h' => (&raw[..raw.len() - 1], 60 * 60),

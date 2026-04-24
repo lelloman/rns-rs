@@ -674,7 +674,10 @@ impl PeerTracker {
     }
 
     fn apply_blacklist(&mut self, peer_key: &(u64, IpAddr), reason: &str) -> BlacklistAction {
-        let record = self.peers.get_mut(peer_key).unwrap();
+        let record = self
+            .peers
+            .entry(*peer_key)
+            .or_insert_with(|| PeerRecord::new(peer_key.0, String::new()));
         record.blacklist_level = record.blacklist_level.saturating_add(1);
         let multiplier = 1u64 << (record.blacklist_level - 1).min(20);
         let duration_secs = self.policy.base_blacklist_secs.saturating_mul(multiplier);

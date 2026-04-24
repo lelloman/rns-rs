@@ -13,7 +13,7 @@ use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 
 /// Configuration for a TCP client interface.
 #[derive(Debug, Clone)]
@@ -184,7 +184,7 @@ fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
 
 /// Try to connect to the target host:port with timeout.
 fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
-    let runtime = config.runtime.lock().unwrap().clone();
+    let runtime = lock_or_recover(&config.runtime, "tcp client runtime").clone();
     let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
         .to_socket_addrs()?
@@ -412,7 +412,7 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
 fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
-        let runtime = config.runtime.lock().unwrap().clone();
+        let runtime = lock_or_recover(&config.runtime, "tcp client runtime").clone();
         thread::sleep(runtime.reconnect_wait);
         attempts += 1;
 

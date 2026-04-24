@@ -1,6 +1,7 @@
 //! Driver loop: receives events, drives the TransportEngine, dispatches actions.
 
 use std::collections::HashMap;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1351,7 +1352,12 @@ impl Driver {
                             );
                         }
                     },
-                    _ => unreachable!(),
+                    other => {
+                        log::warn!(
+                            "shared announce replay returned unexpected response: {:?}",
+                            other
+                        );
+                    }
                 }
             }
         }
@@ -1518,11 +1524,14 @@ impl Driver {
         };
         let (writer, async_writer_metrics) = self.wrap_interface_writer(id, &name, writer);
         let ifac_state = if ifac_enabled {
-            Some(ifac::derive_ifac(
-                ifac_runtime.netname.as_deref(),
-                ifac_runtime.netkey.as_deref(),
-                ifac_runtime.size,
-            ))
+            Some(
+                ifac::derive_ifac(
+                    ifac_runtime.netname.as_deref(),
+                    ifac_runtime.netkey.as_deref(),
+                    ifac_runtime.size,
+                )
+                .map_err(io::Error::other)?,
+            )
         } else {
             None
         };
@@ -3766,11 +3775,21 @@ impl Driver {
 
     fn apply_interface_ifac_runtime(entry: &mut InterfaceEntry, config: &IfacRuntimeConfig) {
         entry.ifac = if config.netname.is_some() || config.netkey.is_some() {
-            Some(ifac::derive_ifac(
+            match ifac::derive_ifac(
                 config.netname.as_deref(),
                 config.netkey.as_deref(),
                 config.size,
-            ))
+            ) {
+                Ok(state) => Some(state),
+                Err(err) => {
+                    log::warn!(
+                        "failed to apply IFAC runtime for {}: {}",
+                        entry.info.name,
+                        err
+                    );
+                    None
+                }
+            }
         } else {
             None
         };

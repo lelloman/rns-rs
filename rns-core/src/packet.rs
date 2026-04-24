@@ -122,8 +122,10 @@ impl RawPacket {
         raw.push(flags.pack());
         raw.push(hops);
 
-        if flags.header_type == constants::HEADER_2 {
-            raw.extend_from_slice(transport_id.unwrap());
+        if let Some(transport_id) = transport_id {
+            if flags.header_type == constants::HEADER_2 {
+                raw.extend_from_slice(transport_id);
+            }
         }
 
         raw.extend_from_slice(destination_hash);

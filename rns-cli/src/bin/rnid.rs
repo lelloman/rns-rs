@@ -66,9 +66,10 @@ fn generate_identity(file: &str, args: &Args) {
     }
 
     let identity = Identity::new(&mut OsRng);
-    let prv_key = identity
-        .get_private_key()
-        .expect("generated identity has private key");
+    let Some(prv_key) = identity.get_private_key() else {
+        eprintln!("Generated identity is missing a private key");
+        process::exit(1);
+    };
 
     fs::write(path, &prv_key).unwrap_or_else(|e| {
         eprintln!("Error writing identity: {}", e);

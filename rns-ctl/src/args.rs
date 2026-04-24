@@ -79,8 +79,11 @@ impl Args {
                                     .map(|s| !s.starts_with('-') || s == "-")
                                     .unwrap_or(false);
                                 if next_is_value {
-                                    let val = iter.next().unwrap();
-                                    flags.insert(c.to_string(), val);
+                                    if let Some(val) = iter.next() {
+                                        flags.insert(c.to_string(), val);
+                                    } else {
+                                        flags.insert(c.to_string(), "true".into());
+                                    }
                                 } else {
                                     flags.insert(c.to_string(), "true".into());
                                 }

@@ -26,7 +26,9 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
+use crate::interface::{
+    lock_or_recover, InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer,
+};
 use crate::BackbonePeerStateEntry;
 
 /// HW_MTU: 1 MB (matches Python BackboneInterface.HW_MTU)
@@ -134,7 +136,8 @@ struct BackboneWriter {
 
 impl Writer for BackboneWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let write_stall_timeout = self.runtime.lock().unwrap().write_stall_timeout;
+        let write_stall_timeout =
+            lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
         if !self.pending.is_empty() {
             self.flush_pending(write_stall_timeout)?;
             if !self.pending.is_empty() {
@@ -236,7 +239,9 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     log::info!(
         "[{}] backbone server listening on {}",
         config.name,
-        listener.local_addr().unwrap_or(addr.parse().unwrap())
+        listener
+            .local_addr()
+            .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], config.listen_port)))
     );
 
     let name = config.name.clone();

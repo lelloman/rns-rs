@@ -75,7 +75,9 @@ impl AnnounceRateLimiter {
             return false;
         }
 
-        let entry = self.table.get_mut(dest_hash).unwrap();
+        let Some(entry) = self.table.get_mut(dest_hash) else {
+            return false;
+        };
 
         entry.timestamps.push(now);
         while entry.timestamps.len() > constants::MAX_RATE_TIMESTAMPS {

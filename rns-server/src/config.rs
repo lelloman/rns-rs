@@ -596,7 +596,7 @@ impl ServerConfig {
             },
             rnsd_rpc_addr: format!("127.0.0.1:{rpc_port}")
                 .parse()
-                .unwrap_or_else(|_| "127.0.0.1:37429".parse().unwrap()),
+                .unwrap_or(std::net::SocketAddr::from(([127, 0, 0, 1], 37429))),
         }
     }
 

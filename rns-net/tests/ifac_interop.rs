@@ -46,7 +46,7 @@ fn ifac_interop_python_vectors() {
         let expected_key = hex_to_bytes(v["ifac_key"].as_str().unwrap());
 
         // 1. Derive IFAC state — verify key matches Python
-        let state = rns_net::ifac::derive_ifac(netname, netkey, ifac_size);
+        let state = rns_net::ifac::derive_ifac(netname, netkey, ifac_size).unwrap();
         assert_eq!(
             state.key.to_vec(),
             expected_key,

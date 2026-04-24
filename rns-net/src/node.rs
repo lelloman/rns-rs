@@ -1106,17 +1106,23 @@ impl RnsNode {
                 }
             };
 
-            let mut ifac_state = iface_config.ifac.as_ref().and_then(|ic| {
+            let mut ifac_state = if let Some(ic) = iface_config.ifac.as_ref() {
                 if ic.netname.is_some() || ic.netkey.is_some() {
-                    Some(ifac::derive_ifac(
-                        ic.netname.as_deref(),
-                        ic.netkey.as_deref(),
-                        ic.size,
-                    ))
+                    Some(
+                        ifac::derive_ifac(ic.netname.as_deref(), ic.netkey.as_deref(), ic.size)
+                            .map_err(|err| {
+                                std::io::Error::other(format!(
+                                    "failed to derive IFAC for {}: {}",
+                                    iface_config.name, err
+                                ))
+                            })?,
+                    )
                 } else {
                     None
                 }
-            });
+            } else {
+                None
+            };
             let ifac_runtime = crate::driver::IfacRuntimeConfig {
                 netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
                 netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
@@ -1257,11 +1263,19 @@ impl RnsNode {
                             first = false;
                             ifac_state.take()
                         } else if let Some(ref ic) = ifac_cfg {
-                            Some(ifac::derive_ifac(
-                                ic.netname.as_deref(),
-                                ic.netkey.as_deref(),
-                                ic.size,
-                            ))
+                            Some(
+                                ifac::derive_ifac(
+                                    ic.netname.as_deref(),
+                                    ic.netkey.as_deref(),
+                                    ic.size,
+                                )
+                                .map_err(|err| {
+                                    std::io::Error::other(format!(
+                                        "failed to derive IFAC for subinterface {}: {}",
+                                        sub.info.name, err
+                                    ))
+                                })?,
+                            )
                         } else {
                             None
                         };

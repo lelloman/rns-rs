@@ -11,7 +11,7 @@ use std::thread;
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 
 /// Configuration for a UDP interface.
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ struct UdpWriter {
 
 impl Writer for UdpWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let runtime = self.runtime.lock().unwrap().clone();
+        let runtime = lock_or_recover(&self.runtime, "udp runtime").clone();
         let target = match (runtime.forward_ip, runtime.forward_port) {
             (Some(ip), Some(port)) => format!("{}:{}", ip, port)
                 .parse::<SocketAddr>()
@@ -98,7 +98,7 @@ pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Wr
     let id = config.interface_id;
     {
         let startup = UdpRuntime::from_config(&config);
-        *config.runtime.lock().unwrap() = startup;
+        *lock_or_recover(&config.runtime, "udp runtime") = startup;
     }
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
     send_socket.set_broadcast(true)?;
@@ -246,7 +246,8 @@ impl InterfaceFactory for UdpFactory {
 
         let maybe_writer = start(udp_config, ctx.tx)?;
 
-        let writer: Box<dyn Writer> = maybe_writer.unwrap();
+        let writer: Box<dyn Writer> = maybe_writer
+            .ok_or_else(|| io::Error::other("UDPInterface did not provide a writer"))?;
 
         Ok(StartResult::Simple {
             id,

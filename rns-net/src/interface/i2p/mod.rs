@@ -22,7 +22,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::Writer;
+use crate::interface::{lock_or_recover, Writer};
 
 use self::sam::{Destination, SamError};
 
@@ -309,7 +309,7 @@ fn outbound_peer_loop(
                 Ok(dest) => dest.to_i2p_base64(),
                 Err(e) => {
                     log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
-                    thread::sleep(runtime.lock().unwrap().reconnect_wait);
+                    thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
                     continue;
                 }
             }
@@ -335,7 +335,7 @@ fn outbound_peer_loop(
                     Ok(s) => s,
                     Err(e) => {
                         log::warn!("[{}] failed to clone stream: {}", iface_name, e);
-                        thread::sleep(runtime.lock().unwrap().reconnect_wait);
+                        thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
                         continue;
                     }
                 };
@@ -381,7 +381,9 @@ fn outbound_peer_loop(
                     "[{}] I2P peer {} disconnected, reconnecting in {}s",
                     iface_name,
                     peer_addr,
-                    runtime.lock().unwrap().reconnect_wait.as_secs()
+                    lock_or_recover(&runtime, "i2p runtime")
+                        .reconnect_wait
+                        .as_secs()
                 );
             }
             Err(e) => {
@@ -394,7 +396,7 @@ fn outbound_peer_loop(
             }
         }
 
-        thread::sleep(runtime.lock().unwrap().reconnect_wait);
+        thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
     }
 }
 
