@@ -12,8 +12,8 @@ authors = ["rns-rs contributors"]
 
 [workspace.dependencies]
 rns-crypto = { version = "0.1.5", path = "rns-crypto" }
-rns-core = { version = "0.1.9", path = "rns-core" }
-rns-net = { version = "0.5.6", path = "rns-net" }
+rns-core = { version = "0.1.10", path = "rns-core" }
+rns-net = { version = "0.5.7", path = "rns-net" }
 rns-hooks = { version = "0.1.5", path = "rns-hooks" }
 
 # Compile crypto crate with optimizations even in debug/test builds.
