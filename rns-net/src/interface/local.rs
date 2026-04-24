@@ -674,15 +674,21 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::mpsc::RecvTimeoutError;
 
-    fn connect_test_client(instance_name: &str, _port: u16) {
+    #[cfg(target_os = "linux")]
+    type TestClient = std::os::unix::net::UnixStream;
+
+    #[cfg(not(target_os = "linux"))]
+    type TestClient = TcpStream;
+
+    fn connect_test_client(instance_name: &str, _port: u16) -> TestClient {
         #[cfg(target_os = "linux")]
         {
-            let _client = unix_socket::try_connect_unix(instance_name).unwrap();
+            unix_socket::try_connect_unix(instance_name).unwrap()
         }
 
         #[cfg(not(target_os = "linux"))]
         {
-            let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+            TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap()
         }
     }
 
@@ -856,8 +862,8 @@ mod tests {
         start_server(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
 
-        connect_test_client(&instance_name, port);
-        connect_test_client(&instance_name, port);
+        let _client1 = connect_test_client(&instance_name, port);
+        let _client2 = connect_test_client(&instance_name, port);
 
         let mut ids = Vec::new();
         for _ in 0..2 {
