@@ -362,6 +362,199 @@ pub fn handle_packets(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     })
 }
 
+pub fn handle_packet_series(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+    let params = parse_query(&req.query);
+    let query = match StatsQuery::from_params(&params) {
+        Ok(query) => query,
+        Err(err) => return HttpResponse::bad_request(&err),
+    };
+    with_db(state, |db_path, conn| {
+        if !has_table(conn, "packet_samples")? {
+            let mut series: Vec<Value> = zero_packet_buckets(&query).into_values().collect();
+            finalize_packet_series(&mut series);
+            return Ok(HttpResponse::ok(json!({
+                "db_path": db_path.display().to_string(),
+                "window": query.window_json(),
+                "bucket_seconds": query.bucket_ms / 1000,
+                "series": series,
+                "anomalies": {
+                    "average_packets_per_bucket": 0.0,
+                    "busy_buckets": [],
+                }
+            })));
+        }
+        let mut buckets = zero_packet_buckets(&query);
+        let mut stmt = conn
+            .prepare(
+                "SELECT (ts_ms / ?1) * ?1 AS bucket_start_ms,
+                        direction,
+                        COALESCE(SUM(packets), 0),
+                        COALESCE(SUM(bytes), 0),
+                        COUNT(DISTINCT interface_key || ':' || packet_type)
+                 FROM packet_samples
+                 WHERE ts_ms >= ?2 AND ts_ms < ?3
+                 GROUP BY bucket_start_ms, direction
+                 ORDER BY bucket_start_ms",
+            )
+            .map_err(db_error)?;
+        let mut rows = stmt
+            .query(params![query.bucket_ms, query.start_ms, query.end_ms])
+            .map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let bucket_start_ms: i64 = row.get(0).map_err(db_error)?;
+            let direction: String = row.get(1).map_err(db_error)?;
+            if let Some(bucket) = buckets.get_mut(&bucket_start_ms) {
+                let packets = row.get::<_, i64>(2).map_err(db_error)?;
+                let bytes = row.get::<_, i64>(3).map_err(db_error)?;
+                let active_keys = row.get::<_, i64>(4).map_err(db_error)?;
+                if direction == "rx" {
+                    bucket["rx_packets"] = Value::from(packets);
+                    bucket["rx_bytes"] = Value::from(bytes);
+                } else if direction == "tx" {
+                    bucket["tx_packets"] = Value::from(packets);
+                    bucket["tx_bytes"] = Value::from(bytes);
+                }
+                let current_active = bucket["active_keys"].as_i64().unwrap_or(0);
+                bucket["active_keys"] = Value::from(current_active + active_keys);
+            }
+        }
+
+        let mut series: Vec<Value> = buckets.into_values().collect();
+        finalize_packet_series(&mut series);
+        let average = if series.is_empty() {
+            0.0
+        } else {
+            series
+                .iter()
+                .map(|bucket| bucket["total_packets"].as_i64().unwrap_or(0) as f64)
+                .sum::<f64>()
+                / series.len() as f64
+        };
+        let busy_buckets: Vec<Value> = series
+            .iter()
+            .filter(|bucket| {
+                let total = bucket["total_packets"].as_i64().unwrap_or(0) as f64;
+                average > 0.0 && total > average * 2.0
+            })
+            .cloned()
+            .collect();
+
+        Ok(HttpResponse::ok(json!({
+            "db_path": db_path.display().to_string(),
+            "window": query.window_json(),
+            "bucket_seconds": query.bucket_ms / 1000,
+            "series": series,
+            "anomalies": {
+                "average_packets_per_bucket": average,
+                "busy_buckets": busy_buckets,
+            }
+        })))
+    })
+}
+
+pub fn handle_links(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+    let params = parse_query(&req.query);
+    let query = match StatsQuery::from_params(&params) {
+        Ok(query) => query,
+        Err(err) => return HttpResponse::bad_request(&err),
+    };
+    let limit = parse_limit(&params);
+    with_db(state, |db_path, conn| {
+        if !has_table(conn, "link_event_samples")? {
+            return Ok(HttpResponse::ok(json!({
+                "db_path": db_path.display().to_string(),
+                "window": query.window_json(),
+                "bucket_seconds": query.bucket_ms / 1000,
+                "series": zero_link_buckets(&query).into_values().collect::<Vec<_>>(),
+                "interfaces": [],
+                "anomalies": {
+                    "close_buckets": [],
+                }
+            })));
+        }
+        let mut buckets = zero_link_buckets(&query);
+        let mut stmt = conn
+            .prepare(
+                "SELECT (ts_ms / ?1) * ?1 AS bucket_start_ms,
+                        event_type,
+                        COUNT(*),
+                        COUNT(DISTINCT hex(link_id))
+                 FROM link_event_samples
+                 WHERE ts_ms >= ?2 AND ts_ms < ?3
+                 GROUP BY bucket_start_ms, event_type
+                 ORDER BY bucket_start_ms",
+            )
+            .map_err(db_error)?;
+        let mut rows = stmt
+            .query(params![query.bucket_ms, query.start_ms, query.end_ms])
+            .map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let bucket_start_ms: i64 = row.get(0).map_err(db_error)?;
+            let event_type: String = row.get(1).map_err(db_error)?;
+            if let Some(bucket) = buckets.get_mut(&bucket_start_ms) {
+                let count = row.get::<_, i64>(2).map_err(db_error)?;
+                let unique_links = row.get::<_, i64>(3).map_err(db_error)?;
+                match event_type.as_str() {
+                    "requested" => bucket["requested"] = Value::from(count),
+                    "established" => bucket["established"] = Value::from(count),
+                    "closed" => bucket["closed"] = Value::from(count),
+                    _ => {}
+                }
+                let current_unique = bucket["unique_links"].as_i64().unwrap_or(0);
+                bucket["unique_links"] = Value::from(current_unique.max(unique_links));
+            }
+        }
+
+        let series: Vec<Value> = buckets.into_values().collect();
+        let close_buckets: Vec<Value> = series
+            .iter()
+            .filter(|bucket| bucket["closed"].as_i64().unwrap_or(0) > 0)
+            .cloned()
+            .collect();
+        let mut iface_stmt = conn
+            .prepare(
+                "SELECT interface_id,
+                        SUM(CASE WHEN event_type = 'requested' THEN 1 ELSE 0 END) AS requested_count,
+                        SUM(CASE WHEN event_type = 'established' THEN 1 ELSE 0 END) AS established_count,
+                        SUM(CASE WHEN event_type = 'closed' THEN 1 ELSE 0 END) AS closed_count,
+                        COUNT(DISTINCT hex(link_id)) AS unique_links,
+                        MAX(ts_ms) AS last_seen_ms
+                 FROM link_event_samples
+                 WHERE ts_ms >= ?1 AND ts_ms < ?2
+                 GROUP BY interface_id
+                 ORDER BY established_count DESC, requested_count DESC, closed_count DESC, last_seen_ms DESC
+                 LIMIT ?3",
+            )
+            .map_err(db_error)?;
+        let interfaces = collect_rows(
+            iface_stmt
+                .query(params![query.start_ms, query.end_ms, limit as i64])
+                .map_err(db_error)?,
+            |row| {
+                Ok(json!({
+                    "interface_id": row.get::<_, Option<i64>>(0).map_err(db_error)?,
+                    "requested_count": row.get::<_, i64>(1).map_err(db_error)?,
+                    "established_count": row.get::<_, i64>(2).map_err(db_error)?,
+                    "closed_count": row.get::<_, i64>(3).map_err(db_error)?,
+                    "unique_links": row.get::<_, i64>(4).map_err(db_error)?,
+                    "last_seen_ms": row.get::<_, i64>(5).map_err(db_error)?,
+                }))
+            },
+        )?;
+
+        Ok(HttpResponse::ok(json!({
+            "db_path": db_path.display().to_string(),
+            "window": query.window_json(),
+            "bucket_seconds": query.bucket_ms / 1000,
+            "series": series,
+            "interfaces": interfaces,
+            "anomalies": {
+                "close_buckets": close_buckets,
+            }
+        })))
+    })
+}
+
 pub fn handle_system(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
@@ -514,6 +707,16 @@ where
     Ok(values)
 }
 
+fn has_table(conn: &Connection, table_name: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        params![table_name],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value != 0)
+    .map_err(db_error)
+}
+
 fn parse_limit(params: &std::collections::HashMap<String, String>) -> usize {
     params
         .get("limit")
@@ -579,6 +782,58 @@ fn zero_system_buckets(query: &StatsQuery) -> BTreeMap<i64, Value> {
         bucket_start += query.bucket_ms;
     }
     buckets
+}
+
+fn zero_packet_buckets(query: &StatsQuery) -> BTreeMap<i64, Value> {
+    let mut buckets = BTreeMap::new();
+    let mut bucket_start = query.aligned_start_ms();
+    while bucket_start < query.end_ms {
+        buckets.insert(
+            bucket_start,
+            json!({
+                "bucket_start_ms": bucket_start,
+                "bucket_end_ms": (bucket_start + query.bucket_ms).min(query.end_ms),
+                "rx_packets": 0,
+                "tx_packets": 0,
+                "rx_bytes": 0,
+                "tx_bytes": 0,
+                "active_keys": 0,
+            }),
+        );
+        bucket_start += query.bucket_ms;
+    }
+    buckets
+}
+
+fn zero_link_buckets(query: &StatsQuery) -> BTreeMap<i64, Value> {
+    let mut buckets = BTreeMap::new();
+    let mut bucket_start = query.aligned_start_ms();
+    while bucket_start < query.end_ms {
+        buckets.insert(
+            bucket_start,
+            json!({
+                "bucket_start_ms": bucket_start,
+                "bucket_end_ms": (bucket_start + query.bucket_ms).min(query.end_ms),
+                "requested": 0,
+                "established": 0,
+                "closed": 0,
+                "unique_links": 0,
+            }),
+        );
+        bucket_start += query.bucket_ms;
+    }
+    buckets
+}
+
+fn finalize_packet_series(series: &mut [Value]) {
+    for bucket in series {
+        let total_packets =
+            bucket["rx_packets"].as_i64().unwrap_or(0) + bucket["tx_packets"].as_i64().unwrap_or(0);
+        let total_bytes =
+            bucket["rx_bytes"].as_i64().unwrap_or(0) + bucket["tx_bytes"].as_i64().unwrap_or(0);
+        bucket["total_packets"] = Value::from(total_packets);
+        bucket["total_bytes"] = Value::from(total_bytes);
+    }
 }
 
 struct StatsQuery {

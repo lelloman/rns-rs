@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rns_hooks_abi::stats::{
-    AnnounceStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
-    PACKET_STATS_PAYLOAD_TYPE,
+    AnnounceStatsPayload, LinkStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
+    LINK_STATS_PAYLOAD_TYPE, PACKET_STATS_PAYLOAD_TYPE,
 };
 use rns_net::config;
 use rns_net::provider_bridge::{ProviderEnvelope, ProviderMessage};
@@ -23,10 +23,13 @@ use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
 const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_STATSD_HOOK_WASM"));
-const HOOK_SPECS: [(&str, &str); 3] = [
+const HOOK_SPECS: [(&str, &str); 6] = [
     ("rns_statsd_pre_ingress", "PreIngress"),
     ("rns_statsd_send_on_interface", "SendOnInterface"),
     ("rns_statsd_broadcast_all", "BroadcastOnAllInterfaces"),
+    ("rns_statsd_link_request", "LinkRequestReceived"),
+    ("rns_statsd_link_established", "LinkEstablished"),
+    ("rns_statsd_link_closed", "LinkClosed"),
 ];
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
@@ -261,10 +264,17 @@ struct AnnounceRecord {
     interface_id: u64,
 }
 
+struct LinkRecord {
+    link_id: [u8; 16],
+    interface_id: u64,
+    event_type: &'static str,
+}
+
 #[derive(Default)]
 struct StatsAggregator {
     counters: HashMap<CounterKey, CounterValue>,
     announce_records: Vec<AnnounceRecord>,
+    link_records: Vec<LinkRecord>,
     dropped_events: u64,
 }
 
@@ -295,6 +305,25 @@ impl StatsAggregator {
                             log::warn!("invalid announce payload length: {}", event.payload.len());
                         }
                     }
+                    return;
+                }
+                if event.payload_type == LINK_STATS_PAYLOAD_TYPE {
+                    let payload = match LinkStatsPayload::decode(&event.payload) {
+                        Some(payload) => payload,
+                        None => {
+                            log::warn!("invalid link payload length: {}", event.payload.len());
+                            return;
+                        }
+                    };
+                    let Some(event_type) = link_event_type_for_attach_point(&event.attach_point)
+                    else {
+                        return;
+                    };
+                    self.link_records.push(LinkRecord {
+                        link_id: payload.link_id,
+                        interface_id: payload.interface_id,
+                        event_type,
+                    });
                     return;
                 }
                 if event.payload_type != PACKET_STATS_PAYLOAD_TYPE {
@@ -359,6 +388,15 @@ impl StatsDb {
                 updated_at_ms INTEGER NOT NULL,
                 PRIMARY KEY (interface_key, direction, packet_type)
             );
+            CREATE TABLE IF NOT EXISTS packet_samples (
+                ts_ms INTEGER NOT NULL,
+                interface_key TEXT NOT NULL,
+                interface_id INTEGER NULL,
+                direction TEXT NOT NULL,
+                packet_type TEXT NOT NULL,
+                packets INTEGER NOT NULL,
+                bytes INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS seen_identities (
                 identity_hash BLOB NOT NULL PRIMARY KEY,
                 first_seen_ms INTEGER NOT NULL,
@@ -394,6 +432,12 @@ impl StatsDb {
                 ts_ms INTEGER NOT NULL PRIMARY KEY,
                 dropped_events INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS link_event_samples (
+                ts_ms INTEGER NOT NULL,
+                link_id BLOB NOT NULL,
+                interface_id INTEGER NULL,
+                event_type TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS seen_announces (
                 destination_hash BLOB NOT NULL,
                 random_hash BLOB NOT NULL,
@@ -411,6 +455,7 @@ impl StatsDb {
     fn flush(&mut self, aggregator: &mut StatsAggregator) -> rusqlite::Result<()> {
         if aggregator.counters.is_empty()
             && aggregator.announce_records.is_empty()
+            && aggregator.link_records.is_empty()
             && aggregator.dropped_events == 0
         {
             return Ok(());
@@ -418,7 +463,7 @@ impl StatsDb {
         let tx = self.conn.transaction()?;
         let now = now_unix_ms() as i64;
         {
-            let mut stmt = tx.prepare(
+            let mut counter_stmt = tx.prepare(
                 "INSERT INTO packet_counters (
                     interface_key, interface_id, direction, packet_type, packets, bytes, updated_at_ms
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -428,8 +473,13 @@ impl StatsDb {
                     bytes = packet_counters.bytes + excluded.bytes,
                     updated_at_ms = excluded.updated_at_ms",
             )?;
+            let mut sample_stmt = tx.prepare(
+                "INSERT INTO packet_samples (
+                    ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
             for (key, value) in aggregator.counters.drain() {
-                stmt.execute(params![
+                counter_stmt.execute(params![
                     key.interface_key,
                     key.interface_id.map(|v| v as i64),
                     key.direction,
@@ -437,6 +487,15 @@ impl StatsDb {
                     value.packets as i64,
                     value.bytes as i64,
                     now,
+                ])?;
+                sample_stmt.execute(params![
+                    now,
+                    key.interface_key,
+                    key.interface_id.map(|v| v as i64),
+                    key.direction,
+                    key.packet_type,
+                    value.packets as i64,
+                    value.bytes as i64,
                 ])?;
             }
         }
@@ -498,6 +557,21 @@ impl StatsDb {
                     rec.interface_id as i64,
                 ])?;
                 name_stmt.execute(params![rec.name_hash.as_slice(), now,])?;
+            }
+        }
+        if !aggregator.link_records.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT INTO link_event_samples (
+                    ts_ms, link_id, interface_id, event_type
+                ) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for rec in aggregator.link_records.drain(..) {
+                stmt.execute(params![
+                    now,
+                    rec.link_id.as_slice(),
+                    rec.interface_id as i64,
+                    rec.event_type,
+                ])?;
             }
         }
         if aggregator.dropped_events > 0 {
@@ -726,6 +800,15 @@ fn direction_for_attach_point(attach_point: &str) -> Option<&'static str> {
     match attach_point {
         "PreIngress" => Some("rx"),
         "SendOnInterface" | "BroadcastOnAllInterfaces" => Some("tx"),
+        _ => None,
+    }
+}
+
+fn link_event_type_for_attach_point(attach_point: &str) -> Option<&'static str> {
+    match attach_point {
+        "LinkRequestReceived" => Some("requested"),
+        "LinkEstablished" => Some("established"),
+        "LinkClosed" => Some("closed"),
         _ => None,
     }
 }
@@ -1068,5 +1151,123 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM seen_announces", [], |row| row.get(0))
             .unwrap();
         assert_eq!(ann_count, 2);
+    }
+
+    #[test]
+    fn link_event_is_persisted_to_sqlite() {
+        let payload = LinkStatsPayload {
+            link_id: [0x11; 16],
+            interface_id: 7,
+        }
+        .encode()
+        .to_vec();
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 11,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "LinkEstablished".into(),
+                payload_type: LINK_STATS_PAYLOAD_TYPE.into(),
+                payload,
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        assert_eq!(agg.link_records.len(), 1);
+        assert_eq!(agg.link_records[0].event_type, "established");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+        db.flush(&mut agg).unwrap();
+
+        let row: (i64, String) = db
+            .conn
+            .query_row(
+                "SELECT interface_id, event_type FROM link_event_samples",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (7, "established".into()));
+    }
+
+    #[test]
+    fn invalid_link_payload_is_ignored() {
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 12,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "LinkClosed".into(),
+                payload_type: LINK_STATS_PAYLOAD_TYPE.into(),
+                payload: vec![1, 2, 3],
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        assert!(agg.link_records.is_empty());
+        assert!(agg.counters.is_empty());
+        assert!(agg.announce_records.is_empty());
+    }
+
+    #[test]
+    fn unknown_link_attach_point_is_ignored() {
+        let payload = LinkStatsPayload {
+            link_id: [0x11; 16],
+            interface_id: 7,
+        }
+        .encode()
+        .to_vec();
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 13,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "LinkRetried".into(),
+                payload_type: LINK_STATS_PAYLOAD_TYPE.into(),
+                payload,
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        assert!(agg.link_records.is_empty());
+    }
+
+    #[test]
+    fn sqlite_flush_persists_packet_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+        let mut agg = StatsAggregator::default();
+        agg.counters.insert(
+            CounterKey {
+                interface_key: "iface:9".into(),
+                interface_id: Some(9),
+                direction: "rx",
+                packet_type: "data",
+            },
+            CounterValue {
+                packets: 4,
+                bytes: 128,
+            },
+        );
+        db.flush(&mut agg).unwrap();
+
+        let row: (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT packets, bytes FROM packet_samples WHERE interface_key = 'iface:9'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (4, 128));
     }
 }

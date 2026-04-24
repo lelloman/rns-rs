@@ -111,6 +111,8 @@ let latestTelemetry = {
   interfaces: null,
   destinations: null,
   packets: null,
+  packetSeries: null,
+  links: null,
   system: null,
 };
 
@@ -209,9 +211,9 @@ function renderSparkBars(container, items, options = {}) {
   }
 }
 
-function renderTelemetry(summary, announces, interfaces, destinations, packets, system) {
-  latestTelemetry = { summary, announces, interfaces, destinations, packets, system };
-  const windowSeconds = summary?.window?.seconds || announces?.window?.seconds || system?.window?.seconds || null;
+function renderTelemetry(summary, announces, interfaces, destinations, packets, packetSeries, links, system) {
+  latestTelemetry = { summary, announces, interfaces, destinations, packets, packetSeries, links, system };
+  const windowSeconds = summary?.window?.seconds || announces?.window?.seconds || packetSeries?.window?.seconds || links?.window?.seconds || system?.window?.seconds || null;
   telemetryWindowLabelEl.textContent = fmtWindow(windowSeconds);
 
   const announceTotal = summary?.announces?.total ?? null;
@@ -220,6 +222,10 @@ function renderTelemetry(summary, announces, interfaces, destinations, packets, 
   const providerDrops = summary?.system?.provider_dropped_events ?? null;
   const firstSeen = summary?.announces?.first_seen_ms;
   const lastSeen = summary?.announces?.last_seen_ms;
+  const packetTotals = (packetSeries?.series || []).reduce((totals, bucket) => ({
+    packets: totals.packets + (bucket.total_packets || 0),
+    bytes: totals.bytes + (bucket.total_bytes || 0),
+  }), { packets: 0, bytes: 0 });
 
   telemetryAnnounceTotalEl.textContent = fmtInteger(announceTotal);
   telemetryAnnounceDetailEl.textContent = announceTotal
@@ -230,7 +236,7 @@ function renderTelemetry(summary, announces, interfaces, destinations, packets, 
     ? `${fmtInteger(summary?.announces?.unique_identities ?? 0)} unique identities and ${fmtInteger(summary?.announces?.unique_interfaces ?? 0)} interfaces participated.`
     : "No active destination set in the current window.";
   telemetryPacketActivityEl.textContent = fmtInteger(packetCounters);
-  telemetryPacketDetailEl.textContent = `RX ${fmtInteger(summary?.packets?.rx_packets ?? 0)} / ${fmtBytes(summary?.packets?.rx_bytes ?? 0)} | TX ${fmtInteger(summary?.packets?.tx_packets ?? 0)} / ${fmtBytes(summary?.packets?.tx_bytes ?? 0)}`;
+  telemetryPacketDetailEl.textContent = `Window ${fmtInteger(packetTotals.packets)} packets / ${fmtBytes(packetTotals.bytes)} | lifetime RX ${fmtInteger(summary?.packets?.rx_packets ?? 0)} / TX ${fmtInteger(summary?.packets?.tx_packets ?? 0)}`;
   telemetryDropTotalEl.textContent = fmtInteger(providerDrops);
   telemetryDropDetailEl.textContent = providerDrops
     ? `Provider drops were observed in ${fmtInteger(system?.anomalies?.provider_drop_buckets?.length ?? 0)} buckets.`
@@ -239,7 +245,7 @@ function renderTelemetry(summary, announces, interfaces, destinations, packets, 
   renderAnnounceTelemetry(announces);
   renderSystemTelemetry(system);
   renderTelemetryRankings(interfaces, destinations, packets);
-  renderTelemetryAlerts(announces, system);
+  renderTelemetryAlerts(announces, system, packetSeries, links);
 }
 
 function renderAnnounceTelemetry(announces) {
@@ -319,9 +325,11 @@ function renderTelemetryRankings(interfaces, destinations, packets) {
   );
 }
 
-function renderTelemetryAlerts(announces, system) {
+function renderTelemetryAlerts(announces, system, packetSeries, links) {
   const burstBuckets = announces?.anomalies?.burst_buckets || [];
   const dropBuckets = system?.anomalies?.provider_drop_buckets || [];
+  const busyPacketBuckets = packetSeries?.anomalies?.busy_buckets || [];
+  const linkCloseBuckets = links?.anomalies?.close_buckets || [];
   const announceAlerts = [];
   if (burstBuckets.length) {
     const hottest = burstBuckets.reduce((top, bucket) =>
@@ -343,12 +351,32 @@ function renderTelemetryAlerts(announces, system) {
       meta: `${fmtInteger(worst.provider_dropped_events || 0)} dropped events in one bucket. ${fmtInteger(dropBuckets.length)} bucket(s) showed provider backpressure.`,
     });
   }
+  if (busyPacketBuckets.length) {
+    const busiest = busyPacketBuckets.reduce((top, bucket) =>
+      (bucket.total_packets || 0) > (top.total_packets || 0) ? bucket : top, busyPacketBuckets[0]);
+    announceAlerts.push({
+      className: "alert-row warn",
+      title: `Packet spike at ${fmtTimestamp(busiest.bucket_start_ms)}`,
+      metaClass: "alert-meta",
+      meta: `${fmtInteger(busiest.total_packets || 0)} packets / ${fmtBytes(busiest.total_bytes || 0)} in one bucket. ${fmtInteger(busyPacketBuckets.length)} packet bucket(s) crossed the 2x average threshold.`,
+    });
+  }
+  if (linkCloseBuckets.length) {
+    const noisiest = linkCloseBuckets.reduce((top, bucket) =>
+      (bucket.closed || 0) > (top.closed || 0) ? bucket : top, linkCloseBuckets[0]);
+    announceAlerts.push({
+      className: "alert-row warn",
+      title: `Link churn at ${fmtTimestamp(noisiest.bucket_start_ms)}`,
+      metaClass: "alert-meta",
+      meta: `${fmtInteger(noisiest.closed || 0)} closed link event(s) in one bucket. ${fmtInteger(linkCloseBuckets.length)} bucket(s) recorded link teardown activity.`,
+    });
+  }
   if (!announceAlerts.length) {
     announceAlerts.push({
       className: "alert-row",
       title: "No telemetry anomalies",
       metaClass: "alert-meta",
-      meta: "The current historical window did not flag announce bursts or provider drop spikes.",
+      meta: "The current historical window did not flag announce bursts, packet spikes, provider drop spikes, or link churn.",
     });
   }
   renderSimpleRows(telemetryAlertListEl, announceAlerts, "No telemetry anomalies.");
@@ -374,6 +402,15 @@ function renderTelemetryAlerts(announces, system) {
       title: `${event.process} · ${event.event}`,
       metaClass: "alert-meta",
       meta: `${fmtAge(event.age_seconds)} | ${event.detail || "No detail"}`,
+    });
+  }
+  for (const entry of (links?.interfaces || []).slice(0, 3)) {
+    if ((entry.closed_count || 0) === 0 && (entry.established_count || 0) === 0) continue;
+    restartSignals.push({
+      className: (entry.closed_count || 0) > 0 ? "alert-row warn" : "alert-row",
+      title: `Interface ${entry.interface_id ?? "unknown"} link activity`,
+      metaClass: "alert-meta",
+      meta: `${fmtInteger(entry.established_count || 0)} established | ${fmtInteger(entry.closed_count || 0)} closed | ${fmtInteger(entry.unique_links || 0)} unique links | last seen ${fmtTimestamp(entry.last_seen_ms)}`,
     });
   }
   if (!restartSignals.length) {
@@ -1040,7 +1077,7 @@ async function refreshLogs() {
 
 async function refresh() {
   try {
-    const [node, config, configSchema, configStatus, processes, processEvents, statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsSystem] = await Promise.all([
+    const [node, config, configSchema, configStatus, processes, processEvents, statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsPacketSeries, statsLinks, statsSystem] = await Promise.all([
       fetchJson("/api/node"),
       fetchJson("/api/config"),
       fetchJson("/api/config/schema"),
@@ -1052,6 +1089,8 @@ async function refresh() {
       fetchJson("/api/stats/interfaces?window=24h&limit=5"),
       fetchJson("/api/stats/destinations?window=24h&limit=5"),
       fetchJson("/api/stats/packets?window=24h&limit=5"),
+      fetchJson("/api/stats/packets/series?window=24h&bucket=1h"),
+      fetchJson("/api/stats/links?window=24h&bucket=1h&limit=5"),
       fetchJson("/api/stats/system?window=24h&bucket=1h"),
     ]);
     serverModeEl.textContent = node.server_mode || "-";
@@ -1063,7 +1102,7 @@ async function refresh() {
     renderConfigStatus(configStatus.status);
     renderProcesses(processes.processes || []);
     renderProcessEvents(processEvents.events || []);
-    renderTelemetry(statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsSystem);
+    renderTelemetry(statsSummary, statsAnnounces, statsInterfaces, statsDestinations, statsPackets, statsPacketSeries, statsLinks, statsSystem);
     await refreshLogs();
     statusEl.textContent = "Connected";
   } catch (error) {

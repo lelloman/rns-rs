@@ -2,11 +2,11 @@
 
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::stats::{
-    AnnounceStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
-    PACKET_STATS_PAYLOAD_TYPE,
+    AnnounceStatsPayload, LinkStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
+    LINK_STATS_PAYLOAD_TYPE, PACKET_STATS_PAYLOAD_TYPE,
 };
 #[cfg(target_arch = "wasm32")]
-use rns_hooks_sdk::context::{self, PacketContext};
+use rns_hooks_sdk::context::{self, LinkContext, PacketContext};
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_sdk::host;
 #[cfg(target_arch = "wasm32")]
@@ -38,20 +38,32 @@ const PACKET_TYPE_ANNOUNCE: u8 = 0x01;
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
     let ptr = ctx_ptr as *const u8;
-    if unsafe { context::context_type(ptr) } == context::CTX_TYPE_PACKET {
-        let ctx = unsafe { &*(ptr as *const PacketContext) };
+    match unsafe { context::context_type(ptr) } {
+        context::CTX_TYPE_PACKET => {
+            let ctx = unsafe { &*(ptr as *const PacketContext) };
 
-        let payload = PacketStatsPayload {
-            flags: ctx.flags,
-            packet_len: ctx.data_len,
-            interface_id: ctx.interface_id,
-        }
-        .encode();
-        let _ = host::emit_event(PACKET_STATS_PAYLOAD_TYPE, &payload);
+            let payload = PacketStatsPayload {
+                flags: ctx.flags,
+                packet_len: ctx.data_len,
+                interface_id: ctx.interface_id,
+            }
+            .encode();
+            let _ = host::emit_event(PACKET_STATS_PAYLOAD_TYPE, &payload);
 
-        if (ctx.flags & 0x03) == PACKET_TYPE_ANNOUNCE {
-            emit_announce_stats(ctx);
+            if (ctx.flags & 0x03) == PACKET_TYPE_ANNOUNCE {
+                emit_announce_stats(ctx);
+            }
         }
+        context::CTX_TYPE_LINK => {
+            let ctx = unsafe { &*(ptr as *const LinkContext) };
+            let payload = LinkStatsPayload {
+                link_id: ctx.link_id,
+                interface_id: ctx.interface_id,
+            }
+            .encode();
+            let _ = host::emit_event(LINK_STATS_PAYLOAD_TYPE, &payload);
+        }
+        _ => {}
     }
 
     unsafe {

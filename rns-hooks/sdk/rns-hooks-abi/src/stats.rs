@@ -5,6 +5,10 @@ pub const ANNOUNCE_STATS_PAYLOAD_TYPE: &str = "stats.announce.v1";
 /// identity_hash:16 + destination_hash:16 + name_hash:10 + random_hash:10 + hops:1 + interface_id:8 = 61
 pub const ANNOUNCE_STATS_ENCODED_LEN: usize = 61;
 
+pub const LINK_STATS_PAYLOAD_TYPE: &str = "stats.link.v1";
+/// link_id:16 + interface_id:8 = 24
+pub const LINK_STATS_ENCODED_LEN: usize = 24;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketStatsPayload {
     pub flags: u8,
@@ -85,6 +89,35 @@ impl AnnounceStatsPayload {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkStatsPayload {
+    pub link_id: [u8; 16],
+    pub interface_id: u64,
+}
+
+impl LinkStatsPayload {
+    pub fn encode(&self) -> [u8; LINK_STATS_ENCODED_LEN] {
+        let mut buf = [0u8; LINK_STATS_ENCODED_LEN];
+        buf[0..16].copy_from_slice(&self.link_id);
+        buf[16..24].copy_from_slice(&self.interface_id.to_le_bytes());
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != LINK_STATS_ENCODED_LEN {
+            return None;
+        }
+        let mut link_id = [0u8; 16];
+        link_id.copy_from_slice(&bytes[0..16]);
+        let mut interface_id = [0u8; 8];
+        interface_id.copy_from_slice(&bytes[16..24]);
+        Some(Self {
+            link_id,
+            interface_id: u64::from_le_bytes(interface_id),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +145,15 @@ mod tests {
         };
         let encoded = payload.encode();
         assert_eq!(PacketStatsPayload::decode(&encoded), Some(payload));
+    }
+
+    #[test]
+    fn link_stats_roundtrip() {
+        let payload = LinkStatsPayload {
+            link_id: [0xAB; 16],
+            interface_id: 42,
+        };
+        let encoded = payload.encode();
+        assert_eq!(LinkStatsPayload::decode(&encoded), Some(payload));
     }
 }

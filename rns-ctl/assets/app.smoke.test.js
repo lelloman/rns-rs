@@ -353,6 +353,33 @@ function makeUiHarness() {
         { interface_key: "if-3", direction: "in", packet_type: "announce", packets: 9910, bytes: 8123400, updated_at_ms: 1713907199000 },
       ],
     },
+    statsPacketSeries: {
+      anomalies: {
+        busy_buckets: [
+          { bucket_start_ms: 1713896400000, total_packets: 2400, total_bytes: 2400000 },
+        ],
+      },
+      series: [
+        { bucket_start_ms: 1713889200000, total_packets: 1200, total_bytes: 1200000 },
+        { bucket_start_ms: 1713892800000, total_packets: 1300, total_bytes: 1300000 },
+        { bucket_start_ms: 1713896400000, total_packets: 2400, total_bytes: 2400000 },
+      ],
+    },
+    statsLinks: {
+      anomalies: {
+        close_buckets: [
+          { bucket_start_ms: 1713896400000, closed: 2 },
+        ],
+      },
+      interfaces: [
+        { interface_id: 3, established_count: 12, closed_count: 2, unique_links: 10, last_seen_ms: 1713907199000 },
+      ],
+      series: [
+        { bucket_start_ms: 1713889200000, requested: 3, established: 2, closed: 0, unique_links: 2 },
+        { bucket_start_ms: 1713892800000, requested: 4, established: 4, closed: 0, unique_links: 4 },
+        { bucket_start_ms: 1713896400000, requested: 2, established: 1, closed: 2, unique_links: 2 },
+      ],
+    },
     statsSystem: {
       latest_process_sample: {
         rss_bytes: 73400320,
@@ -415,6 +442,8 @@ function makeUiHarness() {
       if (url.startsWith("/api/stats/announces")) return createJsonResponse(state.statsAnnounces);
       if (url.startsWith("/api/stats/interfaces")) return createJsonResponse(state.statsInterfaces);
       if (url.startsWith("/api/stats/destinations")) return createJsonResponse(state.statsDestinations);
+      if (url.startsWith("/api/stats/packets/series")) return createJsonResponse(state.statsPacketSeries);
+      if (url.startsWith("/api/stats/links")) return createJsonResponse(state.statsLinks);
       if (url.startsWith("/api/stats/packets")) return createJsonResponse(state.statsPackets);
       if (url.startsWith("/api/stats/system")) return createJsonResponse(state.statsSystem);
       if (url.startsWith("/api/processes/") && url.includes("/logs")) {
@@ -482,7 +511,7 @@ async function flushUi() {
 }
 
 test("app.js renders operator state on initial refresh", async () => {
-  const { document } = makeUiHarness();
+  const { document, calls } = makeUiHarness();
   await flushUi();
 
   assert.equal(document.getElementById("serverMode").textContent, "supervised");
@@ -491,7 +520,11 @@ test("app.js renders operator state on initial refresh", async () => {
   assert.equal(document.getElementById("telemetryWindowLabel").textContent, "1d");
   assert.equal(document.getElementById("telemetryAnnounceTotal").textContent, "274,321");
   assert.match(document.getElementById("telemetryAlertList").textContent, /Announce burst/);
+  assert.match(document.getElementById("telemetryAlertList").textContent, /Packet spike/);
+  assert.match(document.getElementById("telemetryAlertList").textContent, /Link churn/);
   assert.match(document.getElementById("telemetryRestartList").textContent, /rns-statsd/);
+  assert.match(document.getElementById("telemetryRestartList").textContent, /Interface 3 link activity/);
+  assert.match(document.getElementById("telemetryPacketDetail").textContent, /Window 4,900 packets/);
   assert.equal(document.getElementById("selectedProcessName").textContent, "rnsd");
   assert.match(
     document.getElementById("selectedProcessSummary").textContent,
@@ -499,6 +532,11 @@ test("app.js renders operator state on initial refresh", async () => {
   );
   assert.equal(document.getElementById("logProcessName").textContent, "rnsd");
   assert.match(document.getElementById("processLogOutput").textContent, /\[stderr\] rnsd started/);
+  const getPaths = calls
+    .filter((call) => (call.options.method || "GET") === "GET")
+    .map((call) => call.url);
+  assert(getPaths.includes("/api/stats/packets/series?window=24h&bucket=1h"));
+  assert(getPaths.includes("/api/stats/links?window=24h&bucket=1h&limit=5"));
 });
 
 test("app.js validate, save, and apply actions hit config endpoints", async () => {

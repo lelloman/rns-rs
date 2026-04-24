@@ -333,6 +333,15 @@ fn seed_stats_db(path: &PathBuf) {
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY (interface_key, direction, packet_type)
         );
+        CREATE TABLE packet_samples (
+            ts_ms INTEGER NOT NULL,
+            interface_key TEXT NOT NULL,
+            interface_id INTEGER NULL,
+            direction TEXT NOT NULL,
+            packet_type TEXT NOT NULL,
+            packets INTEGER NOT NULL,
+            bytes INTEGER NOT NULL
+        );
         CREATE TABLE seen_announces (
             destination_hash BLOB NOT NULL,
             random_hash BLOB NOT NULL,
@@ -365,6 +374,12 @@ fn seed_stats_db(path: &PathBuf) {
         CREATE TABLE provider_drop_samples (
             ts_ms INTEGER NOT NULL PRIMARY KEY,
             dropped_events INTEGER NOT NULL
+        );
+        CREATE TABLE link_event_samples (
+            ts_ms INTEGER NOT NULL,
+            link_id BLOB NOT NULL,
+            interface_id INTEGER NULL,
+            event_type TEXT NOT NULL
         );",
     )
     .unwrap();
@@ -384,6 +399,8 @@ fn seed_stats_db(path: &PathBuf) {
     let i2 = [0x42u8; 16];
     let n1 = [0x51u8; 10];
     let n2 = [0x52u8; 10];
+    let l1 = [0x61u8; 16];
+    let l2 = [0x62u8; 16];
 
     conn.execute(
         "INSERT INTO seen_announces (
@@ -447,6 +464,27 @@ fn seed_stats_db(path: &PathBuf) {
         ("iface:8", 8, "out", "data", 5, 900, bucket_1h + 1000),
     )
     .unwrap();
+    conn.execute(
+        "INSERT INTO packet_samples (
+            ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (bucket_2h, "iface:7", 7, "rx", "announce", 4, 400),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO packet_samples (
+            ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (bucket_1h, "iface:7", 7, "rx", "announce", 8, 800),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO packet_samples (
+            ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        (bucket_1h + 1000, "iface:8", 8, "tx", "data", 5, 900),
+    )
+    .unwrap();
 
     conn.execute(
         "INSERT INTO process_samples (
@@ -467,6 +505,21 @@ fn seed_stats_db(path: &PathBuf) {
         (bucket_1h, 3i64),
     )
     .unwrap();
+    conn.execute(
+        "INSERT INTO link_event_samples (ts_ms, link_id, interface_id, event_type) VALUES (?1, ?2, ?3, ?4)",
+        (bucket_2h, &l1[..], 7, "requested"),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO link_event_samples (ts_ms, link_id, interface_id, event_type) VALUES (?1, ?2, ?3, ?4)",
+        (bucket_1h, &l1[..], 7, "established"),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO link_event_samples (ts_ms, link_id, interface_id, event_type) VALUES (?1, ?2, ?3, ?4)",
+        (bucket_1h + 500, &l2[..], 8, "closed"),
+    )
+    .unwrap();
 }
 
 fn configure_stats_db(server: &TestServer, stats_db_path: &PathBuf) {
@@ -474,6 +527,59 @@ fn configure_stats_db(server: &TestServer, stats_db_path: &PathBuf) {
     snapshot.stats_db_path = stats_db_path.display().to_string();
     let mut state = server.ctx.state.write().unwrap();
     state.server_config = Some(snapshot);
+}
+
+fn seed_legacy_stats_db(path: &PathBuf) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE packet_counters (
+            interface_key TEXT NOT NULL,
+            interface_id INTEGER NULL,
+            direction TEXT NOT NULL,
+            packet_type TEXT NOT NULL,
+            packets INTEGER NOT NULL,
+            bytes INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (interface_key, direction, packet_type)
+        );
+        CREATE TABLE seen_announces (
+            destination_hash BLOB NOT NULL,
+            random_hash BLOB NOT NULL,
+            identity_hash BLOB NOT NULL,
+            name_hash BLOB NOT NULL,
+            hops INTEGER NOT NULL,
+            interface_id INTEGER NULL,
+            seen_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (destination_hash, random_hash)
+        );
+        CREATE TABLE seen_destinations (
+            destination_hash BLOB NOT NULL PRIMARY KEY,
+            identity_hash BLOB NOT NULL,
+            name_hash BLOB NOT NULL,
+            first_seen_ms INTEGER NOT NULL,
+            last_seen_ms INTEGER NOT NULL,
+            announce_count INTEGER NOT NULL DEFAULT 1,
+            last_hops INTEGER NOT NULL,
+            last_interface_id INTEGER NULL
+        );
+        CREATE TABLE process_samples (
+            ts_ms INTEGER NOT NULL PRIMARY KEY,
+            pid INTEGER NOT NULL,
+            rss_bytes INTEGER NOT NULL,
+            cpu_user_ms INTEGER NOT NULL,
+            cpu_system_ms INTEGER NOT NULL,
+            threads INTEGER NOT NULL,
+            fds INTEGER NOT NULL
+        );
+        CREATE TABLE provider_drop_samples (
+            ts_ms INTEGER NOT NULL PRIMARY KEY,
+            dropped_events INTEGER NOT NULL
+        );",
+    )
+    .unwrap();
 }
 
 fn sample_server_config_schema() -> ServerConfigSchemaSnapshot {
@@ -808,6 +914,72 @@ fn test_stats_timeseries_and_system_anomalies() {
         .unwrap();
     assert_eq!(anomaly_buckets.len(), 1);
     assert_eq!(anomaly_buckets[0]["provider_dropped_events"], 3);
+
+    let packet_series = http_get(server.port, "/api/stats/packets/series?window=6h&bucket=1h");
+    assert_eq!(packet_series.status, 200);
+    let packet_series_json = packet_series.json();
+    let packet_buckets = packet_series_json["series"].as_array().unwrap();
+    assert!(packet_buckets.len() >= 6);
+    assert!(
+        packet_buckets
+            .iter()
+            .map(|bucket| bucket["total_packets"].as_i64().unwrap_or(0))
+            .sum::<i64>()
+            >= 17
+    );
+
+    let links = http_get(server.port, "/api/stats/links?window=6h&bucket=1h&limit=5");
+    assert_eq!(links.status, 200);
+    let links_json = links.json();
+    let link_buckets = links_json["series"].as_array().unwrap();
+    assert!(link_buckets.len() >= 6);
+    let link_interfaces = links_json["interfaces"].as_array().unwrap();
+    assert_eq!(link_interfaces.len(), 2);
+    assert_eq!(link_interfaces[0]["interface_id"], 7);
+    let close_buckets = links_json["anomalies"]["close_buckets"].as_array().unwrap();
+    assert_eq!(close_buckets.len(), 1);
+    assert_eq!(close_buckets[0]["closed"], 1);
+
+    server.shutdown();
+    let _ = std::fs::remove_file(stats_db_path);
+}
+
+#[test]
+fn test_stats_history_endpoints_are_backward_compatible_with_legacy_db() {
+    let server = start_test_server();
+    let stats_db_path = unique_temp_path("stats-legacy.db");
+    seed_legacy_stats_db(&stats_db_path);
+    configure_stats_db(&server, &stats_db_path);
+
+    let packet_series = http_get(server.port, "/api/stats/packets/series?window=6h&bucket=1h");
+    assert_eq!(packet_series.status, 200);
+    let packet_series_json = packet_series.json();
+    let packet_buckets = packet_series_json["series"].as_array().unwrap();
+    assert!(packet_buckets.len() >= 6);
+    assert!(
+        packet_buckets
+            .iter()
+            .all(|bucket| bucket["total_packets"].as_i64().unwrap_or(-1) == 0)
+    );
+    assert_eq!(
+        packet_series_json["anomalies"]["busy_buckets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let links = http_get(server.port, "/api/stats/links?window=6h&bucket=1h&limit=5");
+    assert_eq!(links.status, 200);
+    let links_json = links.json();
+    let link_buckets = links_json["series"].as_array().unwrap();
+    assert!(link_buckets.len() >= 6);
+    assert!(
+        link_buckets
+            .iter()
+            .all(|bucket| bucket["closed"].as_i64().unwrap_or(-1) == 0)
+    );
+    assert!(links_json["interfaces"].as_array().unwrap().is_empty());
 
     server.shutdown();
     let _ = std::fs::remove_file(stats_db_path);

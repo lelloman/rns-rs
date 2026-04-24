@@ -98,6 +98,8 @@ pub fn handle_request(
         ("GET", "/api/stats/interfaces") => stats_api::handle_interfaces(req, state),
         ("GET", "/api/stats/destinations") => stats_api::handle_destinations(req, state),
         ("GET", "/api/stats/packets") => stats_api::handle_packets(req, state),
+        ("GET", "/api/stats/packets/series") => stats_api::handle_packet_series(req, state),
+        ("GET", "/api/stats/links") => stats_api::handle_links(req, state),
         ("GET", "/api/stats/system") => stats_api::handle_system(req, state),
         ("GET", path) if path.starts_with("/api/processes/") && path.ends_with("/logs") => {
             handle_process_logs(path, req, state)
