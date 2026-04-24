@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/helpers.sh"
+source "${SCRIPT_DIR}/lib/readiness.sh"
 
 _CURRENT_SUITE="18_node_restart"
 echo "Suite 18: Node restart recovery"
@@ -55,6 +56,15 @@ if poll_until "$PORT_B" "/health" ".status" "healthy" 60; then
   pass_test "Node-B healthy after restart"
 else
   fail_test "Node-B not healthy after restart"
+  suite_result "18_node_restart"
+  exit 0
+fi
+
+echo "  Waiting for interfaces to recover after restart..."
+if wait_for_topology_ready "${TOPO_TYPE:-chain}" "${TOPO_N:-3}" 60; then
+  pass_test "Topology interfaces recovered after restart"
+else
+  fail_test "Topology interfaces not ready after restart"
   suite_result "18_node_restart"
   exit 0
 fi
