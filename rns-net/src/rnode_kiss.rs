@@ -394,6 +394,12 @@ impl RNodeDecoder {
     }
 }
 
+impl Default for RNodeDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Command builders ────────────────────────────────────────────────────
 
 /// Build a KISS command frame: [FEND][cmd][escaped value][FEND].

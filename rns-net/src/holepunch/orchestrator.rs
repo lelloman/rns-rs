@@ -659,7 +659,7 @@ impl HolePunchManager {
         // update the engine's facilitator so UPGRADE_REQUEST carries the correct address.
         if session.engine.is_initiator() {
             let first = self.probe_addrs.first().copied();
-            if first.map_or(true, |f| f != probe_server) {
+            if first != Some(probe_server) {
                 let facilitator_ep = Endpoint {
                     addr: match probe_server {
                         SocketAddr::V4(v4) => v4.ip().octets().to_vec(),

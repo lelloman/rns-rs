@@ -307,7 +307,7 @@ fn query_has_path(
             ),
         ]))
         .map_err(|e| format!("RPC call: {}", e))?;
-    Ok(response.as_bytes().map_or(false, |b| b.len() == 16))
+    Ok(response.as_bytes().is_some_and(|b| b.len() == 16))
 }
 
 fn request_path(addr: &RpcAddr, auth_key: &[u8; 32], dest_hash: &[u8; 16]) -> Result<(), String> {

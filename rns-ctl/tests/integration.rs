@@ -956,11 +956,9 @@ fn test_stats_history_endpoints_are_backward_compatible_with_legacy_db() {
     let packet_series_json = packet_series.json();
     let packet_buckets = packet_series_json["series"].as_array().unwrap();
     assert!(packet_buckets.len() >= 6);
-    assert!(
-        packet_buckets
-            .iter()
-            .all(|bucket| bucket["total_packets"].as_i64().unwrap_or(-1) == 0)
-    );
+    assert!(packet_buckets
+        .iter()
+        .all(|bucket| bucket["total_packets"].as_i64().unwrap_or(-1) == 0));
     assert_eq!(
         packet_series_json["anomalies"]["busy_buckets"]
             .as_array()
@@ -974,11 +972,9 @@ fn test_stats_history_endpoints_are_backward_compatible_with_legacy_db() {
     let links_json = links.json();
     let link_buckets = links_json["series"].as_array().unwrap();
     assert!(link_buckets.len() >= 6);
-    assert!(
-        link_buckets
-            .iter()
-            .all(|bucket| bucket["closed"].as_i64().unwrap_or(-1) == 0)
-    );
+    assert!(link_buckets
+        .iter()
+        .all(|bucket| bucket["closed"].as_i64().unwrap_or(-1) == 0));
     assert!(links_json["interfaces"].as_array().unwrap().is_empty());
 
     server.shutdown();

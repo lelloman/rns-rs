@@ -502,7 +502,7 @@ fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
             Ok(QueryResponse::PathTable(paths)) => {
                 let list: Vec<Value> = paths
                     .iter()
-                    .filter(|p| filter_hash.map_or(true, |h| p.hash == h))
+                    .filter(|p| filter_hash.is_none_or(|h| p.hash == h))
                     .map(|p| {
                         json!({
                             "hash": to_hex(&p.hash),
@@ -576,7 +576,7 @@ fn handle_resources(node: &NodeHandle) -> HttpResponse {
 
 fn handle_event_list(req: &HttpRequest, state: &SharedState, kind: &str) -> HttpResponse {
     let params = parse_query(&req.query);
-    let clear = params.get("clear").map_or(false, |v| v == "true");
+    let clear = params.get("clear").is_some_and(|v| v == "true");
 
     let mut s = crate::state::write_state(state);
     let items: Vec<Value> = match kind {

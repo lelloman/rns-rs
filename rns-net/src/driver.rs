@@ -7478,7 +7478,7 @@ impl Driver {
                                     e,
                                     &mut hook_injected,
                                 );
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
                                     continue;
                                 }
                             }
@@ -7696,7 +7696,7 @@ impl Driver {
                                     e,
                                     &mut hook_injected,
                                 );
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
                                     continue;
                                 }
                             }
@@ -7920,24 +7920,24 @@ impl Driver {
                     {
                         if let Ok(packet) = RawPacket::unpack(&raw) {
                             let link_id = packet.destination_hash;
-                            if let Some((iface, transport_id)) =
+                            if let Some(route_hint) =
                                 self.link_manager.get_link_route_hint(&link_id)
                             {
-                                attached_interface = Some(iface);
+                                attached_interface = Some(route_hint.interface);
                                 if packet.flags.header_type == rns_core::constants::HEADER_1 {
-                                    if let Some(next_hop) = transport_id {
+                                    if let Some(next_hop) = route_hint.transport_id {
                                         raw = inject_transport_header(&packet.raw, &next_hop);
                                         log::debug!(
                                             "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
                                             &link_id[..4],
-                                            iface.0,
+                                            route_hint.interface.0,
                                             &next_hop[..4]
                                         );
                                     } else {
                                         log::debug!(
                                             "Link SendPacket route: link={:02x?} iface={} header=1 (no transport_id)",
                                             &link_id[..4],
-                                            iface.0
+                                            route_hint.interface.0
                                         );
                                     }
                                 }

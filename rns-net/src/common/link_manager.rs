@@ -190,6 +190,12 @@ pub struct LinkManager {
     management_paths: Vec<[u8; 16]>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkRouteHint {
+    pub interface: rns_core::transport::types::InterfaceId,
+    pub transport_id: Option<[u8; 16]>,
+}
+
 impl LinkManager {
     fn resource_sdu_for_link(link: &ManagedLink) -> usize {
         // Python parity: Resource.sdu = link.mtu - HEADER_MAXSIZE - IFAC_MIN_SIZE
@@ -230,13 +236,12 @@ impl LinkManager {
     }
 
     /// Return best-known routing hint for link packets.
-    pub fn get_link_route_hint(
-        &self,
-        link_id: &LinkId,
-    ) -> Option<(rns_core::transport::types::InterfaceId, Option<[u8; 16]>)> {
+    pub fn get_link_route_hint(&self, link_id: &LinkId) -> Option<LinkRouteHint> {
         self.links.get(link_id).and_then(|link| {
-            link.route_interface
-                .map(|iface| (iface, link.route_transport_id))
+            link.route_interface.map(|interface| LinkRouteHint {
+                interface,
+                transport_id: link.route_transport_id,
+            })
         })
     }
 
@@ -2608,6 +2613,12 @@ impl LinkManager {
             }
         }
         result
+    }
+}
+
+impl Default for LinkManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

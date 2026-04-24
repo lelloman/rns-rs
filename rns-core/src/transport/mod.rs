@@ -1226,7 +1226,7 @@ impl TransportEngine {
         }
 
         let existing_set = self.path_table.get(&ctx.packet.destination_hash);
-        let was_unknown_destination = existing_set.map_or(true, |ps| ps.is_empty());
+        let was_unknown_destination = existing_set.is_none_or(|ps| ps.is_empty());
 
         // Reset stale path state before first-path installation so path-state handling
         // cannot race ahead of the path table for previously unknown destinations.
