@@ -12,7 +12,7 @@ pub mod tables;
 pub mod tunnel;
 pub mod types;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -99,7 +99,8 @@ pub struct TransportEngine {
     announce_queues: AnnounceQueues,
     ingress_control: IngressControl,
     tunnel_table: TunnelTable,
-    discovery_pr_tags: Vec<[u8; 32]>,
+    discovery_pr_tags: VecDeque<[u8; 32]>,
+    discovery_pr_tag_set: BTreeSet<[u8; 32]>,
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     path_destination_cap_evict_count: usize,
     // Job timing
@@ -134,7 +135,8 @@ impl TransportEngine {
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
             ingress_control: IngressControl::new(),
             tunnel_table: TunnelTable::new(),
-            discovery_pr_tags: Vec::new(),
+            discovery_pr_tags: VecDeque::new(),
+            discovery_pr_tag_set: BTreeSet::new(),
             discovery_path_requests: BTreeMap::new(),
             path_destination_cap_evict_count: 0,
             announces_last_checked: 0.0,
@@ -143,16 +145,18 @@ impl TransportEngine {
     }
 
     fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
-        if self.discovery_pr_tags.contains(&unique_tag) {
+        if self.discovery_pr_tag_set.contains(&unique_tag) {
             return false;
         }
         if self.config.max_discovery_pr_tags != usize::MAX
             && self.discovery_pr_tags.len() >= self.config.max_discovery_pr_tags
-            && !self.discovery_pr_tags.is_empty()
         {
-            self.discovery_pr_tags.remove(0);
+            if let Some(evicted) = self.discovery_pr_tags.pop_front() {
+                self.discovery_pr_tag_set.remove(&evicted);
+            }
         }
-        self.discovery_pr_tags.push(unique_tag);
+        self.discovery_pr_tags.push_back(unique_tag);
+        self.discovery_pr_tag_set.insert(unique_tag);
         true
     }
 
@@ -1984,6 +1988,11 @@ impl TransportEngine {
     /// Number of discovery PR tags.
     pub fn discovery_pr_tags_count(&self) -> usize {
         self.discovery_pr_tags.len()
+    }
+
+    #[cfg(test)]
+    fn has_discovery_pr_tag(&self, unique_tag: &[u8; 32]) -> bool {
+        self.discovery_pr_tag_set.contains(unique_tag)
     }
 
     /// Number of discovery path requests.
@@ -3938,8 +3947,8 @@ mod tests {
 
         let unique1 = make_unique_tag(dest1, &tag1);
         let unique2 = make_unique_tag(dest2, &tag2);
-        assert!(engine.discovery_pr_tags.contains(&unique1));
-        assert!(engine.discovery_pr_tags.contains(&unique2));
+        assert!(engine.has_discovery_pr_tag(&unique1));
+        assert!(engine.has_discovery_pr_tag(&unique2));
 
         engine.handle_path_request(
             &make_path_request_data(&dest3, &tag3),
@@ -3947,8 +3956,8 @@ mod tests {
             1002.0,
         );
         assert_eq!(engine.discovery_pr_tags_count(), 2);
-        assert!(!engine.discovery_pr_tags.contains(&unique1));
-        assert!(engine.discovery_pr_tags.contains(&unique2));
+        assert!(!engine.has_discovery_pr_tag(&unique1));
+        assert!(engine.has_discovery_pr_tag(&unique2));
 
         engine.handle_path_request(
             &make_path_request_data(&dest1, &tag1),
@@ -3956,7 +3965,7 @@ mod tests {
             1003.0,
         );
         assert_eq!(engine.discovery_pr_tags_count(), 2);
-        assert!(engine.discovery_pr_tags.contains(&unique1));
+        assert!(engine.has_discovery_pr_tag(&unique1));
     }
 
     #[test]
