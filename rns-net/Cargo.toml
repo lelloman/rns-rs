@@ -45,6 +45,10 @@ tempfile = "3"
 name = "link_dispatch"
 harness = false
 
+[[bench]]
+name = "shared_client_replay"
+harness = false
+
 [[example]]
 name = "tcp_connect"
 
