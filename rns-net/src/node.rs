@@ -303,6 +303,91 @@ fn tcp_server_discovery_runtime_from_interface(
     }
 }
 
+fn ifac_runtime_from_config(
+    ifac: Option<&IfacConfig>,
+    default_size: usize,
+) -> crate::driver::IfacRuntimeConfig {
+    crate::driver::IfacRuntimeConfig {
+        netname: ifac.and_then(|cfg| cfg.netname.clone()),
+        netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
+        size: ifac.map(|cfg| cfg.size).unwrap_or(default_size),
+    }
+}
+
+fn discoverable_interface_from_config(
+    interface_name: &str,
+    discovery: &crate::discovery::DiscoveryConfig,
+    transport_enabled: bool,
+    ifac: Option<&IfacConfig>,
+) -> crate::discovery::DiscoverableInterface {
+    crate::discovery::DiscoverableInterface {
+        interface_name: interface_name.to_string(),
+        config: discovery.clone(),
+        transport_enabled,
+        ifac_netname: ifac.and_then(|cfg| cfg.netname.clone()),
+        ifac_netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
+    }
+}
+
+fn derive_ifac_state(
+    ifac: Option<&IfacConfig>,
+    interface_name: &str,
+) -> io::Result<Option<crate::ifac::IfacState>> {
+    let Some(ifac) = ifac else {
+        return Ok(None);
+    };
+    if ifac.netname.is_none() && ifac.netkey.is_none() {
+        return Ok(None);
+    }
+
+    ifac::derive_ifac(ifac.netname.as_deref(), ifac.netkey.as_deref(), ifac.size)
+        .map(Some)
+        .map_err(|err| {
+            io::Error::other(format!(
+                "failed to derive IFAC for {}: {}",
+                interface_name, err
+            ))
+        })
+}
+
+fn register_started_interface(
+    driver: &mut Driver,
+    tx: &EventSender,
+    queue_capacity: usize,
+    id: rns_core::transport::types::InterfaceId,
+    info: rns_core::transport::types::InterfaceInfo,
+    writer: Box<dyn crate::interface::Writer>,
+    interface_type_name: String,
+    ifac_state: Option<crate::ifac::IfacState>,
+    ifac_runtime: &crate::driver::IfacRuntimeConfig,
+) {
+    let (writer, async_writer_metrics) =
+        crate::interface::wrap_async_writer(writer, id, &info.name, tx.clone(), queue_capacity);
+    driver.register_interface_runtime_defaults(&info);
+    driver.register_interface_ifac_runtime(&info.name, ifac_runtime.clone());
+    driver.engine.register_interface(info.clone());
+    driver.interfaces.insert(
+        id,
+        InterfaceEntry {
+            id,
+            info,
+            writer,
+            async_writer_metrics: Some(async_writer_metrics),
+            enabled: true,
+            online: false,
+            dynamic: false,
+            ifac: ifac_state,
+            stats: InterfaceStats {
+                started: time::now(),
+                ..Default::default()
+            },
+            interface_type: interface_type_name,
+            send_retry_at: None,
+            send_retry_backoff: Duration::ZERO,
+        },
+    );
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -1106,32 +1191,9 @@ impl RnsNode {
                 }
             };
 
-            let mut ifac_state = if let Some(ic) = iface_config.ifac.as_ref() {
-                if ic.netname.is_some() || ic.netkey.is_some() {
-                    Some(
-                        ifac::derive_ifac(ic.netname.as_deref(), ic.netkey.as_deref(), ic.size)
-                            .map_err(|err| {
-                                std::io::Error::other(format!(
-                                    "failed to derive IFAC for {}: {}",
-                                    iface_config.name, err
-                                ))
-                            })?,
-                    )
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let ifac_runtime = crate::driver::IfacRuntimeConfig {
-                netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
-                netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
-                size: iface_config
-                    .ifac
-                    .as_ref()
-                    .map(|ic| ic.size)
-                    .unwrap_or(factory.default_ifac_size()),
-            };
+            let mut ifac_state = derive_ifac_state(iface_config.ifac.as_ref(), &iface_config.name)?;
+            let ifac_runtime =
+                ifac_runtime_from_config(iface_config.ifac.as_ref(), factory.default_ifac_size());
 
             #[cfg(feature = "iface-backbone")]
             if config.backbone_peer_pool.is_some() && iface_config.type_name == "BackboneInterface"
@@ -1151,19 +1213,12 @@ impl RnsNode {
                             interface_type_name: iface_config.type_name.clone(),
                         });
                         if let Some(ref disc) = iface_config.discovery {
-                            discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
-                                interface_name: iface_config.name.clone(),
-                                config: disc.clone(),
-                                transport_enabled: config.transport_enabled,
-                                ifac_netname: iface_config
-                                    .ifac
-                                    .as_ref()
-                                    .and_then(|ic| ic.netname.clone()),
-                                ifac_netkey: iface_config
-                                    .ifac
-                                    .as_ref()
-                                    .and_then(|ic| ic.netkey.clone()),
-                            });
+                            discoverable_interfaces.push(discoverable_interface_from_config(
+                                &iface_config.name,
+                                disc,
+                                config.transport_enabled,
+                                iface_config.ifac.as_ref(),
+                            ));
                         }
                         continue;
                     }
@@ -1194,13 +1249,12 @@ impl RnsNode {
             };
 
             if let Some(ref disc) = iface_config.discovery {
-                discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
-                    interface_name: iface_config.name.clone(),
-                    config: disc.clone(),
-                    transport_enabled: config.transport_enabled,
-                    ifac_netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
-                    ifac_netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
-                });
+                discoverable_interfaces.push(discoverable_interface_from_config(
+                    &iface_config.name,
+                    disc,
+                    config.transport_enabled,
+                    iface_config.ifac.as_ref(),
+                ));
             }
 
             match result {
@@ -1210,35 +1264,16 @@ impl RnsNode {
                     writer,
                     interface_type_name,
                 } => {
-                    let (writer, async_writer_metrics) = crate::interface::wrap_async_writer(
-                        writer,
-                        id,
-                        &info.name,
-                        tx.clone(),
+                    register_started_interface(
+                        &mut driver,
+                        &tx,
                         config.interface_writer_queue_capacity,
-                    );
-                    driver.register_interface_runtime_defaults(&info);
-                    driver.register_interface_ifac_runtime(&info.name, ifac_runtime.clone());
-                    driver.engine.register_interface(info.clone());
-                    driver.interfaces.insert(
                         id,
-                        InterfaceEntry {
-                            id,
-                            info,
-                            writer,
-                            async_writer_metrics: Some(async_writer_metrics),
-                            enabled: true,
-                            online: false,
-                            dynamic: false,
-                            ifac: ifac_state,
-                            stats: InterfaceStats {
-                                started: time::now(),
-                                ..Default::default()
-                            },
-                            interface_type: interface_type_name,
-                            send_retry_at: None,
-                            send_retry_backoff: Duration::ZERO,
-                        },
+                        info,
+                        writer,
+                        interface_type_name,
+                        ifac_state,
+                        &ifac_runtime,
                     );
                 }
                 crate::interface::StartResult::Listener { control } => {
@@ -1252,57 +1287,22 @@ impl RnsNode {
                     let ifac_cfg = &iface_config.ifac;
                     let mut first = true;
                     for sub in subs {
-                        let (writer, async_writer_metrics) = crate::interface::wrap_async_writer(
-                            sub.writer,
-                            sub.id,
-                            &sub.info.name,
-                            tx.clone(),
-                            config.interface_writer_queue_capacity,
-                        );
                         let sub_ifac = if first {
                             first = false;
                             ifac_state.take()
-                        } else if let Some(ref ic) = ifac_cfg {
-                            Some(
-                                ifac::derive_ifac(
-                                    ic.netname.as_deref(),
-                                    ic.netkey.as_deref(),
-                                    ic.size,
-                                )
-                                .map_err(|err| {
-                                    std::io::Error::other(format!(
-                                        "failed to derive IFAC for subinterface {}: {}",
-                                        sub.info.name, err
-                                    ))
-                                })?,
-                            )
                         } else {
-                            None
+                            derive_ifac_state(ifac_cfg.as_ref(), &sub.info.name)?
                         };
-
-                        driver.register_interface_runtime_defaults(&sub.info);
-                        driver
-                            .register_interface_ifac_runtime(&sub.info.name, ifac_runtime.clone());
-                        driver.engine.register_interface(sub.info.clone());
-                        driver.interfaces.insert(
+                        register_started_interface(
+                            &mut driver,
+                            &tx,
+                            config.interface_writer_queue_capacity,
                             sub.id,
-                            InterfaceEntry {
-                                id: sub.id,
-                                info: sub.info,
-                                writer,
-                                async_writer_metrics: Some(async_writer_metrics),
-                                enabled: true,
-                                online: false,
-                                dynamic: false,
-                                ifac: sub_ifac,
-                                stats: InterfaceStats {
-                                    started: time::now(),
-                                    ..Default::default()
-                                },
-                                interface_type: sub.interface_type_name,
-                                send_retry_at: None,
-                                send_retry_backoff: Duration::ZERO,
-                            },
+                            sub.info,
+                            sub.writer,
+                            sub.interface_type_name,
+                            sub_ifac,
+                            &ifac_runtime,
                         );
                     }
                 }
