@@ -226,6 +226,31 @@ fn extract_discovery_config(
     })
 }
 
+fn default_discovery_runtime_config(
+    interface_name: &str,
+    interface_type: &str,
+    listen_port: Option<u16>,
+) -> crate::discovery::DiscoveryConfig {
+    crate::discovery::DiscoveryConfig {
+        discovery_name: interface_name.to_string(),
+        announce_interval: 21600,
+        stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+        reachable_on: None,
+        interface_type: interface_type.to_string(),
+        listen_port,
+        latitude: None,
+        longitude: None,
+        height: None,
+    }
+}
+
+fn discovery_runtime_ifac_fields(ifac: Option<&IfacConfig>) -> (Option<String>, Option<String>) {
+    (
+        ifac.and_then(|cfg| cfg.netname.clone()),
+        ifac.and_then(|cfg| cfg.netkey.clone()),
+    )
+}
+
 #[cfg(feature = "iface-backbone")]
 fn backbone_discovery_runtime_from_interface(
     interface_name: &str,
@@ -239,32 +264,23 @@ fn backbone_discovery_runtime_from_interface(
         BackboneMode::Client(_) => return None,
     };
 
-    let startup_config = discovery
-        .cloned()
-        .unwrap_or(crate::discovery::DiscoveryConfig {
-            discovery_name: interface_name.to_string(),
-            announce_interval: 21600,
-            stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
-            reachable_on: None,
-            interface_type: "BackboneInterface".to_string(),
-            listen_port: Some(config.listen_port),
-            latitude: None,
-            longitude: None,
-            height: None,
-        });
-    let startup = crate::driver::BackboneDiscoveryRuntime {
-        discoverable: discovery.is_some(),
-        config: startup_config,
-        transport_enabled,
-        ifac_netname: ifac.and_then(|cfg| cfg.netname.clone()),
-        ifac_netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
-    };
+    let startup_config = discovery.cloned().unwrap_or_else(|| {
+        default_discovery_runtime_config(
+            interface_name,
+            "BackboneInterface",
+            Some(config.listen_port),
+        )
+    });
+    let (ifac_netname, ifac_netkey) = discovery_runtime_ifac_fields(ifac);
 
-    Some(crate::driver::BackboneDiscoveryRuntimeHandle {
-        interface_name: config.name.clone(),
-        current: startup.clone(),
-        startup,
-    })
+    Some(crate::driver::BackboneDiscoveryRuntimeHandle::from_parts(
+        config.name.clone(),
+        startup_config,
+        transport_enabled,
+        ifac_netname,
+        ifac_netkey,
+        discovery.is_some(),
+    ))
 }
 
 #[cfg(feature = "iface-tcp")]
@@ -275,43 +291,34 @@ fn tcp_server_discovery_runtime_from_interface(
     transport_enabled: bool,
     ifac: Option<&IfacConfig>,
 ) -> crate::driver::TcpServerDiscoveryRuntimeHandle {
-    let startup_config = discovery
-        .cloned()
-        .unwrap_or(crate::discovery::DiscoveryConfig {
-            discovery_name: interface_name.to_string(),
-            announce_interval: 21600,
-            stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
-            reachable_on: None,
-            interface_type: "TCPServerInterface".to_string(),
-            listen_port: Some(config.listen_port),
-            latitude: None,
-            longitude: None,
-            height: None,
-        });
-    let startup = crate::driver::TcpServerDiscoveryRuntime {
-        discoverable: discovery.is_some(),
-        config: startup_config,
-        transport_enabled,
-        ifac_netname: ifac.and_then(|cfg| cfg.netname.clone()),
-        ifac_netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
-    };
+    let startup_config = discovery.cloned().unwrap_or_else(|| {
+        default_discovery_runtime_config(
+            interface_name,
+            "TCPServerInterface",
+            Some(config.listen_port),
+        )
+    });
+    let (ifac_netname, ifac_netkey) = discovery_runtime_ifac_fields(ifac);
 
-    crate::driver::TcpServerDiscoveryRuntimeHandle {
-        interface_name: config.name.clone(),
-        current: startup.clone(),
-        startup,
-    }
+    crate::driver::TcpServerDiscoveryRuntimeHandle::from_parts(
+        config.name.clone(),
+        startup_config,
+        transport_enabled,
+        ifac_netname,
+        ifac_netkey,
+        discovery.is_some(),
+    )
 }
 
 fn ifac_runtime_from_config(
     ifac: Option<&IfacConfig>,
     default_size: usize,
 ) -> crate::driver::IfacRuntimeConfig {
-    crate::driver::IfacRuntimeConfig {
-        netname: ifac.and_then(|cfg| cfg.netname.clone()),
-        netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
-        size: ifac.map(|cfg| cfg.size).unwrap_or(default_size),
-    }
+    crate::driver::IfacRuntimeConfig::from_parts(
+        ifac.and_then(|cfg| cfg.netname.clone()),
+        ifac.and_then(|cfg| cfg.netkey.clone()),
+        ifac.map(|cfg| cfg.size).unwrap_or(default_size),
+    )
 }
 
 fn discoverable_interface_from_config(

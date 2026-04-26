@@ -175,6 +175,66 @@ pub(crate) struct IfacRuntimeConfig {
 }
 
 #[cfg(feature = "iface-backbone")]
+impl BackboneDiscoveryRuntimeHandle {
+    pub(crate) fn from_parts(
+        interface_name: String,
+        startup_config: crate::discovery::DiscoveryConfig,
+        transport_enabled: bool,
+        ifac_netname: Option<String>,
+        ifac_netkey: Option<String>,
+        discoverable: bool,
+    ) -> Self {
+        let startup = BackboneDiscoveryRuntime {
+            discoverable,
+            config: startup_config,
+            transport_enabled,
+            ifac_netname,
+            ifac_netkey,
+        };
+        Self {
+            interface_name,
+            current: startup.clone(),
+            startup,
+        }
+    }
+}
+
+#[cfg(feature = "iface-tcp")]
+impl TcpServerDiscoveryRuntimeHandle {
+    pub(crate) fn from_parts(
+        interface_name: String,
+        startup_config: crate::discovery::DiscoveryConfig,
+        transport_enabled: bool,
+        ifac_netname: Option<String>,
+        ifac_netkey: Option<String>,
+        discoverable: bool,
+    ) -> Self {
+        let startup = TcpServerDiscoveryRuntime {
+            discoverable,
+            config: startup_config,
+            transport_enabled,
+            ifac_netname,
+            ifac_netkey,
+        };
+        Self {
+            interface_name,
+            current: startup.clone(),
+            startup,
+        }
+    }
+}
+
+impl IfacRuntimeConfig {
+    pub(crate) fn from_parts(netname: Option<String>, netkey: Option<String>, size: usize) -> Self {
+        Self {
+            netname,
+            netkey,
+            size,
+        }
+    }
+}
+
+#[cfg(feature = "iface-backbone")]
 #[derive(Debug, Clone)]
 pub struct BackbonePeerPoolSettings {
     pub max_connected: usize,

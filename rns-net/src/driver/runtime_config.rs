@@ -1,6 +1,142 @@
 use super::*;
 
 impl Driver {
+    fn is_discovery_runtime_setting(setting: &str) -> bool {
+        matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        )
+    }
+
+    fn discovery_runtime_entry(
+        key: &str,
+        setting: &str,
+        interface_label: &str,
+        current_discoverable: bool,
+        startup_discoverable: bool,
+        current_config: &crate::discovery::DiscoveryConfig,
+        startup_config: &crate::discovery::DiscoveryConfig,
+    ) -> Option<RuntimeConfigEntry> {
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: String|
+         -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::Immediate,
+                description: Some(description),
+            }
+        };
+
+        match setting {
+            "discoverable" => Some(make_entry(
+                RuntimeConfigValue::Bool(current_discoverable),
+                RuntimeConfigValue::Bool(startup_discoverable),
+                format!(
+                    "Whether this {} interface is advertised through interface discovery.",
+                    interface_label
+                ),
+            )),
+            "discovery_name" => Some(make_entry(
+                RuntimeConfigValue::String(current_config.discovery_name.clone()),
+                RuntimeConfigValue::String(startup_config.discovery_name.clone()),
+                format!(
+                    "Human-readable discovery name advertised for this {} interface.",
+                    interface_label
+                ),
+            )),
+            "announce_interval_secs" => Some(make_entry(
+                RuntimeConfigValue::Int(current_config.announce_interval as i64),
+                RuntimeConfigValue::Int(startup_config.announce_interval as i64),
+                format!(
+                    "Discovery announce interval for this {} interface in seconds.",
+                    interface_label
+                ),
+            )),
+            "reachable_on" => Some(make_entry(
+                current_config
+                    .reachable_on
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .reachable_on
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Reachable hostname or IP advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "stamp_value" => Some(make_entry(
+                RuntimeConfigValue::Int(current_config.stamp_value as i64),
+                RuntimeConfigValue::Int(startup_config.stamp_value as i64),
+                format!(
+                    "Discovery proof-of-work stamp cost for this {} interface.",
+                    interface_label
+                ),
+            )),
+            "latitude" => Some(make_entry(
+                current_config
+                    .latitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .latitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Latitude advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "longitude" => Some(make_entry(
+                current_config
+                    .longitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .longitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Longitude advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "height" => Some(make_entry(
+                current_config
+                    .height
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .height
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Height advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            _ => None,
+        }
+    }
+
     pub(crate) fn register_backbone_runtime(&mut self, handle: BackboneRuntimeConfigHandle) {
         self.backbone_runtime
             .insert(handle.interface_name.clone(), handle);
@@ -2723,123 +2859,17 @@ impl Driver {
     pub(crate) fn tcp_server_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("tcp_server.")?;
         let (name, setting) = rest.split_once('.')?;
-        if matches!(
-            setting,
-            "discoverable"
-                | "discovery_name"
-                | "announce_interval_secs"
-                | "reachable_on"
-                | "stamp_value"
-                | "latitude"
-                | "longitude"
-                | "height"
-        ) {
+        if Self::is_discovery_runtime_setting(setting) {
             let handle = self.tcp_server_discovery_runtime.get(name)?;
-            let current = &handle.current;
-            let startup = &handle.startup;
-            let make_entry = |value: RuntimeConfigValue,
-                              default: RuntimeConfigValue,
-                              apply_mode: RuntimeConfigApplyMode,
-                              description: &str|
-             -> RuntimeConfigEntry {
-                RuntimeConfigEntry {
-                    key: key.to_string(),
-                    source: if value == default {
-                        RuntimeConfigSource::Startup
-                    } else {
-                        RuntimeConfigSource::RuntimeOverride
-                    },
-                    value,
-                    default,
-                    apply_mode,
-                    description: Some(description.to_string()),
-                }
-            };
-            return match setting {
-                "discoverable" => Some(make_entry(
-                    RuntimeConfigValue::Bool(current.discoverable),
-                    RuntimeConfigValue::Bool(startup.discoverable),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Whether this TCP server interface is advertised through interface discovery.",
-                )),
-                "discovery_name" => Some(make_entry(
-                    RuntimeConfigValue::String(current.config.discovery_name.clone()),
-                    RuntimeConfigValue::String(startup.config.discovery_name.clone()),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Human-readable discovery name advertised for this TCP server interface.",
-                )),
-                "announce_interval_secs" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.config.announce_interval as i64),
-                    RuntimeConfigValue::Int(startup.config.announce_interval as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Discovery announce interval for this TCP server interface in seconds.",
-                )),
-                "reachable_on" => Some(make_entry(
-                    current
-                        .config
-                        .reachable_on
-                        .clone()
-                        .map(RuntimeConfigValue::String)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .reachable_on
-                        .clone()
-                        .map(RuntimeConfigValue::String)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Reachable hostname or IP advertised for this TCP server interface; null clears it.",
-                )),
-                "stamp_value" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.config.stamp_value as i64),
-                    RuntimeConfigValue::Int(startup.config.stamp_value as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Discovery proof-of-work stamp cost for this TCP server interface.",
-                )),
-                "latitude" => Some(make_entry(
-                    current
-                        .config
-                        .latitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .latitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Latitude advertised for this TCP server interface; null clears it.",
-                )),
-                "longitude" => Some(make_entry(
-                    current
-                        .config
-                        .longitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .longitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Longitude advertised for this TCP server interface; null clears it.",
-                )),
-                "height" => Some(make_entry(
-                    current
-                        .config
-                        .height
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .height
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Height advertised for this TCP server interface; null clears it.",
-                )),
-                _ => None,
-            };
+            return Self::discovery_runtime_entry(
+                key,
+                setting,
+                "TCP server",
+                handle.current.discoverable,
+                handle.startup.discoverable,
+                &handle.current.config,
+                &handle.startup.config,
+            );
         }
 
         let handle = self.tcp_server_runtime.get(name)?;
@@ -3110,105 +3140,17 @@ impl Driver {
             description: Some(description.to_string()),
         };
 
-        if matches!(
-            setting,
-            "discoverable"
-                | "discovery_name"
-                | "announce_interval_secs"
-                | "reachable_on"
-                | "stamp_value"
-                | "latitude"
-                | "longitude"
-                | "height"
-        ) {
+        if Self::is_discovery_runtime_setting(setting) {
             let handle = self.backbone_discovery_runtime.get(name)?;
-            let current = &handle.current;
-            let startup = &handle.startup;
-            return match setting {
-                "discoverable" => Some(make_entry(
-                    RuntimeConfigValue::Bool(current.discoverable),
-                    RuntimeConfigValue::Bool(startup.discoverable),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Whether this backbone interface is advertised through interface discovery.",
-                )),
-                "discovery_name" => Some(make_entry(
-                    RuntimeConfigValue::String(current.config.discovery_name.clone()),
-                    RuntimeConfigValue::String(startup.config.discovery_name.clone()),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Human-readable discovery name advertised for this backbone interface.",
-                )),
-                "announce_interval_secs" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.config.announce_interval as i64),
-                    RuntimeConfigValue::Int(startup.config.announce_interval as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Discovery announce interval for this backbone interface in seconds.",
-                )),
-                "reachable_on" => Some(make_entry(
-                    current
-                        .config
-                        .reachable_on
-                        .clone()
-                        .map(RuntimeConfigValue::String)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .reachable_on
-                        .clone()
-                        .map(RuntimeConfigValue::String)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Reachable hostname or IP advertised for this backbone interface; null clears it.",
-                )),
-                "stamp_value" => Some(make_entry(
-                    RuntimeConfigValue::Int(current.config.stamp_value as i64),
-                    RuntimeConfigValue::Int(startup.config.stamp_value as i64),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Discovery proof-of-work stamp cost for this backbone interface.",
-                )),
-                "latitude" => Some(make_entry(
-                    current
-                        .config
-                        .latitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .latitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Latitude advertised for this backbone interface; null clears it.",
-                )),
-                "longitude" => Some(make_entry(
-                    current
-                        .config
-                        .longitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .longitude
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Longitude advertised for this backbone interface; null clears it.",
-                )),
-                "height" => Some(make_entry(
-                    current
-                        .config
-                        .height
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    startup
-                        .config
-                        .height
-                        .map(RuntimeConfigValue::Float)
-                        .unwrap_or(RuntimeConfigValue::Null),
-                    RuntimeConfigApplyMode::Immediate,
-                    "Height advertised for this backbone interface; null clears it.",
-                )),
-                _ => None,
-            };
+            return Self::discovery_runtime_entry(
+                key,
+                setting,
+                "backbone",
+                handle.current.discoverable,
+                handle.startup.discoverable,
+                &handle.current.config,
+                &handle.startup.config,
+            );
         }
 
         if let Some(handle) = self.backbone_runtime.get(name) {
