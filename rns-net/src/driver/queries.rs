@@ -717,41 +717,15 @@ impl Driver {
                         }),
                         Err(err) => Err(err),
                     },
-                    #[cfg(feature = "iface-backbone")]
-                    _ if key.starts_with("backbone.") => {
-                        self.set_backbone_runtime_config(&key, value)
-                    }
-                    #[cfg(feature = "iface-backbone")]
-                    _ if key.starts_with("backbone_client.") => {
-                        self.set_backbone_client_runtime_config(&key, value)
-                    }
-                    #[cfg(feature = "iface-tcp")]
-                    _ if key.starts_with("tcp_server.") => {
-                        self.set_tcp_server_runtime_config(&key, value)
-                    }
-                    #[cfg(feature = "iface-tcp")]
-                    _ if key.starts_with("tcp_client.") => {
-                        self.set_tcp_client_runtime_config(&key, value)
-                    }
-                    #[cfg(feature = "iface-udp")]
-                    _ if key.starts_with("udp.") => self.set_udp_runtime_config(&key, value),
-                    #[cfg(feature = "iface-auto")]
-                    _ if key.starts_with("auto.") => self.set_auto_runtime_config(&key, value),
-                    #[cfg(feature = "iface-i2p")]
-                    _ if key.starts_with("i2p.") => self.set_i2p_runtime_config(&key, value),
-                    #[cfg(feature = "iface-pipe")]
-                    _ if key.starts_with("pipe.") => self.set_pipe_runtime_config(&key, value),
-                    #[cfg(feature = "iface-rnode")]
-                    _ if key.starts_with("rnode.") => self.set_rnode_runtime_config(&key, value),
-                    _ if key.starts_with("interface.") => {
-                        self.set_generic_interface_runtime_config(&key, value)
-                    }
-                    _ => {
-                        return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        }))
-                    }
+                    _ => match Self::runtime_config_family_for_key(&key) {
+                        Some(family) => self.set_runtime_config_family_value(family, &key, value),
+                        None => {
+                            return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::UnknownKey,
+                                message: format!("unknown runtime-config key '{}'", key),
+                            }))
+                        }
+                    },
                 };
 
                 QueryResponse::RuntimeConfigSet(match result {
@@ -822,39 +796,15 @@ impl Driver {
                         }
                         Ok(())
                     }
-                    #[cfg(feature = "iface-backbone")]
-                    _ if key.starts_with("backbone.") => self.reset_backbone_runtime_config(&key),
-                    #[cfg(feature = "iface-backbone")]
-                    _ if key.starts_with("backbone_client.") => {
-                        self.reset_backbone_client_runtime_config(&key)
-                    }
-                    #[cfg(feature = "iface-tcp")]
-                    _ if key.starts_with("tcp_server.") => {
-                        self.reset_tcp_server_runtime_config(&key)
-                    }
-                    #[cfg(feature = "iface-tcp")]
-                    _ if key.starts_with("tcp_client.") => {
-                        self.reset_tcp_client_runtime_config(&key)
-                    }
-                    #[cfg(feature = "iface-udp")]
-                    _ if key.starts_with("udp.") => self.reset_udp_runtime_config(&key),
-                    #[cfg(feature = "iface-auto")]
-                    _ if key.starts_with("auto.") => self.reset_auto_runtime_config(&key),
-                    #[cfg(feature = "iface-i2p")]
-                    _ if key.starts_with("i2p.") => self.reset_i2p_runtime_config(&key),
-                    #[cfg(feature = "iface-pipe")]
-                    _ if key.starts_with("pipe.") => self.reset_pipe_runtime_config(&key),
-                    #[cfg(feature = "iface-rnode")]
-                    _ if key.starts_with("rnode.") => self.reset_rnode_runtime_config(&key),
-                    _ if key.starts_with("interface.") => {
-                        self.reset_generic_interface_runtime_config(&key)
-                    }
-                    _ => {
-                        return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        }))
-                    }
+                    _ => match Self::runtime_config_family_for_key(&key) {
+                        Some(family) => self.reset_runtime_config_family_value(family, &key),
+                        None => {
+                            return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::UnknownKey,
+                                message: format!("unknown runtime-config key '{}'", key),
+                            }))
+                        }
+                    },
                 };
 
                 QueryResponse::RuntimeConfigReset(match result {

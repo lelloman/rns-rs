@@ -1,5 +1,28 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeConfigFamily {
+    #[cfg(feature = "iface-backbone")]
+    Backbone,
+    #[cfg(feature = "iface-backbone")]
+    BackboneClient,
+    #[cfg(feature = "iface-tcp")]
+    TcpServer,
+    #[cfg(feature = "iface-tcp")]
+    TcpClient,
+    #[cfg(feature = "iface-udp")]
+    Udp,
+    #[cfg(feature = "iface-auto")]
+    Auto,
+    #[cfg(feature = "iface-i2p")]
+    I2p,
+    #[cfg(feature = "iface-pipe")]
+    Pipe,
+    #[cfg(feature = "iface-rnode")]
+    Rnode,
+    Interface,
+}
+
 impl Driver {
     fn is_discovery_runtime_setting(setting: &str) -> bool {
         matches!(
@@ -134,6 +157,161 @@ impl Driver {
                 ),
             )),
             _ => None,
+        }
+    }
+
+    pub(crate) fn runtime_config_family_for_key(key: &str) -> Option<RuntimeConfigFamily> {
+        #[cfg(feature = "iface-backbone")]
+        if key.starts_with("backbone.") {
+            return Some(RuntimeConfigFamily::Backbone);
+        }
+        #[cfg(feature = "iface-backbone")]
+        if key.starts_with("backbone_client.") {
+            return Some(RuntimeConfigFamily::BackboneClient);
+        }
+        #[cfg(feature = "iface-tcp")]
+        if key.starts_with("tcp_server.") {
+            return Some(RuntimeConfigFamily::TcpServer);
+        }
+        #[cfg(feature = "iface-tcp")]
+        if key.starts_with("tcp_client.") {
+            return Some(RuntimeConfigFamily::TcpClient);
+        }
+        #[cfg(feature = "iface-udp")]
+        if key.starts_with("udp.") {
+            return Some(RuntimeConfigFamily::Udp);
+        }
+        #[cfg(feature = "iface-auto")]
+        if key.starts_with("auto.") {
+            return Some(RuntimeConfigFamily::Auto);
+        }
+        #[cfg(feature = "iface-i2p")]
+        if key.starts_with("i2p.") {
+            return Some(RuntimeConfigFamily::I2p);
+        }
+        #[cfg(feature = "iface-pipe")]
+        if key.starts_with("pipe.") {
+            return Some(RuntimeConfigFamily::Pipe);
+        }
+        #[cfg(feature = "iface-rnode")]
+        if key.starts_with("rnode.") {
+            return Some(RuntimeConfigFamily::Rnode);
+        }
+        if key.starts_with("interface.") {
+            return Some(RuntimeConfigFamily::Interface);
+        }
+        None
+    }
+
+    pub(crate) fn runtime_config_family_entry(
+        &self,
+        family: RuntimeConfigFamily,
+        key: &str,
+    ) -> Option<RuntimeConfigEntry> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.backbone_runtime_entry(key),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.backbone_client_runtime_entry(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.tcp_server_runtime_entry(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.tcp_client_runtime_entry(key),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.udp_runtime_entry(key),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.auto_runtime_entry(key),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.i2p_runtime_entry(key),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.pipe_runtime_entry(key),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.rnode_runtime_entry(key),
+            RuntimeConfigFamily::Interface => self.generic_interface_runtime_entry(key),
+        }
+    }
+
+    pub(crate) fn runtime_config_family_entries(
+        &self,
+        family: RuntimeConfigFamily,
+    ) -> Vec<RuntimeConfigEntry> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.list_backbone_runtime_config(),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.list_backbone_client_runtime_config(),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.list_tcp_server_runtime_config(),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.list_tcp_client_runtime_config(),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.list_udp_runtime_config(),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.list_auto_runtime_config(),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.list_i2p_runtime_config(),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.list_pipe_runtime_config(),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.list_rnode_runtime_config(),
+            RuntimeConfigFamily::Interface => self.list_generic_interface_runtime_config(),
+        }
+    }
+
+    pub(crate) fn set_runtime_config_family_value(
+        &mut self,
+        family: RuntimeConfigFamily,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.set_backbone_runtime_config(key, value),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.set_backbone_client_runtime_config(key, value),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.set_tcp_server_runtime_config(key, value),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.set_tcp_client_runtime_config(key, value),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.set_udp_runtime_config(key, value),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.set_auto_runtime_config(key, value),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.set_i2p_runtime_config(key, value),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.set_pipe_runtime_config(key, value),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.set_rnode_runtime_config(key, value),
+            RuntimeConfigFamily::Interface => self.set_generic_interface_runtime_config(key, value),
+        }
+    }
+
+    pub(crate) fn reset_runtime_config_family_value(
+        &mut self,
+        family: RuntimeConfigFamily,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.reset_backbone_runtime_config(key),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.reset_backbone_client_runtime_config(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.reset_tcp_server_runtime_config(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.reset_tcp_client_runtime_config(key),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.reset_udp_runtime_config(key),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.reset_auto_runtime_config(key),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.reset_i2p_runtime_config(key),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.reset_pipe_runtime_config(key),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.reset_rnode_runtime_config(key),
+            RuntimeConfigFamily::Interface => self.reset_generic_interface_runtime_config(key),
         }
     }
 
@@ -743,46 +921,8 @@ impl Driver {
                 ))
             }
             _ => {
-                #[cfg(feature = "iface-backbone")]
-                if let Some(entry) = self.backbone_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-backbone")]
-                if let Some(entry) = self.backbone_client_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-tcp")]
-                if let Some(entry) = self.tcp_server_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-tcp")]
-                if let Some(entry) = self.tcp_client_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-udp")]
-                if let Some(entry) = self.udp_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-auto")]
-                if let Some(entry) = self.auto_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-i2p")]
-                if let Some(entry) = self.i2p_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-pipe")]
-                if let Some(entry) = self.pipe_runtime_entry(key) {
-                    return Some(entry);
-                }
-                #[cfg(feature = "iface-rnode")]
-                if let Some(entry) = self.rnode_runtime_entry(key) {
-                    return Some(entry);
-                }
-                if let Some(entry) = self.generic_interface_runtime_entry(key) {
-                    return Some(entry);
-                }
-                None
+                Self::runtime_config_family_for_key(key)
+                    .and_then(|family| self.runtime_config_family_entry(family, key))
             }
         }
     }
@@ -812,36 +952,24 @@ impl Driver {
             );
         }
         #[cfg(feature = "iface-backbone")]
-        {
-            entries.extend(self.list_backbone_runtime_config());
-            entries.extend(self.list_backbone_client_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Backbone));
+        #[cfg(feature = "iface-backbone")]
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::BackboneClient));
         #[cfg(feature = "iface-tcp")]
-        {
-            entries.extend(self.list_tcp_server_runtime_config());
-            entries.extend(self.list_tcp_client_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::TcpServer));
+        #[cfg(feature = "iface-tcp")]
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::TcpClient));
         #[cfg(feature = "iface-udp")]
-        {
-            entries.extend(self.list_udp_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Udp));
         #[cfg(feature = "iface-auto")]
-        {
-            entries.extend(self.list_auto_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Auto));
         #[cfg(feature = "iface-i2p")]
-        {
-            entries.extend(self.list_i2p_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::I2p));
         #[cfg(feature = "iface-pipe")]
-        {
-            entries.extend(self.list_pipe_runtime_config());
-        }
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Pipe));
         #[cfg(feature = "iface-rnode")]
-        {
-            entries.extend(self.list_rnode_runtime_config());
-        }
-        entries.extend(self.list_generic_interface_runtime_config());
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Rnode));
+        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Interface));
 
         entries
     }
