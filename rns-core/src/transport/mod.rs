@@ -2725,7 +2725,10 @@ mod tests {
         let announce_ctx = engine
             .prepare_inbound_packet(&announce.raw, InterfaceId(9), 1000.0)
             .expect("announce should parse and pass filter");
-        assert_eq!(announce_ctx.original_raw.as_deref(), Some(announce.raw.as_slice()));
+        assert_eq!(
+            announce_ctx.original_raw.as_deref(),
+            Some(announce.raw.as_slice())
+        );
     }
 
     #[test]

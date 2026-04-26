@@ -435,7 +435,7 @@ fn test_transport_routing_interop() {
                         assert_eq!(&raw[2..18], &next_hop, "transport_id mismatch for {}", desc);
                         // Rest should match
                         assert_eq!(
-                            raw.as_slice(),
+                            raw.as_ref(),
                             expected_raw.as_slice(),
                             "raw mismatch for {}",
                             desc

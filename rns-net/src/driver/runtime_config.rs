@@ -268,7 +268,9 @@ impl Driver {
             #[cfg(feature = "iface-backbone")]
             RuntimeConfigFamily::Backbone => self.set_backbone_runtime_config(key, value),
             #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::BackboneClient => self.set_backbone_client_runtime_config(key, value),
+            RuntimeConfigFamily::BackboneClient => {
+                self.set_backbone_client_runtime_config(key, value)
+            }
             #[cfg(feature = "iface-tcp")]
             RuntimeConfigFamily::TcpServer => self.set_tcp_server_runtime_config(key, value),
             #[cfg(feature = "iface-tcp")]
@@ -920,10 +922,8 @@ impl Driver {
                     "Max queued bytes in the provider bridge.",
                 ))
             }
-            _ => {
-                Self::runtime_config_family_for_key(key)
-                    .and_then(|family| self.runtime_config_family_entry(family, key))
-            }
+            _ => Self::runtime_config_family_for_key(key)
+                .and_then(|family| self.runtime_config_family_entry(family, key)),
         }
     }
 

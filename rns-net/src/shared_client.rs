@@ -63,11 +63,7 @@ impl RnsNode {
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
     ) -> io::Result<Self> {
-        Self::connect_shared_with_reconnect_wait(
-            config,
-            callbacks,
-            Duration::from_secs(8),
-        )
+        Self::connect_shared_with_reconnect_wait(config, callbacks, Duration::from_secs(8))
     }
 
     fn connect_shared_with_reconnect_wait(
@@ -343,7 +339,12 @@ pub fn bench_shared_client_replay_once(
 
     let (tx, rx) = event::channel();
     let tick_interval_ms = Arc::new(AtomicU64::new(1000));
-    let mut driver = Driver::new(transport_config, rx, tx.clone(), Box::new(BenchNoopCallbacks));
+    let mut driver = Driver::new(
+        transport_config,
+        rx,
+        tx.clone(),
+        Box::new(BenchNoopCallbacks),
+    );
     driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
 
     let local_config = LocalClientConfig {
@@ -404,19 +405,24 @@ pub fn bench_shared_client_replay_once(
             driver.run();
         })?;
 
-    let mut stream1 = accepted1_rx.recv_timeout(Duration::from_secs(2)).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("shared bench initial accept failed: {e}"),
-        )
-    })?;
+    let mut stream1 = accepted1_rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("shared bench initial accept failed: {e}"),
+            )
+        })?;
     stream1.set_read_timeout(Some(Duration::from_secs(2)))?;
 
     let mut records = Vec::new();
     for i in 0..announce_count {
         let mut prv_key = [0u8; 64];
         for (j, byte) in prv_key.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(23).wrapping_add(j as u8).wrapping_add(5);
+            *byte = (i as u8)
+                .wrapping_mul(23)
+                .wrapping_add(j as u8)
+                .wrapping_add(5);
         }
         let identity = Identity::from_private_key(&prv_key);
         let aspect = format!("echo-{i}");
@@ -443,7 +449,11 @@ pub fn bench_shared_client_replay_once(
         .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("{e}")))?;
     }
 
-    let _ = read_until_frames(&mut stream1, announce_count, rns_core::constants::CONTEXT_NONE)?;
+    let _ = read_until_frames(
+        &mut stream1,
+        announce_count,
+        rns_core::constants::CONTEXT_NONE,
+    )?;
     drop(stream1);
 
     let listener2 = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))?;
@@ -453,12 +463,14 @@ pub fn bench_shared_client_replay_once(
         accepted2_tx.send(stream).unwrap();
     });
 
-    let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(2)).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("shared bench reconnect accept failed: {e}"),
-        )
-    })?;
+    let mut stream2 = accepted2_rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("shared bench reconnect accept failed: {e}"),
+            )
+        })?;
     stream2.set_read_timeout(Some(Duration::from_secs(2)))?;
     let frames = read_until_frames(
         &mut stream2,

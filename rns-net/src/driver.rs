@@ -418,12 +418,10 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     next_hop,
                     interface: InterfaceId(interface),
                 },
-                ActionWire::CacheAnnounce { packet_hash, raw } => {
-                    TransportAction::CacheAnnounce {
-                        packet_hash,
-                        raw: raw.into(),
-                    }
-                }
+                ActionWire::CacheAnnounce { packet_hash, raw } => TransportAction::CacheAnnounce {
+                    packet_hash,
+                    raw: raw.into(),
+                },
                 ActionWire::TunnelEstablished {
                     tunnel_id,
                     interface,

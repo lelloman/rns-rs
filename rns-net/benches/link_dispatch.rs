@@ -51,8 +51,13 @@ fn setup_active_link() -> (LinkManager, LinkManager, [u8; 16]) {
     );
 
     let mut initiator_mgr = LinkManager::new();
-    let (link_id, init_actions) =
-        initiator_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+    let (link_id, init_actions) = initiator_mgr.create_link(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        &mut rng,
+    );
     let linkrequest_raw = extract_send_packet_at(&init_actions, 1);
     let lr_packet = RawPacket::unpack(&linkrequest_raw).unwrap();
 
@@ -97,7 +102,12 @@ fn bench_send_on_link(c: &mut Criterion) {
             setup_active_link,
             |(mut init_mgr, _resp_mgr, link_id)| {
                 let mut rng = make_rng(0x41);
-                black_box(init_mgr.send_on_link(&link_id, &payload, constants::CONTEXT_NONE, &mut rng))
+                black_box(init_mgr.send_on_link(
+                    &link_id,
+                    &payload,
+                    constants::CONTEXT_NONE,
+                    &mut rng,
+                ))
             },
             BatchSize::SmallInput,
         );
@@ -114,9 +124,11 @@ fn bench_send_request(c: &mut Criterion) {
         b.iter_batched(
             setup_active_link,
             |(mut init_mgr, mut resp_mgr, link_id)| {
-                resp_mgr.register_request_handler("/bench", None, |_link_id, _path, _data, _remote| {
-                    Some(b"OK".to_vec())
-                });
+                resp_mgr.register_request_handler(
+                    "/bench",
+                    None,
+                    |_link_id, _path, _data, _remote| Some(b"OK".to_vec()),
+                );
                 let mut rng = make_rng(0x51);
                 black_box(init_mgr.send_request(&link_id, "/bench", &request_data, &mut rng))
             },
@@ -144,5 +156,10 @@ fn bench_send_resource(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_send_on_link, bench_send_request, bench_send_resource);
+criterion_group!(
+    benches,
+    bench_send_on_link,
+    bench_send_request,
+    bench_send_resource
+);
 criterion_main!(benches);

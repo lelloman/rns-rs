@@ -96,12 +96,12 @@ pub fn route_outbound(
             );
 
             if should_transmit {
-                    actions.push(TransportAction::SendOnInterface {
-                        interface: iface_info.id,
-                        raw: shared_raw.clone(),
-                    });
-                }
+                actions.push(TransportAction::SendOnInterface {
+                    interface: iface_info.id,
+                    raw: shared_raw.clone(),
+                });
             }
+        }
     } else {
         // Regular broadcast
         // Python Transport.py:1037-1038: if attached_interface is set,

@@ -3,7 +3,9 @@ use rns_core::announce::AnnounceData;
 use rns_core::constants;
 use rns_core::destination;
 use rns_core::packet::{PacketFlags, RawPacket};
-use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo, TransportConfig};
+use rns_core::transport::types::{
+    IngressControlConfig, InterfaceId, InterfaceInfo, TransportConfig,
+};
 use rns_core::transport::TransportEngine;
 use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
@@ -78,7 +80,15 @@ fn build_announce_packet(identity: &Identity, name_hash: [u8; 10], hops: u8) -> 
         destination_type: constants::DESTINATION_SINGLE,
         packet_type: constants::PACKET_TYPE_ANNOUNCE,
     };
-    RawPacket::pack(flags, hops, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap()
+    RawPacket::pack(
+        flags,
+        hops,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
+    )
+    .unwrap()
 }
 
 fn build_announce_packets(count: usize) -> Vec<RawPacket> {
@@ -86,7 +96,10 @@ fn build_announce_packets(count: usize) -> Vec<RawPacket> {
         .map(|i| {
             let mut prv = [0u8; 64];
             for (j, byte) in prv.iter_mut().enumerate() {
-                *byte = (i as u8).wrapping_mul(17).wrapping_add(j as u8).wrapping_add(1);
+                *byte = (i as u8)
+                    .wrapping_mul(17)
+                    .wrapping_add(j as u8)
+                    .wrapping_add(1);
             }
             let identity = Identity::from_private_key(&prv);
             let mut name_hash = [0u8; 10];

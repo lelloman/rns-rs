@@ -1602,9 +1602,14 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        if let Ok((raw, _packet_hash)) =
-            RawPacket::pack_raw_with_hash(flags, 0, link_id, None, constants::CONTEXT_LINKCLOSE, &[])
-        {
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_LINKCLOSE,
+            &[],
+        ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -2117,9 +2122,9 @@ impl LinkManager {
             .get(link_id)
             .map(|l| l.engine.mtu() as usize)
             .unwrap_or(constants::MTU);
-        if let Ok((raw, _packet_hash)) =
-            RawPacket::pack_raw_with_hash_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
-        {
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
+            flags, 0, link_id, None, context, data, max_mtu,
+        ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -2284,9 +2289,14 @@ impl LinkManager {
                     destination_type: constants::DESTINATION_LINK,
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
-                if let Ok((raw, _packet_hash)) =
-                    RawPacket::pack_raw_with_hash(flags, 0, link_id, None, constants::CONTEXT_KEEPALIVE, &[])
-                {
+                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
+                    flags,
+                    0,
+                    link_id,
+                    None,
+                    constants::CONTEXT_KEEPALIVE,
+                    &[],
+                ) {
                     all_actions.push(LinkManagerAction::SendPacket {
                         raw,
                         dest_type: constants::DESTINATION_LINK,
