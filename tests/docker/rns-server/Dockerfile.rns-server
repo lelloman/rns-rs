@@ -1,6 +1,7 @@
 FROM rust:1.93.1-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+COPY build build
 COPY rns-crypto rns-crypto
 COPY rns-core rns-core
 COPY rns-net rns-net
