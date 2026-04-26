@@ -75,6 +75,37 @@ jobs:
       - name: Run rns-ctl tests with tls
         run: cargo test -p rns-ctl --features tls
 
+  armv7-build-smoke:
+    name: ARMv7 Build Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install ARMv7 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build ARMv7 runtime binaries without hooks
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+        run: |
+          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd
+          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl
+
   rns-ctl-web-smoke:
     name: rns-ctl-web-smoke
     runs-on: ubuntu-latest
