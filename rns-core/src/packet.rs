@@ -104,6 +104,26 @@ impl RawPacket {
         )
     }
 
+    /// Pack fields into raw bytes and packet hash without constructing a full RawPacket.
+    pub fn pack_raw_with_hash(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+    ) -> Result<(Vec<u8>, [u8; 32]), PacketError> {
+        Self::pack_raw_with_hash_with_max_mtu(
+            flags,
+            hops,
+            destination_hash,
+            transport_id,
+            context,
+            data,
+            constants::MTU,
+        )
+    }
+
     /// Pack fields into raw bytes with a caller-provided MTU limit.
     pub fn pack_with_max_mtu(
         flags: PacketFlags,
@@ -114,6 +134,38 @@ impl RawPacket {
         data: &[u8],
         max_mtu: usize,
     ) -> Result<Self, PacketError> {
+        let (raw, packet_hash) = Self::pack_raw_with_hash_with_max_mtu(
+            flags,
+            hops,
+            destination_hash,
+            transport_id,
+            context,
+            data,
+            max_mtu,
+        )?;
+
+        Ok(RawPacket {
+            flags,
+            hops,
+            transport_id: transport_id.copied(),
+            destination_hash: *destination_hash,
+            context,
+            data: data.to_vec(),
+            raw,
+            packet_hash,
+        })
+    }
+
+    /// Pack fields into raw bytes and packet hash with a caller-provided MTU limit.
+    pub fn pack_raw_with_hash_with_max_mtu(
+        flags: PacketFlags,
+        hops: u8,
+        destination_hash: &[u8; 16],
+        transport_id: Option<&[u8; 16]>,
+        context: u8,
+        data: &[u8],
+        max_mtu: usize,
+    ) -> Result<(Vec<u8>, [u8; 32]), PacketError> {
         if flags.header_type == constants::HEADER_2 && transport_id.is_none() {
             return Err(PacketError::MissingTransportId);
         }
@@ -137,17 +189,7 @@ impl RawPacket {
         }
 
         let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, &raw));
-
-        Ok(RawPacket {
-            flags,
-            hops,
-            transport_id: transport_id.copied(),
-            destination_hash: *destination_hash,
-            context,
-            data: data.to_vec(),
-            raw,
-            packet_hash,
-        })
+        Ok((raw, packet_hash))
     }
 
     /// Unpack raw bytes into fields.

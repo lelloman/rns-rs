@@ -492,7 +492,7 @@ impl LinkManager {
         // Register link_id as local destination so we receive link data
         actions.push(LinkManagerAction::RegisterLinkDest { link_id });
 
-        if let Ok(pkt) = RawPacket::pack(
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
             packet.hops,
             &link_id,
@@ -508,7 +508,7 @@ impl LinkManager {
                 packet.hops
             );
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -517,7 +517,7 @@ impl LinkManager {
         // Reticulum interop fallback #1: queue an LRPROOF variant with
         // hop=0, matching peers that validate LRPROOF with hop=0 semantics.
         if packet.hops != 0 {
-            if let Ok(pkt0) = RawPacket::pack(
+            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
                 flags,
                 0,
                 &link_id,
@@ -531,7 +531,7 @@ impl LinkManager {
                     receiving_interface.0
                 );
                 actions.push(LinkManagerAction::SendPacket {
-                    raw: pkt0.raw,
+                    raw,
                     dest_type: constants::DESTINATION_LINK,
                     attached_interface: None,
                 });
@@ -543,7 +543,7 @@ impl LinkManager {
         // differently from destination-side delivery hops.
         if packet.hops < u8::MAX {
             let hops_plus_one = packet.hops + 1;
-            if let Ok(pkt2) = RawPacket::pack(
+            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
                 flags,
                 hops_plus_one,
                 &link_id,
@@ -558,7 +558,7 @@ impl LinkManager {
                     hops_plus_one
                 );
                 actions.push(LinkManagerAction::SendPacket {
-                    raw: pkt2.raw,
+                    raw,
                     dest_type: constants::DESTINATION_LINK,
                     attached_interface: None,
                 });
@@ -632,7 +632,7 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        if let Ok(pkt) = RawPacket::pack(
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
             0,
             link_id,
@@ -641,7 +641,7 @@ impl LinkManager {
             &proof_data,
         ) {
             vec![LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             }]
@@ -718,7 +718,7 @@ impl LinkManager {
             packet_type: constants::PACKET_TYPE_DATA,
         };
 
-        if let Ok(pkt) = RawPacket::pack(
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
             0,
             &link_id,
@@ -727,7 +727,7 @@ impl LinkManager {
             &lrrtt_encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1320,7 +1320,7 @@ impl LinkManager {
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
                 let max_mtu = link.engine.mtu() as usize;
-                if let Ok(pkt) = RawPacket::pack_with_max_mtu(
+                if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
                     flags,
                     0,
                     link_id,
@@ -1330,7 +1330,7 @@ impl LinkManager {
                     max_mtu,
                 ) {
                     actions.push(LinkManagerAction::SendPacket {
-                        raw: pkt.raw,
+                        raw,
                         dest_type: constants::DESTINATION_LINK,
                         attached_interface: None,
                     });
@@ -1477,7 +1477,7 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok(pkt) = RawPacket::pack(
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
             0,
             link_id,
@@ -1486,7 +1486,7 @@ impl LinkManager {
             &encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1525,9 +1525,11 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok(pkt) = RawPacket::pack(flags, 0, link_id, None, context, &encrypted) {
+        if let Ok((raw, _packet_hash)) =
+            RawPacket::pack_raw_with_hash(flags, 0, link_id, None, context, &encrypted)
+        {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1561,7 +1563,7 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok(pkt) = RawPacket::pack(
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
             0,
             link_id,
@@ -1570,7 +1572,7 @@ impl LinkManager {
             &encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -1600,10 +1602,11 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        if let Ok(pkt) = RawPacket::pack(flags, 0, link_id, None, constants::CONTEXT_LINKCLOSE, &[])
+        if let Ok((raw, _packet_hash)) =
+            RawPacket::pack_raw_with_hash(flags, 0, link_id, None, constants::CONTEXT_LINKCLOSE, &[])
         {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -2114,11 +2117,11 @@ impl LinkManager {
             .get(link_id)
             .map(|l| l.engine.mtu() as usize)
             .unwrap_or(constants::MTU);
-        if let Ok(pkt) =
-            RawPacket::pack_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
+        if let Ok((raw, _packet_hash)) =
+            RawPacket::pack_raw_with_hash_with_max_mtu(flags, 0, link_id, None, context, data, max_mtu)
         {
             actions.push(LinkManagerAction::SendPacket {
-                raw: pkt.raw,
+                raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
@@ -2281,11 +2284,11 @@ impl LinkManager {
                     destination_type: constants::DESTINATION_LINK,
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
-                if let Ok(pkt) =
-                    RawPacket::pack(flags, 0, link_id, None, constants::CONTEXT_KEEPALIVE, &[])
+                if let Ok((raw, _packet_hash)) =
+                    RawPacket::pack_raw_with_hash(flags, 0, link_id, None, constants::CONTEXT_KEEPALIVE, &[])
                 {
                     all_actions.push(LinkManagerAction::SendPacket {
-                        raw: pkt.raw,
+                        raw,
                         dest_type: constants::DESTINATION_LINK,
                         attached_interface: None,
                     });
@@ -2575,7 +2578,7 @@ impl LinkManager {
                         destination_type: constants::DESTINATION_LINK,
                         packet_type: constants::PACKET_TYPE_DATA,
                     };
-                    if let Ok(pkt) = RawPacket::pack(
+                    if let Ok((raw_bytes, packet_hash)) = RawPacket::pack_raw_with_hash(
                         flags,
                         0,
                         link_id,
@@ -2586,10 +2589,10 @@ impl LinkManager {
                         if let Some(link_mut) = self.links.get_mut(link_id) {
                             link_mut
                                 .pending_channel_packets
-                                .insert(pkt.packet_hash, sequence);
+                                .insert(packet_hash, sequence);
                         }
                         result.push(LinkManagerAction::SendPacket {
-                            raw: pkt.raw,
+                            raw: raw_bytes,
                             dest_type: constants::DESTINATION_LINK,
                             attached_interface: None,
                         });
