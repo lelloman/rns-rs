@@ -2,37 +2,16 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../build/common.rs"]
+mod build_common;
+
 fn main() {
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    println!("cargo:rerun-if-changed=../.git/refs");
+    build_common::emit_git_rerun_inputs();
     println!("cargo:rerun-if-changed=../rns-stats-hook/src/lib.rs");
     println!("cargo:rerun-if-changed=../rns-stats-hook/Cargo.toml");
     println!("cargo:rerun-if-changed=../rns-sentinel-hook/src/lib.rs");
     println!("cargo:rerun-if-changed=../rns-sentinel-hook/Cargo.toml");
-
-    let pkg_version = env!("CARGO_PKG_VERSION");
-    let parts: Vec<&str> = pkg_version.split('.').collect();
-    let major = parts.first().unwrap_or(&"0");
-    let minor = parts.get(1).unwrap_or(&"0");
-
-    let commit_count = Command::new("git")
-        .args(["rev-list", "--count", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "0".to_string());
-
-    let commit_hash = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let version = format!("{}.{}.{}-{}", major, minor, commit_count, commit_hash);
-    println!("cargo:rustc-env=FULL_VERSION={}", version);
+    build_common::emit_full_version();
 
     embed_stats_hook().expect("failed to build embedded stats hook");
     embed_sentinel_hook().expect("failed to build embedded sentinel hook");
