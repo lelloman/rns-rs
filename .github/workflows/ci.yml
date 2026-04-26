@@ -140,4 +140,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -A clippy::approx_constant -A clippy::never_loop
+        run: bash scripts/lint-host.sh

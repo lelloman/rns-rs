@@ -72,6 +72,23 @@ cargo test -p rns-ctl
 cargo test -p rns-hooks
 ```
 
+## Developer Checks
+
+Standard host-side validation commands:
+
+```bash
+# Full workspace tests
+cargo test --workspace
+
+# Host-safe workspace lint
+bash scripts/lint-host.sh
+```
+
+The lint script enables `rns-hooks` coverage, but intentionally does not use
+workspace-wide `--all-features`. That would enable `rns-crypto/espidf`, which
+pulls in `esp-idf-sys` and fails on normal `x86_64-unknown-linux-gnu` host
+machines. ESP32 validation remains separate under `rns-esp32/`.
+
 ### Docker E2E Tests
 
 There are 19 Docker-based end-to-end test suites that validate multi-node behaviour across chain, mesh, and star topologies:
