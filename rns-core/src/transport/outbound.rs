@@ -464,6 +464,51 @@ mod tests {
     }
 
     #[test]
+    fn test_outbound_announce_fanout_clones_for_each_allowed_interface() {
+        let dest = [0x56; 16];
+        let paths = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_FULL));
+        interfaces.insert(
+            InterfaceId(3),
+            make_interface(3, constants::MODE_ACCESS_POINT),
+        );
+
+        let local_dests = BTreeMap::new();
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        };
+        let packet =
+            RawPacket::pack(flags, 1, &dest, None, constants::CONTEXT_NONE, &[0xAA; 64]).unwrap();
+
+        let actions = route_outbound(
+            &paths,
+            &interfaces,
+            &local_dests,
+            &packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1000.0,
+        );
+
+        assert_eq!(actions.len(), 2);
+        for action in &actions {
+            match action {
+                TransportAction::SendOnInterface { interface, raw } => {
+                    assert!(*interface == InterfaceId(1) || *interface == InterfaceId(2));
+                    assert_eq!(raw, &packet.raw);
+                }
+                other => panic!("Expected SendOnInterface, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
     fn test_outbound_attached_interface_sends_only_on_that_interface() {
         let dest = [0x77; 16];
         let paths = BTreeMap::new();

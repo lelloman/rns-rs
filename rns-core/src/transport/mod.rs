@@ -2228,6 +2228,38 @@ mod tests {
     }
 
     #[test]
+    fn test_gate_retransmit_actions_expands_broadcast_to_matching_interfaces() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        engine.register_interface(make_interface(3, constants::MODE_ACCESS_POINT));
+
+        let dest = [0x56; 16];
+        let raw = make_announce_raw(&dest, &[0xAB; 32]);
+        let actions = engine.gate_retransmit_actions(
+            vec![TransportAction::BroadcastOnAllInterfaces {
+                raw: raw.clone(),
+                exclude: None,
+            }],
+            1000.0,
+        );
+
+        assert_eq!(actions.len(), 2);
+        for action in &actions {
+            match action {
+                TransportAction::SendOnInterface {
+                    interface,
+                    raw: sent,
+                } => {
+                    assert!(*interface == InterfaceId(1) || *interface == InterfaceId(2));
+                    assert_eq!(sent, &raw);
+                }
+                other => panic!("expected SendOnInterface, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
     fn test_tick_culls_expired_announce_entries() {
         let mut config = make_config(true);
         config.announce_table_ttl_secs = 10.0;
@@ -2637,6 +2669,70 @@ mod tests {
             .iter()
             .find(|a| matches!(a, TransportAction::DeliverLocal { .. }));
         assert!(deliver.is_some(), "Should deliver locally");
+    }
+
+    #[test]
+    fn test_prepare_inbound_packet_retains_original_raw_bytes() {
+        let engine = TransportEngine::new(make_config(false));
+        let dest = [0xAB; 16];
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+
+        let ctx = engine
+            .prepare_inbound_packet(&packet.raw, InterfaceId(9), 1000.0)
+            .expect("packet should parse and pass filter");
+
+        assert_eq!(ctx.original_raw, packet.raw);
+        assert_eq!(ctx.packet.raw, packet.raw);
+        assert_eq!(ctx.packet.hops, 1);
+        assert_eq!(ctx.iface, InterfaceId(9));
+    }
+
+    #[test]
+    fn test_deliver_local_preserves_original_raw_and_metadata() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let dest = [0xAC; 16];
+        engine.register_destination(dest, constants::DESTINATION_SINGLE);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"deliver").unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
+        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+
+        let deliver = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::DeliverLocal {
+                    destination_hash,
+                    raw,
+                    packet_hash,
+                    receiving_interface,
+                } => Some((destination_hash, raw, packet_hash, receiving_interface)),
+                _ => None,
+            })
+            .expect("should produce DeliverLocal");
+
+        assert_eq!(*deliver.0, dest);
+        assert_eq!(deliver.1, &packet.raw);
+        assert_eq!(*deliver.2, packet.packet_hash);
+        assert_eq!(*deliver.3, InterfaceId(1));
     }
 
     #[test]
@@ -3215,6 +3311,27 @@ mod tests {
         // MODE_FULL is not in DISCOVER_PATHS_FOR, so no forwarding
         assert!(actions.is_empty());
         assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_duplicate_discovery_path_request_is_suppressed() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD7; 16];
+        let tag = [0x07; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let first = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+        let second = engine.handle_path_request(&data, InterfaceId(1), 1001.0);
+
+        assert_eq!(first.len(), 1);
+        assert!(
+            second.is_empty(),
+            "duplicate discovery request should be dropped"
+        );
+        assert_eq!(engine.discovery_pr_tags_count(), 1);
     }
 
     #[test]

@@ -547,6 +547,12 @@ impl LinkEngine {
         self.mdu = compute_mdu(mtu as usize);
     }
 
+    #[doc(hidden)]
+    pub fn clear_session_for_testing(&mut self) {
+        self.derived_key = None;
+        self.token = None;
+    }
+
     // --- Internal ---
 
     fn update_keepalive(&mut self) {

@@ -2937,6 +2937,89 @@ mod tests {
     }
 
     #[test]
+    fn test_send_request_wraps_invalid_msgpack_data_as_bin() {
+        use std::sync::{Arc, Mutex};
+
+        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let invalid = vec![0xC1];
+        let expected = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(invalid.clone()));
+        let captured = Arc::new(Mutex::new(None::<Vec<u8>>));
+        let captured_for_handler = Arc::clone(&captured);
+
+        resp_mgr.register_request_handler("/bin", None, move |_link_id, _path, data, _remote| {
+            *captured_for_handler.lock().unwrap() = Some(data.to_vec());
+            Some(rns_core::msgpack::pack(&rns_core::msgpack::Value::Bool(
+                true,
+            )))
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/bin", &invalid, &mut rng);
+        let req_raw = extract_send_packet_from(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(
+            resp_actions
+                .iter()
+                .any(|a| matches!(a, LinkManagerAction::SendPacket { .. })),
+            "handler should still produce a response"
+        );
+        assert_eq!(*captured.lock().unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn test_invalid_response_bytes_are_returned_as_msgpack_bin() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let invalid_response = vec![0xC1];
+        let expected =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(invalid_response.clone()));
+
+        resp_mgr.register_request_handler("/invalid-response", None, {
+            let invalid_response = invalid_response.clone();
+            move |_link_id, _path, _data, _remote| Some(invalid_response.clone())
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/invalid-response", b"\xc0", &mut rng);
+        let req_raw = extract_send_packet_from(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let resp_raw = extract_any_send_packet(&resp_actions);
+        let resp_pkt = RawPacket::unpack(&resp_raw).unwrap();
+        let init_actions = init_mgr.handle_local_delivery(
+            resp_pkt.destination_hash,
+            &resp_raw,
+            resp_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let response_data = init_actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::ResponseReceived { data, .. } => Some(data.clone()),
+                _ => None,
+            })
+            .expect("initiator should receive a response");
+        assert_eq!(response_data, expected);
+    }
+
+    #[test]
     fn test_request_acl_deny_unidentified() {
         let mut rng = OsRng;
         let dest_hash = [0xDD; 16];
@@ -3287,6 +3370,32 @@ mod tests {
         // Link is Pending, not Active
         let actions = mgr.send_resource(&link_id, b"data", None, &mut rng);
         assert!(actions.is_empty(), "Cannot send resource on inactive link");
+    }
+
+    #[test]
+    fn test_send_resource_without_session_key_uses_encrypt_fallback_path() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .clear_session_for_testing();
+
+        let actions = init_mgr.send_resource(&link_id, b"data", None, &mut rng);
+
+        assert!(
+            actions.is_empty(),
+            "without a session key, no advertisement should be emitted"
+        );
+        assert_eq!(
+            init_mgr
+                .links
+                .get(&link_id)
+                .map(|managed| managed.outgoing_resources.len()),
+            Some(1)
+        );
     }
 
     #[test]
@@ -3687,6 +3796,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_build_link_packet_returns_empty_when_mtu_too_small() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        init_mgr.set_link_mtu(&link_id, 84);
+
+        let actions =
+            init_mgr.build_link_packet(&link_id, constants::CONTEXT_RESOURCE, &[0xAA; 200]);
+        assert!(actions.is_empty(), "oversized packet should not be built");
+    }
+
+    #[test]
+    fn test_process_resource_actions_encrypted_variants_drop_on_encrypt_failure() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .clear_session_for_testing();
+
+        let cases = vec![
+            ResourceAction::SendAdvertisement(vec![1, 2, 3]),
+            ResourceAction::SendRequest(vec![4, 5, 6]),
+            ResourceAction::SendHmu(vec![7, 8, 9]),
+            ResourceAction::SendProof(vec![10, 11, 12]),
+            ResourceAction::SendCancelInitiator(vec![13, 14, 15]),
+            ResourceAction::SendCancelReceiver(vec![16, 17, 18]),
+        ];
+
+        for action in cases {
+            let out = init_mgr.process_resource_actions(&link_id, vec![action], &mut rng);
+            assert!(
+                out.is_empty(),
+                "encrypt failure should suppress packet emission"
+            );
+        }
+    }
+
     // ====================================================================
     // Phase 8b: Channel message & data callback tests
     // ====================================================================
@@ -3727,6 +3875,36 @@ mod tests {
             }
         }
         assert!(got_channel_msg, "Responder should receive channel message");
+    }
+
+    #[test]
+    fn test_channel_send_drops_packet_when_encrypt_fails() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .clear_session_for_testing();
+
+        let actions = init_mgr
+            .send_channel_message(&link_id, 42, b"channel data", &mut rng)
+            .expect("channel should still accept the message locally");
+
+        assert!(
+            actions.is_empty(),
+            "encrypt failure should suppress channel packet"
+        );
+        assert!(
+            init_mgr
+                .links
+                .get(&link_id)
+                .unwrap()
+                .pending_channel_packets
+                .is_empty(),
+            "failed packet encryption must not track a pending channel proof"
+        );
     }
 
     #[test]
@@ -3818,6 +3996,77 @@ mod tests {
             has_data,
             "Responder should receive LinkDataReceived for unknown context"
         );
+    }
+
+    #[test]
+    fn test_invalid_encrypted_contexts_are_ignored() {
+        let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let contexts = [
+            constants::CONTEXT_CHANNEL,
+            constants::CONTEXT_REQUEST,
+            constants::CONTEXT_RESPONSE,
+            constants::CONTEXT_RESOURCE_ADV,
+            constants::CONTEXT_RESOURCE_REQ,
+            constants::CONTEXT_RESOURCE_HMU,
+            constants::CONTEXT_RESOURCE_PRF,
+            0x42,
+        ];
+
+        for context in contexts {
+            let flags = PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_DATA,
+            };
+            let pkt = RawPacket::pack(flags, 0, &link_id, None, context, b"invalid-ciphertext")
+                .expect("test packet should pack");
+            let actions = resp_mgr.handle_local_delivery(
+                pkt.destination_hash,
+                &pkt.raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            );
+            assert!(
+                actions.is_empty(),
+                "invalid ciphertext for context {context:#x} should be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resource_part_without_matching_receiver_is_ignored() {
+        let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let pkt = RawPacket::pack(
+            flags,
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_RESOURCE,
+            b"orphan-part",
+        )
+        .expect("test packet should pack");
+
+        let actions = resp_mgr.handle_local_delivery(
+            pkt.destination_hash,
+            &pkt.raw,
+            pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(actions.is_empty(), "orphan resource part should be ignored");
     }
 
     #[test]
@@ -3918,6 +4167,34 @@ mod tests {
         assert!(
             !has_direct_response,
             "Large response should not use direct CONTEXT_RESPONSE packet"
+        );
+    }
+
+    #[test]
+    fn test_send_management_response_without_session_key_uses_resource_fallback_path() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .clear_session_for_testing();
+
+        let large_response: Vec<u8> = (0..5000u32).map(|i| (i & 0xFF) as u8).collect();
+        let actions =
+            init_mgr.send_management_response(&link_id, &[0x11; 16], &large_response, &mut rng);
+
+        assert!(
+            actions.is_empty(),
+            "without a session key, no response packets should be emitted"
+        );
+        assert_eq!(
+            init_mgr
+                .links
+                .get(&link_id)
+                .map(|managed| managed.outgoing_resources.len()),
+            Some(1)
         );
     }
 
