@@ -514,7 +514,10 @@ impl Driver {
         self.handle_backbone_peer_pool_down(id);
     }
 
-    pub(crate) fn known_destination_route_hint(&self, dest_hash: &[u8; 16]) -> Option<(InterfaceId, u8)> {
+    pub(crate) fn known_destination_route_hint(
+        &self,
+        dest_hash: &[u8; 16],
+    ) -> Option<(InterfaceId, u8)> {
         let announced = &self.known_destinations.get(dest_hash)?.announced;
         let iface = announced.receiving_interface;
         if iface.0 == 0 {

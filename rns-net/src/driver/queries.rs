@@ -71,7 +71,10 @@ impl Driver {
         QueryResponse::PathTable(entries)
     }
 
-    pub(crate) fn handle_runtime_config_query(&self, request: QueryRequest) -> Option<QueryResponse> {
+    pub(crate) fn handle_runtime_config_query(
+        &self,
+        request: QueryRequest,
+    ) -> Option<QueryResponse> {
         match request {
             QueryRequest::ListRuntimeConfig => {
                 Some(QueryResponse::RuntimeConfigList(self.list_runtime_config()))

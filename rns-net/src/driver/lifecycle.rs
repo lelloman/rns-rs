@@ -427,5 +427,4 @@ impl Driver {
             dropped_links
         );
     }
-
 }

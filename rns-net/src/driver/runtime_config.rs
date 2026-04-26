@@ -103,7 +103,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    pub(crate) fn start_backbone_peer_pool_candidate(&mut self, index: usize) -> std::io::Result<()> {
+    pub(crate) fn start_backbone_peer_pool_candidate(
+        &mut self,
+        index: usize,
+    ) -> std::io::Result<()> {
         let Some(pool) = self.backbone_peer_pool.as_ref() else {
             return Ok(());
         };
@@ -715,7 +718,9 @@ impl Driver {
         }
     }
 
-    pub(crate) fn parse_holepunch_policy(value: &RuntimeConfigValue) -> Option<crate::event::HolePunchPolicy> {
+    pub(crate) fn parse_holepunch_policy(
+        value: &RuntimeConfigValue,
+    ) -> Option<crate::event::HolePunchPolicy> {
         match value {
             RuntimeConfigValue::String(s) => match s.to_ascii_lowercase().as_str() {
                 "reject" => Some(crate::event::HolePunchPolicy::Reject),
@@ -727,7 +732,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn expect_u64(value: RuntimeConfigValue, key: &str) -> Result<u64, RuntimeConfigError> {
+    pub(crate) fn expect_u64(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<u64, RuntimeConfigError> {
         match value {
             RuntimeConfigValue::Int(v) if v >= 0 => Ok(v as u64),
             RuntimeConfigValue::Int(_) => Err(RuntimeConfigError {
@@ -741,7 +749,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn expect_f64(value: RuntimeConfigValue, key: &str) -> Result<f64, RuntimeConfigError> {
+    pub(crate) fn expect_f64(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<f64, RuntimeConfigError> {
         match value {
             RuntimeConfigValue::Float(v) if v >= 0.0 => Ok(v),
             RuntimeConfigValue::Int(v) if v >= 0 => Ok(v as f64),
@@ -756,7 +767,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn expect_i64(value: RuntimeConfigValue, key: &str) -> Result<i64, RuntimeConfigError> {
+    pub(crate) fn expect_i64(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<i64, RuntimeConfigError> {
         match value {
             RuntimeConfigValue::Int(v) => Ok(v),
             _ => Err(RuntimeConfigError {
@@ -766,7 +780,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn expect_bool(value: RuntimeConfigValue, key: &str) -> Result<bool, RuntimeConfigError> {
+    pub(crate) fn expect_bool(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<bool, RuntimeConfigError> {
         match value {
             RuntimeConfigValue::Bool(v) => Ok(v),
             _ => Err(RuntimeConfigError {
@@ -776,7 +793,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn expect_string(value: RuntimeConfigValue, key: &str) -> Result<String, RuntimeConfigError> {
+    pub(crate) fn expect_string(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<String, RuntimeConfigError> {
         match value {
             RuntimeConfigValue::String(v) => Ok(v),
             _ => Err(RuntimeConfigError {
@@ -1022,7 +1042,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    pub(crate) fn reset_backbone_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_backbone_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_runtime_key(key)?;
         if matches!(
             setting,
@@ -1352,7 +1375,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn reset_tcp_client_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_tcp_client_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
         let handle = self
             .tcp_client_runtime
@@ -1626,7 +1652,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-auto")]
-    pub(crate) fn reset_auto_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_auto_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_auto_runtime_key(key)?;
         let handle = self.auto_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
@@ -1834,7 +1863,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-pipe")]
-    pub(crate) fn reset_pipe_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_pipe_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_pipe_runtime_key(key)?;
         let handle = self.pipe_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
@@ -1974,7 +2006,9 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-rnode")]
-    pub(crate) fn apply_rnode_runtime(runtime: &mut RNodeRuntime) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn apply_rnode_runtime(
+        runtime: &mut RNodeRuntime,
+    ) -> Result<(), RuntimeConfigError> {
         if let Some(err) = validate_sub_config(&runtime.sub) {
             return Err(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::InvalidValue,
@@ -2039,7 +2073,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-rnode")]
-    pub(crate) fn reset_rnode_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_rnode_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
         let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
@@ -2393,7 +2430,10 @@ impl Driver {
         }
     }
 
-    pub(crate) fn apply_interface_ifac_runtime(entry: &mut InterfaceEntry, config: &IfacRuntimeConfig) {
+    pub(crate) fn apply_interface_ifac_runtime(
+        entry: &mut InterfaceEntry,
+        config: &IfacRuntimeConfig,
+    ) {
         entry.ifac = if config.netname.is_some() || config.netkey.is_some() {
             match ifac::derive_ifac(
                 config.netname.as_deref(),
@@ -2881,7 +2921,10 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn reset_tcp_server_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+    pub(crate) fn reset_tcp_server_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         if matches!(
             setting,

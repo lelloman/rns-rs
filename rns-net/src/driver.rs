@@ -1010,5 +1010,4 @@ impl Driver {
     ) {
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
     }
-
 }
