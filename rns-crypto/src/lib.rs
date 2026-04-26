@@ -60,56 +60,12 @@ impl Rng for OsRng {
                 );
             }
         }
-        // Use getrandom(2) syscall directly on Linux
-        #[cfg(target_os = "linux")]
+        #[cfg(not(target_os = "espidf"))]
         {
-            let ret = unsafe { libc_getrandom(dest.as_mut_ptr(), dest.len(), 0) };
-            assert!(ret == dest.len() as isize, "getrandom failed");
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "espidf")))]
-        {
-            // Fallback: read from /dev/urandom
             use std::io::Read;
             let mut f = std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom");
             f.read_exact(dest)
                 .expect("Failed to read from /dev/urandom");
         }
-    }
-}
-
-#[cfg(all(feature = "std", target_os = "linux"))]
-unsafe fn libc_getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize {
-    // getrandom syscall number on x86_64 is 318, aarch64 is 278
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ret: isize;
-        core::arch::asm!(
-            "syscall",
-            in("rax") 318u64,
-            in("rdi") buf as u64,
-            in("rsi") buflen as u64,
-            in("rdx") flags as u64,
-            lateout("rax") ret,
-            lateout("rcx") _,
-            lateout("r11") _,
-        );
-        ret
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let ret: isize;
-        core::arch::asm!(
-            "svc #0",
-            in("x8") 278u64,
-            in("x0") buf as u64,
-            in("x1") buflen as u64,
-            in("x2") flags as u64,
-            lateout("x0") ret,
-        );
-        ret
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        compile_error!("Unsupported architecture for getrandom syscall");
     }
 }
