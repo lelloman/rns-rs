@@ -188,23 +188,39 @@ impl ServerConfig {
     }
 
     pub fn process_specs(&self) -> Vec<ProcessSpec> {
-        vec![
-            ProcessSpec {
+        #[cfg(not(feature = "rns-hooks"))]
+        {
+            return vec![ProcessSpec {
                 role: Role::Rnsd,
                 command: self.command_for_override(&self.rnsd_bin),
                 args: self.rnsd_args(),
-            },
-            ProcessSpec {
-                role: Role::Sentineld,
-                command: self.command_for_override(&self.sentineld_bin),
-                args: self.sentineld_args(),
-            },
-            ProcessSpec {
-                role: Role::Statsd,
-                command: self.command_for_override(&self.statsd_bin),
-                args: self.statsd_args(),
-            },
-        ]
+            }];
+        }
+
+        #[cfg(feature = "rns-hooks")]
+        {
+            let mut specs = vec![ProcessSpec {
+                role: Role::Rnsd,
+                command: self.command_for_override(&self.rnsd_bin),
+                args: self.rnsd_args(),
+            }];
+
+            #[cfg(feature = "rns-hooks")]
+            {
+                specs.push(ProcessSpec {
+                    role: Role::Sentineld,
+                    command: self.command_for_override(&self.sentineld_bin),
+                    args: self.sentineld_args(),
+                });
+                specs.push(ProcessSpec {
+                    role: Role::Statsd,
+                    command: self.command_for_override(&self.statsd_bin),
+                    args: self.statsd_args(),
+                });
+            }
+
+            specs
+        }
     }
 
     pub fn snapshot(&self) -> ServerConfigSnapshot {
@@ -400,20 +416,35 @@ impl ServerConfig {
     }
 
     fn readiness_checks(&self) -> Vec<ProcessReadiness> {
-        vec![
-            ProcessReadiness {
+        #[cfg(not(feature = "rns-hooks"))]
+        {
+            return vec![ProcessReadiness {
                 role: Role::Rnsd,
                 target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
-            },
-            ProcessReadiness {
-                role: Role::Sentineld,
-                target: ReadinessTarget::ReadyFile(self.sentineld_ready_file_path()),
-            },
-            ProcessReadiness {
-                role: Role::Statsd,
-                target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
-            },
-        ]
+            }];
+        }
+
+        #[cfg(feature = "rns-hooks")]
+        {
+            let mut readiness = vec![ProcessReadiness {
+                role: Role::Rnsd,
+                target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
+            }];
+
+            #[cfg(feature = "rns-hooks")]
+            {
+                readiness.push(ProcessReadiness {
+                    role: Role::Sentineld,
+                    target: ReadinessTarget::ReadyFile(self.sentineld_ready_file_path()),
+                });
+                readiness.push(ProcessReadiness {
+                    role: Role::Statsd,
+                    target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
+                });
+            }
+
+            readiness
+        }
     }
 
     fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
@@ -440,6 +471,7 @@ impl ServerConfig {
         args
     }
 
+    #[cfg(feature = "rns-hooks")]
     fn sentineld_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--ready-file".into());
@@ -447,6 +479,7 @@ impl ServerConfig {
         args
     }
 
+    #[cfg(feature = "rns-hooks")]
     fn statsd_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--db".into());
@@ -456,10 +489,12 @@ impl ServerConfig {
         args
     }
 
+    #[cfg(feature = "rns-hooks")]
     fn sentineld_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-sentineld.ready")
     }
 
+    #[cfg(feature = "rns-hooks")]
     fn statsd_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-statsd.ready")
     }
@@ -874,6 +909,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "rns-hooks")]
     #[test]
     fn apply_plan_restarts_statsd_when_db_changes() {
         let current = test_config();
@@ -893,6 +929,24 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.field == "stats_db_path"));
+    }
+
+    #[cfg(not(feature = "rns-hooks"))]
+    #[test]
+    fn apply_plan_ignores_stats_db_when_hooks_are_disabled() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                stats_db_path: Some("/tmp/rns/other-stats.db".into()),
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.overall_action, "none");
+        assert!(plan.processes_to_restart.is_empty());
     }
 
     #[test]
@@ -986,6 +1040,7 @@ mod tests {
         assert!(warnings[0].contains("http.enabled=false"));
     }
 
+    #[cfg(feature = "rns-hooks")]
     #[test]
     fn process_specs_include_sidecar_ready_file_args() {
         let config = test_config();
@@ -1007,6 +1062,18 @@ mod tests {
             .any(|pair| { pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-statsd.ready" }));
     }
 
+    #[cfg(not(feature = "rns-hooks"))]
+    #[test]
+    fn process_specs_include_only_rnsd_without_hooks() {
+        let config = test_config();
+        let specs = config.process_specs();
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].role, Role::Rnsd);
+        assert!(matches!(specs[0].command, ProcessCommand::SelfInvoke));
+    }
+
+    #[cfg(feature = "rns-hooks")]
     #[test]
     fn readiness_checks_use_ready_files_for_sidecars() {
         let config = test_config();
@@ -1032,6 +1099,20 @@ mod tests {
                 assert_eq!(path, &PathBuf::from("/tmp/rns/rns-statsd.ready"));
             }
             _ => panic!("unexpected statsd readiness target"),
+        }
+    }
+
+    #[cfg(not(feature = "rns-hooks"))]
+    #[test]
+    fn readiness_checks_include_only_rnsd_without_hooks() {
+        let config = test_config();
+        let readiness = config.readiness_checks();
+
+        assert_eq!(readiness.len(), 1);
+        assert_eq!(readiness[0].role, Role::Rnsd);
+        match readiness[0].target {
+            ReadinessTarget::Tcp(addr) => assert_eq!(addr, "127.0.0.1:37429".parse().unwrap()),
+            _ => panic!("unexpected rnsd readiness target"),
         }
     }
 

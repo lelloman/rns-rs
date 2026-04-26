@@ -13,8 +13,10 @@ fn main() {
     println!("cargo:rerun-if-changed=../rns-sentinel-hook/Cargo.toml");
     build_common::emit_full_version();
 
-    embed_stats_hook().expect("failed to build embedded stats hook");
-    embed_sentinel_hook().expect("failed to build embedded sentinel hook");
+    if env::var_os("CARGO_FEATURE_RNS_HOOKS").is_some() {
+        embed_stats_hook().expect("failed to build embedded stats hook");
+        embed_sentinel_hook().expect("failed to build embedded sentinel hook");
+    }
 }
 
 fn embed_stats_hook() -> anyhow::Result<()> {

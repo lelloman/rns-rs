@@ -22,18 +22,11 @@ mod drain;
 mod process;
 mod readiness;
 
-use self::drain::{
-    drain_complete_for_shutdown, format_drain_status_detail, log_rnsd_drain_progress,
-    reflect_rnsd_drain_status, request_rnsd_drain, wait_for_rnsd_drain,
-};
 use self::process::{
-    check_exits, command_for_spec, exit_code, role_from_name, shutdown_priority, spawn_child,
-    terminate_child, terminate_children, ManagedChild,
+    check_exits, exit_code, role_from_name, spawn_child, terminate_child, terminate_children,
+    ManagedChild,
 };
-use self::readiness::{
-    inspect_ready_file, missing_required_hooks, observe_sidecar_draining, probe_ready_file,
-    ready_file_path_for_role,
-};
+use self::readiness::ready_file_path_for_role;
 pub use self::readiness::{ProcessReadiness, ReadinessTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -388,13 +381,18 @@ fn install_signal_handlers() -> mpsc::Receiver<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::drain::{
+        drain_complete_for_shutdown, format_drain_status_detail, log_rnsd_drain_progress,
+        reflect_rnsd_drain_status, request_rnsd_drain, wait_for_rnsd_drain,
+    };
+    use super::process::{command_for_spec, role_from_name, shutdown_priority};
+    use super::readiness::{
+        inspect_ready_file, missing_required_hooks, observe_sidecar_draining, probe_ready_file,
+        ready_file_path_for_role,
+    };
     use super::{
-        command_for_spec, drain_complete_for_shutdown, format_drain_status_detail,
-        inspect_ready_file, log_rnsd_drain_progress, missing_required_hooks,
-        observe_sidecar_draining, probe_ready_file, ready_file_path_for_role,
-        reflect_rnsd_drain_status, request_rnsd_drain, role_from_name, shutdown_priority,
-        wait_for_rnsd_drain, ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget,
-        RnsdDrainConfig, Role, Supervisor, SupervisorConfig, STOP_TX,
+        ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role,
+        Supervisor, SupervisorConfig, STOP_TX,
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{

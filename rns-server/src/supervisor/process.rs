@@ -1,3 +1,4 @@
+use super::readiness::observe_sidecar_draining;
 use super::*;
 
 pub(crate) struct ManagedChild {
