@@ -116,7 +116,7 @@ pub fn route_proof_via_reverse(
 
         Some(TransportAction::SendOnInterface {
             interface: reverse_entry.receiving_interface,
-            raw: new_raw,
+            raw: new_raw.into(),
         })
     } else {
         None

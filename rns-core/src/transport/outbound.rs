@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::tables::PathSet;
-use super::types::{InterfaceId, InterfaceInfo, TransportAction};
+use super::types::{InterfaceId, InterfaceInfo, PacketBytes, TransportAction};
 use crate::constants;
 use crate::packet::RawPacket;
 
@@ -22,6 +22,7 @@ pub fn route_outbound(
     _now: f64,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
+    let shared_raw: PacketBytes = packet.raw.clone().into();
 
     // Don't route announces or PLAIN/GROUP via path table
     let use_path_table = packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
@@ -42,7 +43,7 @@ pub fn route_outbound(
                 if packet.flags.header_type == constants::HEADER_1 {
                     actions.push(TransportAction::SendOnInterface {
                         interface: path_entry.receiving_interface,
-                        raw: inject_transport_header(packet, &path_entry.next_hop),
+                        raw: inject_transport_header(packet, &path_entry.next_hop).into(),
                     });
                 }
                 // If already HEADER_2, just forward (shouldn't normally happen for outbound)
@@ -50,7 +51,7 @@ pub fn route_outbound(
                 // Direct: hops <= 1, send as-is on path interface
                 actions.push(TransportAction::SendOnInterface {
                     interface: path_entry.receiving_interface,
-                    raw: packet.raw.clone(),
+                    raw: shared_raw,
                 });
             }
             return actions;
@@ -65,7 +66,7 @@ pub fn route_outbound(
         if let Some(iface) = attached_interface {
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
-                raw: packet.raw.clone(),
+                raw: shared_raw,
             });
             return actions;
         }
@@ -95,12 +96,12 @@ pub fn route_outbound(
             );
 
             if should_transmit {
-                actions.push(TransportAction::SendOnInterface {
-                    interface: iface_info.id,
-                    raw: packet.raw.clone(),
-                });
+                    actions.push(TransportAction::SendOnInterface {
+                        interface: iface_info.id,
+                        raw: shared_raw.clone(),
+                    });
+                }
             }
-        }
     } else {
         // Regular broadcast
         // Python Transport.py:1037-1038: if attached_interface is set,
@@ -108,11 +109,11 @@ pub fn route_outbound(
         if let Some(iface) = attached_interface {
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
-                raw: packet.raw.clone(),
+                raw: shared_raw,
             });
         } else {
             actions.push(TransportAction::BroadcastOnAllInterfaces {
-                raw: packet.raw.clone(),
+                raw: shared_raw,
                 exclude: None,
             });
         }
@@ -501,7 +502,7 @@ mod tests {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
                     assert!(*interface == InterfaceId(1) || *interface == InterfaceId(2));
-                    assert_eq!(raw, &packet.raw);
+                    assert_eq!(&**raw, packet.raw.as_slice());
                 }
                 other => panic!("Expected SendOnInterface, got {:?}", other),
             }

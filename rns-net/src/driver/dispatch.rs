@@ -234,7 +234,7 @@ impl Driver {
     pub(crate) fn dispatch_send_on_interface_action(
         &mut self,
         interface: InterfaceId,
-        raw: Vec<u8>,
+        raw: rns_core::transport::types::PacketBytes,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
         #[cfg(feature = "rns-hooks")]
@@ -296,28 +296,38 @@ impl Driver {
                 let data = if let Some(ref ifac_state) = entry.ifac {
                     ifac::mask_outbound(&raw, ifac_state)
                 } else {
-                    raw
+                    Vec::new()
                 };
-                entry.stats.txb += data.len() as u64;
+                let send_len = if entry.ifac.is_some() {
+                    data.len()
+                } else {
+                    raw.len()
+                };
+                entry.stats.txb += send_len as u64;
                 entry.stats.tx_packets += 1;
                 if is_announce {
                     entry.stats.record_outgoing_announce(time::now());
                 }
-                let send_result = entry.writer.send_frame(&data);
+                let send_result = if entry.ifac.is_some() {
+                    entry.writer.send_frame(&data)
+                } else {
+                    entry.writer.send_frame(&raw)
+                };
                 let sent_ok = send_result.is_ok();
                 Self::record_send_result(entry, &send_result, "send", interface);
                 if sent_ok && is_announce {
-                    let header_type = (data[0] >> 6) & 0x03;
+                    let sent_slice: &[u8] = if entry.ifac.is_some() { &data } else { &raw };
+                    let header_type = (sent_slice[0] >> 6) & 0x03;
                     let dest_start = if header_type == 1 { 18usize } else { 2usize };
-                    let dest_preview = if data.len() >= dest_start + 4 {
-                        format!("{:02x?}", &data[dest_start..dest_start + 4])
+                    let dest_preview = if sent_slice.len() >= dest_start + 4 {
+                        format!("{:02x?}", &sent_slice[dest_start..dest_start + 4])
                     } else {
                         "??".into()
                     };
                     log::debug!(
                         "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
                         interface.0,
-                        data.len(),
+                        sent_slice.len(),
                         header_type,
                         dest_preview
                     );
@@ -328,7 +338,7 @@ impl Driver {
 
     pub(crate) fn dispatch_broadcast_action(
         &mut self,
-        raw: Vec<u8>,
+        raw: rns_core::transport::types::PacketBytes,
         exclude: Option<InterfaceId>,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
@@ -380,14 +390,23 @@ impl Driver {
                 let data = if let Some(ref ifac_state) = entry.ifac {
                     ifac::mask_outbound(&raw, ifac_state)
                 } else {
-                    raw.clone()
+                    Vec::new()
                 };
-                entry.stats.txb += data.len() as u64;
+                let send_len = if entry.ifac.is_some() {
+                    data.len()
+                } else {
+                    raw.len()
+                };
+                entry.stats.txb += send_len as u64;
                 entry.stats.tx_packets += 1;
                 if is_announce {
                     entry.stats.record_outgoing_announce(time::now());
                 }
-                let send_result = entry.writer.send_frame(&data);
+                let send_result = if entry.ifac.is_some() {
+                    entry.writer.send_frame(&data)
+                } else {
+                    entry.writer.send_frame(&raw)
+                };
                 Self::record_send_result(entry, &send_result, "broadcast", entry.id);
             }
         }
@@ -396,7 +415,7 @@ impl Driver {
     pub(crate) fn dispatch_deliver_local_action(
         &mut self,
         destination_hash: [u8; 16],
-        raw: Vec<u8>,
+        raw: rns_core::transport::types::PacketBytes,
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
         _hook_injected: &mut Vec<TransportAction>,
@@ -467,7 +486,7 @@ impl Driver {
                 self.maybe_generate_proof(destination_hash, &packet_hash);
                 self.callbacks.on_local_delivery(
                     rns_core::types::DestHash(destination_hash),
-                    raw,
+                    raw.to_vec(),
                     rns_core::types::PacketHash(packet_hash),
                 );
             } else {
@@ -483,7 +502,7 @@ impl Driver {
             self.maybe_generate_proof(destination_hash, &packet_hash);
             self.callbacks.on_local_delivery(
                 rns_core::types::DestHash(destination_hash),
-                raw,
+                raw.to_vec(),
                 rns_core::types::PacketHash(packet_hash),
             );
         }
@@ -680,7 +699,7 @@ impl Driver {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
-                                raw.clone()
+                                raw.to_vec()
                             };
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
@@ -711,7 +730,7 @@ impl Driver {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
-                                raw.clone()
+                                raw.to_vec()
                             };
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;

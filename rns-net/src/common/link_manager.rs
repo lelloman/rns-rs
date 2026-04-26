@@ -758,7 +758,7 @@ impl LinkManager {
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         // First pass: perform engine operations, collect results
-        enum LinkDataResult {
+        enum LinkDataResult<'a> {
             Lrrtt {
                 link_id: LinkId,
                 link_actions: Vec<LinkAction>,
@@ -821,7 +821,7 @@ impl LinkManager {
             ResourcePart {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
-                raw_data: Vec<u8>,
+                raw_data: &'a [u8],
             },
             /// Resource proof (feed to sender).
             ResourcePrf {
@@ -986,7 +986,7 @@ impl LinkManager {
                     LinkDataResult::ResourcePart {
                         link_id,
                         inbound_actions,
-                        raw_data: packet.data.clone(),
+                        raw_data: &packet.data,
                     }
                 }
                 constants::CONTEXT_RESOURCE_PRF => match link.engine.decrypt(&packet.data) {

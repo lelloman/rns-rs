@@ -44,14 +44,16 @@ use self::pathfinder::{
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
 use self::tunnel::TunnelTable;
-use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
+use self::types::{
+    BlackholeEntry, InterfaceId, InterfaceInfo, PacketBytes, TransportAction, TransportConfig,
+};
 
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 
 struct InboundPacketCtx {
     packet: RawPacket,
-    original_raw: Vec<u8>,
+    original_raw: Option<Vec<u8>>,
     iface: InterfaceId,
     now: f64,
     from_local_client: bool,
@@ -571,9 +573,14 @@ impl TransportEngine {
         if !self.packet_filter(&packet) {
             return None;
         }
+        let retain_original_raw = packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE;
         Some(InboundPacketCtx {
             packet,
-            original_raw: raw.to_vec(),
+            original_raw: if retain_original_raw {
+                Some(raw.to_vec())
+            } else {
+                None
+            },
             iface,
             now,
             from_local_client,
@@ -599,13 +606,13 @@ impl TransportEngine {
 
         if ctx.from_local_client {
             actions.push(TransportAction::ForwardPlainBroadcast {
-                raw: ctx.packet.raw.clone(),
+                raw: PacketBytes::from(ctx.packet.raw.clone()),
                 to_local: false,
                 exclude: Some(ctx.iface),
             });
         } else {
             actions.push(TransportAction::ForwardPlainBroadcast {
-                raw: ctx.packet.raw.clone(),
+                raw: PacketBytes::from(ctx.packet.raw.clone()),
                 to_local: true,
                 exclude: None,
             });
@@ -673,7 +680,7 @@ impl TransportEngine {
 
         actions.push(TransportAction::SendOnInterface {
             interface: outbound_interface,
-            raw: new_raw,
+            raw: new_raw.into(),
         });
 
         if let Some(entry) = self
@@ -712,7 +719,7 @@ impl TransportEngine {
         self.packet_hashlist.add(ctx.packet.packet_hash);
         actions.push(TransportAction::SendOnInterface {
             interface: outbound_iface,
-            raw: new_raw,
+            raw: new_raw.into(),
         });
 
         if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
@@ -734,9 +741,13 @@ impl TransportEngine {
         if let Some(queue) = announce_queue {
             self.try_enqueue_announce(ctx, rng, queue, actions);
         } else {
+            let original_raw = ctx
+                .original_raw
+                .as_deref()
+                .expect("announce packets retain original raw bytes");
             self.process_inbound_announce(
                 &ctx.packet,
-                &ctx.original_raw,
+                original_raw,
                 ctx.iface,
                 ctx.now,
                 rng,
@@ -758,7 +769,7 @@ impl TransportEngine {
         {
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: ctx.packet.destination_hash,
-                raw: ctx.packet.raw.clone(),
+                raw: PacketBytes::from(ctx.packet.raw.clone()),
                 packet_hash: ctx.packet.packet_hash,
                 receiving_interface: ctx.iface,
             });
@@ -943,7 +954,11 @@ impl TransportEngine {
             return;
         }
 
-        if self.should_hold_announce(&ctx.packet, &ctx.original_raw, ctx.iface, ctx.now) {
+        let original_raw = ctx
+            .original_raw
+            .as_deref()
+            .expect("announce packets retain original raw bytes");
+        if self.should_hold_announce(&ctx.packet, original_raw, ctx.iface, ctx.now) {
             return;
         }
 
@@ -959,7 +974,7 @@ impl TransportEngine {
             self.process_verified_announce(
                 VerifiedAnnounceCtx {
                     packet: &ctx.packet,
-                    original_raw: &ctx.original_raw,
+                    original_raw,
                     iface: ctx.iface,
                     now: ctx.now,
                     validated,
@@ -986,7 +1001,7 @@ impl TransportEngine {
             self.process_verified_announce(
                 VerifiedAnnounceCtx {
                     packet: &ctx.packet,
-                    original_raw: &ctx.original_raw,
+                    original_raw,
                     iface: ctx.iface,
                     now: ctx.now,
                     validated,
@@ -1011,7 +1026,7 @@ impl TransportEngine {
             received_from,
         };
         let pending = PendingAnnounce {
-            original_raw: ctx.original_raw.clone(),
+            original_raw: original_raw.to_vec(),
             packet: ctx.packet.clone(),
             interface: ctx.iface,
             received_from,
@@ -1163,7 +1178,7 @@ impl TransportEngine {
         // Emit CacheAnnounce for disk caching (pre-hop-increment raw)
         actions.push(TransportAction::CacheAnnounce {
             packet_hash: ctx.packet.packet_hash,
-            raw: ctx.original_raw.to_vec(),
+            raw: ctx.original_raw.to_vec().into(),
         });
 
         // Store path via upsert into PathSet
@@ -1225,7 +1240,7 @@ impl TransportEngine {
         // Forward announce to local clients if any are connected
         if self.has_local_clients() {
             actions.push(TransportAction::ForwardToLocalClients {
-                raw: ctx.packet.raw.clone(),
+                raw: PacketBytes::from(ctx.packet.raw.clone()),
                 exclude: Some(ctx.iface),
             });
         }
@@ -1299,7 +1314,7 @@ impl TransportEngine {
 
                         actions.push(TransportAction::SendOnInterface {
                             interface: outbound_interface,
-                            raw: new_raw,
+                            raw: new_raw.into(),
                         });
                     }
                 }
@@ -1307,7 +1322,7 @@ impl TransportEngine {
                 // Could be for a local pending link - deliver locally
                 actions.push(TransportAction::DeliverLocal {
                     destination_hash: packet.destination_hash,
-                    raw: packet.raw.clone(),
+                    raw: PacketBytes::from(packet.raw.clone()),
                     packet_hash: packet.packet_hash,
                     receiving_interface: iface,
                 });
@@ -1325,7 +1340,7 @@ impl TransportEngine {
             // Deliver to local receipts
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: packet.destination_hash,
-                raw: packet.raw.clone(),
+                raw: PacketBytes::from(packet.raw.clone()),
                 packet_hash: packet.packet_hash,
                 receiving_interface: iface,
             });
@@ -1728,7 +1743,7 @@ mod tests {
 
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -1738,7 +1753,7 @@ mod tests {
         );
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -1760,7 +1775,7 @@ mod tests {
 
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -1770,7 +1785,7 @@ mod tests {
         );
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xAB; 16],
             3,
             0.0,
@@ -1780,7 +1795,7 @@ mod tests {
         );
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(2),
-            vec![0x03; 100],
+            vec![0x03; 100].into(),
             [0xBA; 16],
             2,
             0.0,
@@ -1790,7 +1805,7 @@ mod tests {
         );
         let _ = engine.announce_queues.gate_announce(
             InterfaceId(2),
-            vec![0x04; 100],
+            vec![0x04; 100].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -2238,7 +2253,7 @@ mod tests {
         let raw = make_announce_raw(&dest, &[0xAB; 32]);
         let actions = engine.gate_retransmit_actions(
             vec![TransportAction::BroadcastOnAllInterfaces {
-                raw: raw.clone(),
+                raw: raw.clone().into(),
                 exclude: None,
             }],
             1000.0,
@@ -2252,7 +2267,7 @@ mod tests {
                     raw: sent,
                 } => {
                     assert!(*interface == InterfaceId(1) || *interface == InterfaceId(2));
-                    assert_eq!(sent, &raw);
+                    assert_eq!(&**sent, raw.as_slice());
                 }
                 other => panic!("expected SendOnInterface, got {:?}", other),
             }
@@ -2672,7 +2687,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_inbound_packet_retains_original_raw_bytes() {
+    fn test_prepare_inbound_packet_only_retains_original_raw_for_announces() {
         let engine = TransportEngine::new(make_config(false));
         let dest = [0xAB; 16];
         let flags = PacketFlags {
@@ -2689,10 +2704,28 @@ mod tests {
             .prepare_inbound_packet(&packet.raw, InterfaceId(9), 1000.0)
             .expect("packet should parse and pass filter");
 
-        assert_eq!(ctx.original_raw, packet.raw);
+        assert!(ctx.original_raw.is_none());
         assert_eq!(ctx.packet.raw, packet.raw);
         assert_eq!(ctx.packet.hops, 1);
         assert_eq!(ctx.iface, InterfaceId(9));
+
+        let announce_flags = PacketFlags {
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            ..flags
+        };
+        let announce = RawPacket::pack(
+            announce_flags,
+            0,
+            &dest,
+            None,
+            constants::CONTEXT_NONE,
+            &[0u8; 91],
+        )
+        .unwrap();
+        let announce_ctx = engine
+            .prepare_inbound_packet(&announce.raw, InterfaceId(9), 1000.0)
+            .expect("announce should parse and pass filter");
+        assert_eq!(announce_ctx.original_raw.as_deref(), Some(announce.raw.as_slice()));
     }
 
     #[test]
@@ -2730,7 +2763,7 @@ mod tests {
             .expect("should produce DeliverLocal");
 
         assert_eq!(*deliver.0, dest);
-        assert_eq!(deliver.1, &packet.raw);
+        assert_eq!(&**deliver.1, packet.raw.as_slice());
         assert_eq!(*deliver.2, packet.packet_hash);
         assert_eq!(*deliver.3, InterfaceId(1));
     }

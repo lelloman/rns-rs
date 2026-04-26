@@ -140,7 +140,7 @@ impl TransportEngine {
             .filter(|iface_info| iface_info.id != ctx.interface_id && iface_info.out_capable)
             .map(|iface_info| TransportAction::SendOnInterface {
                 interface: iface_info.id,
-                raw: ctx.data.to_vec(),
+                raw: ctx.data.to_vec().into(),
             })
             .collect()
     }

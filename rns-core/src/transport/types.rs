@@ -1,9 +1,12 @@
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::constants;
 
 pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
+
+pub type PacketBytes = Arc<[u8]>;
 
 /// Opaque identifier for a network interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -89,17 +92,17 @@ pub enum TransportAction {
     /// Send raw bytes on a specific interface.
     SendOnInterface {
         interface: InterfaceId,
-        raw: Vec<u8>,
+        raw: PacketBytes,
     },
     /// Broadcast raw bytes on all OUT-capable interfaces, optionally excluding one.
     BroadcastOnAllInterfaces {
-        raw: Vec<u8>,
+        raw: PacketBytes,
         exclude: Option<InterfaceId>,
     },
     /// Deliver a packet to a local destination.
     DeliverLocal {
         destination_hash: [u8; 16],
-        raw: Vec<u8>,
+        raw: PacketBytes,
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
     },
@@ -123,17 +126,20 @@ pub enum TransportAction {
     },
     /// Forward raw bytes to all local client interfaces (excluding one).
     ForwardToLocalClients {
-        raw: Vec<u8>,
+        raw: PacketBytes,
         exclude: Option<InterfaceId>,
     },
     /// Forward a PLAIN/GROUP broadcast between local and external interfaces.
     ForwardPlainBroadcast {
-        raw: Vec<u8>,
+        raw: PacketBytes,
         to_local: bool,
         exclude: Option<InterfaceId>,
     },
     /// Cache an announce packet to disk.
-    CacheAnnounce { packet_hash: [u8; 32], raw: Vec<u8> },
+    CacheAnnounce {
+        packet_hash: [u8; 32],
+        raw: PacketBytes,
+    },
     /// Tunnel synthesis: send synthesis data on an interface.
     TunnelSynthesize {
         interface: InterfaceId,

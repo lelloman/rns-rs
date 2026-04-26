@@ -43,10 +43,13 @@ pub fn process_pending_announces(
             if let Some(attached) = entry.attached_interface {
                 actions.push(TransportAction::SendOnInterface {
                     interface: attached,
-                    raw,
+                    raw: raw.into(),
                 });
             } else {
-                actions.push(TransportAction::BroadcastOnAllInterfaces { raw, exclude: None });
+                actions.push(TransportAction::BroadcastOnAllInterfaces {
+                    raw: raw.into(),
+                    exclude: None,
+                });
             }
 
             actions.push(TransportAction::AnnounceRetransmit {

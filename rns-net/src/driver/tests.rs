@@ -858,7 +858,7 @@ fn dispatch_send() {
 
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(1),
-        raw: vec![0x01, 0x02, 0x03],
+        raw: vec![0x01, 0x02, 0x03].into(),
     }]);
 
     assert_eq!(sent.lock().unwrap().len(), 1);
@@ -905,7 +905,7 @@ fn dispatch_broadcast() {
         .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
     driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
-        raw: vec![0xAA],
+        raw: vec![0xAA].into(),
         exclude: None,
     }]);
 
@@ -953,7 +953,7 @@ fn dispatch_broadcast_exclude() {
         .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
     driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
-        raw: vec![0xBB],
+        raw: vec![0xBB].into(),
         exclude: Some(InterfaceId(1)),
     }]);
 
@@ -1190,12 +1190,12 @@ fn begin_drain_with_queued_writer_frames_reports_incomplete_status() {
 
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(77),
-        raw: vec![0x01],
+        raw: vec![0x01].into(),
     }]);
     entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(77),
-        raw: vec![0x02],
+        raw: vec![0x02].into(),
     }]);
 
     driver.begin_drain(Duration::from_secs(3));
@@ -1662,13 +1662,13 @@ fn dispatch_skips_offline_interface() {
     // Direct send to offline interface: should be skipped
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(1),
-        raw: vec![0x01],
+        raw: vec![0x01].into(),
     }]);
     assert_eq!(sent1.lock().unwrap().len(), 0);
 
     // Broadcast: only online interface should receive
     driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
-        raw: vec![0x02],
+        raw: vec![0x02].into(),
         exclude: None,
     }]);
     assert_eq!(sent1.lock().unwrap().len(), 0); // still offline
@@ -1727,7 +1727,7 @@ fn interface_up_refreshes_writer() {
     // Send via the (now-refreshed) interface
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(1),
-        raw: vec![0xFF],
+        raw: vec![0xFF].into(),
     }]);
 
     // Old writer should not have received anything
@@ -1792,7 +1792,7 @@ fn dynamic_interface_register() {
     // Can send to it
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(100),
-        raw: vec![0x42],
+        raw: vec![0x42].into(),
     }]);
     wait_for_sent_len(&sent, 1);
 
@@ -1893,7 +1893,7 @@ fn send_wouldblock_is_backed_off_between_dispatches() {
 
     let action = TransportAction::SendOnInterface {
         interface: InterfaceId(7),
-        raw: vec![0x01, 0x00, 0x42],
+        raw: vec![0x01, 0x00, 0x42].into(),
     };
     driver.dispatch_all(vec![action.clone()]);
     assert_eq!(*attempts.lock().unwrap(), 1);
@@ -2047,7 +2047,7 @@ fn send_updates_tx_stats() {
 
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(1),
-        raw: vec![0x01, 0x02, 0x03],
+        raw: vec![0x01, 0x02, 0x03].into(),
     }]);
 
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
@@ -2094,7 +2094,7 @@ fn broadcast_updates_tx_stats() {
         .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
     driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
-        raw: vec![0xAA, 0xBB],
+        raw: vec![0xAA, 0xBB].into(),
         exclude: None,
     }]);
 
@@ -4389,7 +4389,7 @@ fn disabled_interface_drops_ingress_and_egress() {
 
     driver.dispatch_all(vec![TransportAction::SendOnInterface {
         interface: InterfaceId(1),
-        raw: vec![0x00, 0x01, 0x42],
+        raw: vec![0x00, 0x01, 0x42].into(),
     }]);
     assert!(sent.lock().unwrap().is_empty());
 

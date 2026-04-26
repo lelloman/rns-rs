@@ -381,7 +381,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                 ActionWire::SendOnInterface { interface, raw } => {
                     TransportAction::SendOnInterface {
                         interface: InterfaceId(interface),
-                        raw,
+                        raw: raw.into(),
                     }
                 }
                 ActionWire::BroadcastOnAllInterfaces {
@@ -389,7 +389,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     exclude,
                     has_exclude,
                 } => TransportAction::BroadcastOnAllInterfaces {
-                    raw,
+                    raw: raw.into(),
                     exclude: if has_exclude != 0 {
                         Some(InterfaceId(exclude))
                     } else {
@@ -403,7 +403,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     receiving_interface,
                 } => TransportAction::DeliverLocal {
                     destination_hash,
-                    raw,
+                    raw: raw.into(),
                     packet_hash,
                     receiving_interface: InterfaceId(receiving_interface),
                 },
@@ -419,7 +419,10 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     interface: InterfaceId(interface),
                 },
                 ActionWire::CacheAnnounce { packet_hash, raw } => {
-                    TransportAction::CacheAnnounce { packet_hash, raw }
+                    TransportAction::CacheAnnounce {
+                        packet_hash,
+                        raw: raw.into(),
+                    }
                 }
                 ActionWire::TunnelEstablished {
                     tunnel_id,
@@ -442,7 +445,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     exclude,
                     has_exclude,
                 } => TransportAction::ForwardToLocalClients {
-                    raw,
+                    raw: raw.into(),
                     exclude: if has_exclude != 0 {
                         Some(InterfaceId(exclude))
                     } else {
@@ -455,7 +458,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     exclude,
                     has_exclude,
                 } => TransportAction::ForwardPlainBroadcast {
-                    raw,
+                    raw: raw.into(),
                     to_local: to_local != 0,
                     exclude: if has_exclude != 0 {
                         Some(InterfaceId(exclude))

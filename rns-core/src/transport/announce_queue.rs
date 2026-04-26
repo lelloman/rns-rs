@@ -9,7 +9,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use super::types::{InterfaceId, TransportAction};
+use super::types::{InterfaceId, PacketBytes, TransportAction};
 use crate::constants;
 
 /// A queued announce entry waiting for bandwidth availability.
@@ -24,7 +24,7 @@ pub struct AnnounceQueueEntry {
     /// Time the announce was originally emitted (from random blob).
     pub emitted: f64,
     /// Raw announce bytes (ready to send).
-    pub raw: Vec<u8>,
+    pub raw: PacketBytes,
 }
 
 /// Per-interface announce queue with bandwidth tracking.
@@ -154,7 +154,7 @@ impl AnnounceQueues {
     pub fn gate_announce(
         &mut self,
         interface: InterfaceId,
-        raw: Vec<u8>,
+        raw: PacketBytes,
         dest_hash: [u8; 16],
         hops: u8,
         emitted: f64,
@@ -316,7 +316,7 @@ mod tests {
             time,
             hops,
             emitted: time,
-            raw: vec![0x01, 0x02, 0x03],
+            raw: vec![0x01, 0x02, 0x03].into(),
         }
     }
 
@@ -417,7 +417,7 @@ mod tests {
                 time: i as f64,
                 hops: 1,
                 emitted: i as f64,
-                raw: vec![0x01],
+                raw: vec![0x01].into(),
             });
         }
         assert_eq!(queue.entries.len(), constants::MAX_QUEUED_ANNOUNCES);
@@ -468,7 +468,7 @@ mod tests {
         let mut queues = AnnounceQueues::new(1024);
         let result = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01, 0x02, 0x03],
+            vec![0x01, 0x02, 0x03].into(),
             [0xAA; 16],
             2,
             1000.0,
@@ -488,7 +488,7 @@ mod tests {
         let mut queues = AnnounceQueues::new(1024);
         let result = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xBB; 16],
             2,
             1000.0,
@@ -511,7 +511,7 @@ mod tests {
         // First announce goes through
         let r1 = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             1000.0,
@@ -524,7 +524,7 @@ mod tests {
         // Second announce at same time should be queued
         let r2 = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             1000.0,
@@ -545,7 +545,7 @@ mod tests {
         // Queue an announce by exhausting bandwidth first
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 10],
+            vec![0x01; 10].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -555,7 +555,7 @@ mod tests {
         );
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 10],
+            vec![0x02; 10].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -597,7 +597,7 @@ mod tests {
         // Exhaust bandwidth
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -610,7 +610,7 @@ mod tests {
         // is the caller's responsibility. gate_announce is agnostic.
         let r = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             0,
             0.0,
@@ -626,7 +626,7 @@ mod tests {
         let mut queues = AnnounceQueues::new(1024);
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -636,7 +636,7 @@ mod tests {
         );
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -657,7 +657,7 @@ mod tests {
 
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 10],
+            vec![0x01; 10].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -667,7 +667,7 @@ mod tests {
         );
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 10],
+            vec![0x02; 10].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -694,7 +694,7 @@ mod tests {
         let mut queues = AnnounceQueues::new(1024);
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -704,7 +704,7 @@ mod tests {
         );
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -714,7 +714,7 @@ mod tests {
         );
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x03; 100],
+            vec![0x03; 100].into(),
             [0xCC; 16],
             4,
             0.0,
@@ -742,7 +742,7 @@ mod tests {
 
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -752,7 +752,7 @@ mod tests {
         );
         let second = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             0.0,
@@ -765,7 +765,7 @@ mod tests {
 
         let rejected = queues.gate_announce(
             InterfaceId(2),
-            vec![0x03; 100],
+            vec![0x03; 100].into(),
             [0xCC; 16],
             4,
             0.0,
@@ -785,7 +785,7 @@ mod tests {
 
         let _ = queues.gate_announce(
             InterfaceId(1),
-            vec![0x01; 100],
+            vec![0x01; 100].into(),
             [0xAA; 16],
             2,
             0.0,
@@ -795,7 +795,7 @@ mod tests {
         );
         let queued = queues.gate_announce(
             InterfaceId(1),
-            vec![0x02; 100],
+            vec![0x02; 100].into(),
             [0xBB; 16],
             3,
             0.0,
