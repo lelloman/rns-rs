@@ -6,6 +6,8 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+#[cfg(feature = "rns-hooks-builtin")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
@@ -13,6 +15,8 @@ use std::time::Duration;
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
+#[cfg(feature = "rns-hooks-builtin")]
+use rns_hooks_crate::{BuiltinHookCall, BuiltinHookHost, HookError, HookResult};
 use rusqlite::Connection;
 
 use rns_net::{
@@ -29,6 +33,30 @@ use rns_ctl::state::{
     ServerConfigSchemaSnapshot, ServerConfigSnapshot, ServerConfigStatusState,
     ServerConfigValidationSnapshot, ServerHttpConfigSnapshot, SharedState, WsBroadcast,
 };
+
+#[cfg(feature = "rns-hooks-builtin")]
+static BUILTIN_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "rns-hooks-builtin")]
+fn register_builtin_continue_hook(label: &str) -> String {
+    let id = format!(
+        "test.rns_ctl.{}.{}.{}",
+        label,
+        std::process::id(),
+        BUILTIN_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    rns_hooks_crate::register_builtin_hook(id.clone(), builtin_continue_hook)
+        .expect("register built-in test hook");
+    id
+}
+
+#[cfg(feature = "rns-hooks-builtin")]
+fn builtin_continue_hook(
+    _call: BuiltinHookCall<'_>,
+    _host: &mut BuiltinHookHost,
+) -> Result<HookResult, HookError> {
+    Ok(HookResult::continue_result())
+}
 
 // ─── Test Server Harness ────────────────────────────────────────────────────
 
@@ -687,6 +715,50 @@ fn test_get_info() {
     // Uptime should be a small number
     let uptime = json["uptime_seconds"].as_f64().unwrap();
     assert!(uptime < 30.0);
+    server.shutdown();
+}
+
+#[test]
+#[cfg(feature = "rns-hooks-builtin")]
+fn test_hook_api_loads_reloads_lists_and_unloads_builtin_hook() {
+    let server = start_test_server();
+    let first_builtin_id = register_builtin_continue_hook("api_load");
+    let second_builtin_id = register_builtin_continue_hook("api_reload");
+
+    let load_body = format!(
+        r#"{{"name":"api_builtin","path":"{0}","type":"builtin","builtin_id":"{0}","attach_point":"Tick","priority":13}}"#,
+        first_builtin_id
+    );
+    let res = http_post(server.port, "/api/hook/load", &load_body);
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json()["status"], "loaded");
+
+    let res = http_get(server.port, "/api/hooks");
+    assert_eq!(res.status, 200);
+    let json = res.json();
+    assert_eq!(json["hooks"].as_array().unwrap().len(), 1);
+    assert_eq!(json["hooks"][0]["name"], "api_builtin");
+    assert_eq!(json["hooks"][0]["type"], "builtin");
+    assert_eq!(json["hooks"][0]["attach_point"], "Tick");
+    assert_eq!(json["hooks"][0]["priority"], 13);
+
+    let reload_body = format!(
+        r#"{{"name":"api_builtin","path":"{0}","type":"builtin","builtin_id":"{0}","attach_point":"Tick"}}"#,
+        second_builtin_id
+    );
+    let res = http_post(server.port, "/api/hook/reload", &reload_body);
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json()["status"], "reloaded");
+
+    let unload_body = r#"{"name":"api_builtin","attach_point":"Tick"}"#;
+    let res = http_post(server.port, "/api/hook/unload", unload_body);
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json()["status"], "unloaded");
+
+    let res = http_get(server.port, "/api/hooks");
+    assert_eq!(res.status, 200);
+    assert!(res.json()["hooks"].as_array().unwrap().is_empty());
+
     server.shutdown();
 }
 

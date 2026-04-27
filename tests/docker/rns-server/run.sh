@@ -25,12 +25,21 @@ fi
 
 NO_TEARDOWN=false
 CLEAN_ONLY=false
+RNS_SERVER_FEATURES="rns-hooks"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-teardown) NO_TEARDOWN=true; shift ;;
     --clean)       CLEAN_ONLY=true; shift ;;
+    --features)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --features requires a feature list." >&2
+        exit 1
+      fi
+      RNS_SERVER_FEATURES="$2"
+      shift 2
+      ;;
     *)
-      echo "Usage: $0 [--no-teardown] [--clean]" >&2
+      echo "Usage: $0 [--no-teardown] [--clean] [--features FEATURES]" >&2
       exit 1
       ;;
   esac
@@ -49,8 +58,12 @@ fi
 # Always build: rns-server-test is a separate image from rns-test,
 # so SKIP_BUILD from run-all.sh does not apply.
 
-echo "=== Building rns-server-test Docker image ==="
-docker build -t rns-server-test -f "${SCRIPT_DIR}/Dockerfile.rns-server" "$REPO_ROOT"
+echo "=== Building rns-server-test Docker image (${RNS_SERVER_FEATURES}) ==="
+docker build \
+  --build-arg "RNS_SERVER_FEATURES=${RNS_SERVER_FEATURES}" \
+  -t rns-server-test \
+  -f "${SCRIPT_DIR}/Dockerfile.rns-server" \
+  "$REPO_ROOT"
 
 # ── Set up results file ─────────────────────────────────────────────────────
 

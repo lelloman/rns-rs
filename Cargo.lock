@@ -2004,6 +2004,7 @@ dependencies = [
  "rcgen",
  "rns-core",
  "rns-crypto",
+ "rns-hooks",
  "rns-net",
  "rusqlite",
  "rustls",

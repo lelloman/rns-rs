@@ -57,6 +57,11 @@ jobs:
       - name: Run workspace tests with rns-hooks
         run: cargo test --workspace --features rns-hooks
 
+      - name: Run built-in hook integration tests
+        run: |
+          cargo test -p rns-net --features rns-hooks-builtin --test e2e_hooks builtin
+          cargo test -p rns-ctl --features rns-hooks-builtin test_hook_api_loads_reloads_lists_and_unloads_builtin_hook
+
   cargo-test-rns-ctl-tls:
     name: Cargo Test (rns-ctl tls)
     runs-on: ubuntu-latest
@@ -114,6 +119,13 @@ jobs:
         run: |
           cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd --features rns-hooks-native
           cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl --features rns-hooks-native
+
+      - name: Build ARMv7 rns-server with built-in hooks
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+        run: cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-server --features rns-hooks-builtin
 
   rns-ctl-web-smoke:
     name: rns-ctl-web-smoke

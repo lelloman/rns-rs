@@ -10,12 +10,16 @@
 #![cfg(feature = "hooks")]
 
 use std::path::PathBuf;
+#[cfg(feature = "rns-hooks-builtin")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
+#[cfg(feature = "rns-hooks-builtin")]
+use rns_hooks_crate::{BuiltinHookCall, BuiltinHookHost, HookError, HookResult};
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig, NodeConfig,
@@ -34,6 +38,32 @@ fn wasm_bytes(name: &str) -> Vec<u8> {
             path.display()
         )
     })
+}
+
+// ─── Built-in helpers ────────────────────────────────────────────────────────
+
+#[cfg(feature = "rns-hooks-builtin")]
+static BUILTIN_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "rns-hooks-builtin")]
+fn register_builtin_continue_hook(label: &str) -> String {
+    let id = format!(
+        "test.rns_net.{}.{}.{}",
+        label,
+        std::process::id(),
+        BUILTIN_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    rns_hooks_crate::register_builtin_hook(id.clone(), builtin_continue_hook)
+        .expect("register built-in test hook");
+    id
+}
+
+#[cfg(feature = "rns-hooks-builtin")]
+fn builtin_continue_hook(
+    _call: BuiltinHookCall<'_>,
+    _host: &mut BuiltinHookHost,
+) -> Result<HookResult, HookError> {
+    Ok(HookResult::continue_result())
 }
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -679,6 +709,128 @@ fn test_load_invalid_wasm_returns_error() {
     transport.shutdown();
 }
 
+#[test]
+#[cfg(feature = "rns-hooks-builtin")]
+fn test_load_list_unload_builtin_hook() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    let builtin_id = register_builtin_continue_hook("lifecycle");
+    let result = node
+        .load_builtin_hook(
+            "builtin_continue".into(),
+            builtin_id,
+            "PreIngress".into(),
+            10,
+        )
+        .expect("send failed");
+    assert!(
+        result.is_ok(),
+        "load_builtin_hook failed: {:?}",
+        result.err()
+    );
+
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].name, "builtin_continue");
+    assert_eq!(hooks[0].hook_type, "builtin");
+    assert_eq!(hooks[0].attach_point, "PreIngress");
+    assert_eq!(hooks[0].priority, 10);
+    assert!(hooks[0].enabled);
+
+    node.unload_hook("builtin_continue".into(), "PreIngress".into())
+        .expect("send failed")
+        .expect("unload_hook failed");
+    assert!(node
+        .list_hooks()
+        .expect("list_hooks send failed")
+        .is_empty());
+
+    node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+#[cfg(feature = "rns-hooks-builtin")]
+fn test_reload_builtin_hook_preserves_listing_state() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    let first_builtin_id = register_builtin_continue_hook("reload_a");
+    let second_builtin_id = register_builtin_continue_hook("reload_b");
+
+    node.load_builtin_hook(
+        "reloadable_builtin".into(),
+        first_builtin_id,
+        "Tick".into(),
+        7,
+    )
+    .expect("send failed")
+    .expect("load_builtin_hook failed");
+
+    let result = node
+        .reload_builtin_hook(
+            "reloadable_builtin".into(),
+            "Tick".into(),
+            second_builtin_id,
+        )
+        .expect("send failed");
+    assert!(
+        result.is_ok(),
+        "reload_builtin_hook failed: {:?}",
+        result.err()
+    );
+
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].name, "reloadable_builtin");
+    assert_eq!(hooks[0].hook_type, "builtin");
+    assert_eq!(hooks[0].attach_point, "Tick");
+    assert_eq!(hooks[0].priority, 7);
+    assert!(hooks[0].enabled);
+
+    node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+#[cfg(feature = "rns-hooks-builtin")]
+fn test_load_unknown_builtin_hook_returns_error() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    let missing_id = format!(
+        "test.rns_net.missing.{}.{}",
+        std::process::id(),
+        BUILTIN_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    let result = node
+        .load_builtin_hook("missing_builtin".into(), missing_id, "PreIngress".into(), 0)
+        .expect("send failed");
+    assert!(
+        result.is_err(),
+        "Expected error for unregistered built-in hook"
+    );
+
+    node.shutdown();
+    transport.shutdown();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 2. Hooks on Real Traffic
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -719,6 +871,48 @@ fn test_packet_logger_does_not_block_delivery() {
     // Bob should still receive it (packet_logger returns Continue)
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("Bob did not receive message with packet_logger hook active");
+    let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+    assert_eq!(decrypted, plaintext);
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+#[cfg(feature = "rns-hooks-builtin")]
+fn test_builtin_hook_does_not_block_delivery() {
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
+
+    let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
+
+    let builtin_id = register_builtin_continue_hook("traffic");
+    bob_node
+        .load_builtin_hook(
+            "builtin_continue".into(),
+            builtin_id,
+            "PreIngress".into(),
+            0,
+        )
+        .expect("send failed")
+        .expect("load_builtin_hook failed");
+
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+    let plaintext = b"Hello through built-in hook!";
+    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+
+    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
+        .expect("Bob did not receive message with built-in hook active");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, plaintext);
 
