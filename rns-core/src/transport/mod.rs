@@ -1392,11 +1392,11 @@ impl TransportEngine {
         for action in actions {
             match action {
                 TransportAction::SendOnInterface { interface, raw } => {
-                    let (bitrate, announce_cap) =
+                    let (bitrate, airtime_profile, announce_cap) =
                         if let Some(info) = self.interfaces.get(&interface) {
-                            (info.bitrate, info.announce_cap)
+                            (info.bitrate, info.airtime_profile, info.announce_cap)
                         } else {
-                            (None, constants::ANNOUNCE_CAP)
+                            (None, None, constants::ANNOUNCE_CAP)
                         };
                     if let Some(send_action) = self.announce_queues.gate_announce(
                         interface,
@@ -1406,6 +1406,7 @@ impl TransportEngine {
                         now,
                         now,
                         bitrate,
+                        airtime_profile,
                         announce_cap,
                     ) {
                         result.push(send_action);
@@ -1521,11 +1522,11 @@ impl TransportEngine {
                 TransportAction::SendOnInterface { interface, raw } => {
                     // Extract dest_hash from raw (bytes 2..18 for H1, 18..34 for H2)
                     let (dest_hash, hops) = Self::extract_announce_info(&raw);
-                    let (bitrate, announce_cap) =
+                    let (bitrate, airtime_profile, announce_cap) =
                         if let Some(info) = self.interfaces.get(&interface) {
-                            (info.bitrate, info.announce_cap)
+                            (info.bitrate, info.airtime_profile, info.announce_cap)
                         } else {
-                            (None, constants::ANNOUNCE_CAP)
+                            (None, None, constants::ANNOUNCE_CAP)
                         };
                     if let Some(send_action) = self.announce_queues.gate_announce(
                         interface,
@@ -1535,6 +1536,7 @@ impl TransportEngine {
                         now,
                         now,
                         bitrate,
+                        airtime_profile,
                         announce_cap,
                     ) {
                         result.push(send_action);
@@ -1544,7 +1546,12 @@ impl TransportEngine {
                     let (dest_hash, hops) = Self::extract_announce_info(&raw);
                     // Expand to per-interface sends gated through queues,
                     // applying mode filtering (AP blocks non-local announces, etc.)
-                    let iface_ids: Vec<(InterfaceId, Option<u64>, f64)> = self
+                    let iface_ids: Vec<(
+                        InterfaceId,
+                        Option<u64>,
+                        Option<types::AirtimeProfile>,
+                        f64,
+                    )> = self
                         .interfaces
                         .iter()
                         .filter(|(_, info)| info.out_capable)
@@ -1565,10 +1572,12 @@ impl TransportEngine {
                                 &self.interfaces,
                             )
                         })
-                        .map(|(id, info)| (*id, info.bitrate, info.announce_cap))
+                        .map(|(id, info)| {
+                            (*id, info.bitrate, info.airtime_profile, info.announce_cap)
+                        })
                         .collect();
 
-                    for (iface_id, bitrate, announce_cap) in iface_ids {
+                    for (iface_id, bitrate, airtime_profile, announce_cap) in iface_ids {
                         if let Some(send_action) = self.announce_queues.gate_announce(
                             iface_id,
                             raw.clone(),
@@ -1577,6 +1586,7 @@ impl TransportEngine {
                             now,
                             now,
                             bitrate,
+                            airtime_profile,
                             announce_cap,
                         ) {
                             result.push(send_action);
@@ -1654,6 +1664,7 @@ mod tests {
             out_capable: true,
             in_capable: true,
             bitrate: None,
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
@@ -1749,6 +1760,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
         let _ = engine.announce_queues.gate_announce(
@@ -1759,6 +1771,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
         assert_eq!(engine.announce_queue_count(), 1);
@@ -1781,6 +1794,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
         let _ = engine.announce_queues.gate_announce(
@@ -1791,6 +1805,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
         let _ = engine.announce_queues.gate_announce(
@@ -1801,6 +1816,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
         let _ = engine.announce_queues.gate_announce(
@@ -1811,6 +1827,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             constants::ANNOUNCE_CAP,
         );
 
@@ -2623,6 +2640,7 @@ mod tests {
             out_capable: true,
             in_capable: true,
             bitrate: None,
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
@@ -3028,6 +3046,7 @@ mod tests {
             out_capable: true,
             in_capable: true,
             bitrate: None,
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,

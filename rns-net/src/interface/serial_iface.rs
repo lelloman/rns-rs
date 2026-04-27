@@ -270,6 +270,7 @@ impl InterfaceFactory for SerialFactory {
             out_capable: true,
             in_capable: true,
             bitrate,
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,

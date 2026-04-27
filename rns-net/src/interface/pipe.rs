@@ -296,6 +296,7 @@ impl InterfaceFactory for PipeFactory {
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000),
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use rns_core::transport::types::InterfaceId;
+use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 
 use crate::event::{Event, EventSender};
 use crate::interface::{lock_or_recover, Writer};
@@ -30,6 +30,9 @@ pub const CR_MAX: u8 = 8;
 pub const TXPOWER_MIN: i8 = 0;
 pub const TXPOWER_MAX: i8 = 37;
 pub const HW_MTU: u32 = 508;
+pub const LORA_PREAMBLE_SYMBOLS: u16 = 8;
+pub const LORA_EXPLICIT_HEADER: bool = true;
+pub const LORA_CRC: bool = true;
 
 /// Configuration for one RNode subinterface (radio).
 #[derive(Debug, Clone)]
@@ -166,6 +169,26 @@ pub fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
         }
     }
     None
+}
+
+/// Estimate the LoRa physical bit rate for announce bandwidth gating.
+///
+/// Formula: SF * (bandwidth / 2^SF) * (4 / coding_rate).
+pub fn estimate_lora_bitrate_bps(sub: &RNodeSubConfig) -> u64 {
+    let symbols_per_second = sub.bandwidth as f64 / (1u64 << sub.spreading_factor) as f64;
+    let bits_per_symbol = sub.spreading_factor as f64 * (4.0 / sub.coding_rate as f64);
+    (symbols_per_second * bits_per_symbol).round().max(1.0) as u64
+}
+
+pub fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
+    AirtimeProfile::Lora {
+        bandwidth: sub.bandwidth,
+        spreading_factor: sub.spreading_factor,
+        coding_rate: sub.coding_rate,
+        preamble_symbols: LORA_PREAMBLE_SYMBOLS,
+        explicit_header: LORA_EXPLICIT_HEADER,
+        crc: LORA_CRC,
+    }
 }
 
 /// Writer for a specific RNode subinterface.
@@ -831,6 +854,16 @@ impl InterfaceFactory for RNodeFactory {
         })?;
 
         let name = rnode_config.name.clone();
+        let sub_bitrates: Vec<u64> = rnode_config
+            .subinterfaces
+            .iter()
+            .map(estimate_lora_bitrate_bps)
+            .collect();
+        let airtime_profiles: Vec<AirtimeProfile> = rnode_config
+            .subinterfaces
+            .iter()
+            .map(lora_airtime_profile)
+            .collect();
 
         let pairs = start(rnode_config, ctx.tx)?;
 
@@ -848,7 +881,8 @@ impl InterfaceFactory for RNodeFactory {
                 mode: ctx.mode,
                 out_capable: true,
                 in_capable: true,
-                bitrate: None,
+                bitrate: sub_bitrates.get(index).copied(),
+                airtime_profile: airtime_profiles.get(index).copied(),
                 announce_rate_target: None,
                 announce_rate_grace: 0,
                 announce_rate_penalty: 0.0,
@@ -1267,6 +1301,58 @@ mod tests {
         bad = good.clone();
         bad.txpower = 50;
         assert!(validate_sub_config(&bad).is_some());
+    }
+
+    #[test]
+    fn rnode_lora_bitrate_estimate_uses_radio_params() {
+        let mut sub = RNodeSubConfig {
+            name: "test".into(),
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        };
+
+        assert_eq!(estimate_lora_bitrate_bps(&sub), 3125);
+
+        sub.spreading_factor = 12;
+        assert_eq!(estimate_lora_bitrate_bps(&sub), 293);
+
+        sub.bandwidth = 250_000;
+        assert_eq!(estimate_lora_bitrate_bps(&sub), 586);
+    }
+
+    #[test]
+    fn rnode_lora_airtime_profile_uses_radio_params() {
+        let sub = RNodeSubConfig {
+            name: "test".into(),
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        };
+
+        let profile = lora_airtime_profile(&sub);
+        assert!((profile.transmit_time_secs(100) - 0.307712).abs() < 0.000001);
+        assert_eq!(
+            profile,
+            AirtimeProfile::Lora {
+                bandwidth: 125_000,
+                spreading_factor: 8,
+                coding_rate: 5,
+                preamble_symbols: LORA_PREAMBLE_SYMBOLS,
+                explicit_header: LORA_EXPLICIT_HEADER,
+                crc: LORA_CRC,
+            }
+        );
     }
 
     #[test]

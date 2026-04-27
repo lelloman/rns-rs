@@ -12,6 +12,74 @@ pub type PacketBytes = Arc<[u8]>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InterfaceId(pub u64);
 
+/// Packet airtime model for interfaces where payload transmit time is not
+/// accurately represented by payload bits divided by a raw bit rate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AirtimeProfile {
+    Lora {
+        bandwidth: u32,
+        spreading_factor: u8,
+        coding_rate: u8,
+        preamble_symbols: u16,
+        explicit_header: bool,
+        crc: bool,
+    },
+}
+
+impl AirtimeProfile {
+    pub fn transmit_time_secs(&self, payload_len: usize) -> f64 {
+        match *self {
+            AirtimeProfile::Lora {
+                bandwidth,
+                spreading_factor,
+                coding_rate,
+                preamble_symbols,
+                explicit_header,
+                crc,
+            } => lora_airtime_secs(
+                payload_len,
+                bandwidth,
+                spreading_factor,
+                coding_rate,
+                preamble_symbols,
+                explicit_header,
+                crc,
+            ),
+        }
+    }
+}
+
+fn lora_airtime_secs(
+    payload_len: usize,
+    bandwidth: u32,
+    spreading_factor: u8,
+    coding_rate: u8,
+    preamble_symbols: u16,
+    explicit_header: bool,
+    crc: bool,
+) -> f64 {
+    if bandwidth == 0 || spreading_factor == 0 {
+        return 0.0;
+    }
+
+    let sf = spreading_factor as f64;
+    let symbol_time = 2f64.powi(spreading_factor as i32) / bandwidth as f64;
+    let low_data_rate_optimize = spreading_factor >= 11 && bandwidth <= 125_000;
+    let de = if low_data_rate_optimize { 1.0 } else { 0.0 };
+    let ih = if explicit_header { 0.0 } else { 1.0 };
+    let crc = if crc { 1.0 } else { 0.0 };
+    let denominator = 4.0 * (sf - 2.0 * de);
+    if denominator <= 0.0 {
+        return 0.0;
+    }
+
+    let numerator = 8.0 * payload_len as f64 - 4.0 * sf + 28.0 + 16.0 * crc - 20.0 * ih;
+    let payload_symbols = 8.0 + (numerator / denominator).ceil().max(0.0) * coding_rate as f64;
+    let preamble_time = (preamble_symbols as f64 + 4.25) * symbol_time;
+    let payload_time = payload_symbols * symbol_time;
+    preamble_time + payload_time
+}
+
 /// Per-interface ingress-control configuration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IngressControlConfig {
@@ -65,6 +133,7 @@ pub struct InterfaceInfo {
     pub out_capable: bool,
     pub in_capable: bool,
     pub bitrate: Option<u64>,
+    pub airtime_profile: Option<AirtimeProfile>,
     pub announce_rate_target: Option<f64>,
     pub announce_rate_grace: u32,
     pub announce_rate_penalty: f64,

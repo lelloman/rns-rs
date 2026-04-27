@@ -48,10 +48,10 @@ use crate::interface::i2p::I2pRuntimeConfigHandle;
 use crate::interface::pipe::PipeRuntime;
 #[cfg(feature = "iface-pipe")]
 use crate::interface::pipe::PipeRuntimeConfigHandle;
-#[cfg(all(feature = "iface-rnode", test))]
-use crate::interface::rnode::RNodeSubConfig;
 #[cfg(feature = "iface-rnode")]
-use crate::interface::rnode::{validate_sub_config, RNodeRuntime, RNodeRuntimeConfigHandle};
+use crate::interface::rnode::{
+    validate_sub_config, RNodeRuntime, RNodeRuntimeConfigHandle, RNodeSubConfig,
+};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::TcpClientRuntimeConfigHandle;
 #[cfg(all(feature = "iface-tcp", test))]

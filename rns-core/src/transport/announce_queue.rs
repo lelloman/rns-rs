@@ -9,7 +9,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use super::types::{InterfaceId, PacketBytes, TransportAction};
+use super::types::{AirtimeProfile, InterfaceId, PacketBytes, TransportAction};
 use crate::constants;
 
 /// A queued announce entry waiting for bandwidth availability.
@@ -111,13 +111,26 @@ impl InterfaceAnnounceQueue {
         now: f64,
         raw_len: usize,
         bitrate: u64,
+        airtime_profile: Option<AirtimeProfile>,
         announce_cap: f64,
     ) -> f64 {
-        if bitrate == 0 || announce_cap <= 0.0 {
+        if announce_cap <= 0.0 {
             return now; // no cap
         }
-        let bits = (raw_len * 8) as f64;
-        let time_to_send = bits / (bitrate as f64);
+
+        let time_to_send = airtime_profile
+            .map(|profile| profile.transmit_time_secs(raw_len))
+            .unwrap_or_else(|| {
+                if bitrate == 0 {
+                    0.0
+                } else {
+                    let bits = (raw_len * 8) as f64;
+                    bits / (bitrate as f64)
+                }
+            });
+        if time_to_send <= 0.0 {
+            return now;
+        }
         let delay = time_to_send / announce_cap;
         now + delay
     }
@@ -160,14 +173,16 @@ impl AnnounceQueues {
         emitted: f64,
         now: f64,
         bitrate: Option<u64>,
+        airtime_profile: Option<AirtimeProfile>,
         announce_cap: f64,
     ) -> Option<TransportAction> {
-        // If no bitrate, no cap applies — send immediately
+        // If no timing model is available, no cap applies — send immediately
         let bitrate = match bitrate {
             Some(br) if br > 0 => br,
-            _ => {
+            _ if airtime_profile.is_none() => {
                 return Some(TransportAction::SendOnInterface { interface, raw });
             }
+            _ => 0,
         };
 
         if !self.queues.contains_key(&interface) && self.queues.len() >= self.max_interfaces {
@@ -183,6 +198,7 @@ impl AnnounceQueues {
                 now,
                 raw.len(),
                 bitrate,
+                airtime_profile,
                 announce_cap,
             );
             Some(TransportAction::SendOnInterface { interface, raw })
@@ -219,19 +235,27 @@ impl AnnounceQueues {
                     let entry = queue.entries.remove(idx);
 
                     // Look up bitrate for this interface
-                    let (bitrate, announce_cap) = if let Some(info) = interfaces.get(iface_id) {
-                        (info.bitrate.unwrap_or(0), info.announce_cap)
-                    } else {
-                        (0, constants::ANNOUNCE_CAP)
-                    };
+                    let (bitrate, airtime_profile, announce_cap) =
+                        if let Some(info) = interfaces.get(iface_id) {
+                            (
+                                info.bitrate.unwrap_or(0),
+                                info.airtime_profile,
+                                info.announce_cap,
+                            )
+                        } else {
+                            (0, None, constants::ANNOUNCE_CAP)
+                        };
 
-                    if bitrate > 0 {
+                    if bitrate > 0 || airtime_profile.is_some() {
                         queue.announce_allowed_at = InterfaceAnnounceQueue::calculate_next_allowed(
                             now,
                             entry.raw.len(),
                             bitrate,
+                            airtime_profile,
                             announce_cap,
                         );
+                    } else {
+                        queue.announce_allowed_at = now;
                     }
 
                     actions.push(TransportAction::SendOnInterface {
@@ -328,6 +352,7 @@ mod tests {
             out_capable: true,
             in_capable: true,
             bitrate,
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
@@ -451,14 +476,34 @@ mod tests {
         // 100 bytes = 800 bits, bitrate = 1000 bps, cap = 0.02
         // time_to_send = 800/1000 = 0.8s
         // delay = 0.8 / 0.02 = 40.0s
-        let next = InterfaceAnnounceQueue::calculate_next_allowed(1000.0, 100, 1000, 0.02);
+        let next = InterfaceAnnounceQueue::calculate_next_allowed(1000.0, 100, 1000, None, 0.02);
         assert!((next - 1040.0).abs() < 0.001);
     }
 
     #[test]
     fn test_calculate_next_allowed_zero_bitrate() {
-        let next = InterfaceAnnounceQueue::calculate_next_allowed(1000.0, 100, 0, 0.02);
+        let next = InterfaceAnnounceQueue::calculate_next_allowed(1000.0, 100, 0, None, 0.02);
         assert_eq!(next, 1000.0); // no cap
+    }
+
+    #[test]
+    fn test_calculate_next_allowed_uses_lora_airtime() {
+        let profile = AirtimeProfile::Lora {
+            bandwidth: 125_000,
+            spreading_factor: 8,
+            coding_rate: 5,
+            preamble_symbols: 8,
+            explicit_header: true,
+            crc: true,
+        };
+
+        let next =
+            InterfaceAnnounceQueue::calculate_next_allowed(1000.0, 100, 0, Some(profile), 0.02);
+
+        // 100-byte explicit-header LoRa packet at BW125/SF8/CR4/5:
+        // (8 + ceil((800 - 32 + 28 + 16) / 32) * 5 + 12.25) symbols
+        // * 2.048 ms/symbol = 307.712 ms airtime.
+        assert!((next - 1015.3856).abs() < 0.0001);
     }
 
     // --- AnnounceQueues tests ---
@@ -474,6 +519,7 @@ mod tests {
             1000.0,
             1000.0,
             None, // no bitrate
+            None,
             0.02,
         );
         assert!(result.is_some());
@@ -481,6 +527,49 @@ mod tests {
             result.unwrap(),
             TransportAction::SendOnInterface { .. }
         ));
+    }
+
+    #[test]
+    fn test_gate_announce_uses_airtime_profile_without_bitrate() {
+        let mut queues = AnnounceQueues::new(1024);
+        let profile = AirtimeProfile::Lora {
+            bandwidth: 125_000,
+            spreading_factor: 8,
+            coding_rate: 5,
+            preamble_symbols: 8,
+            explicit_header: true,
+            crc: true,
+        };
+
+        let first = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x01; 100].into(),
+            [0xAA; 16],
+            2,
+            1000.0,
+            1000.0,
+            None,
+            Some(profile),
+            0.02,
+        );
+        assert!(first.is_some());
+
+        let queue = queues.queue_for(&InterfaceId(1)).unwrap();
+        assert!((queue.announce_allowed_at - 1015.3856).abs() < 0.0001);
+
+        let second = queues.gate_announce(
+            InterfaceId(1),
+            vec![0x02; 100].into(),
+            [0xBB; 16],
+            2,
+            1000.0,
+            1000.0,
+            None,
+            Some(profile),
+            0.02,
+        );
+        assert!(second.is_none());
+        assert_eq!(queues.queue_for(&InterfaceId(1)).unwrap().entries.len(), 1);
     }
 
     #[test]
@@ -494,6 +583,7 @@ mod tests {
             1000.0,
             1000.0,
             Some(10000), // 10 kbps
+            None,
             0.02,
         );
         // First announce should go through
@@ -517,6 +607,7 @@ mod tests {
             1000.0,
             1000.0,
             Some(1000), // 1 kbps — very slow
+            None,
             0.02,
         );
         assert!(r1.is_some());
@@ -530,6 +621,7 @@ mod tests {
             1000.0,
             1000.0,
             Some(1000),
+            None,
             0.02,
         );
         assert!(r2.is_none()); // queued
@@ -551,6 +643,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let _ = queues.gate_announce(
@@ -561,6 +654,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
 
@@ -603,6 +697,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
 
@@ -616,6 +711,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         assert!(r.is_none()); // queued — caller must bypass for hops==0
@@ -632,6 +728,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let _ = queues.gate_announce(
@@ -642,6 +739,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
 
@@ -663,6 +761,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let _ = queues.gate_announce(
@@ -673,6 +772,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
 
@@ -700,6 +800,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let _ = queues.gate_announce(
@@ -710,6 +811,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let _ = queues.gate_announce(
@@ -720,6 +822,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
 
@@ -748,6 +851,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let second = queues.gate_announce(
@@ -758,6 +862,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         assert!(second.is_none());
@@ -771,6 +876,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         assert!(rejected.is_none());
@@ -791,6 +897,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         let queued = queues.gate_announce(
@@ -801,6 +908,7 @@ mod tests {
             0.0,
             0.0,
             Some(1000),
+            None,
             0.02,
         );
         assert!(queued.is_none());

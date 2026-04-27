@@ -449,6 +449,7 @@ impl Driver {
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000_000),
+            airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
             announce_rate_penalty: 0.0,
@@ -2296,43 +2297,47 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
-        let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("rnode interface '{}' not found", name),
-        })?;
-        let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
-        let old = runtime.sub.clone();
-        match setting {
-            "frequency_hz" => runtime.sub.frequency = Self::expect_u64(value, key)? as u32,
-            "bandwidth_hz" => runtime.sub.bandwidth = Self::expect_u64(value, key)? as u32,
-            "txpower_dbm" => runtime.sub.txpower = Self::expect_i64(value, key)? as i8,
-            "spreading_factor" => {
-                runtime.sub.spreading_factor = Self::expect_u64(value, key)? as u8
+        let updated_sub = {
+            let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("rnode interface '{}' not found", name),
+            })?;
+            let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
+            let old = runtime.sub.clone();
+            match setting {
+                "frequency_hz" => runtime.sub.frequency = Self::expect_u64(value, key)? as u32,
+                "bandwidth_hz" => runtime.sub.bandwidth = Self::expect_u64(value, key)? as u32,
+                "txpower_dbm" => runtime.sub.txpower = Self::expect_i64(value, key)? as i8,
+                "spreading_factor" => {
+                    runtime.sub.spreading_factor = Self::expect_u64(value, key)? as u8
+                }
+                "coding_rate" => runtime.sub.coding_rate = Self::expect_u64(value, key)? as u8,
+                "st_alock_pct" => {
+                    runtime.sub.st_alock = match value {
+                        RuntimeConfigValue::Null => None,
+                        other => Some(Self::expect_f64(other, key)? as f32),
+                    };
+                }
+                "lt_alock_pct" => {
+                    runtime.sub.lt_alock = match value {
+                        RuntimeConfigValue::Null => None,
+                        other => Some(Self::expect_f64(other, key)? as f32),
+                    };
+                }
+                _ => {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    });
+                }
             }
-            "coding_rate" => runtime.sub.coding_rate = Self::expect_u64(value, key)? as u8,
-            "st_alock_pct" => {
-                runtime.sub.st_alock = match value {
-                    RuntimeConfigValue::Null => None,
-                    other => Some(Self::expect_f64(other, key)? as f32),
-                };
+            if let Err(err) = Self::apply_rnode_runtime(&mut runtime) {
+                runtime.sub = old;
+                return Err(err);
             }
-            "lt_alock_pct" => {
-                runtime.sub.lt_alock = match value {
-                    RuntimeConfigValue::Null => None,
-                    other => Some(Self::expect_f64(other, key)? as f32),
-                };
-            }
-            _ => {
-                return Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::UnknownKey,
-                    message: format!("unknown runtime-config key '{}'", key),
-                });
-            }
-        }
-        if let Err(err) = Self::apply_rnode_runtime(&mut runtime) {
-            runtime.sub = old;
-            return Err(err);
-        }
+            runtime.sub.clone()
+        };
+        self.refresh_rnode_interface_bitrate(name, &updated_sub);
         Ok(())
     }
 
@@ -2342,33 +2347,54 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
-        let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("rnode interface '{}' not found", name),
-        })?;
-        let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
-        let old = runtime.sub.clone();
-        let startup = handle.startup.clone();
-        match setting {
-            "frequency_hz" => runtime.sub.frequency = startup.sub.frequency,
-            "bandwidth_hz" => runtime.sub.bandwidth = startup.sub.bandwidth,
-            "txpower_dbm" => runtime.sub.txpower = startup.sub.txpower,
-            "spreading_factor" => runtime.sub.spreading_factor = startup.sub.spreading_factor,
-            "coding_rate" => runtime.sub.coding_rate = startup.sub.coding_rate,
-            "st_alock_pct" => runtime.sub.st_alock = startup.sub.st_alock,
-            "lt_alock_pct" => runtime.sub.lt_alock = startup.sub.lt_alock,
-            _ => {
-                return Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::UnknownKey,
-                    message: format!("unknown runtime-config key '{}'", key),
-                });
+        let updated_sub = {
+            let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("rnode interface '{}' not found", name),
+            })?;
+            let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
+            let old = runtime.sub.clone();
+            let startup = handle.startup.clone();
+            match setting {
+                "frequency_hz" => runtime.sub.frequency = startup.sub.frequency,
+                "bandwidth_hz" => runtime.sub.bandwidth = startup.sub.bandwidth,
+                "txpower_dbm" => runtime.sub.txpower = startup.sub.txpower,
+                "spreading_factor" => runtime.sub.spreading_factor = startup.sub.spreading_factor,
+                "coding_rate" => runtime.sub.coding_rate = startup.sub.coding_rate,
+                "st_alock_pct" => runtime.sub.st_alock = startup.sub.st_alock,
+                "lt_alock_pct" => runtime.sub.lt_alock = startup.sub.lt_alock,
+                _ => {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    });
+                }
+            }
+            if let Err(err) = Self::apply_rnode_runtime(&mut runtime) {
+                runtime.sub = old;
+                return Err(err);
+            }
+            runtime.sub.clone()
+        };
+        self.refresh_rnode_interface_bitrate(name, &updated_sub);
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-rnode")]
+    fn refresh_rnode_interface_bitrate(&mut self, name: &str, sub: &RNodeSubConfig) {
+        let bitrate = Some(crate::interface::rnode::estimate_lora_bitrate_bps(sub));
+        let airtime_profile = Some(crate::interface::rnode::lora_airtime_profile(sub));
+        let mut refreshed = Vec::new();
+        for entry in self.interfaces.values_mut() {
+            if entry.info.name == name {
+                entry.info.bitrate = bitrate;
+                entry.info.airtime_profile = airtime_profile;
+                refreshed.push(entry.info.clone());
             }
         }
-        if let Err(err) = Self::apply_rnode_runtime(&mut runtime) {
-            runtime.sub = old;
-            return Err(err);
+        for info in refreshed {
+            self.engine.register_interface(info);
         }
-        Ok(())
     }
 
     pub(crate) fn list_generic_interface_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
