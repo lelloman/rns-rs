@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod action;
 pub mod context;
 pub mod host;
+pub mod native;
 pub mod result;
 
 // Re-export everything from the shared ABI crate so existing hooks don't

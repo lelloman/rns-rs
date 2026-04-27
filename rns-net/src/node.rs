@@ -471,7 +471,7 @@ pub struct NodeConfig {
     /// If false (default), the error is logged and remaining interfaces continue.
     pub panic_on_interface_error: bool,
     /// External provider bridge for hook-emitted events.
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_bridge: Option<crate::provider_bridge::ProviderBridgeConfig>,
 }
 
@@ -516,7 +516,7 @@ impl Default for NodeConfig {
             ),
             registry: None,
             panic_on_interface_error: false,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         }
     }
@@ -828,7 +828,7 @@ impl RnsNode {
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: if rns_config.reticulum.provider_bridge {
                 Some(crate::provider_bridge::ProviderBridgeConfig {
                     enabled: true,
@@ -950,7 +950,7 @@ impl RnsNode {
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
             driver.runtime_config_defaults.provider_queue_max_events =
                 provider_config.queue_max_events;
@@ -1006,7 +1006,7 @@ impl RnsNode {
         }
 
         // Load hooks from config
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             for hook_cfg in &config.hooks {
                 if !hook_cfg.enabled {
@@ -1033,10 +1033,23 @@ impl RnsNode {
                         continue;
                     }
                 };
-                match mgr.load_file(
+                let hook_backend = match config::parse_hook_backend(&hook_cfg.hook_type) {
+                    Ok(backend) => backend,
+                    Err(e) => {
+                        log::warn!(
+                            "Invalid hook type '{}' for hook '{}': {}",
+                            hook_cfg.hook_type,
+                            hook_cfg.name,
+                            e,
+                        );
+                        continue;
+                    }
+                };
+                match mgr.load_file_backend(
                     hook_cfg.name.clone(),
                     std::path::Path::new(&hook_cfg.path),
                     hook_cfg.priority,
+                    hook_backend,
                 ) {
                     Ok(program) => {
                         driver.hook_slots[point_idx].attach(program);
@@ -2210,7 +2223,30 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
-    /// Unload a WASM hook at runtime.
+    /// Load a hook from a server-local filesystem path at runtime.
+    pub fn load_hook_file(
+        &self,
+        name: String,
+        path: String,
+        hook_type: String,
+        attach_point: String,
+        priority: i32,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::LoadHookFile {
+                name,
+                path,
+                hook_type,
+                attach_point,
+                priority,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Unload a hook at runtime.
     pub fn unload_hook(
         &self,
         name: String,
@@ -2246,7 +2282,28 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
-    /// Enable or disable a loaded WASM hook at runtime.
+    /// Reload a hook from a server-local filesystem path at runtime.
+    pub fn reload_hook_file(
+        &self,
+        name: String,
+        attach_point: String,
+        path: String,
+        hook_type: String,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::ReloadHookFile {
+                name,
+                attach_point,
+                path,
+                hook_type,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Enable or disable a loaded hook at runtime.
     pub fn set_hook_enabled(
         &self,
         name: String,
@@ -2497,7 +2554,7 @@ mod tests {
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -2607,7 +2664,7 @@ mod tests {
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -2663,7 +2720,7 @@ mod tests {
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3198,7 +3255,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3263,7 +3320,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3324,7 +3381,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3382,7 +3439,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3480,7 +3537,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3546,7 +3603,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3610,7 +3667,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3685,7 +3742,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),
@@ -3752,7 +3809,7 @@ enable_transport = False
                     rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
                 ),
                 registry: None,
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 provider_bridge: None,
             },
             Box::new(NoopCallbacks),

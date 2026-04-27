@@ -132,7 +132,7 @@ impl Driver {
         for control in &self.listener_controls {
             control.request_stop();
         }
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         if let Some(bridge) = self.provider_bridge.as_ref() {
             bridge.stop_accepting();
         }
@@ -162,7 +162,7 @@ impl Driver {
                     .unwrap_or(0)
             })
             .sum();
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         let (provider_backlog_events, provider_consumer_queued_events) = self
             .provider_bridge
             .as_ref()
@@ -178,7 +178,7 @@ impl Driver {
                 )
             })
             .unwrap_or((0, 0));
-        #[cfg(not(feature = "rns-hooks"))]
+        #[cfg(not(feature = "hooks"))]
         let (provider_backlog_events, provider_consumer_queued_events) = (0, 0);
         let drain_age_seconds = self
             .drain_started_at

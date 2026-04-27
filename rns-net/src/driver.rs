@@ -13,12 +13,12 @@ use rns_core::transport::types::{InterfaceId, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 use crate::provider_bridge::ProviderBridge;
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 use crate::event::BackbonePeerHookEvent;
 use crate::event::{
     BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo,
@@ -125,9 +125,9 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) discovery_cleanup_interval_ticks: u32,
     pub(crate) management_announce_interval_secs: f64,
     pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_events: usize,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_bytes: usize,
 }
 
@@ -270,7 +270,7 @@ struct BackbonePeerPoolCandidate {
 }
 
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 struct EngineRef<'a> {
     engine: &'a TransportEngine,
     interfaces: &'a HashMap<InterfaceId, InterfaceEntry>,
@@ -278,7 +278,7 @@ struct EngineRef<'a> {
     now: f64,
 }
 
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 impl<'a> EngineAccess for EngineRef<'a> {
     fn has_path(&self, dest: &[u8; 16]) -> bool {
         self.engine.has_path(dest)
@@ -324,7 +324,7 @@ impl<'a> EngineAccess for EngineRef<'a> {
 ///
 /// HEADER_1 (raw[0] & 0x40 == 0): dest at bytes 2..18
 /// HEADER_2 (raw[0] & 0x40 != 0): dest at bytes 18..34 (after transport ID)
-#[cfg(any(test, feature = "rns-hooks"))]
+#[cfg(any(test, feature = "hooks"))]
 fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
     let mut dest = [0u8; 16];
     if raw.is_empty() {
@@ -340,7 +340,7 @@ fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
 }
 
 /// Execute a hook chain on disjoint Driver fields (avoids &mut self borrow conflict).
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 fn run_hook_inner(
     programs: &mut [rns_hooks::LoadedProgram],
     hook_manager: &Option<HookManager>,
@@ -356,7 +356,7 @@ fn run_hook_inner(
     mgr.run_chain_with_provider_events(programs, ctx, engine_access, now, provider_events_enabled)
 }
 
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 fn backbone_peer_hook_context(event: &BackbonePeerHookEvent) -> HookContext<'_> {
     HookContext::BackbonePeer {
         server_interface_id: event.server_interface_id.0,
@@ -371,7 +371,7 @@ fn backbone_peer_hook_context(event: &BackbonePeerHookEvent) -> HookContext<'_> 
 }
 
 /// Convert a Vec of ActionWire into TransportActions for dispatch.
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<TransportAction> {
     actions
         .into_iter()
@@ -675,12 +675,12 @@ pub struct Driver {
     /// Startup/default runtime-config values.
     pub(crate) runtime_config_defaults: RuntimeConfigDefaults,
     /// Hook slots for the WASM hook system (one per HookPoint).
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
     /// WASM hook manager (runtime + linker). None if initialization failed.
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub(crate) hook_manager: Option<HookManager>,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub(crate) provider_bridge: Option<ProviderBridge>,
 }
 
@@ -721,10 +721,10 @@ impl Driver {
             discovery_cleanup_interval_ticks: DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS,
             management_announce_interval_secs: DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS,
             direct_connect_policy: crate::event::HolePunchPolicy::default(),
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_events,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_queue_max_bytes: crate::provider_bridge::ProviderBridgeConfig::default()
                 .queue_max_bytes,
         };
@@ -825,11 +825,11 @@ impl Driver {
             management_announce_interval_secs: runtime_config_defaults
                 .management_announce_interval_secs,
             runtime_config_defaults,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             hook_slots: create_hook_slots(),
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             hook_manager: HookManager::new().ok(),
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         }
     }
@@ -867,12 +867,12 @@ impl Driver {
         )
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     fn provider_events_enabled(&self) -> bool {
         self.provider_bridge.is_some()
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     fn run_backbone_peer_hook(
         &mut self,
         attach_point: &str,
@@ -994,7 +994,7 @@ impl Driver {
         Ok(())
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     fn update_hook_program<F>(
         &mut self,
         name: &str,
@@ -1023,7 +1023,7 @@ impl Driver {
         self.engine.set_packet_hashlist_max_entries(max_entries);
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     fn forward_hook_side_effects(&mut self, attach_point: &str, exec: &rns_hooks::ExecuteResult) {
         if !exec.injected_actions.is_empty() {
             self.dispatch_all(convert_injected_actions(exec.injected_actions.clone()));
@@ -1040,7 +1040,7 @@ impl Driver {
         }
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     fn collect_hook_side_effects(
         &mut self,
         attach_point: &str,

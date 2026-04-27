@@ -292,7 +292,16 @@ pub enum Event<W: Send> {
         priority: i32,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
-    /// Unload a WASM hook at runtime.
+    /// Load a hook from a server-local filesystem path at runtime.
+    LoadHookFile {
+        name: String,
+        path: String,
+        hook_type: String,
+        attach_point: String,
+        priority: i32,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// Unload a hook at runtime.
     UnloadHook {
         name: String,
         attach_point: String,
@@ -305,7 +314,15 @@ pub enum Event<W: Send> {
         wasm_bytes: Vec<u8>,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
-    /// Enable or disable a loaded WASM hook at runtime.
+    /// Reload a hook from a server-local filesystem path at runtime.
+    ReloadHookFile {
+        name: String,
+        attach_point: String,
+        path: String,
+        hook_type: String,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// Enable or disable a loaded hook at runtime.
     SetHookEnabled {
         name: String,
         attach_point: String,
@@ -329,6 +346,7 @@ pub enum Event<W: Send> {
 #[derive(Debug, Clone)]
 pub struct HookInfo {
     pub name: String,
+    pub hook_type: String,
     pub attach_point: String,
     pub priority: i32,
     pub enabled: bool,
@@ -969,6 +987,21 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("attach_point", attach_point)
                 .field("priority", priority)
                 .finish(),
+            Event::LoadHookFile {
+                name,
+                path,
+                hook_type,
+                attach_point,
+                priority,
+                ..
+            } => f
+                .debug_struct("LoadHookFile")
+                .field("name", name)
+                .field("path", path)
+                .field("hook_type", hook_type)
+                .field("attach_point", attach_point)
+                .field("priority", priority)
+                .finish(),
             Event::UnloadHook {
                 name, attach_point, ..
             } => f
@@ -982,6 +1015,19 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("ReloadHook")
                 .field("name", name)
                 .field("attach_point", attach_point)
+                .finish(),
+            Event::ReloadHookFile {
+                name,
+                attach_point,
+                path,
+                hook_type,
+                ..
+            } => f
+                .debug_struct("ReloadHookFile")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .field("path", path)
+                .field("hook_type", hook_type)
                 .finish(),
             Event::SetHookEnabled {
                 name,

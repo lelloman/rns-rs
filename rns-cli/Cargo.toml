@@ -9,7 +9,9 @@ authors.workspace = true
 
 [features]
 default = []
-rns-hooks = ["rns-net/rns-hooks", "dep:rns-hooks-abi", "dep:rns-stats-hook", "dep:rns-sentinel-hook"]
+rns-hooks = ["rns-hooks-wasm"]
+rns-hooks-wasm = ["rns-net/rns-hooks-wasm", "dep:rns-hooks-abi", "dep:rns-stats-hook", "dep:rns-sentinel-hook"]
+rns-hooks-native = ["rns-net/rns-hooks-native"]
 
 [dependencies]
 rns-net.workspace = true
@@ -57,9 +59,9 @@ path = "src/bin/rnprobe.rs"
 [[bin]]
 name = "rns-statsd"
 path = "src/bin/rns-statsd.rs"
-required-features = ["rns-hooks"]
+required-features = ["rns-hooks-wasm"]
 
 [[bin]]
 name = "rns-sentineld"
 path = "src/bin/rns-sentineld.rs"
-required-features = ["rns-hooks"]
+required-features = ["rns-hooks-wasm"]

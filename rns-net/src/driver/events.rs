@@ -43,7 +43,7 @@ impl Driver {
             data
         };
 
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
@@ -111,7 +111,7 @@ impl Driver {
                 .handle_inbound(&packet, interface_id, time::now(), &mut self.rng)
         };
 
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if packet.is_empty() { 0 } else { packet[0] },
@@ -176,7 +176,7 @@ impl Driver {
     }
 
     pub(crate) fn handle_tick_event(&mut self) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let ctx = HookContext::Tick;
             let now = time::now();
@@ -373,7 +373,7 @@ impl Driver {
                 );
             }
             self.callbacks.on_interface_up(id);
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             {
                 let ctx = HookContext::Interface { interface_id: id.0 };
                 let now = time::now();
@@ -420,7 +420,7 @@ impl Driver {
                     entry.async_writer_metrics = Some(async_writer_metrics);
                 }
                 self.callbacks.on_interface_up(id);
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 {
                     let ctx = HookContext::Interface { interface_id: id.0 };
                     let now = time::now();
@@ -487,7 +487,7 @@ impl Driver {
                 }
             }
             self.callbacks.on_interface_down(id);
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             {
                 let ctx = HookContext::Interface { interface_id: id.0 };
                 let now = time::now();
@@ -950,7 +950,7 @@ impl Driver {
                     priority,
                     response_tx,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let result = (|| -> Result<(), String> {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
@@ -973,9 +973,53 @@ impl Driver {
                         })();
                         let _ = response_tx.send(result);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, wasm_bytes, attach_point, priority);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::LoadHookFile {
+                    name,
+                    path,
+                    hook_type,
+                    attach_point,
+                    priority,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let backend = crate::config::parse_hook_backend(&hook_type)?;
+                            let mgr = self
+                                .hook_manager
+                                .as_ref()
+                                .ok_or_else(|| "hook manager not available".to_string())?;
+                            let program = mgr
+                                .load_file_backend(
+                                    name.clone(),
+                                    std::path::Path::new(&path),
+                                    priority,
+                                    backend,
+                                )
+                                .map_err(|e| format!("load error: {}", e))?;
+                            self.hook_slots[point_idx].attach(program);
+                            log::info!(
+                                "Loaded {} hook '{}' at point {} (priority {})",
+                                backend.as_str(),
+                                name,
+                                attach_point,
+                                priority
+                            );
+                            Ok(())
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "hooks"))]
+                    {
+                        let _ = (name, path, hook_type, attach_point, priority);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
@@ -984,7 +1028,7 @@ impl Driver {
                     attach_point,
                     response_tx,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let result = (|| -> Result<(), String> {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
@@ -1006,7 +1050,7 @@ impl Driver {
                         })();
                         let _ = response_tx.send(result);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, attach_point);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
@@ -1018,7 +1062,7 @@ impl Driver {
                     wasm_bytes,
                     response_tx,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let result = (|| -> Result<(), String> {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
@@ -1054,9 +1098,71 @@ impl Driver {
                         })();
                         let _ = response_tx.send(result);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, attach_point, wasm_bytes);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::ReloadHookFile {
+                    name,
+                    attach_point,
+                    path,
+                    hook_type,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let old =
+                                self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                                    format!("hook '{}' not found at point '{}'", name, attach_point)
+                                })?;
+                            let priority = old.priority;
+                            let backend = match crate::config::parse_hook_backend(&hook_type) {
+                                Ok(backend) => backend,
+                                Err(e) => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    return Err(e);
+                                }
+                            };
+                            let mgr = match self.hook_manager.as_ref() {
+                                Some(m) => m,
+                                None => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    return Err("hook manager not available".to_string());
+                                }
+                            };
+                            match mgr.load_file_backend(
+                                name.clone(),
+                                std::path::Path::new(&path),
+                                priority,
+                                backend,
+                            ) {
+                                Ok(program) => {
+                                    self.hook_slots[point_idx].attach(program);
+                                    log::info!(
+                                        "Reloaded {} hook '{}' at point {} (priority {})",
+                                        backend.as_str(),
+                                        name,
+                                        attach_point,
+                                        priority
+                                    );
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    Err(format!("load error: {}", e))
+                                }
+                            }
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "hooks"))]
+                    {
+                        let _ = (name, attach_point, path, hook_type);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
@@ -1066,7 +1172,7 @@ impl Driver {
                     enabled,
                     response_tx,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let result = self.update_hook_program(&name, &attach_point, |program| {
                             program.enabled = enabled;
@@ -1081,7 +1187,7 @@ impl Driver {
                         }
                         let _ = response_tx.send(result);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, attach_point, enabled);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
@@ -1093,7 +1199,7 @@ impl Driver {
                     priority,
                     response_tx,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let result = self.update_hook_program(&name, &attach_point, |program| {
                             program.priority = priority;
@@ -1119,14 +1225,14 @@ impl Driver {
                         }
                         let _ = response_tx.send(result);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, attach_point, priority);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
                 Event::ListHooks { response_tx } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let hook_point_names = [
                             "PreIngress",
@@ -1157,6 +1263,7 @@ impl Driver {
                             for prog in &slot.programs {
                                 infos.push(crate::event::HookInfo {
                                     name: prog.name.clone(),
+                                    hook_type: prog.backend_name().to_string(),
                                     attach_point: point_name.to_string(),
                                     priority: prog.priority,
                                     enabled: prog.enabled,
@@ -1166,13 +1273,13 @@ impl Driver {
                         }
                         let _ = response_tx.send(infos);
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = response_tx.send(Vec::new());
                     }
                 }
                 Event::InterfaceConfigChanged(id) => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Interface { interface_id: id.0 };
                         let now = time::now();
@@ -1195,7 +1302,7 @@ impl Driver {
                             self.forward_hook_side_effects("InterfaceConfigChanged", e);
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = id;
                 }
                 Event::BackbonePeerConnected {
@@ -1204,7 +1311,7 @@ impl Driver {
                     peer_ip,
                     peer_port,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         self.run_backbone_peer_hook(
                             "BackbonePeerConnected",
@@ -1221,7 +1328,7 @@ impl Driver {
                             },
                         );
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = (server_interface_id, peer_interface_id, peer_ip, peer_port);
                 }
                 Event::BackbonePeerDisconnected {
@@ -1232,7 +1339,7 @@ impl Driver {
                     connected_for,
                     had_received_data,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         self.run_backbone_peer_hook(
                             "BackbonePeerDisconnected",
@@ -1249,7 +1356,7 @@ impl Driver {
                             },
                         );
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = (
                         server_interface_id,
                         peer_interface_id,
@@ -1266,7 +1373,7 @@ impl Driver {
                     peer_port,
                     connected_for,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         self.run_backbone_peer_hook(
                             "BackbonePeerIdleTimeout",
@@ -1283,7 +1390,7 @@ impl Driver {
                             },
                         );
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = (
                         server_interface_id,
                         peer_interface_id,
@@ -1299,7 +1406,7 @@ impl Driver {
                     peer_port,
                     connected_for,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         self.run_backbone_peer_hook(
                             "BackbonePeerWriteStall",
@@ -1316,7 +1423,7 @@ impl Driver {
                             },
                         );
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = (
                         server_interface_id,
                         peer_interface_id,
@@ -1331,7 +1438,7 @@ impl Driver {
                     penalty_level,
                     blacklist_for,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         self.run_backbone_peer_hook(
                             "BackbonePeerPenalty",
@@ -1348,7 +1455,7 @@ impl Driver {
                             },
                         );
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
                 Event::Shutdown => {

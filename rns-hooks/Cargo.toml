@@ -7,8 +7,14 @@ license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["wasm"]
+wasm = ["dep:wasmtime"]
+native = ["dep:libloading"]
+
 [dependencies]
-wasmtime = "29"
+wasmtime = { version = "29", optional = true }
+libloading = { version = "0.8", optional = true }
 log = "0.4"
 rns-hooks-abi = { version = "0.1.2", path = "sdk/rns-hooks-abi" }
 

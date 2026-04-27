@@ -1,4 +1,6 @@
+#[cfg(feature = "wasm")]
 use crate::engine_access::EngineAccess;
+#[cfg(feature = "wasm")]
 use crate::wire::ActionWire;
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,7 @@ pub const DEFAULT_MAX_MEMORY: usize = 16 * 1024 * 1024;
 /// without lifetime parameters. The Store is cached across calls for instance
 /// persistence, but `engine_access` is refreshed each call via `reset_per_call`
 /// and must only be dereferenced during the active call.
+#[cfg(feature = "wasm")]
 pub struct StoreData {
     pub engine_access: *const dyn EngineAccess,
     pub now: f64,
@@ -30,9 +33,12 @@ pub struct StoreData {
 // Safety: StoreData is only used within a single-threaded driver loop.
 // The `engine_access` raw pointer is refreshed each call and only dereferenced
 // during that call while the borrow is live.
+#[cfg(feature = "wasm")]
 unsafe impl Send for StoreData {}
+#[cfg(feature = "wasm")]
 unsafe impl Sync for StoreData {}
 
+#[cfg(feature = "wasm")]
 impl StoreData {
     /// Access the engine through the raw pointer.
     ///
@@ -59,11 +65,13 @@ impl StoreData {
 }
 
 /// Wrapper around `wasmtime::Engine` with fuel-metering enabled.
+#[cfg(feature = "wasm")]
 pub struct WasmRuntime {
     engine: wasmtime::Engine,
     fuel: u64,
 }
 
+#[cfg(feature = "wasm")]
 impl WasmRuntime {
     pub fn new() -> Result<Self, wasmtime::Error> {
         let mut config = wasmtime::Config::new();

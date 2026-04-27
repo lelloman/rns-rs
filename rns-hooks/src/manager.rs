@@ -1,14 +1,20 @@
 use crate::arena;
-use crate::engine_access::{EngineAccess, NullEngine};
+use crate::engine_access::EngineAccess;
+#[cfg(feature = "wasm")]
+use crate::engine_access::NullEngine;
 use crate::error::HookError;
 use crate::hooks::HookContext;
+#[cfg(feature = "wasm")]
 use crate::host_fns;
-use crate::program::LoadedProgram;
+use crate::program::{LoadedProgram, ProgramBackend};
 use crate::result::{ExecuteResult, HookResult, Verdict};
+#[cfg(feature = "wasm")]
 use crate::runtime::{StoreData, WasmRuntime};
+#[cfg(feature = "wasm")]
 use wasmtime::{Linker, Store};
 
 /// ABI version the host expects from compiled hook modules.
+#[cfg(feature = "wasm")]
 const HOST_ABI_VERSION: i32 = rns_hooks_abi::ABI_VERSION;
 
 /// Central manager for WASM hook execution.
@@ -16,17 +22,53 @@ const HOST_ABI_VERSION: i32 = rns_hooks_abi::ABI_VERSION;
 /// Owns the wasmtime runtime and pre-configured linker. Programs are stored
 /// in `HookSlot`s (one per hook point); the manager provides execution.
 pub struct HookManager {
+    #[cfg(feature = "wasm")]
     runtime: WasmRuntime,
+    #[cfg(feature = "wasm")]
     linker: Linker<StoreData>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookBackend {
+    Wasm,
+    Native,
+}
+
+impl HookBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookBackend::Wasm => "wasm",
+            HookBackend::Native => "native",
+        }
+    }
+}
+
+impl std::str::FromStr for HookBackend {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "wasm" => Ok(HookBackend::Wasm),
+            "native" | "dylib" | "dynamic" => Ok(HookBackend::Native),
+            other => Err(format!("unknown hook type '{}'", other)),
+        }
+    }
 }
 
 impl HookManager {
     pub fn new() -> Result<Self, HookError> {
-        let runtime = WasmRuntime::new().map_err(|e| HookError::CompileError(e.to_string()))?;
-        let mut linker = Linker::new(runtime.engine());
-        host_fns::register_host_functions(&mut linker)
-            .map_err(|e| HookError::CompileError(e.to_string()))?;
-        Ok(HookManager { runtime, linker })
+        #[cfg(feature = "wasm")]
+        {
+            let runtime = WasmRuntime::new().map_err(|e| HookError::CompileError(e.to_string()))?;
+            let mut linker = Linker::new(runtime.engine());
+            host_fns::register_host_functions(&mut linker)
+                .map_err(|e| HookError::CompileError(e.to_string()))?;
+            Ok(HookManager { runtime, linker })
+        }
+        #[cfg(not(feature = "wasm"))]
+        {
+            Ok(HookManager {})
+        }
     }
 
     /// Compile WASM bytes into a LoadedProgram.
@@ -39,16 +81,27 @@ impl HookManager {
         bytes: &[u8],
         priority: i32,
     ) -> Result<LoadedProgram, HookError> {
-        let module = self
-            .runtime
-            .compile(bytes)
-            .map_err(|e| HookError::CompileError(e.to_string()))?;
-        self.validate_abi_version(&name, &module)?;
-        Ok(LoadedProgram::new(name, module, priority))
+        #[cfg(not(feature = "wasm"))]
+        {
+            let _ = (name, bytes, priority);
+            return Err(HookError::CompileError(
+                "WASM hook backend not enabled".to_string(),
+            ));
+        }
+        #[cfg(feature = "wasm")]
+        {
+            let module = self
+                .runtime
+                .compile(bytes)
+                .map_err(|e| HookError::CompileError(e.to_string()))?;
+            self.validate_abi_version(&name, &module)?;
+            Ok(LoadedProgram::new(name, module, priority))
+        }
     }
 
     /// Check that the module exports `__rns_abi_version() -> i32` and that
     /// the returned value matches [`HOST_ABI_VERSION`].
+    #[cfg(feature = "wasm")]
     fn validate_abi_version(&self, name: &str, module: &wasmtime::Module) -> Result<(), HookError> {
         // Check if the export exists in the module's type information.
         let has_export = module.exports().any(|e| e.name() == "__rns_abi_version");
@@ -114,6 +167,32 @@ impl HookManager {
         self.compile(name, &bytes, priority)
     }
 
+    pub fn load_file_backend(
+        &self,
+        name: String,
+        path: &std::path::Path,
+        priority: i32,
+        backend: HookBackend,
+    ) -> Result<LoadedProgram, HookError> {
+        match backend {
+            HookBackend::Wasm => self.load_file(name, path, priority),
+            HookBackend::Native => {
+                #[cfg(feature = "native")]
+                {
+                    let native = crate::native::NativeProgram::load(path)?;
+                    Ok(LoadedProgram::new_native(name, native, priority))
+                }
+                #[cfg(not(feature = "native"))]
+                {
+                    let _ = (name, path, priority);
+                    Err(HookError::CompileError(
+                        "native hook backend not enabled".to_string(),
+                    ))
+                }
+            }
+        }
+    }
+
     /// Execute a single program against a hook context. Returns an `ExecuteResult`
     /// containing the hook result, any injected actions, and modified data (all
     /// extracted from WASM memory before the store is dropped). Returns `None`
@@ -157,6 +236,86 @@ impl HookManager {
             return None;
         }
 
+        #[cfg(feature = "native")]
+        if matches!(program.backend, ProgramBackend::Native(_)) {
+            let ctx_bytes = match arena::context_to_bytes(ctx, data_override) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    log::warn!(
+                        "failed to encode native hook context '{}': {}",
+                        program.name,
+                        e
+                    );
+                    program.record_trap();
+                    return None;
+                }
+            };
+            let result = match &program.backend {
+                ProgramBackend::Native(native) => {
+                    native.execute(&ctx_bytes, engine_access, provider_events_enabled)
+                }
+                #[cfg(feature = "wasm")]
+                ProgramBackend::Wasm(_) => unreachable!(),
+            };
+            return match result {
+                Ok(mut exec) => {
+                    program.record_success();
+                    for event in &mut exec.provider_events {
+                        event.hook_name = program.name.clone();
+                    }
+                    Some(exec)
+                }
+                Err(e) => {
+                    let auto_disabled = program.record_trap();
+                    if auto_disabled {
+                        log::error!(
+                            "native hook '{}' auto-disabled after {} consecutive errors",
+                            program.name,
+                            program.consecutive_traps
+                        );
+                    } else {
+                        log::warn!("native hook '{}' failed: {}", program.name, e);
+                    }
+                    None
+                }
+            };
+        }
+
+        #[cfg(not(feature = "wasm"))]
+        {
+            let _ = (
+                ctx,
+                engine_access,
+                now,
+                provider_events_enabled,
+                data_override,
+            );
+            return None;
+        }
+
+        #[cfg(feature = "wasm")]
+        {
+            return self.execute_wasm_program(
+                program,
+                ctx,
+                engine_access,
+                now,
+                provider_events_enabled,
+                data_override,
+            );
+        }
+    }
+
+    #[cfg(feature = "wasm")]
+    fn execute_wasm_program(
+        &self,
+        program: &mut LoadedProgram,
+        ctx: &HookContext,
+        engine_access: &dyn EngineAccess,
+        now: f64,
+        provider_events_enabled: bool,
+        data_override: Option<&[u8]>,
+    ) -> Option<ExecuteResult> {
         // Safety: transmute erases the lifetime on the fat pointer. The pointer
         // is only dereferenced during this function call, while the borrow is valid.
         let engine_access_ptr: *const dyn EngineAccess =
@@ -164,14 +323,19 @@ impl HookManager {
 
         // Take the cached store+instance out of program (or create fresh).
         // We take ownership to avoid borrow-checker conflicts with program.record_*().
-        let (mut store, instance) = if let Some(cached) = program.cached.take() {
+        let cached = match &mut program.backend {
+            ProgramBackend::Wasm(wasm) => wasm.cached.take(),
+            #[cfg(feature = "native")]
+            ProgramBackend::Native(_) => unreachable!(),
+        };
+        let (mut store, instance) = if let Some(cached) = cached {
             let (mut s, i) = cached;
             // Reset per-call state: fuel, engine_access, injected_actions, log_messages
             s.data_mut()
                 .reset_per_call(engine_access_ptr, now, provider_events_enabled);
             if let Err(e) = s.set_fuel(self.runtime.fuel()) {
                 log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
-                program.cached = Some((s, i));
+                self.cache_wasm_instance(program, s, i);
                 return None;
             }
             (s, i)
@@ -191,7 +355,12 @@ impl HookManager {
                 return None;
             }
 
-            let instance = match self.linker.instantiate(&mut store, &program.module) {
+            let module = match &program.backend {
+                ProgramBackend::Wasm(wasm) => wasm.module.clone(),
+                #[cfg(feature = "native")]
+                ProgramBackend::Native(_) => unreachable!(),
+            };
+            let instance = match self.linker.instantiate(&mut store, &module) {
                 Ok(inst) => inst,
                 Err(e) => {
                     log::warn!("failed to instantiate hook '{}': {}", program.name, e);
@@ -209,7 +378,7 @@ impl HookManager {
             None => {
                 log::warn!("hook '{}' has no exported memory", program.name);
                 program.record_trap();
-                program.cached = Some((store, instance));
+                self.cache_wasm_instance(program, store, instance);
                 return None;
             }
         };
@@ -217,7 +386,7 @@ impl HookManager {
         if let Err(e) = arena::write_context(&memory, &mut store, ctx) {
             log::warn!("failed to write context for hook '{}': {}", program.name, e);
             program.record_trap();
-            program.cached = Some((store, instance));
+            self.cache_wasm_instance(program, store, instance);
             return None;
         }
 
@@ -234,17 +403,22 @@ impl HookManager {
         }
 
         // Call the exported hook function
-        let func = match instance.get_typed_func::<i32, i32>(&mut store, &program.export_name) {
+        let export_name = match &program.backend {
+            ProgramBackend::Wasm(wasm) => wasm.export_name.clone(),
+            #[cfg(feature = "native")]
+            ProgramBackend::Native(_) => unreachable!(),
+        };
+        let func = match instance.get_typed_func::<i32, i32>(&mut store, &export_name) {
             Ok(f) => f,
             Err(e) => {
                 log::warn!(
                     "hook '{}' missing export '{}': {}",
                     program.name,
-                    program.export_name,
+                    export_name,
                     e
                 );
                 program.record_trap();
-                program.cached = Some((store, instance));
+                self.cache_wasm_instance(program, store, instance);
                 return None;
             }
         };
@@ -263,7 +437,7 @@ impl HookManager {
                 } else {
                     log::warn!("hook '{}' trapped: {}", program.name, e);
                 }
-                program.cached = Some((store, instance));
+                self.cache_wasm_instance(program, store, instance);
                 return None;
             }
         };
@@ -306,8 +480,22 @@ impl HookManager {
         };
 
         // Put the store+instance back for next call
-        program.cached = Some((store, instance));
+        self.cache_wasm_instance(program, store, instance);
         ret
+    }
+
+    #[cfg(feature = "wasm")]
+    fn cache_wasm_instance(
+        &self,
+        program: &mut LoadedProgram,
+        store: Store<StoreData>,
+        instance: wasmtime::Instance,
+    ) {
+        match &mut program.backend {
+            ProgramBackend::Wasm(wasm) => wasm.cached = Some((store, instance)),
+            #[cfg(feature = "native")]
+            ProgramBackend::Native(_) => unreachable!(),
+        }
     }
 
     /// Run a chain of programs. Stops on Drop or Halt, continues on Continue or Modify.
@@ -401,7 +589,7 @@ impl HookManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wasm"))]
 mod tests {
     use super::*;
     use crate::engine_access::NullEngine;

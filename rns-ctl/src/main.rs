@@ -56,7 +56,7 @@ COMMANDS:
     path        Display/manage path table
     id          Identity management
     daemon      Start RNS daemon node
-    hook        Manage WASM hooks (list/load/unload)
+    hook        Manage hooks (list/load/unload)
 
 OPTIONS:
     -h, --help      Show this help

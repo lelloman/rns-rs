@@ -1,6 +1,6 @@
 //! Hook management subcommands.
 //!
-//! Connects to a running rns-ctl HTTP server to list, load, and unload WASM hooks.
+//! Connects to a running rns-ctl HTTP server to list, load, and unload hooks.
 
 use crate::args::Args;
 
@@ -42,14 +42,15 @@ fn do_list(base_url: &str, token: Option<&str>) {
                         return;
                     }
                     println!(
-                        "{:<20} {:<28} {:>8} {:>8} {:>6}",
-                        "Name", "Attach Point", "Priority", "Traps", "On"
+                        "{:<20} {:<8} {:<28} {:>8} {:>8} {:>6}",
+                        "Name", "Type", "Attach Point", "Priority", "Traps", "On"
                     );
-                    println!("{}", "-".repeat(74));
+                    println!("{}", "-".repeat(83));
                     for h in hooks {
                         println!(
-                            "{:<20} {:<28} {:>8} {:>8} {:>6}",
+                            "{:<20} {:<8} {:<28} {:>8} {:>8} {:>6}",
                             h["name"].as_str().unwrap_or(""),
+                            h["type"].as_str().unwrap_or("wasm"),
                             h["attach_point"].as_str().unwrap_or(""),
                             h["priority"].as_i64().unwrap_or(0),
                             h["consecutive_traps"].as_u64().unwrap_or(0),
@@ -77,7 +78,7 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
     let path = match args.positional.get(1) {
         Some(p) => p,
         None => {
-            eprintln!("Missing WASM file path");
+            eprintln!("Missing hook file path");
             print_usage();
             std::process::exit(1);
         }
@@ -94,6 +95,7 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
         .get("priority")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let hook_type = args.get("type").unwrap_or("wasm").to_string();
     let name = args.get("name").map(|s| s.to_string()).unwrap_or_else(|| {
         std::path::Path::new(path)
             .file_stem()
@@ -105,6 +107,7 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
     let body = serde_json::json!({
         "name": name,
         "path": path,
+        "type": hook_type,
         "attach_point": attach_point,
         "priority": priority,
     });
@@ -172,15 +175,17 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
     let path = match args.get("path") {
         Some(p) => p.to_string(),
         None => {
-            eprintln!("Missing --path <wasm_file>");
+            eprintln!("Missing --path <hook_file>");
             print_usage();
             std::process::exit(1);
         }
     };
+    let hook_type = args.get("type").unwrap_or("wasm").to_string();
 
     let body = serde_json::json!({
         "name": name,
         "path": path,
+        "type": hook_type,
         "attach_point": attach_point,
     });
 
@@ -357,11 +362,11 @@ fn print_usage() {
     println!();
     println!("COMMANDS:");
     println!("    list                               List loaded hooks");
-    println!("    load <path> --point <HookPoint>     Load a WASM hook");
-    println!("         [--priority N] [--name name]");
+    println!("    load <path> --point <HookPoint>     Load a hook");
+    println!("         [--type wasm|native] [--priority N] [--name name]");
     println!("    unload <name> --point <HookPoint>   Unload a hook");
-    println!("    reload <name> --point <HookPoint>   Reload a hook with new WASM");
-    println!("         --path <wasm_file>");
+    println!("    reload <name> --point <HookPoint>   Reload a hook");
+    println!("         --path <hook_file> [--type wasm|native]");
     println!("    enable <name> --point <HookPoint>   Enable a loaded hook");
     println!("    disable <name> --point <HookPoint>  Disable a loaded hook");
     println!("    set-priority <name> --point <HookPoint> --priority N");

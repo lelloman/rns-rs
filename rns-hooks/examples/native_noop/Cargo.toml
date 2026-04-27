@@ -1,0 +1,12 @@
+[package]
+name = "native-noop-hook"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rns-hooks-abi = { path = "../../sdk/rns-hooks-abi" }

@@ -25,7 +25,7 @@ This is a faithful port of the Python reference implementation, validated agains
 | `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
 | `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid` |
 | `rns-ctl` | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
-| `rns-hooks` | No | WASM hook system: 16 programmable hook points across the transport pipeline, powered by wasmtime. Inspired by eBPF — fail-open, fuel-limited, hot-reloadable |
+| `rns-hooks` | No | Hook runtime: programmable hook points across the transport pipeline with WASM and native dynamic-library backends |
 | `rns-hooks-sdk` | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
 
 ## Building
@@ -38,11 +38,14 @@ cargo build
 
 | Flag | Effect |
 |------|--------|
-| `rns-hooks` | Enables the WASM hook system (compiles in wasmtime) |
+| `rns-hooks` | Compatibility alias for `rns-hooks-wasm` |
+| `rns-hooks-wasm` | Enables WASM hooks (compiles in wasmtime) |
+| `rns-hooks-native` | Enables trusted native dynamic-library hooks without wasmtime |
 | `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
 
 ```bash
-cargo build --features rns-hooks    # Enable WASM hooks
+cargo build --features rns-hooks-wasm      # Enable WASM hooks
+cargo build --features rns-hooks-native    # Enable native dynamic-library hooks
 cargo build --features tls          # Enable TLS in rns-ctl
 ```
 
@@ -240,19 +243,20 @@ The protocol uses a STUN-like probe to discover public endpoints, negotiates the
 
 See [docs/direct-link-protocol.md](docs/direct-link-protocol.md) for the full protocol specification.
 
-## WASM Hooks
+## Hooks
 
 > **rns-rs extension** — this feature is not present in the original Python Reticulum implementation.
 
-rns-rs includes an eBPF-inspired programmable hook system that lets users attach WebAssembly programs to 16 points in the transport pipeline. Hooks can inspect, filter, modify, or mirror packets, announces, links, and interfaces — without modifying rns-rs itself.
+rns-rs includes an eBPF-inspired programmable hook system that lets users attach WASM modules or trusted native dynamic libraries to points in the transport pipeline. Hooks can inspect, filter, modify, or mirror packets, announces, links, and interfaces — without modifying rns-rs itself.
 
 **Design principles:**
 
 - **Fail-open** — a buggy or crashing hook never takes down the node; execution continues as if the hook returned `Continue`
-- **Fuel-limited** — each invocation runs with a bounded fuel budget to prevent runaway execution
+- **Fuel-limited WASM** — WASM invocations run with a bounded fuel budget to prevent runaway execution
 - **Instance persistence** — WASM linear memory survives across calls, so hooks can maintain counters, caches, or bloom filters
+- **Native backend** — native hooks are loaded with `dlopen`/`LoadLibrary` and run in-process for targets where Wasmtime is unavailable, such as ARMv7
 - **Hot-reload** — hooks can be reloaded at runtime without restarting the node (`rns-ctl hook reload`)
-- **Zero overhead when disabled** — the entire system is behind the `rns-hooks` cargo feature flag; when disabled, no WASM runtime is compiled in
+- **Zero overhead when disabled** — hook backends are behind cargo feature flags; `rns-hooks-native` does not compile in Wasmtime
 
 **Hook points (21 total):**
 
@@ -279,12 +283,14 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 [hooks]
   [[drop_tick]]
     path = /tmp/drop_tick.wasm
+    type = wasm
     attach_point = Tick
     priority = 10
     enabled = Yes
 
   [[log_announce]]
-    path = /tmp/log_announce.wasm
+    path = /tmp/log_announce.so
+    type = native
     attach_point = AnnounceReceived
     priority = 5
     enabled = Yes
@@ -294,14 +300,14 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 ```bash
 rns-ctl hook list                                                # list loaded hooks and their status
-rns-ctl hook load <path> --point <HookPoint> [--priority N] [--name name]  # load a WASM hook
+rns-ctl hook load <path> --point <HookPoint> [--type wasm|native] [--priority N] [--name name]
 rns-ctl hook unload <name> --point <HookPoint>                   # unload a running hook
-rns-ctl hook reload <name> --point <HookPoint> --path <wasm_file>  # hot-reload a hook
+rns-ctl hook reload <name> --point <HookPoint> --path <hook_file> [--type wasm|native]
 ```
 
 **Writing hooks:**
 
-Use the `rns-hooks-sdk` crate to write hooks in `no_std` Rust. Each hook exports an `on_hook` function that receives a context and returns a verdict. See the `rns-hooks/examples/` directory for complete examples:
+Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop`.
 
 | Example | Description |
 |---------|-------------|

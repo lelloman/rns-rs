@@ -1163,6 +1163,7 @@ fn handle_list_hooks(node: &NodeHandle) -> HttpResponse {
                     json!({
                         "name": h.name,
                         "attach_point": h.attach_point,
+                        "type": h.hook_type,
                         "priority": h.priority,
                         "enabled": h.enabled,
                         "consecutive_traps": h.consecutive_traps,
@@ -1175,7 +1176,7 @@ fn handle_list_hooks(node: &NodeHandle) -> HttpResponse {
     })
 }
 
-/// Load a WASM hook from a filesystem path.
+/// Load a hook from a filesystem path.
 ///
 /// The `path` field in the JSON body refers to a file on the **server's** local
 /// filesystem. This means the CLI and the HTTP server must have access to the
@@ -1199,20 +1200,32 @@ fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
     let priority = body["priority"].as_i64().unwrap_or(0) as i32;
+    let hook_type = body["type"].as_str().unwrap_or("wasm").to_string();
 
-    // Read WASM file
-    let wasm_bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e)),
-    };
+    if hook_type == "wasm" {
+        let wasm_bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e));
+            }
+        };
 
-    with_node(node, |n| {
-        match n.load_hook(name, wasm_bytes, attach_point, priority) {
-            Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
-            Ok(Err(e)) => HttpResponse::bad_request(&e),
-            Err(_) => HttpResponse::internal_error("Driver unavailable"),
-        }
-    })
+        with_node(node, |n| {
+            match n.load_hook(name, wasm_bytes, attach_point, priority) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
+    } else {
+        with_node(node, |n| {
+            match n.load_hook_file(name, path.to_string(), hook_type, attach_point, priority) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
+    }
 }
 
 fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
@@ -1255,19 +1268,32 @@ fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
+    let hook_type = body["type"].as_str().unwrap_or("wasm").to_string();
 
-    let wasm_bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e)),
-    };
+    if hook_type == "wasm" {
+        let wasm_bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                return HttpResponse::bad_request(&format!("Failed to read WASM file: {}", e));
+            }
+        };
 
-    with_node(node, |n| {
-        match n.reload_hook(name, attach_point, wasm_bytes) {
-            Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
-            Ok(Err(e)) => HttpResponse::bad_request(&e),
-            Err(_) => HttpResponse::internal_error("Driver unavailable"),
-        }
-    })
+        with_node(node, |n| {
+            match n.reload_hook(name, attach_point, wasm_bytes) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
+    } else {
+        with_node(node, |n| {
+            match n.reload_hook_file(name, attach_point, path.to_string(), hook_type) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
+    }
 }
 
 fn handle_set_hook_enabled(req: &HttpRequest, node: &NodeHandle, enabled: bool) -> HttpResponse {

@@ -517,6 +517,7 @@ mod tests {
         let hooks = vec![
             HookInfo {
                 name: "hook-a".into(),
+                hook_type: "wasm".into(),
                 attach_point: "AttachA".into(),
                 priority: 0,
                 enabled: true,
@@ -524,6 +525,7 @@ mod tests {
             },
             HookInfo {
                 name: "hook-b".into(),
+                hook_type: "wasm".into(),
                 attach_point: "AttachB".into(),
                 priority: 0,
                 enabled: false,

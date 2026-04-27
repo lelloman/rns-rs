@@ -4,6 +4,9 @@
 //! Reads standard Python RNS config files, opens TCP server/client, UDP, and
 //! Local interfaces, persists identity and known destinations.
 
+#[cfg(feature = "hooks")]
+extern crate rns_hooks_crate as rns_hooks;
+
 pub mod common;
 pub mod event;
 pub mod hdlc;
@@ -29,7 +32,7 @@ pub mod shared_client;
 pub use common::destination;
 pub mod discovery;
 pub mod holepunch;
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 pub mod provider_bridge;
 
 pub use config::RnsConfig;
@@ -77,7 +80,7 @@ pub use interface::{
 pub use link_manager::{LinkManager, LinkManagerAction};
 pub use management::ManagementConfig;
 pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 pub use provider_bridge::{
     HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,
     ProviderEnvelope, ProviderMessage,

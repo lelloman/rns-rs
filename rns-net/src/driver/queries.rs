@@ -317,13 +317,13 @@ impl Driver {
                 QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
             }
             QueryRequest::ProviderBridgeStats => {
-                #[cfg(feature = "rns-hooks")]
+                #[cfg(feature = "hooks")]
                 {
                     QueryResponse::ProviderBridgeStats(
                         self.provider_bridge.as_ref().map(|bridge| bridge.stats()),
                     )
                 }
-                #[cfg(not(feature = "rns-hooks"))]
+                #[cfg(not(feature = "hooks"))]
                 {
                     QueryResponse::ProviderBridgeStats(None::<crate::event::ProviderBridgeStats>)
                 }
@@ -689,7 +689,7 @@ impl Driver {
                         self.holepunch_manager.set_policy(policy);
                         Ok(())
                     }
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     "provider.queue_max_events" => match Self::expect_u64(value, &key) {
                         Ok(v) if v > 0 => {
                             if let Some(ref bridge) = self.provider_bridge {
@@ -703,7 +703,7 @@ impl Driver {
                         }),
                         Err(err) => Err(err),
                     },
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     "provider.queue_max_bytes" => match Self::expect_u64(value, &key) {
                         Ok(v) if v > 0 => {
                             if let Some(ref bridge) = self.provider_bridge {
@@ -782,14 +782,14 @@ impl Driver {
                             .set_policy(defaults.direct_connect_policy);
                         Ok(())
                     }
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     "provider.queue_max_events" => {
                         if let Some(ref bridge) = self.provider_bridge {
                             bridge.set_queue_max_events(defaults.provider_queue_max_events);
                         }
                         Ok(())
                     }
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     "provider.queue_max_bytes" => {
                         if let Some(ref bridge) = self.provider_bridge {
                             bridge.set_queue_max_bytes(defaults.provider_queue_max_bytes);

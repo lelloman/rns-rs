@@ -237,7 +237,7 @@ impl Driver {
         raw: rns_core::transport::types::PacketBytes,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
@@ -342,7 +342,7 @@ impl Driver {
         exclude: Option<InterfaceId>,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: if raw.is_empty() { 0 } else { raw[0] },
@@ -420,7 +420,7 @@ impl Driver {
         receiving_interface: InterfaceId,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             let pkt_ctx = rns_hooks::PacketContext {
                 flags: 0,
@@ -510,9 +510,9 @@ impl Driver {
 
     /// Dispatch a list of transport actions.
     pub(crate) fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
-        #[cfg(not(feature = "rns-hooks"))]
+        #[cfg(not(feature = "hooks"))]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions {
@@ -547,7 +547,7 @@ impl Driver {
                     receiving_interface,
                     ..
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Announce {
                             destination_hash,
@@ -653,7 +653,7 @@ impl Driver {
                     interface,
                     ..
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Announce {
                             destination_hash,
@@ -679,7 +679,7 @@ impl Driver {
                             self.collect_hook_side_effects("PathUpdated", e, &mut hook_injected);
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     let _ = interface;
 
                     let _ = self.mark_known_destination_used(&destination_hash);
@@ -756,7 +756,7 @@ impl Driver {
                     data,
                     dest_hash,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let pkt_ctx = rns_hooks::PacketContext {
                             flags: 0,
@@ -852,7 +852,7 @@ impl Driver {
                     hops,
                     interface,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Announce {
                             destination_hash,
@@ -882,7 +882,7 @@ impl Driver {
                             );
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (destination_hash, hops, interface);
                     }
@@ -892,7 +892,7 @@ impl Driver {
                     destination_hash: _,
                     receiving_interface,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -921,13 +921,13 @@ impl Driver {
                             );
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (link_id, receiving_interface);
                     }
                 }
                 TransportAction::LinkEstablished { link_id, interface } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -956,13 +956,13 @@ impl Driver {
                             );
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (link_id, interface);
                     }
                 }
                 TransportAction::LinkClosed { link_id } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -987,7 +987,7 @@ impl Driver {
                             self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = link_id;
                     }
@@ -996,7 +996,7 @@ impl Driver {
         }
 
         // Dispatch any actions injected by hooks during action processing
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         if !hook_injected.is_empty() {
             self.dispatch_all(hook_injected);
         }
@@ -1004,7 +1004,7 @@ impl Driver {
 
     /// Dispatch link manager actions.
     pub(crate) fn dispatch_link_actions(&mut self, actions: Vec<LinkManagerAction>) {
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions {
@@ -1077,7 +1077,7 @@ impl Driver {
                     rtt,
                     is_initiator,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -1120,7 +1120,7 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -1288,7 +1288,7 @@ impl Driver {
                     link_id,
                     receiving_interface,
                 } => {
-                    #[cfg(feature = "rns-hooks")]
+                    #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {
                             link_id,
@@ -1317,7 +1317,7 @@ impl Driver {
                             );
                         }
                     }
-                    #[cfg(not(feature = "rns-hooks"))]
+                    #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (link_id, receiving_interface);
                     }
@@ -1326,7 +1326,7 @@ impl Driver {
         }
 
         // Dispatch any actions injected by hooks during action processing
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         if !hook_injected.is_empty() {
             self.dispatch_all(hook_injected);
         }

@@ -706,7 +706,7 @@ impl Driver {
             reason,
         );
         if ok {
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             self.run_backbone_peer_hook(
                 "BackbonePeerPenalty",
                 HookPoint::BackbonePeerPenalty,
@@ -726,7 +726,7 @@ impl Driver {
                     blacklist_for: capped_duration,
                 },
             );
-            #[cfg(not(feature = "rns-hooks"))]
+            #[cfg(not(feature = "hooks"))]
             let _ = (peer_ip, capped_duration, penalty_level);
         }
         ok
@@ -892,7 +892,7 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Policy for incoming direct-connect proposals.",
             )),
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             "provider.queue_max_events" => {
                 let value = self
                     .provider_bridge
@@ -907,7 +907,7 @@ impl Driver {
                     "Max queued events in the provider bridge.",
                 ))
             }
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             "provider.queue_max_bytes" => {
                 let value = self
                     .provider_bridge
@@ -943,7 +943,7 @@ impl Driver {
         .filter_map(|key| self.runtime_config_entry(key))
         .collect();
 
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "hooks")]
         {
             entries.extend(
                 ["provider.queue_max_events", "provider.queue_max_bytes"]

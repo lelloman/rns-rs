@@ -23,6 +23,7 @@ pub struct RnsConfig {
 pub struct ParsedHook {
     pub name: String,
     pub path: String,
+    pub hook_type: String,
     pub attach_point: String,
     pub priority: i32,
     pub enabled: bool,
@@ -104,15 +105,15 @@ pub struct ReticulumSection {
     pub backbone_peer_pool_failure_window: u64,
     /// Cooldown duration for failed pooled Backbone peers, in seconds.
     pub backbone_peer_pool_cooldown: u64,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_bridge: bool,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_socket_path: Option<String>,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_queue_max_events: usize,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_queue_max_bytes: usize,
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     pub provider_overflow_policy: String,
 }
 
@@ -161,15 +162,15 @@ impl Default for ReticulumSection {
             backbone_peer_pool_failure_threshold: 3,
             backbone_peer_pool_failure_window: 600,
             backbone_peer_pool_cooldown: 900,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: false,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_socket_path: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_queue_max_events: 16384,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_queue_max_bytes: 8 * 1024 * 1024,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_overflow_policy: "drop_newest".into(),
         }
     }
@@ -406,6 +407,10 @@ fn build_parsed_interface(name: String, mut kvs: HashMap<String, String>) -> Par
 
 fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHook {
     let path = kvs.remove("path").unwrap_or_default();
+    let hook_type = kvs
+        .remove("type")
+        .or_else(|| kvs.remove("backend"))
+        .unwrap_or_else(|| "wasm".into());
     let attach_point = kvs.remove("attach_point").unwrap_or_default();
     let priority = kvs
         .remove("priority")
@@ -419,6 +424,7 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
     ParsedHook {
         name,
         path,
+        hook_type,
         attach_point,
         priority,
         enabled,
@@ -451,6 +457,11 @@ pub fn parse_hook_point(s: &str) -> Option<usize> {
         "Tick" => Some(20),
         _ => None,
     }
+}
+
+#[cfg(feature = "hooks")]
+pub fn parse_hook_backend(s: &str) -> Result<rns_hooks::HookBackend, String> {
+    s.parse()
 }
 
 fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSection, ConfigError> {
@@ -799,18 +810,18 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 value: v.clone(),
             })?;
     }
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
             key: "provider_bridge".into(),
             value: v.clone(),
         })?;
     }
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     if let Some(v) = kvs.get("provider_socket_path") {
         section.provider_socket_path = Some(v.clone());
     }
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     if let Some(v) = kvs.get("provider_queue_max_events") {
         section.provider_queue_max_events =
             v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
@@ -818,7 +829,7 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 value: v.clone(),
             })?;
     }
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     if let Some(v) = kvs.get("provider_queue_max_bytes") {
         section.provider_queue_max_bytes =
             v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
@@ -826,7 +837,7 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 value: v.clone(),
             })?;
     }
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     if let Some(v) = kvs.get("provider_overflow_policy") {
         let normalized = v.to_lowercase();
         if normalized != "drop_newest" && normalized != "drop_oldest" {
@@ -880,7 +891,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "hooks")]
     #[test]
     fn parse_provider_bridge_config() {
         let config = parse(
@@ -1483,6 +1494,7 @@ publish_blackhole = Yes
 
   [[log_announce]]
     path = /tmp/log_announce.wasm
+    type = native
     attach_point = AnnounceReceived
     priority = 5
     enabled = No
@@ -1491,10 +1503,12 @@ publish_blackhole = Yes
         assert_eq!(config.hooks.len(), 2);
         assert_eq!(config.hooks[0].name, "drop_tick");
         assert_eq!(config.hooks[0].path, "/tmp/drop_tick.wasm");
+        assert_eq!(config.hooks[0].hook_type, "wasm");
         assert_eq!(config.hooks[0].attach_point, "Tick");
         assert_eq!(config.hooks[0].priority, 10);
         assert!(config.hooks[0].enabled);
         assert_eq!(config.hooks[1].name, "log_announce");
+        assert_eq!(config.hooks[1].hook_type, "native");
         assert_eq!(config.hooks[1].attach_point, "AnnounceReceived");
         assert!(!config.hooks[1].enabled);
     }

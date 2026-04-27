@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod context;
+pub mod native;
 pub mod result;
 pub mod sentinel;
 pub mod stats;

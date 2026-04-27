@@ -31,7 +31,13 @@ cargo build --release --bin rns-server
 If you want WASM hooks enabled in the node runtime:
 
 ```bash
-cargo build --release --bin rns-server --features rns-hooks
+cargo build --release --bin rns-server --features rns-hooks-wasm
+```
+
+If you want native dynamic-library hooks enabled without Wasmtime:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks-native
 ```
 
 ## Files And Paths
@@ -73,7 +79,7 @@ cargo build --release --bin rns-server
 If you want hooks enabled:
 
 ```bash
-cargo build --release --bin rns-server --features rns-hooks
+cargo build --release --bin rns-server --features rns-hooks-wasm
 ./target/release/rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 ```
 

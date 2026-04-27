@@ -188,7 +188,7 @@ impl ServerConfig {
     }
 
     pub fn process_specs(&self) -> Vec<ProcessSpec> {
-        #[cfg(not(feature = "rns-hooks"))]
+        #[cfg(not(feature = "rns-hooks-wasm"))]
         {
             return vec![ProcessSpec {
                 role: Role::Rnsd,
@@ -197,7 +197,7 @@ impl ServerConfig {
             }];
         }
 
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "rns-hooks-wasm")]
         {
             let mut specs = vec![ProcessSpec {
                 role: Role::Rnsd,
@@ -205,7 +205,7 @@ impl ServerConfig {
                 args: self.rnsd_args(),
             }];
 
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "rns-hooks-wasm")]
             {
                 specs.push(ProcessSpec {
                     role: Role::Sentineld,
@@ -416,7 +416,7 @@ impl ServerConfig {
     }
 
     fn readiness_checks(&self) -> Vec<ProcessReadiness> {
-        #[cfg(not(feature = "rns-hooks"))]
+        #[cfg(not(feature = "rns-hooks-wasm"))]
         {
             return vec![ProcessReadiness {
                 role: Role::Rnsd,
@@ -424,14 +424,14 @@ impl ServerConfig {
             }];
         }
 
-        #[cfg(feature = "rns-hooks")]
+        #[cfg(feature = "rns-hooks-wasm")]
         {
             let mut readiness = vec![ProcessReadiness {
                 role: Role::Rnsd,
                 target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
             }];
 
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "rns-hooks-wasm")]
             {
                 readiness.push(ProcessReadiness {
                     role: Role::Sentineld,
@@ -471,7 +471,7 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     fn sentineld_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--ready-file".into());
@@ -479,7 +479,7 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     fn statsd_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--db".into());
@@ -489,12 +489,12 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     fn sentineld_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-sentineld.ready")
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     fn statsd_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-statsd.ready")
     }
@@ -909,7 +909,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     #[test]
     fn apply_plan_restarts_statsd_when_db_changes() {
         let current = test_config();
@@ -931,7 +931,7 @@ mod tests {
             .any(|change| change.field == "stats_db_path"));
     }
 
-    #[cfg(not(feature = "rns-hooks"))]
+    #[cfg(not(feature = "rns-hooks-wasm"))]
     #[test]
     fn apply_plan_ignores_stats_db_when_hooks_are_disabled() {
         let current = test_config();
@@ -1040,7 +1040,7 @@ mod tests {
         assert!(warnings[0].contains("http.enabled=false"));
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     #[test]
     fn process_specs_include_sidecar_ready_file_args() {
         let config = test_config();
@@ -1062,7 +1062,7 @@ mod tests {
             .any(|pair| { pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-statsd.ready" }));
     }
 
-    #[cfg(not(feature = "rns-hooks"))]
+    #[cfg(not(feature = "rns-hooks-wasm"))]
     #[test]
     fn process_specs_include_only_rnsd_without_hooks() {
         let config = test_config();
@@ -1073,7 +1073,7 @@ mod tests {
         assert!(matches!(specs[0].command, ProcessCommand::SelfInvoke));
     }
 
-    #[cfg(feature = "rns-hooks")]
+    #[cfg(feature = "rns-hooks-wasm")]
     #[test]
     fn readiness_checks_use_ready_files_for_sidecars() {
         let config = test_config();
@@ -1102,7 +1102,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "rns-hooks"))]
+    #[cfg(not(feature = "rns-hooks-wasm"))]
     #[test]
     fn readiness_checks_include_only_rnsd_without_hooks() {
         let config = test_config();

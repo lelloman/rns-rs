@@ -4272,7 +4272,7 @@ fn runtime_config_sets_generic_interface_values() {
         .is_none());
 }
 
-#[cfg(feature = "rns-hooks")]
+#[cfg(feature = "hooks")]
 #[test]
 fn runtime_config_sets_provider_bridge_values() {
     let mut driver = new_test_driver();

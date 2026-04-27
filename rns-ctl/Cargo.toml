@@ -10,7 +10,9 @@ authors.workspace = true
 [features]
 default = []
 tls = ["rustls", "rustls-pemfile"]
-rns-hooks = ["rns-net/rns-hooks"]
+rns-hooks = ["rns-hooks-wasm"]
+rns-hooks-wasm = ["rns-net/rns-hooks-wasm"]
+rns-hooks-native = ["rns-net/rns-hooks-native"]
 
 [dependencies]
 rns-net.workspace = true

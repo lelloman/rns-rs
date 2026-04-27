@@ -633,7 +633,7 @@ fn start_transport_node_with_limits(
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),
@@ -726,7 +726,7 @@ fn start_client_node_with_packet_hashlist(
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         callbacks,
@@ -1199,7 +1199,7 @@ fn test_direct_link_no_transport() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -1797,7 +1797,7 @@ fn test_plain_message_delivery() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -2028,7 +2028,7 @@ fn test_group_message_delivery() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -2141,7 +2141,7 @@ fn test_group_wrong_key_fails() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -3294,7 +3294,7 @@ fn test_udp_announce_and_message() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
@@ -3362,7 +3362,7 @@ fn test_udp_announce_and_message() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
@@ -3534,7 +3534,7 @@ fn discovery_announce_received_by_client() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),
@@ -3607,7 +3607,7 @@ fn discovery_announce_received_by_client() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
@@ -3739,7 +3739,7 @@ fn discovery_announce_through_relay() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),
@@ -3823,7 +3823,7 @@ fn discovery_announce_through_relay() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),
@@ -3894,7 +3894,7 @@ fn discovery_announce_through_relay() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
@@ -4007,7 +4007,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),

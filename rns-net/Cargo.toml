@@ -9,7 +9,10 @@ authors.workspace = true
 
 [features]
 default = ["iface-tcp", "iface-udp", "iface-local", "iface-auto", "iface-serial", "iface-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p"]
-rns-hooks = ["dep:rns-hooks", "dep:serde", "dep:bincode"]
+rns-hooks = ["rns-hooks-wasm"]
+rns-hooks-wasm = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/wasm", "dep:serde", "dep:bincode"]
+rns-hooks-native = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/native", "dep:serde", "dep:bincode"]
+hooks = []
 iface-tcp = []
 iface-udp = []
 iface-local = []
@@ -23,7 +26,7 @@ iface-i2p = []
 
 [dependencies]
 rns-core.workspace = true
-rns-hooks = { workspace = true, optional = true }
+rns-hooks-crate = { package = "rns-hooks", version = "0.1.5", path = "../rns-hooks", optional = true, default-features = false }
 rns-crypto.workspace = true
 log = "0.4"
 rayon = "1"

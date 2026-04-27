@@ -174,7 +174,7 @@ fn main() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(ServerCallbacks { delivery_tx }),
@@ -248,7 +248,7 @@ fn main() {
                 rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             ),
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(ClientCallbacks {

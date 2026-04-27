@@ -106,6 +106,15 @@ jobs:
           cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd
           cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl
 
+      - name: Build ARMv7 runtime binaries with native hooks
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+        run: |
+          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-cli --bin rnsd --features rns-hooks-native
+          cargo build --release --target armv7-unknown-linux-gnueabihf --no-default-features -p rns-ctl --features rns-hooks-native
+
   rns-ctl-web-smoke:
     name: rns-ctl-web-smoke
     runs-on: ubuntu-latest

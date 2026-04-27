@@ -7,7 +7,7 @@
 //! Debug: RUST_LOG=debug cargo test -p rns-net --features rns-hooks --test e2e_hooks -- --nocapture
 
 #![allow(unused_variables, dead_code)]
-#![cfg(feature = "rns-hooks")]
+#![cfg(feature = "hooks")]
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -239,7 +239,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         Box::new(TransportCallbacks),
@@ -306,7 +306,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             registry: None,
-            #[cfg(feature = "rns-hooks")]
+            #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
         callbacks,

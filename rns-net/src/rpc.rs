@@ -1413,6 +1413,10 @@ fn hooks_to_pickle(hooks: &[HookInfo]) -> PickleValue {
                         PickleValue::String(hook.name.clone()),
                     ),
                     (
+                        PickleValue::String("type".into()),
+                        PickleValue::String(hook.hook_type.clone()),
+                    ),
+                    (
                         PickleValue::String("attach_point".into()),
                         PickleValue::String(hook.attach_point.clone()),
                     ),
@@ -2218,6 +2222,11 @@ fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing hook name"))?
                 .to_string(),
+            hook_type: item
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("wasm")
+                .to_string(),
             attach_point: item
                 .get("attach_point")
                 .and_then(|v| v.as_str())
@@ -2515,6 +2524,7 @@ mod tests {
             if let Ok(Event::ListHooks { response_tx }) = event_rx.recv() {
                 let _ = response_tx.send(vec![HookInfo {
                     name: "stats".into(),
+                    hook_type: "wasm".into(),
                     attach_point: "PreIngress".into(),
                     priority: 7,
                     enabled: true,

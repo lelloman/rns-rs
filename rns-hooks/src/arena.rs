@@ -1,7 +1,8 @@
 use crate::error::HookError;
 use crate::hooks::HookContext;
-use crate::result::HookResult;
-use crate::result::Verdict;
+#[cfg(feature = "wasm")]
+use crate::result::{HookResult, Verdict};
+#[cfg(feature = "wasm")]
 use crate::runtime::StoreData;
 
 pub use rns_hooks_abi::context::{
@@ -12,6 +13,7 @@ pub use rns_hooks_abi::context::{
 
 /// Write a HookContext into WASM linear memory at ARENA_BASE.
 /// Returns the number of bytes written.
+#[cfg(feature = "wasm")]
 pub fn write_context(
     memory: &wasmtime::Memory,
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
@@ -153,7 +155,95 @@ pub fn write_context(
     }
 }
 
+/// Encode a hook context into a host-owned byte buffer for native hooks.
+///
+/// Variable packet data starts at the same offset recorded in
+/// `PacketContext::data_offset`, but offsets are relative to the beginning of
+/// the returned buffer instead of WASM linear memory.
+pub fn context_to_bytes(
+    ctx: &HookContext,
+    data_override: Option<&[u8]>,
+) -> Result<Vec<u8>, HookError> {
+    match ctx {
+        HookContext::Packet { ctx: pkt, raw } => {
+            let raw = data_override.unwrap_or(raw);
+            let header_size = std::mem::size_of::<PacketContext>();
+            let mut data = vec![0u8; header_size + raw.len()];
+            write_u32(&mut data, 0, CTX_TYPE_PACKET);
+            data[4] = pkt.flags;
+            data[5] = pkt.hops;
+            data[8..24].copy_from_slice(&pkt.destination_hash);
+            data[24] = pkt.context;
+            data[28..60].copy_from_slice(&pkt.packet_hash);
+            write_u64(&mut data, 64, pkt.interface_id);
+            write_u32(&mut data, 72, header_size as u32);
+            write_u32(&mut data, 76, raw.len() as u32);
+            if !raw.is_empty() {
+                data[header_size..header_size + raw.len()].copy_from_slice(raw);
+            }
+            Ok(data)
+        }
+        HookContext::Interface { interface_id } => {
+            let mut data = vec![0u8; std::mem::size_of::<InterfaceContext>()];
+            write_u32(&mut data, 0, CTX_TYPE_INTERFACE);
+            write_u64(&mut data, 8, *interface_id);
+            Ok(data)
+        }
+        HookContext::Tick => {
+            let mut data = vec![0u8; std::mem::size_of::<TickContext>()];
+            write_u32(&mut data, 0, CTX_TYPE_TICK);
+            Ok(data)
+        }
+        HookContext::Announce {
+            destination_hash,
+            hops,
+            interface_id,
+        } => {
+            let mut data = vec![0u8; std::mem::size_of::<AnnounceContext>()];
+            write_u32(&mut data, 0, CTX_TYPE_ANNOUNCE);
+            data[4] = *hops;
+            data[8..24].copy_from_slice(destination_hash);
+            write_u64(&mut data, 24, *interface_id);
+            Ok(data)
+        }
+        HookContext::Link {
+            link_id,
+            interface_id,
+        } => {
+            let mut data = vec![0u8; std::mem::size_of::<LinkContext>()];
+            write_u32(&mut data, 0, CTX_TYPE_LINK);
+            data[8..24].copy_from_slice(link_id);
+            write_u64(&mut data, 24, *interface_id);
+            Ok(data)
+        }
+        HookContext::BackbonePeer {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+            connected_for,
+            had_received_data,
+            penalty_level,
+            blacklist_for,
+        } => {
+            let mut data = vec![0u8; std::mem::size_of::<BackbonePeerContext>()];
+            write_u32(&mut data, 0, CTX_TYPE_BACKBONE_PEER);
+            data[4] = peer_ip_family(peer_ip);
+            write_u16(&mut data, 5, *peer_port);
+            data[7] = u8::from(*had_received_data);
+            write_u64(&mut data, 8, *server_interface_id);
+            write_u64(&mut data, 16, peer_interface_id.unwrap_or(0));
+            write_u64(&mut data, 24, connected_for.as_secs());
+            data[32] = *penalty_level;
+            write_u64(&mut data, 40, blacklist_for.as_secs());
+            data[48..64].copy_from_slice(&peer_ip_bytes(peer_ip));
+            Ok(data)
+        }
+    }
+}
+
 /// Read a HookResult from WASM linear memory at the given offset.
+#[cfg(feature = "wasm")]
 pub fn read_result(
     memory: &wasmtime::Memory,
     store: impl wasmtime::AsContext<Data = StoreData>,
@@ -216,6 +306,7 @@ fn peer_ip_bytes(ip: &std::net::IpAddr) -> [u8; 16] {
     }
 }
 
+#[cfg(feature = "wasm")]
 fn read_u32(data: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
 }
@@ -429,6 +520,7 @@ pub fn read_action_wire(
 
 /// Read modified data bytes from WASM memory using offsets from a HookResult.
 /// The offsets are relative to WASM linear memory (not arena base).
+#[cfg(feature = "wasm")]
 pub fn read_modified_data(
     memory: &wasmtime::Memory,
     store: impl wasmtime::AsContext<Data = StoreData>,
@@ -450,6 +542,7 @@ pub fn read_modified_data(
 /// Overwrite the packet data region in the arena for subsequent hooks.
 /// This writes `new_data` at the data offset within the Packet arena layout,
 /// and updates the `data_len` field.
+#[cfg(feature = "wasm")]
 pub fn write_data_override(
     memory: &wasmtime::Memory,
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
