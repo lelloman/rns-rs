@@ -41,11 +41,13 @@ cargo build
 | `rns-hooks` | Compatibility alias for `rns-hooks-wasm` |
 | `rns-hooks-wasm` | Enables WASM hooks (compiles in wasmtime) |
 | `rns-hooks-native` | Enables trusted native dynamic-library hooks without wasmtime |
+| `rns-hooks-builtin` | Enables static built-in hooks without wasmtime or dynamic libraries |
 | `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
 
 ```bash
 cargo build --features rns-hooks-wasm      # Enable WASM hooks
 cargo build --features rns-hooks-native    # Enable native dynamic-library hooks
+cargo build --features rns-hooks-builtin   # Enable static built-in hooks
 cargo build --features tls          # Enable TLS in rns-ctl
 ```
 
@@ -300,14 +302,14 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 ```bash
 rns-ctl hook list                                                # list loaded hooks and their status
-rns-ctl hook load <path> --point <HookPoint> [--type wasm|native] [--priority N] [--name name]
+rns-ctl hook load <path-or-builtin-id> --point <HookPoint> [--type wasm|native|builtin] [--priority N] [--name name]
 rns-ctl hook unload <name> --point <HookPoint>                   # unload a running hook
-rns-ctl hook reload <name> --point <HookPoint> --path <hook_file> [--type wasm|native]
+rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> [--type wasm|native|builtin]
 ```
 
 **Writing hooks:**
 
-Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop`.
+Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop` and [docs/native-hooks.md](docs/native-hooks.md). Built-in hooks are linked Rust functions registered by ID; see [docs/builtin-hooks.md](docs/builtin-hooks.md).
 
 | Example | Description |
 |---------|-------------|

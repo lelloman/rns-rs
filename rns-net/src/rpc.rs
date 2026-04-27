@@ -793,6 +793,31 @@ fn handle_hook_rpc_request(
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook load timed out"))?;
             Ok(hook_result_to_pickle(response))
         }
+        "load_builtin" => {
+            let name = required_string(request, "name")?;
+            let attach_point = required_string(request, "attach_point")?;
+            let builtin_id = required_string(request, "builtin_id")?;
+            let priority = request
+                .get("priority")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0) as i32;
+            let (response_tx, response_rx) = mpsc::channel();
+            event_tx
+                .send(Event::LoadBuiltinHook {
+                    name,
+                    builtin_id,
+                    attach_point,
+                    priority,
+                    response_tx,
+                })
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+            let response = response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "built-in hook load timed out")
+                })?;
+            Ok(hook_result_to_pickle(response))
+        }
         "unload" => {
             let name = required_string(request, "name")?;
             let attach_point = required_string(request, "attach_point")?;
@@ -1960,6 +1985,38 @@ impl RpcClient {
             (
                 PickleValue::String("wasm".into()),
                 PickleValue::Bytes(wasm.to_vec()),
+            ),
+        ]))?;
+        parse_hook_result(&response)
+    }
+
+    pub fn load_builtin_hook(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+        priority: i32,
+        builtin_id: &str,
+    ) -> io::Result<Result<(), String>> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String("load_builtin".into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.to_string()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String(attach_point.to_string()),
+            ),
+            (
+                PickleValue::String("priority".into()),
+                PickleValue::Int(priority as i64),
+            ),
+            (
+                PickleValue::String("builtin_id".into()),
+                PickleValue::String(builtin_id.to_string()),
             ),
         ]))?;
         parse_hook_result(&response)

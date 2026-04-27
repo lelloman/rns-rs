@@ -12,6 +12,7 @@ default = ["iface-tcp", "iface-udp", "iface-local", "iface-auto", "iface-serial"
 rns-hooks = ["rns-hooks-wasm"]
 rns-hooks-wasm = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/wasm", "dep:serde", "dep:bincode"]
 rns-hooks-native = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/native", "dep:serde", "dep:bincode"]
+rns-hooks-builtin = ["hooks", "dep:rns-hooks-crate", "dep:serde", "dep:bincode"]
 hooks = []
 iface-tcp = []
 iface-udp = []

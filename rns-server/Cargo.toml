@@ -12,6 +12,7 @@ default = []
 rns-hooks = ["rns-hooks-wasm"]
 rns-hooks-wasm = ["rns-cli/rns-hooks-wasm", "rns-net/rns-hooks-wasm", "rns-ctl/rns-hooks-wasm"]
 rns-hooks-native = ["rns-cli/rns-hooks-native", "rns-net/rns-hooks-native", "rns-ctl/rns-hooks-native"]
+rns-hooks-builtin = ["rns-cli/rns-hooks-builtin", "rns-net/rns-hooks-builtin", "rns-ctl/rns-hooks-builtin"]
 
 [dependencies]
 rns-cli = { version = "0.2.2", path = "../rns-cli" }

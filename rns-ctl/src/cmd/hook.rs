@@ -108,6 +108,7 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
         "name": name,
         "path": path,
         "type": hook_type,
+        "builtin_id": args.get("builtin").or_else(|| args.get("id")),
         "attach_point": attach_point,
         "priority": priority,
     });
@@ -186,6 +187,7 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
         "name": name,
         "path": path,
         "type": hook_type,
+        "builtin_id": args.get("builtin").or_else(|| args.get("id")),
         "attach_point": attach_point,
     });
 
@@ -363,10 +365,11 @@ fn print_usage() {
     println!("COMMANDS:");
     println!("    list                               List loaded hooks");
     println!("    load <path> --point <HookPoint>     Load a hook");
-    println!("         [--type wasm|native] [--priority N] [--name name]");
+    println!("         [--type wasm|native|builtin] [--priority N] [--name name]");
+    println!("         [--builtin ID]              Built-in hook ID (defaults to <path>)");
     println!("    unload <name> --point <HookPoint>   Unload a hook");
     println!("    reload <name> --point <HookPoint>   Reload a hook");
-    println!("         --path <hook_file> [--type wasm|native]");
+    println!("         --path <hook_file_or_builtin_id> [--type wasm|native|builtin]");
     println!("    enable <name> --point <HookPoint>   Enable a loaded hook");
     println!("    disable <name> --point <HookPoint>  Disable a loaded hook");
     println!("    set-priority <name> --point <HookPoint> --priority N");

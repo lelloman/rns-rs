@@ -1023,6 +1023,43 @@ impl Driver {
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
+                Event::LoadBuiltinHook {
+                    name,
+                    builtin_id,
+                    attach_point,
+                    priority,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let mgr = self
+                                .hook_manager
+                                .as_ref()
+                                .ok_or_else(|| "hook manager not available".to_string())?;
+                            let program = mgr
+                                .load_builtin(name.clone(), builtin_id.as_str(), priority)
+                                .map_err(|e| format!("load error: {}", e))?;
+                            self.hook_slots[point_idx].attach(program);
+                            log::info!(
+                                "Loaded built-in hook '{}' ({}) at point {} (priority {})",
+                                name,
+                                builtin_id,
+                                attach_point,
+                                priority
+                            );
+                            Ok(())
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "hooks"))]
+                    {
+                        let _ = (name, builtin_id, attach_point, priority);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
                 Event::UnloadHook {
                     name,
                     attach_point,
@@ -1163,6 +1200,55 @@ impl Driver {
                     #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (name, attach_point, path, hook_type);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::ReloadBuiltinHook {
+                    name,
+                    attach_point,
+                    builtin_id,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "hooks")]
+                    {
+                        let result = (|| -> Result<(), String> {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            let old =
+                                self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                                    format!("hook '{}' not found at point '{}'", name, attach_point)
+                                })?;
+                            let priority = old.priority;
+                            let mgr = match self.hook_manager.as_ref() {
+                                Some(m) => m,
+                                None => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    return Err("hook manager not available".to_string());
+                                }
+                            };
+                            match mgr.load_builtin(name.clone(), builtin_id.as_str(), priority) {
+                                Ok(program) => {
+                                    self.hook_slots[point_idx].attach(program);
+                                    log::info!(
+                                        "Reloaded built-in hook '{}' ({}) at point {} (priority {})",
+                                        name,
+                                        builtin_id,
+                                        attach_point,
+                                        priority
+                                    );
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    self.hook_slots[point_idx].attach(old);
+                                    Err(format!("load error: {}", e))
+                                }
+                            }
+                        })();
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "hooks"))]
+                    {
+                        let _ = (name, attach_point, builtin_id);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }

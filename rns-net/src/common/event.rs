@@ -301,6 +301,14 @@ pub enum Event<W: Send> {
         priority: i32,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
+    /// Load a registered built-in hook by ID at runtime.
+    LoadBuiltinHook {
+        name: String,
+        builtin_id: String,
+        attach_point: String,
+        priority: i32,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
     /// Unload a hook at runtime.
     UnloadHook {
         name: String,
@@ -320,6 +328,13 @@ pub enum Event<W: Send> {
         attach_point: String,
         path: String,
         hook_type: String,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// Reload a registered built-in hook by ID at runtime.
+    ReloadBuiltinHook {
+        name: String,
+        attach_point: String,
+        builtin_id: String,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
     /// Enable or disable a loaded hook at runtime.
@@ -999,6 +1014,19 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("name", name)
                 .field("path", path)
                 .field("hook_type", hook_type)
+                .field("attach_point", attach_point)
+                .field("priority", priority)
+                .finish(),
+            Event::LoadBuiltinHook {
+                name,
+                builtin_id,
+                attach_point,
+                priority,
+                ..
+            } => f
+                .debug_struct("LoadBuiltinHook")
+                .field("name", name)
+                .field("builtin_id", builtin_id)
                 .field("attach_point", attach_point)
                 .field("priority", priority)
                 .finish(),

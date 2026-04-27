@@ -1217,6 +1217,19 @@ fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
+    } else if hook_type == "builtin" {
+        let builtin_id = body["builtin_id"]
+            .as_str()
+            .or_else(|| body["id"].as_str())
+            .unwrap_or(path)
+            .to_string();
+        with_node(node, |n| {
+            match n.load_builtin_hook(name, builtin_id, attach_point, priority) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
     } else {
         with_node(node, |n| {
             match n.load_hook_file(name, path.to_string(), hook_type, attach_point, priority) {
@@ -1280,6 +1293,19 @@ fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
 
         with_node(node, |n| {
             match n.reload_hook(name, attach_point, wasm_bytes) {
+                Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
+                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Err(_) => HttpResponse::internal_error("Driver unavailable"),
+            }
+        })
+    } else if hook_type == "builtin" {
+        let builtin_id = body["builtin_id"]
+            .as_str()
+            .or_else(|| body["id"].as_str())
+            .unwrap_or(path)
+            .to_string();
+        with_node(node, |n| {
+            match n.reload_builtin_hook(name, attach_point, builtin_id) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
                 Ok(Err(e)) => HttpResponse::bad_request(&e),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),

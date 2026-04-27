@@ -1,3 +1,4 @@
+use crate::builtin::BuiltinProgram;
 #[cfg(feature = "native")]
 use crate::native::NativeProgram;
 #[cfg(feature = "wasm")]
@@ -6,6 +7,7 @@ use crate::runtime::StoreData;
 use wasmtime::{Instance, Module, Store};
 
 pub enum ProgramBackend {
+    Builtin(BuiltinProgram),
     #[cfg(feature = "wasm")]
     Wasm(WasmProgram),
     #[cfg(feature = "native")]
@@ -31,6 +33,17 @@ pub struct LoadedProgram {
 }
 
 impl LoadedProgram {
+    pub fn new_builtin(name: String, builtin: BuiltinProgram, priority: i32) -> Self {
+        LoadedProgram {
+            name,
+            priority,
+            consecutive_traps: 0,
+            enabled: true,
+            max_consecutive_traps: 10,
+            backend: ProgramBackend::Builtin(builtin),
+        }
+    }
+
     #[cfg(feature = "wasm")]
     pub fn new(name: String, module: Module, priority: i32) -> Self {
         LoadedProgram {
@@ -67,6 +80,7 @@ impl LoadedProgram {
     /// Drop the cached store/instance (e.g. on reload).
     pub fn drop_cache(&mut self) {
         match &mut self.backend {
+            ProgramBackend::Builtin(_) => {}
             #[cfg(feature = "wasm")]
             ProgramBackend::Wasm(wasm) => {
                 wasm.cached = None;
@@ -78,6 +92,7 @@ impl LoadedProgram {
 
     pub fn backend_name(&self) -> &'static str {
         match &self.backend {
+            ProgramBackend::Builtin(_) => "builtin",
             #[cfg(feature = "wasm")]
             ProgramBackend::Wasm(_) => "wasm",
             #[cfg(feature = "native")]

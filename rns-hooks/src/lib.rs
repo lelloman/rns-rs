@@ -1,4 +1,5 @@
 pub mod arena;
+pub mod builtin;
 pub mod context;
 pub mod engine_access;
 pub mod error;
@@ -13,6 +14,9 @@ pub mod result;
 pub mod runtime;
 pub mod wire;
 
+pub use builtin::{
+    register_builtin_hook, BuiltinHook, BuiltinHookCall, BuiltinHookHost, BuiltinProgram,
+};
 pub use context::PacketContext;
 pub use engine_access::{EngineAccess, NullEngine};
 pub use error::HookError;

@@ -1045,12 +1045,27 @@ impl RnsNode {
                         continue;
                     }
                 };
-                match mgr.load_file_backend(
-                    hook_cfg.name.clone(),
-                    std::path::Path::new(&hook_cfg.path),
-                    hook_cfg.priority,
-                    hook_backend,
-                ) {
+                let load_result = if hook_backend == rns_hooks::HookBackend::Builtin {
+                    let builtin_id = hook_cfg
+                        .builtin_id
+                        .as_deref()
+                        .filter(|id| !id.is_empty())
+                        .or_else(|| (!hook_cfg.path.is_empty()).then_some(hook_cfg.path.as_str()));
+                    match builtin_id {
+                        Some(id) => mgr.load_builtin(hook_cfg.name.clone(), id, hook_cfg.priority),
+                        None => Err(rns_hooks::HookError::CompileError(
+                            "built-in hook requires builtin/id or path".to_string(),
+                        )),
+                    }
+                } else {
+                    mgr.load_file_backend(
+                        hook_cfg.name.clone(),
+                        std::path::Path::new(&hook_cfg.path),
+                        hook_cfg.priority,
+                        hook_backend,
+                    )
+                };
+                match load_result {
                     Ok(program) => {
                         driver.hook_slots[point_idx].attach(program);
                         log::info!(
@@ -2246,6 +2261,27 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
+    /// Load a registered built-in hook at runtime.
+    pub fn load_builtin_hook(
+        &self,
+        name: String,
+        builtin_id: String,
+        attach_point: String,
+        priority: i32,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::LoadBuiltinHook {
+                name,
+                builtin_id,
+                attach_point,
+                priority,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
     /// Unload a hook at runtime.
     pub fn unload_hook(
         &self,
@@ -2297,6 +2333,25 @@ impl RnsNode {
                 attach_point,
                 path,
                 hook_type,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Reload a registered built-in hook at runtime.
+    pub fn reload_builtin_hook(
+        &self,
+        name: String,
+        attach_point: String,
+        builtin_id: String,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::ReloadBuiltinHook {
+                name,
+                attach_point,
+                builtin_id,
                 response_tx,
             })
             .map_err(|_| SendError)?;

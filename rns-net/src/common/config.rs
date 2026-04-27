@@ -24,6 +24,7 @@ pub struct ParsedHook {
     pub name: String,
     pub path: String,
     pub hook_type: String,
+    pub builtin_id: Option<String>,
     pub attach_point: String,
     pub priority: i32,
     pub enabled: bool,
@@ -411,6 +412,10 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
         .remove("type")
         .or_else(|| kvs.remove("backend"))
         .unwrap_or_else(|| "wasm".into());
+    let builtin_id = kvs
+        .remove("builtin")
+        .or_else(|| kvs.remove("builtin_id"))
+        .or_else(|| kvs.remove("id"));
     let attach_point = kvs.remove("attach_point").unwrap_or_default();
     let priority = kvs
         .remove("priority")
@@ -425,6 +430,7 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
         name,
         path,
         hook_type,
+        builtin_id,
         attach_point,
         priority,
         enabled,
@@ -1498,9 +1504,14 @@ publish_blackhole = Yes
     attach_point = AnnounceReceived
     priority = 5
     enabled = No
+
+  [[builtin_tick]]
+    builtin = example.tick
+    type = builtin
+    attach_point = Tick
 "#;
         let config = parse(input).unwrap();
-        assert_eq!(config.hooks.len(), 2);
+        assert_eq!(config.hooks.len(), 3);
         assert_eq!(config.hooks[0].name, "drop_tick");
         assert_eq!(config.hooks[0].path, "/tmp/drop_tick.wasm");
         assert_eq!(config.hooks[0].hook_type, "wasm");
@@ -1511,6 +1522,8 @@ publish_blackhole = Yes
         assert_eq!(config.hooks[1].hook_type, "native");
         assert_eq!(config.hooks[1].attach_point, "AnnounceReceived");
         assert!(!config.hooks[1].enabled);
+        assert_eq!(config.hooks[2].hook_type, "builtin");
+        assert_eq!(config.hooks[2].builtin_id.as_deref(), Some("example.tick"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+#[cfg(any(feature = "wasm", feature = "native"))]
 use crate::arena;
 use crate::engine_access::EngineAccess;
 #[cfg(feature = "wasm")]
@@ -32,6 +33,7 @@ pub struct HookManager {
 pub enum HookBackend {
     Wasm,
     Native,
+    Builtin,
 }
 
 impl HookBackend {
@@ -39,6 +41,7 @@ impl HookBackend {
         match self {
             HookBackend::Wasm => "wasm",
             HookBackend::Native => "native",
+            HookBackend::Builtin => "builtin",
         }
     }
 }
@@ -50,6 +53,7 @@ impl std::str::FromStr for HookBackend {
         match value.to_ascii_lowercase().as_str() {
             "wasm" => Ok(HookBackend::Wasm),
             "native" | "dylib" | "dynamic" => Ok(HookBackend::Native),
+            "builtin" | "built-in" | "static" => Ok(HookBackend::Builtin),
             other => Err(format!("unknown hook type '{}'", other)),
         }
     }
@@ -176,6 +180,9 @@ impl HookManager {
     ) -> Result<LoadedProgram, HookError> {
         match backend {
             HookBackend::Wasm => self.load_file(name, path, priority),
+            HookBackend::Builtin => Err(HookError::CompileError(
+                "built-in hooks are loaded by ID, not file path".to_string(),
+            )),
             HookBackend::Native => {
                 #[cfg(feature = "native")]
                 {
@@ -191,6 +198,16 @@ impl HookManager {
                 }
             }
         }
+    }
+
+    pub fn load_builtin(
+        &self,
+        name: String,
+        id: impl Into<String>,
+        priority: i32,
+    ) -> Result<LoadedProgram, HookError> {
+        let builtin = crate::builtin::BuiltinProgram::load(id)?;
+        Ok(LoadedProgram::new_builtin(name, builtin, priority))
     }
 
     /// Execute a single program against a hook context. Returns an `ExecuteResult`
@@ -236,6 +253,44 @@ impl HookManager {
             return None;
         }
 
+        if matches!(program.backend, ProgramBackend::Builtin(_)) {
+            let result = match &program.backend {
+                ProgramBackend::Builtin(builtin) => builtin.execute(
+                    ctx,
+                    data_override,
+                    engine_access,
+                    now,
+                    provider_events_enabled,
+                ),
+                #[cfg(feature = "wasm")]
+                ProgramBackend::Wasm(_) => unreachable!(),
+                #[cfg(feature = "native")]
+                ProgramBackend::Native(_) => unreachable!(),
+            };
+            return match result {
+                Ok(mut exec) => {
+                    program.record_success();
+                    for event in &mut exec.provider_events {
+                        event.hook_name = program.name.clone();
+                    }
+                    Some(exec)
+                }
+                Err(e) => {
+                    let auto_disabled = program.record_trap();
+                    if auto_disabled {
+                        log::error!(
+                            "built-in hook '{}' auto-disabled after {} consecutive errors",
+                            program.name,
+                            program.consecutive_traps
+                        );
+                    } else {
+                        log::warn!("built-in hook '{}' failed: {}", program.name, e);
+                    }
+                    None
+                }
+            };
+        }
+
         #[cfg(feature = "native")]
         if matches!(program.backend, ProgramBackend::Native(_)) {
             let ctx_bytes = match arena::context_to_bytes(ctx, data_override) {
@@ -254,6 +309,7 @@ impl HookManager {
                 ProgramBackend::Native(native) => {
                     native.execute(&ctx_bytes, engine_access, provider_events_enabled)
                 }
+                ProgramBackend::Builtin(_) => unreachable!(),
                 #[cfg(feature = "wasm")]
                 ProgramBackend::Wasm(_) => unreachable!(),
             };
@@ -295,14 +351,14 @@ impl HookManager {
 
         #[cfg(feature = "wasm")]
         {
-            return self.execute_wasm_program(
+            self.execute_wasm_program(
                 program,
                 ctx,
                 engine_access,
                 now,
                 provider_events_enabled,
                 data_override,
-            );
+            )
         }
     }
 
@@ -324,6 +380,7 @@ impl HookManager {
         // Take the cached store+instance out of program (or create fresh).
         // We take ownership to avoid borrow-checker conflicts with program.record_*().
         let cached = match &mut program.backend {
+            ProgramBackend::Builtin(_) => unreachable!(),
             ProgramBackend::Wasm(wasm) => wasm.cached.take(),
             #[cfg(feature = "native")]
             ProgramBackend::Native(_) => unreachable!(),
@@ -356,6 +413,7 @@ impl HookManager {
             }
 
             let module = match &program.backend {
+                ProgramBackend::Builtin(_) => unreachable!(),
                 ProgramBackend::Wasm(wasm) => wasm.module.clone(),
                 #[cfg(feature = "native")]
                 ProgramBackend::Native(_) => unreachable!(),
@@ -404,6 +462,7 @@ impl HookManager {
 
         // Call the exported hook function
         let export_name = match &program.backend {
+            ProgramBackend::Builtin(_) => unreachable!(),
             ProgramBackend::Wasm(wasm) => wasm.export_name.clone(),
             #[cfg(feature = "native")]
             ProgramBackend::Native(_) => unreachable!(),
@@ -492,6 +551,7 @@ impl HookManager {
         instance: wasmtime::Instance,
     ) {
         match &mut program.backend {
+            ProgramBackend::Builtin(_) => unreachable!(),
             ProgramBackend::Wasm(wasm) => wasm.cached = Some((store, instance)),
             #[cfg(feature = "native")]
             ProgramBackend::Native(_) => unreachable!(),

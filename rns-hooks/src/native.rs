@@ -171,9 +171,6 @@ unsafe extern "C" fn native_get_hops(user_data: *mut c_void, dest_ptr: *const u8
     let Some(state) = state(user_data) else {
         return -1;
     };
-    if !state.provider_events_enabled {
-        return -1;
-    }
     let Some(dest) = read_16(dest_ptr) else {
         return -1;
     };
@@ -315,6 +312,9 @@ unsafe extern "C" fn native_emit_event(
     let Some(state) = state(user_data) else {
         return -1;
     };
+    if !state.provider_events_enabled {
+        return -1;
+    }
     let Some(payload_type) = read_bytes(type_ptr, type_len) else {
         return -1;
     };
