@@ -194,6 +194,7 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
+        auto_compress: bool,
     },
     /// Set the resource acceptance strategy for a link.
     SetResourceStrategy { link_id: [u8; 16], strategy: u8 },
@@ -1056,6 +1057,17 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("attach_point", attach_point)
                 .field("path", path)
                 .field("hook_type", hook_type)
+                .finish(),
+            Event::ReloadBuiltinHook {
+                name,
+                attach_point,
+                builtin_id,
+                ..
+            } => f
+                .debug_struct("ReloadBuiltinHook")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .field("builtin_id", builtin_id)
                 .finish(),
             Event::SetHookEnabled {
                 name,

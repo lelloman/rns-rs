@@ -1840,12 +1840,24 @@ impl RnsNode {
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
     ) -> Result<(), SendError> {
+        self.send_resource_with_auto_compress(link_id, data, metadata, true)
+    }
+
+    /// Send a resource on an established link, controlling automatic compression.
+    pub fn send_resource_with_auto_compress(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendResource {
                 link_id,
                 data,
                 metadata,
+                auto_compress,
             })
             .map_err(|_| SendError)
     }

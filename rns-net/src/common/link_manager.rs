@@ -2142,6 +2142,18 @@ impl LinkManager {
         metadata: Option<&[u8]>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        self.send_resource_with_auto_compress(link_id, data, metadata, true, rng)
+    }
+
+    /// Start sending a resource on a link, controlling automatic compression.
+    pub fn send_resource_with_auto_compress(
+        &mut self,
+        link_id: &LinkId,
+        data: &[u8],
+        metadata: Option<&[u8]>,
+        auto_compress: bool,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -2172,7 +2184,7 @@ impl LinkManager {
             &Bzip2Compressor,
             rng,
             now,
-            true,  // auto_compress
+            auto_compress,
             false, // is_response
             None,  // request_id
             1,     // segment_index
@@ -3369,6 +3381,57 @@ mod tests {
         assert!(
             has_send,
             "send_resource should emit advertisement SendPacket"
+        );
+    }
+
+    fn first_resource_advertisement(
+        mgr: &LinkManager,
+        link_id: &LinkId,
+        actions: &[LinkManagerAction],
+    ) -> rns_core::resource::ResourceAdvertisement {
+        let adv_raw = actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    let pkt = RawPacket::unpack(raw).ok()?;
+                    (pkt.context == constants::CONTEXT_RESOURCE_ADV).then_some(raw)
+                }
+                _ => None,
+            })
+            .expect("sender should emit a resource advertisement");
+        let adv_pkt = RawPacket::unpack(adv_raw).unwrap();
+        let plaintext = mgr
+            .links
+            .get(link_id)
+            .unwrap()
+            .engine
+            .decrypt(&adv_pkt.data)
+            .unwrap();
+        rns_core::resource::ResourceAdvertisement::unpack(&plaintext).unwrap()
+    }
+
+    #[test]
+    fn test_send_resource_auto_compress_option_controls_adv_flag() {
+        let data = vec![0x41; 2048];
+
+        let (mut compressed_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let actions =
+            compressed_mgr.send_resource_with_auto_compress(&link_id, &data, None, true, &mut rng);
+        let adv = first_resource_advertisement(&compressed_mgr, &link_id, &actions);
+        assert!(
+            adv.flags.compressed,
+            "compressible resource should compress"
+        );
+
+        let (mut plain_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let actions =
+            plain_mgr.send_resource_with_auto_compress(&link_id, &data, None, false, &mut rng);
+        let adv = first_resource_advertisement(&plain_mgr, &link_id, &actions);
+        assert!(
+            !adv.flags.compressed,
+            "auto_compress=false should keep resource uncompressed"
         );
     }
 

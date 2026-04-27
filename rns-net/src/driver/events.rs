@@ -794,16 +794,18 @@ impl Driver {
                     link_id,
                     data,
                     metadata,
+                    auto_compress,
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send resource");
-                        let _ = (link_id, data, metadata);
+                        let _ = (link_id, data, metadata, auto_compress);
                         continue;
                     }
-                    let link_actions = self.link_manager.send_resource(
+                    let link_actions = self.link_manager.send_resource_with_auto_compress(
                         &link_id,
                         &data,
                         metadata.as_deref(),
+                        auto_compress,
                         &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
