@@ -26,13 +26,19 @@ impl Transport {
             Ok((Transport::Tcp(reader), Transport::Tcp(stream)))
         } else {
             let port = SerialPort::open(&config)?;
-            Ok((Transport::Serial(port.reader()?), Transport::Serial(port.writer()?)))
+            Ok((
+                Transport::Serial(port.reader()?),
+                Transport::Serial(port.writer()?),
+            ))
         }
     }
 
     pub fn open_from_fd(fd: i32) -> io::Result<(Transport, Transport)> {
         let port = SerialPort::from_raw_fd(fd);
-        Ok((Transport::Serial(port.reader()?), Transport::Serial(port.writer()?)))
+        Ok((
+            Transport::Serial(port.reader()?),
+            Transport::Serial(port.writer()?),
+        ))
     }
 }
 
@@ -47,9 +53,15 @@ impl Read for Transport {
 
 impl Write for Transport {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self { Transport::Serial(f) => f.write(buf), Transport::Tcp(s) => s.write(buf) }
+        match self {
+            Transport::Serial(f) => f.write(buf),
+            Transport::Tcp(s) => s.write(buf),
+        }
     }
     fn flush(&mut self) -> io::Result<()> {
-        match self { Transport::Serial(f) => f.flush(), Transport::Tcp(s) => s.flush() }
+        match self {
+            Transport::Serial(f) => f.flush(),
+            Transport::Tcp(s) => s.flush(),
+        }
     }
 }
