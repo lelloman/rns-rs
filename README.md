@@ -38,20 +38,21 @@ cargo build
 
 | Flag | Effect |
 |------|--------|
-| `rns-hooks` | Compatibility alias for `rns-hooks-wasm` |
+| `rns-hooks` | Compatibility alias for `rns-hooks-native` |
 | `rns-hooks-wasm` | Enables WASM hooks (compiles in wasmtime) |
 | `rns-hooks-native` | Enables trusted native dynamic-library hooks without wasmtime |
 | `rns-hooks-builtin` | Enables static built-in hooks without wasmtime or dynamic libraries |
 | `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
 
 ```bash
+cargo build --features rns-hooks           # Enable native dynamic-library hooks
+cargo build --features rns-hooks-native    # Enable native dynamic-library hooks explicitly
 cargo build --features rns-hooks-wasm      # Enable WASM hooks
-cargo build --features rns-hooks-native    # Enable native dynamic-library hooks
 cargo build --features rns-hooks-builtin   # Enable static built-in hooks
 cargo build --features tls          # Enable TLS in rns-ctl
 ```
 
-To build WASM hooks, add the WASM target:
+To build WASM hooks or the WASM sidecar bundle, add the WASM target:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -89,7 +90,7 @@ cargo test --workspace
 bash scripts/lint-host.sh
 ```
 
-The lint script enables `rns-hooks` coverage, but intentionally does not use
+The lint script enables native `rns-hooks` coverage, but intentionally does not use
 workspace-wide `--all-features`. That would enable `rns-crypto/espidf`, which
 pulls in `esp-idf-sys` and fails on normal `x86_64-unknown-linux-gnu` host
 machines. ESP32 validation remains separate under `rns-esp32/`.
@@ -108,7 +109,7 @@ cd tests/docker && ./run.sh chain 01_health
 
 ## rns-server
 
-`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd`, `rns-sentineld`, and `rns-statsd` roles from the same executable.
+`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd` role from the same executable. WASM sidecar builds also self-spawn `rns-sentineld` and `rns-statsd`.
 
 If you just want to run a node, start here.
 
@@ -127,7 +128,7 @@ cargo build --release --bin rns-server
 ./target/release/rns-server start --config /path/to/node
 ```
 
-If you want WASM hooks enabled in the node runtime:
+If you want native dynamic-library hooks enabled in the node runtime:
 
 ```bash
 cargo build --release --bin rns-server --features rns-hooks
@@ -206,7 +207,7 @@ cargo run --bin rns-ctl -- path -t
 # Identity management
 cargo run --bin rns-ctl -- id -g /path/to/identity
 
-# Manage WASM hooks
+# Manage hooks
 cargo run --bin rns-ctl -- hook list
 ```
 
@@ -284,15 +285,15 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 ```ini
 [hooks]
   [[drop_tick]]
-    path = /tmp/drop_tick.wasm
-    type = wasm
+    path = /tmp/drop_tick.so
+    type = native
     attach_point = Tick
     priority = 10
     enabled = Yes
 
   [[log_announce]]
-    path = /tmp/log_announce.so
-    type = native
+    path = /tmp/log_announce.wasm
+    type = wasm
     attach_point = AnnounceReceived
     priority = 5
     enabled = Yes
@@ -309,7 +310,7 @@ rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> 
 
 **Writing hooks:**
 
-Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop` and [docs/native-hooks.md](docs/native-hooks.md). Built-in hooks are linked Rust functions registered by ID; see [docs/builtin-hooks.md](docs/builtin-hooks.md).
+Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook_abi_version` plus `rns_hook_on_call`; see `rns-hooks/examples/native_noop` and [docs/native-hooks.md](docs/native-hooks.md). Use the `rns-hooks-sdk` crate to write WASM hooks in `no_std` Rust. Each WASM hook exports an `on_hook` function that receives a context and returns a verdict. Built-in hooks are linked Rust functions registered by ID; see [docs/builtin-hooks.md](docs/builtin-hooks.md).
 
 | Example | Description |
 |---------|-------------|

@@ -3,11 +3,11 @@
 //! Tests hooks through the full RnsNode stack: load/unload/reload/list APIs,
 //! hook execution on real traffic, and runtime hot-swap.
 //!
-//! Run:  cargo test -p rns-net --features rns-hooks --test e2e_hooks
-//! Debug: RUST_LOG=debug cargo test -p rns-net --features rns-hooks --test e2e_hooks -- --nocapture
+//! Run:  cargo test -p rns-net --features rns-hooks-wasm --test e2e_hooks
+//! Debug: RUST_LOG=debug cargo test -p rns-net --features rns-hooks-wasm --test e2e_hooks -- --nocapture
 
 #![allow(unused_variables, dead_code)]
-#![cfg(feature = "hooks")]
+#![cfg(feature = "rns-hooks-wasm")]
 
 use std::path::PathBuf;
 #[cfg(feature = "rns-hooks-builtin")]

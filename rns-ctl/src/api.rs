@@ -1,5 +1,20 @@
 use serde_json::{json, Value};
 
+const DEFAULT_HOOK_TYPE: &str = {
+    #[cfg(feature = "rns-hooks-native")]
+    {
+        "native"
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    {
+        "wasm"
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    {
+        "wasm"
+    }
+};
+
 use rns_crypto::identity::Identity;
 use rns_net::{
     event::LifecycleState, DestHash, Destination, IdentityHash, ProofStrategy, QueryRequest,
@@ -1200,7 +1215,10 @@ fn handle_load_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
     let priority = body["priority"].as_i64().unwrap_or(0) as i32;
-    let hook_type = body["type"].as_str().unwrap_or("wasm").to_string();
+    let hook_type = body["type"]
+        .as_str()
+        .unwrap_or(DEFAULT_HOOK_TYPE)
+        .to_string();
 
     if hook_type == "wasm" {
         let wasm_bytes = match std::fs::read(path) {
@@ -1281,7 +1299,10 @@ fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
-    let hook_type = body["type"].as_str().unwrap_or("wasm").to_string();
+    let hook_type = body["type"]
+        .as_str()
+        .unwrap_or(DEFAULT_HOOK_TYPE)
+        .to_string();
 
     if hook_type == "wasm" {
         let wasm_bytes = match std::fs::read(path) {

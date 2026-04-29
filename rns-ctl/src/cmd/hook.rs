@@ -4,6 +4,21 @@
 
 use crate::args::Args;
 
+const DEFAULT_HOOK_TYPE: &str = {
+    #[cfg(feature = "rns-hooks-native")]
+    {
+        "native"
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    {
+        "wasm"
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    {
+        "wasm"
+    }
+};
+
 pub fn run(args: Args) {
     if args.has("help") {
         print_usage();
@@ -50,7 +65,7 @@ fn do_list(base_url: &str, token: Option<&str>) {
                         println!(
                             "{:<20} {:<8} {:<28} {:>8} {:>8} {:>6}",
                             h["name"].as_str().unwrap_or(""),
-                            h["type"].as_str().unwrap_or("wasm"),
+                            h["type"].as_str().unwrap_or(DEFAULT_HOOK_TYPE),
                             h["attach_point"].as_str().unwrap_or(""),
                             h["priority"].as_i64().unwrap_or(0),
                             h["consecutive_traps"].as_u64().unwrap_or(0),
@@ -95,7 +110,7 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
         .get("priority")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let hook_type = args.get("type").unwrap_or("wasm").to_string();
+    let hook_type = args.get("type").unwrap_or(DEFAULT_HOOK_TYPE).to_string();
     let name = args.get("name").map(|s| s.to_string()).unwrap_or_else(|| {
         std::path::Path::new(path)
             .file_stem()
@@ -181,7 +196,7 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
             std::process::exit(1);
         }
     };
-    let hook_type = args.get("type").unwrap_or("wasm").to_string();
+    let hook_type = args.get("type").unwrap_or(DEFAULT_HOOK_TYPE).to_string();
 
     let body = serde_json::json!({
         "name": name,

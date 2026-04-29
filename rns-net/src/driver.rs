@@ -674,10 +674,10 @@ pub struct Driver {
     pub(crate) management_announce_interval_secs: f64,
     /// Startup/default runtime-config values.
     pub(crate) runtime_config_defaults: RuntimeConfigDefaults,
-    /// Hook slots for the WASM hook system (one per HookPoint).
+    /// Hook slots for the programmable hook system (one per HookPoint).
     #[cfg(feature = "hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
-    /// WASM hook manager (runtime + linker). None if initialization failed.
+    /// Hook manager. None if initialization failed.
     #[cfg(feature = "hooks")]
     pub(crate) hook_manager: Option<HookManager>,
     #[cfg(feature = "hooks")]

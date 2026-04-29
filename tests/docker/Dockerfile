@@ -12,7 +12,7 @@ COPY rns-stats-hook rns-stats-hook
 COPY rns-sentinel-hook rns-sentinel-hook
 COPY rns-server rns-server
 RUN rustup target add wasm32-unknown-unknown
-RUN cargo build --release --bin rns-ctl --bin rns-sentineld --features rns-hooks
+RUN cargo build --release --bin rns-ctl --bin rns-sentineld --features rns-hooks-wasm
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl iproute2 iptables && rm -rf /var/lib/apt/lists/*
