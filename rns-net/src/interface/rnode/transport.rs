@@ -35,10 +35,10 @@ impl Transport {
 
     pub fn open_from_fd(fd: i32) -> io::Result<(Transport, Transport)> {
         let port = SerialPort::from_raw_fd(fd);
-        Ok((
-            Transport::Serial(port.reader()?),
-            Transport::Serial(port.writer()?),
-        ))
+        let reader = port.reader()?;
+        let writer = port.writer()?;
+        std::mem::forget(port);
+        Ok((Transport::Serial(reader), Transport::Serial(writer)))
     }
 }
 
