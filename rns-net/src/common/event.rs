@@ -285,7 +285,7 @@ pub enum Event<W: Send> {
         penalty_level: u8,
         blacklist_for: Duration,
     },
-    /// Load a WASM hook at runtime.
+    /// Load an in-memory WASM hook at runtime.
     LoadHook {
         name: String,
         wasm_bytes: Vec<u8>,
@@ -316,7 +316,7 @@ pub enum Event<W: Send> {
         attach_point: String,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
-    /// Reload a WASM hook at runtime (detach + recompile + reattach with same priority).
+    /// Reload an in-memory WASM hook at runtime (detach + recompile + reattach with same priority).
     ReloadHook {
         name: String,
         attach_point: String,
@@ -345,7 +345,7 @@ pub enum Event<W: Send> {
         enabled: bool,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
-    /// Update the priority of a loaded WASM hook at runtime.
+    /// Update the priority of a loaded hook at runtime.
     SetHookPriority {
         name: String,
         attach_point: String,

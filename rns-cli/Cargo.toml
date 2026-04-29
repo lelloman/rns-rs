@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = []
-rns-hooks = ["rns-hooks-wasm"]
+rns-hooks = ["rns-hooks-native"]
 rns-hooks-wasm = ["rns-net/rns-hooks-wasm", "dep:rns-hooks-abi", "dep:rns-stats-hook", "dep:rns-sentinel-hook"]
 rns-hooks-native = ["rns-net/rns-hooks-native"]
 rns-hooks-builtin = ["rns-net/rns-hooks-builtin"]

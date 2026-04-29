@@ -108,8 +108,25 @@ impl ResourceReceiver {
         if adv.resource_hash.len() != 32 {
             return Err(ResourceError::InvalidAdvertisement);
         }
+        if adv.random_hash.len() != RESOURCE_RANDOM_HASH_SIZE || adv.original_hash.len() != 32 {
+            return Err(ResourceError::InvalidAdvertisement);
+        }
+        if adv.transfer_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64
+            || adv.data_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64
+        {
+            return Err(ResourceError::TooLarge);
+        }
 
-        let total_parts = adv.num_parts as usize;
+        let total_parts = usize::try_from(adv.num_parts).map_err(|_| ResourceError::TooLarge)?;
+        if total_parts == 0 {
+            return Err(ResourceError::InvalidAdvertisement);
+        }
+        let max_parts = RESOURCE_AUTO_COMPRESS_MAX_SIZE
+            .div_ceil(sdu.max(1))
+            .saturating_add(RESOURCE_COLLISION_GUARD_SIZE);
+        if total_parts > max_parts {
+            return Err(ResourceError::TooLarge);
+        }
         let parts_vec: Vec<Option<Vec<u8>>> = vec![None; total_parts];
         let mut hashmap_vec: Vec<Option<[u8; RESOURCE_MAPHASH_LEN]>> = vec![None; total_parts];
 
@@ -620,6 +637,7 @@ impl ResourceReceiver {
 mod tests {
     use super::*;
     use crate::buffer::types::{Compressor, DecompressError, NoopCompressor};
+    use crate::resource::advertisement::ResourceAdvertisement;
     use crate::resource::sender::ResourceSender;
 
     fn identity_encrypt(data: &[u8]) -> Vec<u8> {
@@ -714,6 +732,82 @@ mod tests {
             receiver.max_decompressed_size,
             RESOURCE_AUTO_COMPRESS_MAX_SIZE
         );
+    }
+
+    #[test]
+    fn test_from_advertisement_rejects_huge_part_count() {
+        let adv = ResourceAdvertisement {
+            transfer_size: 1024,
+            data_size: 1024,
+            num_parts: u64::MAX,
+            resource_hash: vec![0x11; 32],
+            random_hash: vec![0x22; RESOURCE_RANDOM_HASH_SIZE],
+            original_hash: vec![0x33; 32],
+            hashmap: vec![0x44; RESOURCE_MAPHASH_LEN],
+            flags: AdvFlags {
+                encrypted: false,
+                compressed: false,
+                split: false,
+                is_request: false,
+                is_response: false,
+                has_metadata: false,
+            },
+            segment_index: 1,
+            total_segments: 1,
+            request_id: None,
+        };
+
+        let err = match ResourceReceiver::from_advertisement(
+            &adv.pack(0),
+            RESOURCE_SDU,
+            0.5,
+            1000.0,
+            None,
+            None,
+        ) {
+            Ok(_) => panic!("huge advertisement should be rejected"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, ResourceError::TooLarge);
+    }
+
+    #[test]
+    fn test_from_advertisement_rejects_oversized_transfer() {
+        let adv = ResourceAdvertisement {
+            transfer_size: RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64 + 1,
+            data_size: 1024,
+            num_parts: 1,
+            resource_hash: vec![0x11; 32],
+            random_hash: vec![0x22; RESOURCE_RANDOM_HASH_SIZE],
+            original_hash: vec![0x33; 32],
+            hashmap: vec![0x44; RESOURCE_MAPHASH_LEN],
+            flags: AdvFlags {
+                encrypted: false,
+                compressed: false,
+                split: false,
+                is_request: false,
+                is_response: false,
+                has_metadata: false,
+            },
+            segment_index: 1,
+            total_segments: 1,
+            request_id: None,
+        };
+
+        let err = match ResourceReceiver::from_advertisement(
+            &adv.pack(0),
+            RESOURCE_SDU,
+            0.5,
+            1000.0,
+            None,
+            None,
+        ) {
+            Ok(_) => panic!("oversized advertisement should be rejected"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, ResourceError::TooLarge);
     }
 
     #[test]

@@ -40,7 +40,7 @@ done
 if ! $SKIP_BUILD; then
   cargo build --release \
     --bin rns-server \
-    --features rns-hooks
+    --features rns-hooks-native
 fi
 
 rm -rf "${DIST_DIR:?}/${OUTPUT_NAME}"

@@ -18,10 +18,10 @@ use wasmtime::{Linker, Store};
 #[cfg(feature = "wasm")]
 const HOST_ABI_VERSION: i32 = rns_hooks_abi::ABI_VERSION;
 
-/// Central manager for WASM hook execution.
+/// Central manager for hook execution.
 ///
-/// Owns the wasmtime runtime and pre-configured linker. Programs are stored
-/// in `HookSlot`s (one per hook point); the manager provides execution.
+/// Owns any enabled backend runtime state. Programs are stored in `HookSlot`s
+/// (one per hook point); the manager provides execution.
 pub struct HookManager {
     #[cfg(feature = "wasm")]
     runtime: WasmRuntime,

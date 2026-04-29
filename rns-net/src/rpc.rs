@@ -2282,7 +2282,7 @@ fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
             hook_type: item
                 .get("type")
                 .and_then(|v| v.as_str())
-                .unwrap_or("wasm")
+                .unwrap_or(default_hook_type())
                 .to_string(),
             attach_point: item
                 .get("attach_point")
@@ -2307,6 +2307,21 @@ fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
         });
     }
     Ok(hooks)
+}
+
+fn default_hook_type() -> &'static str {
+    #[cfg(feature = "rns-hooks-native")]
+    {
+        return "native";
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    {
+        return "wasm";
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    {
+        "wasm"
+    }
 }
 
 /// Client-side authentication: answer the server's challenge.

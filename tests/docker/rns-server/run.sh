@@ -25,7 +25,7 @@ fi
 
 NO_TEARDOWN=false
 CLEAN_ONLY=false
-RNS_SERVER_FEATURES="rns-hooks"
+RNS_SERVER_FEATURES="rns-hooks-wasm"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-teardown) NO_TEARDOWN=true; shift ;;

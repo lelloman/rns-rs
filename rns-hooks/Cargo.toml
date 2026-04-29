@@ -1,6 +1,6 @@
 [package]
 name = "rns-hooks"
-description = "WASM hook system for the Reticulum Network Stack"
+description = "Programmable hook system for the Reticulum Network Stack"
 version = "0.1.5"
 edition.workspace = true
 license-file.workspace = true

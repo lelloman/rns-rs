@@ -389,7 +389,8 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xc4 => {
             ensure_len(data, 2)?;
             let len = data[1] as usize;
-            ensure_len(data, 2 + len)?;
+            let needed = 2usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
+            ensure_len(data, needed)?;
             Ok((Value::Bin(data[2..2 + len].to_vec()), 2 + len))
         }
 
@@ -397,7 +398,8 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xc5 => {
             ensure_len(data, 3)?;
             let len = u16::from_be_bytes([data[1], data[2]]) as usize;
-            ensure_len(data, 3 + len)?;
+            let needed = 3usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
+            ensure_len(data, needed)?;
             Ok((Value::Bin(data[3..3 + len].to_vec()), 3 + len))
         }
 
@@ -405,7 +407,8 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xc6 => {
             ensure_len(data, 5)?;
             let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
-            ensure_len(data, 5 + len)?;
+            let needed = 5usize.checked_add(len).ok_or(Error::UnexpectedEof)?;
+            ensure_len(data, needed)?;
             Ok((Value::Bin(data[5..5 + len].to_vec()), 5 + len))
         }
 
@@ -541,7 +544,8 @@ fn ensure_len(data: &[u8], needed: usize) -> Result<(), Error> {
 }
 
 fn unpack_str_bytes(data: &[u8], offset: usize, len: usize) -> Result<(Value, usize), Error> {
-    ensure_len(data, offset + len)?;
+    let needed = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
+    ensure_len(data, needed)?;
     let bytes = &data[offset..offset + len];
     let s = core::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
     Ok((Value::Str(String::from(s)), offset + len))
@@ -553,6 +557,9 @@ fn unpack_array_entries(
     count: usize,
     depth: usize,
 ) -> Result<(Value, usize), Error> {
+    if count > data.len().saturating_sub(start) {
+        return Err(Error::UnexpectedEof);
+    }
     let mut offset = start;
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
@@ -569,6 +576,11 @@ fn unpack_map_entries(
     count: usize,
     depth: usize,
 ) -> Result<(Value, usize), Error> {
+    if count.checked_mul(2).map_or(true, |minimum_items| {
+        minimum_items > data.len().saturating_sub(start)
+    }) {
+        return Err(Error::UnexpectedEof);
+    }
     let mut offset = start;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
@@ -801,6 +813,18 @@ mod tests {
         assert_eq!(unpack(&[]), Err(Error::UnexpectedEof));
         // bin8 with length but no data
         assert_eq!(unpack(&[0xc4, 0x05]), Err(Error::UnexpectedEof));
+    }
+
+    #[test]
+    fn test_declared_array_length_cannot_force_large_allocation() {
+        let data = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        assert_eq!(unpack(&data), Err(Error::UnexpectedEof));
+    }
+
+    #[test]
+    fn test_declared_map_length_cannot_force_large_allocation() {
+        let data = [0xdf, 0x7f, 0xff, 0xff, 0xff];
+        assert_eq!(unpack(&data), Err(Error::UnexpectedEof));
     }
 
     #[test]

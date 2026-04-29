@@ -165,10 +165,10 @@ USAGE:
 
 OPTIONS:
     -c, --config PATH        Path to config directory
-        --stats-db PATH      Path to stats SQLite database
+        --stats-db PATH      Path to stats SQLite database (WASM sidecar builds)
         --rnsd-bin PATH      Advanced override for rnsd executable
-        --sentineld-bin PATH Advanced override for rns-sentineld executable
-        --statsd-bin PATH    Advanced override for rns-statsd executable
+        --sentineld-bin PATH Advanced override for rns-sentineld executable (WASM sidecar builds)
+        --statsd-bin PATH    Advanced override for rns-statsd executable (WASM sidecar builds)
         --http-host HOST     Host for embedded control HTTP server
         --http-port PORT     Port for embedded control HTTP server
         --http-token TOKEN   Auth token for embedded control HTTP server

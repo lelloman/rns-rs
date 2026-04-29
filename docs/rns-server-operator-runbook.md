@@ -5,12 +5,13 @@
 `rns-server` is the default single-node product entrypoint for a supervised RNS
 node. It owns:
 
-- process lifecycle for `rnsd`, `rns-sentineld`, and `rns-statsd`
+- process lifecycle for `rnsd`
+- optional WASM-sidecar lifecycle for `rns-sentineld` and `rns-statsd`
 - persisted `rns-server.json` config
 - the embedded `rns-ctl` HTTP API and built-in UI
 - process readiness, recent lifecycle events, and durable process logs
 
-Deployment uses one binary. At runtime, `rns-server` self-spawns its child roles from the same executable via `/proc/self/exe`, with `current_exe()` fallback.
+Deployment uses one binary. At runtime, `rns-server` self-spawns its child roles from the same executable via `/proc/self/exe`, with `current_exe()` fallback. The default hook build uses native dynamic-library hooks; the WASM build keeps the stats and sentinel sidecars.
 
 ## Build And Package
 
@@ -28,16 +29,23 @@ For a direct local build without packaging:
 cargo build --release --bin rns-server
 ```
 
-If you want WASM hooks enabled in the node runtime:
-
-```bash
-cargo build --release --bin rns-server --features rns-hooks-wasm
-```
-
-If you want native dynamic-library hooks enabled without Wasmtime:
+If you want native dynamic-library hooks enabled in the node runtime:
 
 ```bash
 cargo build --release --bin rns-server --features rns-hooks-native
+```
+
+`rns-hooks` is a compatibility alias for the native backend:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks
+```
+
+If you need the legacy WASM sidecars:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --release --bin rns-server --features rns-hooks-wasm
 ```
 
 ## Files And Paths
@@ -45,15 +53,15 @@ cargo build --release --bin rns-server --features rns-hooks-native
 At runtime, `rns-server` resolves a config directory and uses it for:
 
 - `config`
-  The Reticulum runtime config consumed by `rnsd` and the sidecars.
+  The Reticulum runtime config consumed by `rnsd` and, in WASM builds, the sidecars.
 - `rns-server.json`
   Product config managed through the API/UI.
 - `logs/*.log`
   Durable stdout/stderr tails for supervised processes.
 - `*.ready`
-  Explicit readiness files written by sidecars.
+  Explicit readiness files written by WASM sidecars.
 - `stats.db`
-  Default SQLite path for `rns-statsd` unless overridden.
+  Default SQLite path for `rns-statsd` in WASM sidecar builds unless overridden.
 
 ## Startup
 
@@ -76,10 +84,10 @@ cargo build --release --bin rns-server
 ./target/release/rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 ```
 
-If you want hooks enabled:
+If you want native dynamic-library hooks enabled:
 
 ```bash
-cargo build --release --bin rns-server --features rns-hooks-wasm
+cargo build --release --bin rns-server --features rns-hooks-native
 ./target/release/rns-server start --config /path/to/node --http-host 127.0.0.1 --http-port 8080
 ```
 
@@ -178,9 +186,12 @@ The built-in UI is served from `/`.
 
 ## Self-Spawn Runtime
 
-By default, child processes are started by re-executing the running `rns-server` binary with hidden internal role flags. The normal deploy path does not require separate installed copies of:
+By default, child processes are started by re-executing the running `rns-server` binary with hidden internal role flags. The native hook build only manages:
 
 - `rnsd`
+
+The WASM sidecar build additionally manages:
+
 - `rns-sentineld`
 - `rns-statsd`
 
@@ -219,8 +230,8 @@ Use the UI or API first. Shell access should not be required for routine diagnos
 Durable log files live under the resolved config dir:
 
 - `logs/rnsd.log`
-- `logs/rns-sentineld.log`
-- `logs/rns-statsd.log`
+- `logs/rns-sentineld.log` in WASM sidecar builds
+- `logs/rns-statsd.log` in WASM sidecar builds
 
 ## Troubleshooting
 
@@ -234,7 +245,7 @@ If the node is up but not converged:
 Common cases:
 
 - Sidecar stuck in `waiting`
-  Check the corresponding `*.ready` file expectation and the process log for RPC/provider bridge wait messages.
+  In WASM sidecar builds, check the corresponding `*.ready` file expectation and the process log for RPC/provider bridge wait messages.
 - `control_plane_reload_required`
   Apply the saved config.
 - `control_plane_restart_required`

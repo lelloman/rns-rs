@@ -411,7 +411,7 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
     let hook_type = kvs
         .remove("type")
         .or_else(|| kvs.remove("backend"))
-        .unwrap_or_else(|| "wasm".into());
+        .unwrap_or_else(|| default_hook_type().into());
     let builtin_id = kvs
         .remove("builtin")
         .or_else(|| kvs.remove("builtin_id"))
@@ -434,6 +434,21 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
         attach_point,
         priority,
         enabled,
+    }
+}
+
+fn default_hook_type() -> &'static str {
+    #[cfg(feature = "rns-hooks-native")]
+    {
+        return "native";
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
+    {
+        return "wasm";
+    }
+    #[cfg(all(not(feature = "rns-hooks-native"), not(feature = "rns-hooks-wasm")))]
+    {
+        "wasm"
     }
 }
 
@@ -1514,7 +1529,7 @@ publish_blackhole = Yes
         assert_eq!(config.hooks.len(), 3);
         assert_eq!(config.hooks[0].name, "drop_tick");
         assert_eq!(config.hooks[0].path, "/tmp/drop_tick.wasm");
-        assert_eq!(config.hooks[0].hook_type, "wasm");
+        assert_eq!(config.hooks[0].hook_type, default_hook_type());
         assert_eq!(config.hooks[0].attach_point, "Tick");
         assert_eq!(config.hooks[0].priority, 10);
         assert!(config.hooks[0].enabled);

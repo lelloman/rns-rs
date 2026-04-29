@@ -47,7 +47,15 @@ def run_ssh(host: str, script: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect a VPS daily snapshot into SQLite.")
-    parser.add_argument("--host", default="vps-eu", help="SSH target")
+    parser.add_argument(
+        "--host",
+        default="vps-eu",
+        help="Report host key. Also used as the SSH target unless --ssh-target is set.",
+    )
+    parser.add_argument(
+        "--ssh-target",
+        help="SSH target to connect to. Defaults to --host; --host is still stored in the report.",
+    )
     parser.add_argument(
         "--db-path",
         default=str(DEFAULT_DB),
@@ -385,6 +393,7 @@ def classify(snapshot: dict[str, object]) -> str:
 
 def collect_snapshot(
     host: str,
+    ssh_target: str | None,
     config_dir: str,
     http_port: int,
     report_date_override: str | None,
@@ -394,6 +403,7 @@ def collect_snapshot(
     list[dict[str, object]],
     list[dict[str, object]],
 ]:
+    ssh_host = ssh_target or host
     quoted_config = shlex.quote(config_dir)
     basic_script = f"""
 set -euo pipefail
@@ -421,20 +431,20 @@ if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:37429'; then echo 'LISTENER
 if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:{http_port}'; then echo 'LISTENER_CONTROL=1'; else echo 'LISTENER_CONTROL=0'; fi
 echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {{count++}} END {{print count+0}}')"
 """
-    basic = parse_kv(run_ssh(host, basic_script))
-    status_text = run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
+    basic = parse_kv(run_ssh(ssh_host, basic_script))
+    status_text = run_ssh(ssh_host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
     status = parse_status(status_text)
     interface_payload = json.loads(
-        run_ssh(host, f"/usr/local/bin/rns-ctl --config {quoted_config} status -j")
+        run_ssh(ssh_host, f"/usr/local/bin/rns-ctl --config {quoted_config} status -j")
     )
     blacklist = json.loads(
         run_ssh(
-            host,
+            ssh_host,
             f"/usr/local/bin/rns-ctl --config {quoted_config} backbone blacklist list --json",
         )
     )
     process_payload = json.loads(
-        run_ssh(host, f"curl -fsS http://127.0.0.1:{http_port}/api/processes")
+        run_ssh(ssh_host, f"curl -fsS http://127.0.0.1:{http_port}/api/processes")
     )
     processes = {
         row["name"]: row
@@ -444,7 +454,7 @@ echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /
 
     journal_counts = parse_kv(
         run_ssh(
-            host,
+            ssh_host,
             r"""
 set -euo pipefail
 echo "PROVIDER_DROPPED_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'provider bridge dropped' || true)"
@@ -455,14 +465,14 @@ echo "IDLE_TIMEOUT_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pa
     )
     memstats = parse_memstats(
         run_ssh(
-            host,
+            ssh_host,
             r"journalctl -u rns-server --since '1 hour ago' --no-pager | grep 'MEMSTATS' | tail -n 12 || true",
         )
     )
 
     stats_db = f"{config_dir.rstrip('/')}/stats.db"
     ann_rows = run_ssh(
-        host,
+        ssh_host,
         f"""sqlite3 {shlex.quote(stats_db)} "
 SELECT COUNT(*) FROM seen_announces;
 SELECT datetime(MAX(seen_at_ms)/1000, 'unixepoch') FROM seen_announces;
@@ -472,7 +482,7 @@ SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-86
     ).splitlines()
 
     packet_lines = run_ssh(
-        host,
+        ssh_host,
         f"""sqlite3 {shlex.quote(stats_db)} "
 SELECT packet_type || '|' || direction || '|' ||
        COALESCE(datetime(MAX(updated_at_ms)/1000, 'unixepoch'), '')
@@ -725,7 +735,7 @@ def write_db(
 def main() -> int:
     args = parse_args()
     snapshot, memstats, packet_rows, interface_rows = collect_snapshot(
-        args.host, args.config_dir, args.http_port, args.date
+        args.host, args.ssh_target, args.config_dir, args.http_port, args.date
     )
     db_path = pathlib.Path(args.db_path)
     write_db(db_path, snapshot, memstats, packet_rows, interface_rows)

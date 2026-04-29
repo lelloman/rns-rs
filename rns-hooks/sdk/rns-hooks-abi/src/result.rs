@@ -1,4 +1,4 @@
-/// Verdict returned by a WASM hook program.
+/// Verdict returned by a hook program.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -31,9 +31,9 @@ pub const VERDICT_DROP: u32 = Verdict::Drop as u32;
 pub const VERDICT_MODIFY: u32 = Verdict::Modify as u32;
 pub const VERDICT_HALT: u32 = Verdict::Halt as u32;
 
-/// Result returned from a WASM hook invocation.
+/// Result returned from a hook invocation.
 ///
-/// Laid out as `#[repr(C)]` for direct reading from WASM linear memory.
+/// Laid out as `#[repr(C)]` for direct reading across hook ABI boundaries.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct HookResult {

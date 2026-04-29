@@ -272,7 +272,7 @@ impl ServerConfig {
                     self.server_config_file_path.display()
                 ),
                 "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
-                "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Explicit child binary paths remain available as advanced overrides.".into(),
+                "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Native hook builds manage rnsd; WASM sidecar builds also manage rns-sentineld and rns-statsd. Explicit child binary paths remain available as advanced overrides.".into(),
                 "Changing process launch settings restarts only the affected child processes. Embedded HTTP auth settings reload in place; bind host, port, and enablement changes still require restarting rns-server.".into(),
             ],
             fields: vec![
@@ -281,8 +281,9 @@ impl ServerConfig {
                     field_type: "string".into(),
                     required: false,
                     default_value: self.resolved_config_dir.join("stats.db").display().to_string(),
-                    description: "SQLite database path used by rns-statsd.".into(),
-                    effect: "Restarts rns-statsd when changed.".into(),
+                    description: "SQLite database path used by rns-statsd in WASM sidecar builds."
+                        .into(),
+                    effect: "Restarts rns-statsd when changed in WASM sidecar builds.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "rnsd_bin".into(),
@@ -297,16 +298,16 @@ impl ServerConfig {
                     field_type: "string".into(),
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
-                    description: "Advanced override for the sentinel sidecar executable; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-sentineld when changed.".into(),
+                    description: "Advanced override for the sentinel sidecar executable in WASM sidecar builds; unset uses self-spawn from rns-server.".into(),
+                    effect: "Restarts rns-sentineld when changed in WASM sidecar builds.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "statsd_bin".into(),
                     field_type: "string".into(),
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
-                    description: "Advanced override for the stats sidecar executable; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-statsd when changed.".into(),
+                    description: "Advanced override for the stats sidecar executable in WASM sidecar builds; unset uses self-spawn from rns-server.".into(),
+                    effect: "Restarts rns-statsd when changed in WASM sidecar builds.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "http.enabled".into(),

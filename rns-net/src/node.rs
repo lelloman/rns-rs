@@ -2229,7 +2229,7 @@ impl RnsNode {
         }
     }
 
-    /// Load a WASM hook at runtime.
+    /// Load an in-memory WASM hook at runtime.
     pub fn load_hook(
         &self,
         name: String,
@@ -2311,7 +2311,7 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
-    /// Reload a WASM hook at runtime (detach + recompile + reattach with same priority).
+    /// Reload an in-memory WASM hook at runtime (detach + recompile + reattach with same priority).
     pub fn reload_hook(
         &self,
         name: String,
@@ -2389,7 +2389,7 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
-    /// Update the priority of a loaded WASM hook at runtime.
+    /// Update the priority of a loaded hook at runtime.
     pub fn set_hook_priority(
         &self,
         name: String,
