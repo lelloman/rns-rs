@@ -6,11 +6,13 @@
 //!
 //! Matches Python `RNodeInterface.py` and `RNodeMultiInterface.py`.
 
+mod transport;
+
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use super::transport::Transport;
+use transport::Transport;
 
 use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 

@@ -13,7 +13,6 @@ pub mod local;
 #[cfg(feature = "iface-pipe")]
 pub mod pipe;
 pub mod registry;
-pub mod transport;
 #[cfg(feature = "iface-rnode")]
 pub mod rnode;
 #[cfg(feature = "iface-serial")]
