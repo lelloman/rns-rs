@@ -92,6 +92,10 @@ fn find_free_port() -> u16 {
     }
 }
 
+fn bind_test_http_listener() -> TcpListener {
+    TcpListener::bind(("127.0.0.1", 0)).expect("Failed to bind test HTTP listener")
+}
+
 /// Start a test server with no interfaces and auth disabled.
 fn start_test_server() -> TestServer {
     start_test_server_with_config(
@@ -131,7 +135,8 @@ fn start_test_server_with_config(
     mut cfg: CtlConfig,
     interfaces: Vec<InterfaceConfig>,
 ) -> TestServer {
-    let port = find_free_port();
+    let listener = bind_test_http_listener();
+    let port = listener.local_addr().unwrap().port();
     cfg.port = port;
     cfg.host = "127.0.0.1".into();
 
@@ -178,34 +183,19 @@ fn start_test_server_with_config(
     });
 
     let ctx2 = ctx.clone();
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
     let thread = thread::Builder::new()
         .name("test-server".into())
         .spawn(move || {
-            let _ = server::run_server(addr, ctx2);
+            server::run_server_with_listener(listener, ctx2).expect("test HTTP server failed");
         })
         .expect("Failed to spawn server thread");
-
-    // Wait for listener to be ready
-    wait_for_port(port);
 
     TestServer {
         ctx,
         port,
         _thread: thread,
     }
-}
-
-/// Poll until a TCP connection to the given port succeeds.
-fn wait_for_port(port: u16) {
-    for _ in 0..50 {
-        if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    panic!("Server did not start on port {} within 1s", port);
 }
 
 // ─── Raw HTTP Client Helpers ────────────────────────────────────────────────
@@ -1902,7 +1892,8 @@ mod tls_tests {
             rns_ctl::tls::load_tls_config(cert_path.to_str().unwrap(), key_path.to_str().unwrap())
                 .expect("Failed to load TLS config");
 
-        let port = find_free_port();
+        let listener = bind_test_http_listener();
+        let port = listener.local_addr().unwrap().port();
 
         let cfg = Arc::new(RwLock::new(CtlConfig {
             host: "127.0.0.1".into(),
@@ -1956,17 +1947,13 @@ mod tls_tests {
         });
 
         let ctx2 = ctx.clone();
-        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
         let handle = thread::Builder::new()
             .name("test-tls-server".into())
             .spawn(move || {
-                let _ = server::run_server(addr, ctx2);
+                server::run_server_with_listener(listener, ctx2).expect("test TLS server failed");
             })
             .expect("Failed to spawn TLS server thread");
-
-        // Wait for the port to accept TCP connections
-        wait_for_port(port);
 
         // Build a root cert store with our self-signed cert
         let mut root_store = rustls::RootCertStore::empty();
