@@ -1009,8 +1009,8 @@ mod tests {
     fn rnode_detect_over_pty() {
         // Test that the RNode decoder can parse detect responses from a PTY
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
-        let mut slave = unsafe { Transport::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::open_from_fd(master_fd) };
+        let mut slave = unsafe { Transport::open_from_fd(slave_fd) };
 
         // Write detect response to master
         mock_respond_detect(&mut master);
@@ -1061,8 +1061,8 @@ mod tests {
     #[test]
     fn rnode_configure_commands() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
-        let writer_file = unsafe { Transport::from_raw_fd(libc::dup(slave_fd)) };
+        let mut master = unsafe { Transport::open_from_fd(master_fd) };
+        let writer_file = unsafe { Transport::open_from_fd(libc::dup(slave_fd)) };
         let writer = Arc::new(Mutex::new(writer_file));
 
         let sub = RNodeSubConfig {
@@ -1108,8 +1108,8 @@ mod tests {
     #[test]
     fn rnode_data_roundtrip() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
-        let slave = unsafe { Transport::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::open_from_fd(master_fd) };
+        let slave = unsafe { Transport::open_from_fd(slave_fd) };
 
         // Write a data frame (subinterface 0) to master
         let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05];
@@ -1138,7 +1138,7 @@ mod tests {
     #[test]
     fn rnode_flow_control() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let writer_file = unsafe { Transport::from_raw_fd(slave_fd) };
+        let writer_file = unsafe { Transport::open_from_fd(slave_fd) };
         let shared_writer = Arc::new(Mutex::new(writer_file));
 
         let flow_state = Arc::new(Mutex::new(SubFlowState {
@@ -1176,8 +1176,8 @@ mod tests {
     #[test]
     fn rnode_sub_writer_format() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
-        let writer_file = unsafe { Transport::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::open_from_fd(master_fd) };
+        let writer_file = unsafe { Transport::open_from_fd(slave_fd) };
         let shared_writer = Arc::new(Mutex::new(writer_file));
 
         let flow_state = Arc::new(Mutex::new(SubFlowState {
@@ -1361,8 +1361,8 @@ mod tests {
         let slave1_path = slave_tty_path(slave1_fd);
         std::os::unix::fs::symlink(&slave1_path, &port_path).unwrap();
 
-        let mut master1 = unsafe { Transport::from_raw_fd(master1_fd) };
-        let slave1 = unsafe { Transport::from_raw_fd(slave1_fd) };
+        let mut master1 = unsafe { Transport::open_from_fd(master1_fd) };
+        let slave1 = unsafe { Transport::open_from_fd(slave1_fd) };
 
         let (tx, rx) = event::channel();
         let sub = RNodeSubConfig {
@@ -1427,8 +1427,8 @@ mod tests {
         std::fs::remove_file(&port_path).unwrap();
         std::os::unix::fs::symlink(&slave2_path, &port_path).unwrap();
 
-        let mut master2 = unsafe { Transport::from_raw_fd(master2_fd) };
-        let _slave2 = unsafe { Transport::from_raw_fd(slave2_fd) };
+        let mut master2 = unsafe { Transport::open_from_fd(master2_fd) };
+        let _slave2 = unsafe { Transport::open_from_fd(slave2_fd) };
 
         thread::sleep(Duration::from_secs(3));
         mock_respond_detect(&mut master2);
