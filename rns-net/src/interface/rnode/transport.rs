@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::os::unix::io::AsRawFd;
 
 use crate::serial::SerialConfig;
 use crate::serial::SerialPort;
@@ -62,6 +63,15 @@ impl Write for Transport {
         match self {
             Transport::Serial(f) => f.flush(),
             Transport::Tcp(s) => s.flush(),
+        }
+    }
+}
+
+impl AsRawFd for Transport {
+    fn as_raw_fd(&self) -> i32 {
+        match self {
+            Transport::Serial(f) => f.as_raw_fd(),
+            Transport::Tcp(s) => s.as_raw_fd(),
         }
     }
 }
