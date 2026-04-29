@@ -10,13 +10,14 @@ use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use super::transport::Transport;
 
 use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 
 use crate::event::{Event, EventSender};
 use crate::interface::{lock_or_recover, Writer};
 use crate::rnode_kiss;
-use crate::serial::{Parity, SerialConfig, SerialPort};
+use crate::serial::{Parity, SerialConfig};
 
 /// Validation limits matching Python RNodeInterface.
 pub const FREQ_MIN: u32 = 137_000_000;
@@ -67,7 +68,7 @@ pub struct RNodeConfig {
 #[derive(Debug, Clone)]
 pub struct RNodeRuntime {
     pub sub: RNodeSubConfig,
-    pub writer: Option<Arc<Mutex<std::fs::File>>>,
+    pub writer: Option<Arc<Mutex<Transport>>>,
 }
 
 impl RNodeRuntime {
@@ -194,7 +195,7 @@ pub fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
 /// Writer for a specific RNode subinterface.
 /// Wraps a shared serial writer with subinterface-specific data framing.
 struct RNodeSubWriter {
-    writer: Arc<Mutex<std::fs::File>>,
+    writer: Arc<Mutex<Transport>>,
     index: u8,
     flow_control: bool,
     flow_state: Arc<Mutex<SubFlowState>>,
@@ -206,7 +207,7 @@ struct SubFlowState {
 }
 
 fn make_sub_writer(
-    writer: Arc<Mutex<std::fs::File>>,
+    writer: Arc<Mutex<Transport>>,
     index: u8,
     flow_control: bool,
     flow_state: Arc<Mutex<SubFlowState>>,
@@ -264,10 +265,7 @@ pub fn start(
 
     let (reader_file, shared_writer) = if let Some(fd) = config.pre_opened_fd {
         // Pre-opened fd from USB bridge — dup for independent reader/writer handles
-        let port = SerialPort::from_raw_fd(fd);
-        let r = port.reader()?;
-        let w = port.writer()?;
-        std::mem::forget(port); // don't close the original fd — bridge owns it
+        let (r, w) = Transport::open_from_fd(fd)?;
         (r, Arc::new(Mutex::new(w)))
     } else {
         let serial_config = SerialConfig {
@@ -277,9 +275,7 @@ pub fn start(
             parity: Parity::None,
             stop_bits: 1,
         };
-        let port = SerialPort::open(&serial_config)?;
-        let r = port.reader()?;
-        let w = port.writer()?;
+        let (r, w) = Transport::open(&serial_config)?;
         (r, Arc::new(Mutex::new(w)))
     };
 
@@ -348,8 +344,8 @@ pub fn start(
 
 /// Reader loop: detect device, configure radios, then relay data frames.
 fn reader_loop(
-    mut reader: std::fs::File,
-    writer: Arc<Mutex<std::fs::File>>,
+    mut reader: Transport,
+    writer: Arc<Mutex<Transport>>,
     config: RNodeConfig,
     tx: EventSender,
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
@@ -445,8 +441,8 @@ fn reader_loop(
 }
 
 fn detect_and_configure(
-    reader: &mut std::fs::File,
-    writer: &Arc<Mutex<std::fs::File>>,
+    reader: &mut Transport,
+    writer: &Arc<Mutex<Transport>>,
     config: &RNodeConfig,
 ) -> io::Result<()> {
     let detect_cmd = rnode_kiss::detect_request();
@@ -543,7 +539,7 @@ fn signal_interface_down(tx: &EventSender, config: &RNodeConfig) {
 fn signal_interface_up(
     tx: &EventSender,
     config: &RNodeConfig,
-    writer: &Arc<Mutex<std::fs::File>>,
+    writer: &Arc<Mutex<Transport>>,
     flow_states: &[Arc<Mutex<SubFlowState>>],
     reconnected: bool,
 ) {
@@ -571,8 +567,8 @@ fn reset_flow_states(flow_states: &[Arc<Mutex<SubFlowState>>]) {
 
 fn reopen_connection(
     config: &RNodeConfig,
-    writer: &Arc<Mutex<std::fs::File>>,
-) -> io::Result<std::fs::File> {
+    writer: &Arc<Mutex<Transport>>,
+) -> io::Result<Transport> {
     let serial_config = SerialConfig {
         path: config.port.clone(),
         baud: config.speed,
@@ -580,16 +576,15 @@ fn reopen_connection(
         parity: Parity::None,
         stop_bits: 1,
     };
-    let port = SerialPort::open(&serial_config)?;
-    let reader = port.reader()?;
-    let new_writer = port.writer()?;
+
+    let (reader, new_writer) = Transport::open(&serial_config)?;
     *lock_or_recover(writer, "rnode shared writer") = new_writer;
     Ok(reader)
 }
 
 /// Configure a single subinterface on the RNode device.
 pub(crate) fn configure_subinterface(
-    writer: &Arc<Mutex<std::fs::File>>,
+    writer: &Arc<Mutex<Transport>>,
     index: u8,
     sub: &RNodeSubConfig,
     multi: bool,
@@ -715,7 +710,7 @@ pub(crate) fn configure_subinterface(
 /// Process flow control queue for a subinterface.
 fn process_flow_queue(
     flow_state: &Arc<Mutex<SubFlowState>>,
-    writer: &Arc<Mutex<std::fs::File>>,
+    writer: &Arc<Mutex<Transport>>,
     index: u8,
 ) {
     let mut state = lock_or_recover(flow_state, "rnode flow state");
@@ -938,7 +933,7 @@ mod tests {
     }
 
     /// Read all available bytes from an fd.
-    fn read_available(file: &mut std::fs::File) -> Vec<u8> {
+    fn read_available(file: &mut Transport) -> Vec<u8> {
         let mut all = Vec::new();
         let mut buf = [0u8; 4096];
         while poll_read(file.as_raw_fd(), 100) {
@@ -979,7 +974,7 @@ mod tests {
     }
 
     /// Mock RNode: respond to detect with DETECT_RESP, FW version, platform
-    fn mock_respond_detect(master: &mut std::fs::File) {
+    fn mock_respond_detect(master: &mut Transport) {
         // Respond: DETECT_RESP
         master
             .write_all(&rnode_kiss::rnode_command(
@@ -1012,8 +1007,8 @@ mod tests {
     fn rnode_detect_over_pty() {
         // Test that the RNode decoder can parse detect responses from a PTY
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        let mut slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
+        let mut slave = unsafe { Transport::from_raw_fd(slave_fd) };
 
         // Write detect response to master
         mock_respond_detect(&mut master);
@@ -1064,8 +1059,8 @@ mod tests {
     #[test]
     fn rnode_configure_commands() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        let writer_file = unsafe { std::fs::File::from_raw_fd(libc::dup(slave_fd)) };
+        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
+        let writer_file = unsafe { Transport::from_raw_fd(libc::dup(slave_fd)) };
         let writer = Arc::new(Mutex::new(writer_file));
 
         let sub = RNodeSubConfig {
@@ -1111,8 +1106,8 @@ mod tests {
     #[test]
     fn rnode_data_roundtrip() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
+        let slave = unsafe { Transport::from_raw_fd(slave_fd) };
 
         // Write a data frame (subinterface 0) to master
         let payload = vec![0x01, 0x02, 0x03, 0x04, 0x05];
@@ -1141,7 +1136,7 @@ mod tests {
     #[test]
     fn rnode_flow_control() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let writer_file = unsafe { Transport::from_raw_fd(slave_fd) };
         let shared_writer = Arc::new(Mutex::new(writer_file));
 
         let flow_state = Arc::new(Mutex::new(SubFlowState {
@@ -1179,8 +1174,8 @@ mod tests {
     #[test]
     fn rnode_sub_writer_format() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
-        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        let writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let mut master = unsafe { Transport::from_raw_fd(master_fd) };
+        let writer_file = unsafe { Transport::from_raw_fd(slave_fd) };
         let shared_writer = Arc::new(Mutex::new(writer_file));
 
         let flow_state = Arc::new(Mutex::new(SubFlowState {
@@ -1364,8 +1359,8 @@ mod tests {
         let slave1_path = slave_tty_path(slave1_fd);
         std::os::unix::fs::symlink(&slave1_path, &port_path).unwrap();
 
-        let mut master1 = unsafe { std::fs::File::from_raw_fd(master1_fd) };
-        let slave1 = unsafe { std::fs::File::from_raw_fd(slave1_fd) };
+        let mut master1 = unsafe { Transport::from_raw_fd(master1_fd) };
+        let slave1 = unsafe { Transport::from_raw_fd(slave1_fd) };
 
         let (tx, rx) = event::channel();
         let sub = RNodeSubConfig {
@@ -1430,8 +1425,8 @@ mod tests {
         std::fs::remove_file(&port_path).unwrap();
         std::os::unix::fs::symlink(&slave2_path, &port_path).unwrap();
 
-        let mut master2 = unsafe { std::fs::File::from_raw_fd(master2_fd) };
-        let _slave2 = unsafe { std::fs::File::from_raw_fd(slave2_fd) };
+        let mut master2 = unsafe { Transport::from_raw_fd(master2_fd) };
+        let _slave2 = unsafe { Transport::from_raw_fd(slave2_fd) };
 
         thread::sleep(Duration::from_secs(3));
         mock_respond_detect(&mut master2);
