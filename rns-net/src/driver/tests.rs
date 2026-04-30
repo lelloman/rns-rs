@@ -911,6 +911,61 @@ fn process_inbound_frame() {
 }
 
 #[test]
+fn queued_startup_events_register_dynamic_interface_before_frame() {
+    let (tx, rx) = event::channel();
+    let (cbs, announces, _, _, iface_ups, _) = MockCallbacks::new();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx.clone(),
+        Box::new(cbs),
+    );
+
+    let info = make_interface_info(100);
+    let (writer, _sent) = MockWriter::new();
+    let identity = Identity::new(&mut OsRng);
+    let announce_raw = build_announce_packet(&identity);
+
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(100),
+        data: announce_raw,
+    })
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let entry = driver.interfaces.get(&InterfaceId(100)).unwrap();
+    assert!(entry.online);
+    assert!(entry.dynamic);
+    assert_eq!(entry.stats.rx_packets, 1);
+    assert_eq!(iface_ups.lock().unwrap().as_slice(), &[InterfaceId(100)]);
+    assert_eq!(announces.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn dispatch_send() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

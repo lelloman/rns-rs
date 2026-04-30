@@ -1630,7 +1630,9 @@ impl RnsNode {
                 }
             })?;
 
-        // Spawn driver thread
+        // Spawn the driver after startup has registered local destinations and static interfaces.
+        // Interface readers can enqueue frames before this point; the bounded event queue preserves
+        // ordering and backpressures instead of dropping startup traffic.
         let driver_handle = thread::Builder::new()
             .name("rns-driver".into())
             .spawn(move || {
