@@ -245,6 +245,21 @@ impl LinkManager {
         })
     }
 
+    /// Set the best-known outbound route for a link.
+    pub fn set_link_route_hint(
+        &mut self,
+        link_id: &LinkId,
+        interface: rns_core::transport::types::InterfaceId,
+        transport_id: Option<[u8; 16]>,
+    ) -> bool {
+        let Some(link) = self.links.get_mut(link_id) else {
+            return false;
+        };
+        link.route_interface = Some(interface);
+        link.route_transport_id = transport_id;
+        true
+    }
+
     /// Register a destination that can accept incoming links.
     pub fn register_link_destination(
         &mut self,
@@ -853,6 +868,8 @@ impl LinkManager {
                 if let Some(transport_id) = packet.transport_id {
                     link.route_transport_id = Some(transport_id);
                 }
+            } else {
+                link.route_transport_id = None;
             }
 
             match packet.context {

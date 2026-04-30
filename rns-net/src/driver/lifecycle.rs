@@ -142,6 +142,64 @@ impl Driver {
         log::info!("rejecting {} while node is draining", op);
     }
 
+    fn interface_writer_queued_frames(&self) -> usize {
+        self.interfaces
+            .values()
+            .map(|entry| {
+                entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .map(|metrics| metrics.queued_frames())
+                    .unwrap_or(0)
+            })
+            .sum()
+    }
+
+    fn wait_for_writer_flush(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    pub(crate) fn graceful_shutdown(&mut self) {
+        if matches!(self.lifecycle_state, LifecycleState::Stopped) {
+            return;
+        }
+
+        self.lifecycle_state = LifecycleState::Stopping;
+        self.stop_listener_accepts();
+
+        let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
+        let resource_flush = resource_actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::SendPacket { .. }));
+        self.dispatch_link_actions(resource_actions);
+
+        let link_actions = self.link_manager.teardown_all_links();
+        let link_flush = link_actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::SendPacket { .. }));
+        self.dispatch_link_actions(link_actions);
+
+        let cleanup_actions = self.link_manager.tick(&mut self.rng);
+        let cleanup_flush = cleanup_actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::SendPacket { .. }));
+        self.dispatch_link_actions(cleanup_actions);
+        self.holepunch_manager.abort_all_sessions();
+
+        if resource_flush
+            || link_flush
+            || cleanup_flush
+            || self.interface_writer_queued_frames() > 0
+        {
+            self.wait_for_writer_flush(DEFAULT_LINK_TEARDOWN_FLUSH);
+        }
+
+        self.lifecycle_state = LifecycleState::Stopped;
+    }
+
     pub(crate) fn drain_error(&self, op: &str) -> String {
         format!("cannot {} while node is draining", op)
     }
@@ -151,17 +209,7 @@ impl Driver {
         let active_links = self.link_manager.link_count();
         let active_resource_transfers = self.link_manager.resource_transfer_count();
         let active_holepunch_sessions = self.holepunch_manager.session_count();
-        let interface_writer_queued_frames = self
-            .interfaces
-            .values()
-            .map(|entry| {
-                entry
-                    .async_writer_metrics
-                    .as_ref()
-                    .map(|metrics| metrics.queued_frames())
-                    .unwrap_or(0)
-            })
-            .sum();
+        let interface_writer_queued_frames = self.interface_writer_queued_frames();
         #[cfg(feature = "hooks")]
         let (provider_backlog_events, provider_consumer_queued_events) = self
             .provider_bridge

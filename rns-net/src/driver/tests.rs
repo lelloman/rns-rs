@@ -3,7 +3,7 @@ use crate::event;
 use crate::interface::Writer;
 use rns_core::announce::AnnounceData;
 use rns_core::constants;
-use rns_core::packet::PacketFlags;
+use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::transport::types::InterfaceInfo;
 use rns_crypto::identity::Identity;
 use std::io;
@@ -230,6 +230,91 @@ fn make_known_destination_state(
         last_used_at: None,
         retained: false,
     }
+}
+
+fn sent_contains_linkclose(sent: &[Vec<u8>], link_id: [u8; 16]) -> bool {
+    sent.iter().any(|raw| {
+        RawPacket::unpack(raw)
+            .map(|packet| {
+                packet.destination_hash == link_id && packet.context == constants::CONTEXT_LINKCLOSE
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn active_link_manager_with_route(
+    interface_id: InterfaceId,
+) -> (crate::link_manager::LinkManager, [u8; 16]) {
+    let mut rng = OsRng;
+    let mut initiator = crate::link_manager::LinkManager::new();
+    let mut responder = crate::link_manager::LinkManager::new();
+    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
+    let sig_pub_bytes = sig_prv.public_key().public_bytes();
+    let dest_hash = [0xDD; 16];
+    responder.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        crate::link_manager::ResourceStrategy::AcceptNone,
+    );
+
+    let (link_id, init_actions) = initiator.create_link(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        &mut rng,
+    );
+    let linkrequest_raw = init_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("link request send packet");
+    let linkrequest = RawPacket::unpack(&linkrequest_raw).unwrap();
+    let resp_actions = responder.handle_local_delivery(
+        linkrequest.destination_hash,
+        &linkrequest_raw,
+        linkrequest.packet_hash,
+        interface_id,
+        &mut rng,
+    );
+
+    let lrproof_raw = resp_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("lrproof send packet");
+    let lrproof = RawPacket::unpack(&lrproof_raw).unwrap();
+    let init_actions = initiator.handle_local_delivery(
+        lrproof.destination_hash,
+        &lrproof_raw,
+        lrproof.packet_hash,
+        interface_id,
+        &mut rng,
+    );
+
+    let lrrtt_raw = init_actions
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+            _ => None,
+        })
+        .expect("lrrtt send packet");
+    let lrrtt = RawPacket::unpack(&lrrtt_raw).unwrap();
+    responder.handle_local_delivery(
+        lrrtt.destination_hash,
+        &lrrtt_raw,
+        lrrtt.packet_hash,
+        interface_id,
+        &mut rng,
+    );
+
+    initiator.set_link_route_hint(&link_id, interface_id, None);
+    (initiator, link_id)
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -2808,8 +2893,8 @@ fn create_link_event() {
     let link_id = resp_rx.recv().unwrap();
     assert_ne!(link_id, [0u8; 16]);
 
-    // Link should be in pending state in the manager
-    assert_eq!(driver.link_manager.link_count(), 1);
+    // Shutdown should tear down and clean up pending links.
+    assert_eq!(driver.link_manager.link_count(), 0);
 
     // The LINKREQUEST packet won't be sent on the wire without a path
     // to the destination (DESTINATION_LINK requires a known path or
@@ -2875,7 +2960,7 @@ fn create_link_uses_known_destination_interface_without_path() {
 
     let link_id = resp_rx.recv().unwrap();
     assert_ne!(link_id, [0u8; 16]);
-    assert_eq!(driver.link_manager.link_count(), 1);
+    assert_eq!(driver.link_manager.link_count(), 0);
 
     let sent_packets = sent.lock().unwrap();
     let sent_packets2 = sent2.lock().unwrap();
@@ -2883,10 +2968,11 @@ fn create_link_uses_known_destination_interface_without_path() {
             sent_packets.is_empty(),
             "LINKREQUEST should not broadcast to unrelated interfaces when a known destination interface exists"
         );
-    assert_eq!(sent_packets2.len(), 1);
+    assert_eq!(sent_packets2.len(), 2);
     let flags = PacketFlags::unpack(sent_packets2[0][0] & 0x7F);
     assert_eq!(flags.packet_type, constants::PACKET_TYPE_LINKREQUEST);
     assert_eq!(extract_dest_hash(&sent_packets2[0]), dest_hash);
+    assert!(sent_contains_linkclose(&sent_packets2, link_id));
 }
 
 #[test]
@@ -2947,12 +3033,12 @@ fn create_link_ignores_sentinel_known_destination_interface() {
 
     let link_id = resp_rx.recv().unwrap();
     assert_ne!(link_id, [0u8; 16]);
-    assert_eq!(driver.link_manager.link_count(), 1);
+    assert_eq!(driver.link_manager.link_count(), 0);
 
     let sent_packets = sent.lock().unwrap();
     let sent_packets2 = sent2.lock().unwrap();
     assert!(
-        sent_packets.len() == 1 && sent_packets2.len() == 1,
+        sent_packets.len() == 2 && sent_packets2.len() == 2,
         "sentinel InterfaceId(0) must not suppress the default broadcast behavior"
     );
     let flags = PacketFlags::unpack(sent_packets[0][0] & 0x7F);
@@ -3019,7 +3105,7 @@ fn deliver_local_routes_to_link_manager() {
 }
 
 #[test]
-fn teardown_link_event() {
+fn shutdown_tears_down_pending_link() {
     let (tx, rx) = event::channel();
     let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();
     let mut driver = Driver::new(
@@ -3047,7 +3133,7 @@ fn teardown_link_event() {
     );
     let info = make_interface_info(1);
     driver.engine.register_interface(info);
-    let (writer, _sent) = MockWriter::new();
+    let (writer, sent) = MockWriter::new();
     driver
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
@@ -3060,24 +3146,63 @@ fn teardown_link_event() {
         response_tx: resp_tx,
     })
     .unwrap();
-    // Then tear it down
-    // We can't receive resp_rx yet since driver.run() hasn't started,
-    // but we know the link_id will be created. Send teardown after CreateLink.
-    // Actually, we need to get the link_id first. Let's use a two-phase approach.
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
     let link_id = resp_rx.recv().unwrap();
     assert_ne!(link_id, [0u8; 16]);
-    assert_eq!(driver.link_manager.link_count(), 1);
-
-    // Now restart with same driver (just use events directly since driver loop exited)
-    let teardown_actions = driver.link_manager.teardown_link(&link_id);
-    driver.dispatch_link_actions(teardown_actions);
-
-    // Callback should have been called
+    assert_eq!(driver.link_manager.link_count(), 0);
     assert_eq!(link_closed.lock().unwrap().len(), 1);
     assert_eq!(link_closed.lock().unwrap()[0], TypedLinkId(link_id));
+    assert!(sent_contains_linkclose(&sent.lock().unwrap(), link_id));
+}
+
+#[test]
+fn shutdown_tears_down_active_link() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx.clone(),
+        Box::new(cbs),
+    );
+    let info = make_interface_info(1);
+    driver.engine.register_interface(info);
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+    let (link_manager, link_id) = active_link_manager_with_route(InterfaceId(1));
+    driver.link_manager = link_manager;
+
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    assert_eq!(driver.link_manager.link_count(), 0);
+    assert_eq!(
+        link_closed.lock().unwrap().as_slice(),
+        &[TypedLinkId(link_id)]
+    );
+    assert!(sent_contains_linkclose(&sent.lock().unwrap(), link_id));
 }
 
 #[test]

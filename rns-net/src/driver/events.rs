@@ -734,6 +734,9 @@ impl Driver {
                         mtu,
                         &mut self.rng,
                     );
+                    if let Some(iface) = attached_interface {
+                        self.link_manager.set_link_route_hint(&link_id, iface, None);
+                    }
                     if next_hop_interface.is_none() {
                         if let Some(iface) = attached_interface {
                             for action in &mut link_actions {
@@ -1547,7 +1550,7 @@ impl Driver {
                     let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
                 Event::Shutdown => {
-                    self.lifecycle_state = LifecycleState::Stopped;
+                    self.graceful_shutdown();
                     break;
                 }
             }
