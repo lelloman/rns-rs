@@ -59,6 +59,10 @@ struct ManagedLink {
     incoming_resources: Vec<ResourceReceiver>,
     /// Active outgoing resource transfers.
     outgoing_resources: Vec<ResourceSender>,
+    /// Logical incoming split transfers, keyed by original resource hash.
+    incoming_splits: HashMap<[u8; 32], IncomingSplitTransfer>,
+    /// Logical outgoing split transfers, keyed by original resource hash.
+    outgoing_splits: HashMap<[u8; 32], OutgoingSplitTransfer>,
     /// Resource acceptance strategy.
     resource_strategy: ResourceStrategy,
     /// Interface this link's packets should be sent on when known.
@@ -68,6 +72,25 @@ struct ManagedLink {
     /// When present, outbound link packets can be rewritten to HEADER_2 using
     /// this transport ID to preserve multi-hop routing.
     route_transport_id: Option<[u8; 16]>,
+}
+
+struct IncomingSplitTransfer {
+    total_segments: u64,
+    completed_segments: u64,
+    current_segment_index: u64,
+    current_received_parts: usize,
+    current_total_parts: usize,
+    data: Vec<u8>,
+    metadata: Option<Vec<u8>>,
+    is_response: bool,
+}
+
+struct OutgoingSplitTransfer {
+    total_segments: u64,
+    completed_segments: u64,
+    current_segment_index: u64,
+    current_sent_parts: usize,
+    current_total_parts: usize,
 }
 
 /// A registered link destination that can accept incoming LINKREQUEST.
@@ -207,6 +230,58 @@ impl LinkManager {
         } else {
             constants::RESOURCE_SDU
         }
+    }
+
+    fn split_progress_parts(
+        segment_index: u64,
+        total_segments: u64,
+        current_done: usize,
+        current_total: usize,
+        sdu: usize,
+    ) -> (usize, usize) {
+        let max_parts_per_segment = constants::RESOURCE_MAX_EFFICIENT_SIZE.div_ceil(sdu.max(1));
+        let total = (total_segments as usize).saturating_mul(max_parts_per_segment);
+        let completed_segments = segment_index.saturating_sub(1) as usize;
+        let completed = completed_segments.saturating_mul(max_parts_per_segment);
+        let current = if current_total == 0 {
+            0
+        } else if current_total < max_parts_per_segment {
+            let scaled =
+                (current_done as f64) * (max_parts_per_segment as f64 / current_total as f64);
+            scaled.floor() as usize
+        } else {
+            current_done
+        };
+        (completed.saturating_add(current).min(total), total)
+    }
+
+    fn resource_hash_key(hash: &[u8]) -> Option<[u8; 32]> {
+        let mut key = [0u8; 32];
+        if hash.len() != key.len() {
+            return None;
+        }
+        key.copy_from_slice(hash);
+        Some(key)
+    }
+
+    fn incoming_split_progress(split: &IncomingSplitTransfer, sdu: usize) -> (usize, usize) {
+        Self::split_progress_parts(
+            split.current_segment_index,
+            split.total_segments,
+            split.current_received_parts,
+            split.current_total_parts,
+            sdu,
+        )
+    }
+
+    fn outgoing_split_progress(split: &OutgoingSplitTransfer, sdu: usize) -> (usize, usize) {
+        Self::split_progress_parts(
+            split.current_segment_index,
+            split.total_segments,
+            split.current_sent_parts,
+            split.current_total_parts,
+            sdu,
+        )
     }
 
     /// Create a new empty link manager.
@@ -369,6 +444,8 @@ impl LinkManager {
             dest_sig_pub_bytes: Some(*dest_sig_pub_bytes),
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
+            incoming_splits: HashMap::new(),
+            outgoing_splits: HashMap::new(),
             resource_strategy: ResourceStrategy::default(),
             route_interface: None,
             route_transport_id: None,
@@ -483,6 +560,8 @@ impl LinkManager {
             dest_sig_pub_bytes: None,
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
+            incoming_splits: HashMap::new(),
+            outgoing_splits: HashMap::new(),
             resource_strategy: ld.resource_strategy,
             route_interface: Some(receiving_interface),
             route_transport_id: if packet.flags.header_type == constants::HEADER_2 {
@@ -1192,7 +1271,7 @@ impl LinkManager {
                 plaintext,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_prf(&link_id, &plaintext));
+                actions.extend(self.handle_resource_prf(&link_id, &plaintext, rng));
             }
             LinkDataResult::ResourceIcl {
                 link_id,
@@ -1375,16 +1454,7 @@ impl LinkManager {
             return Vec::new();
         }
 
-        let link_rtt = link.engine.rtt().unwrap_or(1.0);
-        let resource_sdu = Self::resource_sdu_for_link(link);
         let now = time::now();
-
-        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
-        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-            link.engine
-                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
-                .unwrap_or_else(|_| plaintext.to_vec())
-        };
 
         // Match Python resource response format from Link.handle_request:
         // packed_response = msgpack([request_id, response_value])
@@ -1394,22 +1464,15 @@ impl LinkManager {
         let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
         let resource_payload = msgpack::pack(&response_array);
 
-        let sender = match ResourceSender::new(
+        let senders = match Self::build_resource_senders(
+            link,
             &resource_payload,
             None,
-            resource_sdu,
-            &encrypt_fn,
-            &Bzip2Compressor,
-            rng,
-            now,
             true, // auto_compress
             true, // is_response
             Some(request_id.to_vec()),
-            1,    // segment_index
-            1,    // total_segments
-            None, // original_hash
-            link_rtt,
-            6.0, // traffic_timeout_factor
+            rng,
+            now,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1418,9 +1481,7 @@ impl LinkManager {
             }
         };
 
-        let mut sender = sender;
-        let adv_actions = sender.advertise(now);
-        link.outgoing_resources.push(sender);
+        let adv_actions = Self::start_resource_senders(link, senders, now);
 
         let _ = link;
         self.process_resource_actions(link_id, adv_actions, rng)
@@ -1673,6 +1734,149 @@ impl LinkManager {
         }]
     }
 
+    fn build_resource_senders(
+        link: &ManagedLink,
+        data: &[u8],
+        metadata: Option<&[u8]>,
+        auto_compress: bool,
+        is_response: bool,
+        request_id: Option<Vec<u8>>,
+        rng: &mut dyn Rng,
+        now: f64,
+    ) -> Result<Vec<ResourceSender>, rns_core::resource::ResourceError> {
+        let link_rtt = link.engine.rtt().unwrap_or(1.0);
+        let resource_sdu = Self::resource_sdu_for_link(link);
+        let metadata_overhead = metadata.map(|m| 3 + m.len()).unwrap_or(0);
+        let logical_size = metadata_overhead + data.len();
+
+        if logical_size <= constants::RESOURCE_MAX_EFFICIENT_SIZE {
+            let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
+            let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
+                link.engine
+                    .encrypt(plaintext, &mut *enc_rng.borrow_mut())
+                    .unwrap_or_else(|_| plaintext.to_vec())
+            };
+            return ResourceSender::new(
+                data,
+                metadata,
+                resource_sdu,
+                &encrypt_fn,
+                &Bzip2Compressor,
+                rng,
+                now,
+                auto_compress,
+                is_response,
+                request_id,
+                1,
+                1,
+                None,
+                link_rtt,
+                6.0,
+            )
+            .map(|sender| vec![sender]);
+        }
+
+        if metadata_overhead > constants::RESOURCE_MAX_EFFICIENT_SIZE {
+            return Err(rns_core::resource::ResourceError::TooLarge);
+        }
+
+        let first_payload_len = core::cmp::min(
+            data.len(),
+            constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead,
+        );
+        let remaining = data.len().saturating_sub(first_payload_len);
+        let total_segments = 1 + remaining.div_ceil(constants::RESOURCE_MAX_EFFICIENT_SIZE) as u64;
+
+        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
+        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
+            link.engine
+                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
+                .unwrap_or_else(|_| plaintext.to_vec())
+        };
+
+        let mut senders = Vec::new();
+        let mut first = ResourceSender::new(
+            &data[..first_payload_len],
+            metadata,
+            resource_sdu,
+            &encrypt_fn,
+            &Bzip2Compressor,
+            rng,
+            now,
+            auto_compress,
+            is_response,
+            request_id.clone(),
+            1,
+            total_segments,
+            None,
+            link_rtt,
+            6.0,
+        )?;
+        first.data_size = logical_size;
+        let original_hash = first.original_hash;
+        let has_metadata = metadata.is_some();
+        senders.push(first);
+
+        let mut offset = first_payload_len;
+        let mut segment_index = 2;
+        while offset < data.len() {
+            let end = core::cmp::min(offset + constants::RESOURCE_MAX_EFFICIENT_SIZE, data.len());
+            let mut sender = ResourceSender::new(
+                &data[offset..end],
+                None,
+                resource_sdu,
+                &encrypt_fn,
+                &Bzip2Compressor,
+                rng,
+                now,
+                auto_compress,
+                is_response,
+                request_id.clone(),
+                segment_index,
+                total_segments,
+                Some(original_hash),
+                link_rtt,
+                6.0,
+            )?;
+            sender.data_size = logical_size;
+            sender.flags.has_metadata = has_metadata;
+            senders.push(sender);
+            segment_index += 1;
+            offset = end;
+        }
+
+        Ok(senders)
+    }
+
+    fn start_resource_senders(
+        link: &mut ManagedLink,
+        mut senders: Vec<ResourceSender>,
+        now: f64,
+    ) -> Vec<ResourceAction> {
+        if senders.is_empty() {
+            return Vec::new();
+        }
+
+        let mut first = senders.remove(0);
+        let adv_actions = first.advertise(now);
+
+        if first.total_segments > 1 {
+            let original_hash = first.original_hash;
+            let split = OutgoingSplitTransfer {
+                total_segments: first.total_segments,
+                completed_segments: 0,
+                current_segment_index: first.segment_index,
+                current_sent_parts: 0,
+                current_total_parts: first.total_parts(),
+            };
+            link.outgoing_splits.insert(original_hash, split);
+        }
+
+        link.outgoing_resources.push(first);
+        link.outgoing_resources.extend(senders);
+        adv_actions
+    }
+
     /// Handle resource advertisement (CONTEXT_RESOURCE_ADV).
     fn handle_resource_adv(
         &mut self,
@@ -1709,10 +1913,63 @@ impl LinkManager {
         let transfer_size = receiver.transfer_size;
         let has_metadata = receiver.has_metadata;
         let is_response = receiver.flags.is_response;
+        let is_split = receiver.flags.split;
+        let segment_index = receiver.segment_index;
+        let total_segments = receiver.total_segments;
+        let original_hash = match Self::resource_hash_key(&receiver.original_hash) {
+            Some(key) => key,
+            None => return Vec::new(),
+        };
+
+        if is_split && segment_index > 1 {
+            let should_accept = link
+                .incoming_splits
+                .get(&original_hash)
+                .is_some_and(|split| {
+                    split.completed_segments + 1 == segment_index
+                        && split.total_segments == total_segments
+                });
+
+            if !should_accept {
+                let reject_actions = {
+                    let mut r = receiver;
+                    r.reject()
+                };
+                let _ = link;
+                return self.process_resource_actions(link_id, reject_actions, rng);
+            }
+
+            let current_total_parts = receiver.total_parts;
+            link.incoming_resources.push(receiver);
+            let idx = link.incoming_resources.len() - 1;
+            if let Some(split) = link.incoming_splits.get_mut(&original_hash) {
+                split.current_segment_index = segment_index;
+                split.current_received_parts = 0;
+                split.current_total_parts = current_total_parts;
+            }
+            let resource_actions = link.incoming_resources[idx].accept(now);
+            let _ = link;
+            return self.process_resource_actions(link_id, resource_actions, rng);
+        }
 
         if is_response {
             // Response resources bypass the application acceptance strategy —
             // they are answers to pending requests, not independent resources.
+            if is_split {
+                link.incoming_splits.insert(
+                    original_hash,
+                    IncomingSplitTransfer {
+                        total_segments,
+                        completed_segments: 0,
+                        current_segment_index: segment_index,
+                        current_received_parts: 0,
+                        current_total_parts: receiver.total_parts,
+                        data: Vec::new(),
+                        metadata: None,
+                        is_response,
+                    },
+                );
+            }
             link.incoming_resources.push(receiver);
             let idx = link.incoming_resources.len() - 1;
             let resource_actions = link.incoming_resources[idx].accept(now);
@@ -1730,6 +1987,21 @@ impl LinkManager {
                 self.process_resource_actions(link_id, reject_actions, rng)
             }
             ResourceStrategy::AcceptAll => {
+                if is_split {
+                    link.incoming_splits.insert(
+                        original_hash,
+                        IncomingSplitTransfer {
+                            total_segments,
+                            completed_segments: 0,
+                            current_segment_index: segment_index,
+                            current_received_parts: 0,
+                            current_total_parts: receiver.total_parts,
+                            data: Vec::new(),
+                            metadata: None,
+                            is_response,
+                        },
+                    );
+                }
                 link.incoming_resources.push(receiver);
                 let idx = link.incoming_resources.len() - 1;
                 let resource_actions = link.incoming_resources[idx].accept(now);
@@ -1772,6 +2044,25 @@ impl LinkManager {
             None => return Vec::new(),
         };
 
+        if accept && link.incoming_resources[idx].flags.split {
+            if let Some(original_hash) =
+                Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
+            {
+                link.incoming_splits
+                    .entry(original_hash)
+                    .or_insert_with(|| IncomingSplitTransfer {
+                        total_segments: link.incoming_resources[idx].total_segments,
+                        completed_segments: 0,
+                        current_segment_index: link.incoming_resources[idx].segment_index,
+                        current_received_parts: 0,
+                        current_total_parts: link.incoming_resources[idx].total_parts,
+                        data: Vec::new(),
+                        metadata: None,
+                        is_response: link.incoming_resources[idx].flags.is_response,
+                    });
+            }
+        }
+
         let resource_actions = if accept {
             link.incoming_resources[idx].accept(now)
         } else {
@@ -1796,16 +2087,42 @@ impl LinkManager {
 
         let now = time::now();
         let mut all_actions = Vec::new();
+        let mut progress_update = None;
         for sender in &mut link.outgoing_resources {
+            if sender.flags.split && sender.status == rns_core::resource::ResourceStatus::Queued {
+                continue;
+            }
+            let before_sent = sender.sent_parts;
             let resource_actions = sender.handle_request(plaintext, now);
             if !resource_actions.is_empty() {
+                if sender.sent_parts != before_sent {
+                    if sender.flags.split {
+                        if let Some(split) = link.outgoing_splits.get_mut(&sender.original_hash) {
+                            split.current_segment_index = sender.segment_index;
+                            split.current_sent_parts = sender.sent_parts;
+                            split.current_total_parts = sender.total_parts();
+                            progress_update =
+                                Some(Self::outgoing_split_progress(split, sender.sdu));
+                        }
+                    } else {
+                        progress_update = Some((sender.sent_parts, sender.total_parts()));
+                    }
+                }
                 all_actions.extend(resource_actions);
                 break;
             }
         }
 
         let _ = link;
-        self.process_resource_actions(link_id, all_actions, rng)
+        let mut out = self.process_resource_actions(link_id, all_actions, rng);
+        if let Some((received, total)) = progress_update {
+            out.push(LinkManagerAction::ResourceProgress {
+                link_id: *link_id,
+                received,
+                total,
+            });
+        }
+        out
     }
 
     /// Handle resource HMU (CONTEXT_RESOURCE_HMU) — feed to receiver.
@@ -1847,28 +2164,110 @@ impl LinkManager {
         };
 
         let now = time::now();
+        let resource_sdu = Self::resource_sdu_for_link(link);
         let mut all_actions = Vec::new();
         let mut assemble_idx = None;
         let mut assembled_is_response = false;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
+            if receiver.status >= rns_core::resource::ResourceStatus::Complete {
+                continue;
+            }
             let resource_actions = receiver.receive_part(raw_data, now);
             if !resource_actions.is_empty() {
                 if receiver.received_count == receiver.total_parts {
                     assemble_idx = Some(idx);
                 }
-                all_actions.extend(resource_actions);
+                if receiver.flags.split {
+                    if let Some(key) = Self::resource_hash_key(&receiver.original_hash) {
+                        if let Some(split) = link.incoming_splits.get_mut(&key) {
+                            split.current_segment_index = receiver.segment_index;
+                            split.current_received_parts = receiver.received_count;
+                            split.current_total_parts = receiver.total_parts;
+                            let (received, total) =
+                                Self::incoming_split_progress(split, resource_sdu);
+                            for action in resource_actions {
+                                match action {
+                                    ResourceAction::ProgressUpdate { .. } => {
+                                        all_actions.push(ResourceAction::ProgressUpdate {
+                                            received,
+                                            total,
+                                        });
+                                    }
+                                    other => all_actions.push(other),
+                                }
+                            }
+                        } else {
+                            all_actions.extend(resource_actions);
+                        }
+                    } else {
+                        all_actions.extend(resource_actions);
+                    }
+                } else {
+                    all_actions.extend(resource_actions);
+                }
                 break;
             }
         }
 
         if let Some(idx) = assemble_idx {
+            let split_key = if link.incoming_resources[idx].flags.split {
+                Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
+            } else {
+                None
+            };
+            let split_segment_index = link.incoming_resources[idx].segment_index;
+            let split_segment_total = link.incoming_resources[idx].total_segments;
+            let split_segment_parts = link.incoming_resources[idx].total_parts;
+            let split_is_response = link.incoming_resources[idx].flags.is_response;
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 link.engine.decrypt(ciphertext).map_err(|_| ())
             };
-            let assemble_actions =
+            let mut assemble_actions =
                 link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
-            assembled_is_response = link.incoming_resources[idx].flags.is_response;
+            assembled_is_response = split_is_response;
+
+            if let Some(key) = split_key {
+                let mut converted_actions = Vec::new();
+                let mut segment_data = None;
+                let mut segment_metadata = None;
+                for action in assemble_actions {
+                    match action {
+                        ResourceAction::DataReceived { data, metadata } => {
+                            segment_data = Some(data);
+                            segment_metadata = metadata;
+                        }
+                        ResourceAction::Completed => {}
+                        other => converted_actions.push(other),
+                    }
+                }
+
+                if let Some(data) = segment_data {
+                    if let Some(split) = link.incoming_splits.get_mut(&key) {
+                        split.data.extend_from_slice(&data);
+                        if segment_metadata.is_some() {
+                            split.metadata = segment_metadata;
+                        }
+                        split.completed_segments = split_segment_index;
+                        split.current_segment_index = split_segment_index;
+                        split.current_received_parts = split_segment_parts;
+                        split.current_total_parts = split_segment_parts;
+                    }
+
+                    if split_segment_index == split_segment_total {
+                        if let Some(split) = link.incoming_splits.remove(&key) {
+                            assembled_is_response = split.is_response;
+                            converted_actions.push(ResourceAction::DataReceived {
+                                data: split.data,
+                                metadata: split.metadata,
+                            });
+                            converted_actions.push(ResourceAction::Completed);
+                        }
+                    }
+                }
+
+                assemble_actions = converted_actions;
+            }
             all_actions.extend(assemble_actions);
         }
 
@@ -1899,6 +2298,7 @@ impl LinkManager {
         &mut self,
         link_id: &LinkId,
         plaintext: &[u8],
+        rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
@@ -1907,9 +2307,33 @@ impl LinkManager {
 
         let now = time::now();
         let mut result_actions = Vec::new();
+        let mut completed_sender = None;
+        let mut failed_split = None;
+        let proof_hash = plaintext.get(..32);
         for sender in &mut link.outgoing_resources {
+            if proof_hash.is_some_and(|hash| hash != sender.resource_hash.as_slice()) {
+                continue;
+            }
             let resource_actions = sender.handle_proof(plaintext, now);
             if !resource_actions.is_empty() {
+                if resource_actions
+                    .iter()
+                    .any(|action| matches!(action, ResourceAction::Completed))
+                {
+                    completed_sender = Some((
+                        sender.original_hash,
+                        sender.segment_index,
+                        sender.total_segments,
+                        sender.total_parts(),
+                    ));
+                }
+                if sender.flags.split
+                    && resource_actions
+                        .iter()
+                        .any(|action| matches!(action, ResourceAction::Failed(_)))
+                {
+                    failed_split = Some(sender.original_hash);
+                }
                 result_actions.extend(resource_actions);
                 break;
             }
@@ -1917,12 +2341,43 @@ impl LinkManager {
 
         // Convert to LinkManagerActions
         let mut actions = Vec::new();
+        let mut advertise_next = None;
         for ra in result_actions {
             match ra {
                 ResourceAction::Completed => {
-                    actions.push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
+                    if let Some((original_hash, segment_index, total_segments, total_parts)) =
+                        completed_sender
+                    {
+                        if total_segments > 1 && segment_index < total_segments {
+                            if let Some(split) = link.outgoing_splits.get_mut(&original_hash) {
+                                split.completed_segments = segment_index;
+                                split.current_segment_index = segment_index;
+                                split.current_sent_parts = total_parts;
+                                split.current_total_parts = total_parts;
+                                if let Some(next) = link.outgoing_resources.iter_mut().find(|s| {
+                                    s.flags.split
+                                        && s.original_hash == original_hash
+                                        && s.segment_index == segment_index + 1
+                                }) {
+                                    split.current_segment_index = next.segment_index;
+                                    split.current_sent_parts = 0;
+                                    split.current_total_parts = next.total_parts();
+                                    advertise_next = Some(next.advertise(now));
+                                }
+                            }
+                        } else {
+                            link.outgoing_splits.remove(&original_hash);
+                            actions
+                                .push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
+                        }
+                    } else {
+                        actions.push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
+                    }
                 }
                 ResourceAction::Failed(e) => {
+                    if let Some(original_hash) = failed_split {
+                        link.outgoing_splits.remove(&original_hash);
+                    }
                     actions.push(LinkManagerAction::ResourceFailed {
                         link_id: *link_id,
                         error: format!("{}", e),
@@ -1935,6 +2390,11 @@ impl LinkManager {
         // Clean up completed/failed senders
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
+
+        let _ = link;
+        if let Some(next_actions) = advertise_next {
+            actions.extend(self.process_resource_actions(link_id, next_actions, rng));
+        }
 
         actions
     }
@@ -1960,6 +2420,7 @@ impl LinkManager {
         }
         link.incoming_resources
             .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
+        link.incoming_splits.clear();
         actions
     }
 
@@ -1984,6 +2445,7 @@ impl LinkManager {
         }
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
+        link.outgoing_splits.clear();
         actions
     }
 
@@ -2180,35 +2642,17 @@ impl LinkManager {
             return Vec::new();
         }
 
-        let link_rtt = link.engine.rtt().unwrap_or(1.0);
-        let resource_sdu = Self::resource_sdu_for_link(link);
         let now = time::now();
 
-        // Use RefCell for interior mutability since ResourceSender::new expects &dyn Fn (not FnMut)
-        // but link.engine.encrypt needs &mut dyn Rng
-        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
-        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-            link.engine
-                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
-                .unwrap_or_else(|_| plaintext.to_vec())
-        };
-
-        let sender = match ResourceSender::new(
+        let senders = match Self::build_resource_senders(
+            link,
             data,
             metadata,
-            resource_sdu,
-            &encrypt_fn,
-            &Bzip2Compressor,
-            rng,
-            now,
             auto_compress,
             false, // is_response
             None,  // request_id
-            1,     // segment_index
-            1,     // total_segments
-            None,  // original_hash
-            link_rtt,
-            6.0, // traffic_timeout_factor
+            rng,
+            now,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -2217,9 +2661,7 @@ impl LinkManager {
             }
         };
 
-        let mut sender = sender;
-        let adv_actions = sender.advertise(now);
-        link.outgoing_resources.push(sender);
+        let adv_actions = Self::start_resource_senders(link, senders, now);
 
         let _ = link;
         self.process_resource_actions(link_id, adv_actions, rng)
@@ -2370,6 +2812,16 @@ impl LinkManager {
                 .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
             link.incoming_resources
                 .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
+            let active_split_hashes: Vec<[u8; 32]> = link
+                .outgoing_resources
+                .iter()
+                .filter(|s| s.flags.split)
+                .map(|s| s.original_hash)
+                .collect();
+            link.outgoing_splits.retain(|original_hash, split| {
+                split.completed_segments < split.total_segments
+                    && active_split_hashes.contains(original_hash)
+            });
 
             let _ = link;
             all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
@@ -2436,7 +2888,20 @@ impl LinkManager {
     pub fn resource_transfer_count(&self) -> usize {
         self.links
             .values()
-            .map(|managed| managed.incoming_resources.len() + managed.outgoing_resources.len())
+            .map(|managed| {
+                managed
+                    .incoming_resources
+                    .iter()
+                    .filter(|resource| !resource.flags.split)
+                    .count()
+                    + managed.incoming_splits.len()
+                    + managed
+                        .outgoing_resources
+                        .iter()
+                        .filter(|resource| !resource.flags.split)
+                        .count()
+                    + managed.outgoing_splits.len()
+            })
             .sum()
     }
 
@@ -2465,6 +2930,8 @@ impl LinkManager {
                 .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
             link.incoming_resources
                 .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
+            link.outgoing_splits.clear();
+            link.incoming_splits.clear();
 
             let _ = link;
             all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
@@ -2512,7 +2979,21 @@ impl LinkManager {
     pub fn resource_entries(&self) -> Vec<crate::event::ResourceInfoEntry> {
         let mut entries = Vec::new();
         for (link_id, managed) in &self.links {
+            let resource_sdu = Self::resource_sdu_for_link(managed);
+            for split in managed.incoming_splits.values() {
+                let (received, total) = Self::incoming_split_progress(split, resource_sdu);
+                entries.push(crate::event::ResourceInfoEntry {
+                    link_id: *link_id,
+                    direction: "incoming".to_string(),
+                    total_parts: total,
+                    transferred_parts: received,
+                    complete: received >= total && total > 0,
+                });
+            }
             for recv in &managed.incoming_resources {
+                if recv.flags.split {
+                    continue;
+                }
                 let (received, total) = recv.progress();
                 entries.push(crate::event::ResourceInfoEntry {
                     link_id: *link_id,
@@ -2522,7 +3003,20 @@ impl LinkManager {
                     complete: received >= total && total > 0,
                 });
             }
+            for split in managed.outgoing_splits.values() {
+                let (sent, total) = Self::outgoing_split_progress(split, resource_sdu);
+                entries.push(crate::event::ResourceInfoEntry {
+                    link_id: *link_id,
+                    direction: "outgoing".to_string(),
+                    total_parts: total,
+                    transferred_parts: sent,
+                    complete: sent >= total && total > 0,
+                });
+            }
             for send in &managed.outgoing_resources {
+                if send.flags.split {
+                    continue;
+                }
                 let total = send.total_parts();
                 let sent = send.sent_parts;
                 entries.push(crate::event::ResourceInfoEntry {
@@ -3427,6 +3921,93 @@ mod tests {
         rns_core::resource::ResourceAdvertisement::unpack(&plaintext).unwrap()
     }
 
+    fn deterministic_bytes(len: usize) -> Vec<u8> {
+        let mut state = 0x1234_5678u32;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                (state >> 16) as u8
+            })
+            .collect()
+    }
+
+    fn drive_link_manager_packets(
+        init_mgr: &mut LinkManager,
+        resp_mgr: &mut LinkManager,
+        initial_actions: Vec<LinkManagerAction>,
+        initial_source: char,
+        rng: &mut dyn Rng,
+        max_rounds: usize,
+    ) -> (
+        Option<Vec<u8>>,
+        bool,
+        Vec<(char, usize, usize)>,
+        Vec<(char, String)>,
+        usize,
+    ) {
+        let mut pending: Vec<(char, LinkManagerAction)> = initial_actions
+            .into_iter()
+            .map(|a| (initial_source, a))
+            .collect();
+        let mut rounds = 0;
+        let mut received_data = None;
+        let mut sender_completed = false;
+        let mut progress = Vec::new();
+        let mut failures = Vec::new();
+
+        while !pending.is_empty() && rounds < max_rounds {
+            rounds += 1;
+            let mut next = Vec::new();
+            for (source, action) in pending.drain(..) {
+                let LinkManagerAction::SendPacket { raw, .. } = action else {
+                    continue;
+                };
+                let pkt = RawPacket::unpack(&raw).unwrap();
+                let target_actions = if source == 'i' {
+                    resp_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        rng,
+                    )
+                } else {
+                    init_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        rng,
+                    )
+                };
+                let target_source = if source == 'i' { 'r' } else { 'i' };
+                for action in &target_actions {
+                    match action {
+                        LinkManagerAction::ResourceReceived { data, .. } => {
+                            received_data = Some(data.clone());
+                        }
+                        LinkManagerAction::ResourceCompleted { .. } => {
+                            sender_completed = true;
+                        }
+                        LinkManagerAction::ResourceProgress {
+                            received, total, ..
+                        } => {
+                            progress.push((target_source, *received, *total));
+                        }
+                        LinkManagerAction::ResourceFailed { error, .. } => {
+                            failures.push((target_source, error.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+                next.extend(target_actions.into_iter().map(|a| (target_source, a)));
+            }
+            pending = next;
+        }
+
+        (received_data, sender_completed, progress, failures, rounds)
+    }
+
     #[test]
     fn test_send_resource_auto_compress_option_controls_adv_flag() {
         let data = vec![0x41; 2048];
@@ -3753,6 +4334,165 @@ mod tests {
             "Sender should get completion proof (rounds={})",
             rounds
         );
+    }
+
+    #[test]
+    fn test_split_resource_advertisement_and_progress_entries() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE + 1024);
+
+        let actions =
+            init_mgr.send_resource_with_auto_compress(&link_id, &data, None, false, &mut rng);
+        let adv = first_resource_advertisement(&init_mgr, &link_id, &actions);
+
+        assert!(adv.flags.split);
+        assert_eq!(adv.segment_index, 1);
+        assert_eq!(adv.total_segments, 2);
+        assert_eq!(adv.data_size, data.len() as u64);
+
+        let managed = init_mgr.links.get(&link_id).unwrap();
+        assert_eq!(managed.outgoing_splits.len(), 1);
+        assert_eq!(
+            managed
+                .outgoing_resources
+                .iter()
+                .filter(|sender| sender.flags.split)
+                .count(),
+            2
+        );
+
+        let entries = init_mgr.resource_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].direction, "outgoing");
+        assert!(entries[0].total_parts > managed.outgoing_resources[0].total_parts());
+        assert_eq!(entries[0].transferred_parts, 0);
+    }
+
+    #[test]
+    fn test_split_resource_full_transfer_and_monotonic_progress() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+
+        let original_data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE + 2048);
+        let initial_actions = init_mgr.send_resource_with_auto_compress(
+            &link_id,
+            &original_data,
+            None,
+            false,
+            &mut rng,
+        );
+
+        let (received_data, sender_completed, progress, failures, rounds) =
+            drive_link_manager_packets(
+                &mut init_mgr,
+                &mut resp_mgr,
+                initial_actions,
+                'i',
+                &mut rng,
+                10_000,
+            );
+
+        assert!(
+            received_data.as_ref().is_some_and(|data| data == &original_data),
+            "split transfer did not deliver payload in {rounds} rounds; sender_completed={sender_completed}; failures={failures:?}; last_progress={:?}; init_entries={:?}; resp_entries={:?}",
+            progress.last(),
+            init_mgr.resource_entries(),
+            resp_mgr.resource_entries()
+        );
+        assert!(
+            sender_completed,
+            "sender did not complete in {rounds} rounds"
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|(_, received, total)| received == total),
+            "expected final progress update"
+        );
+
+        let mut init_last = 0;
+        let mut resp_last = 0;
+        for (side, received, total) in progress {
+            assert!(received <= total);
+            match side {
+                'i' => {
+                    assert!(
+                        received >= init_last,
+                        "initiator progress regressed from {init_last} to {received}"
+                    );
+                    init_last = received;
+                }
+                'r' => {
+                    assert!(
+                        received >= resp_last,
+                        "responder progress regressed from {resp_last} to {received}"
+                    );
+                    resp_last = received;
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_resource_accept_app_queries_only_first_segment() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+
+        let original_data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE + 1024);
+        let adv_actions = init_mgr.send_resource_with_auto_compress(
+            &link_id,
+            &original_data,
+            None,
+            false,
+            &mut rng,
+        );
+        let adv_raw = extract_any_send_packet(&adv_actions);
+        let adv_pkt = RawPacket::unpack(&adv_raw).unwrap();
+        let query_actions = resp_mgr.handle_local_delivery(
+            adv_pkt.destination_hash,
+            &adv_raw,
+            adv_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let queries: Vec<_> = query_actions
+            .iter()
+            .filter_map(|action| match action {
+                LinkManagerAction::ResourceAcceptQuery { resource_hash, .. } => {
+                    Some(resource_hash.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(queries.len(), 1);
+
+        let accept_actions = resp_mgr.accept_resource(&link_id, &queries[0], true, &mut rng);
+        let (received_data, sender_completed, _progress, failures, rounds) =
+            drive_link_manager_packets(
+                &mut init_mgr,
+                &mut resp_mgr,
+                accept_actions,
+                'r',
+                &mut rng,
+                10_000,
+            );
+
+        assert!(
+            failures.is_empty(),
+            "split AcceptApp transfer failed: {failures:?}"
+        );
+        assert!(
+            received_data
+                .as_ref()
+                .is_some_and(|data| data == &original_data),
+            "split AcceptApp transfer did not deliver in {rounds} rounds"
+        );
+        assert!(sender_completed);
     }
 
     #[test]
