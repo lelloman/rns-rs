@@ -11,9 +11,9 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rns_core::constants;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
@@ -21,6 +21,11 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{ListenerControl, Writer};
+
+#[cfg(target_os = "android")]
+const CLIENT_SLEEP_PAUSE_TIMEOUT: Duration = Duration::from_secs(12);
+#[cfg(target_os = "android")]
+const PHY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Configuration for a Local server (shared instance).
 #[derive(Debug, Clone)]
@@ -65,12 +70,111 @@ impl Default for LocalClientConfig {
 /// HDLC writer over a TCP or Unix stream.
 struct LocalWriter {
     stream: TcpStream,
+    sleep_hold: Option<ClientSleepHold>,
 }
 
 impl Writer for LocalWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        if self
+            .sleep_hold
+            .as_ref()
+            .is_some_and(ClientSleepHold::should_drop_outbound)
+        {
+            log::debug!("TX paused for LocalInterface client, dropping outbound packet");
+            return Ok(());
+        }
         self.stream.write_all(&hdlc::frame(data))
     }
+}
+
+#[derive(Clone)]
+struct ClientSleepHold {
+    timeout: Duration,
+    deadline: Arc<Mutex<Instant>>,
+}
+
+impl ClientSleepHold {
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    fn new(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            deadline: Arc::new(Mutex::new(Instant::now() + timeout)),
+        }
+    }
+
+    fn refresh(&self) {
+        *lock_or_recover(&self.deadline) = Instant::now() + self.timeout;
+    }
+
+    fn should_drop_outbound(&self) -> bool {
+        Instant::now() > *lock_or_recover(&self.deadline)
+    }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn android_client_sleep_hold() -> Option<ClientSleepHold> {
+    #[cfg(target_os = "android")]
+    {
+        Some(ClientSleepHold::new(CLIENT_SLEEP_PAUSE_TIMEOUT))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn spawn_physical_keepalive_loop(
+    mut writer: Box<dyn Writer>,
+    interface_id: InterfaceId,
+    interface_name: String,
+    interval: Duration,
+) {
+    thread::Builder::new()
+        .name(format!("local-phy-keepalive-{}", interface_id.0))
+        .spawn(move || loop {
+            thread::sleep(interval);
+            if let Err(err) = writer.send_frame(&[]) {
+                log::debug!(
+                    "[{}:{}] LocalInterface physical keepalive stopped: {}",
+                    interface_name,
+                    interface_id.0,
+                    err
+                );
+                return;
+            }
+        })
+        .ok();
+}
+
+fn maybe_spawn_local_client_phy_keepalive(
+    stream: &LocalClientStream,
+    interface_id: InterfaceId,
+    interface_name: &str,
+) -> io::Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        let writer = local_client_stream_writer(stream)?;
+        spawn_physical_keepalive_loop(
+            writer,
+            interface_id,
+            interface_name.to_string(),
+            PHY_KEEPALIVE_INTERVAL,
+        );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (stream, interface_id, interface_name);
+    }
+
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -223,9 +327,11 @@ fn unix_server_loop(
             }
         };
 
+        let sleep_hold = android_client_sleep_hold();
         let info = make_local_interface_info(client_id);
         let writer: Box<dyn Writer> = Box::new(UnixLocalWriter {
             stream: writer_stream,
+            sleep_hold: sleep_hold.clone(),
         });
 
         if tx
@@ -239,7 +345,7 @@ fn unix_server_loop(
         thread::Builder::new()
             .name(format!("local-unix-reader-{}", client_id.0))
             .spawn(move || {
-                unix_reader_loop(stream, client_id, client_tx);
+                unix_reader_loop(stream, client_id, client_tx, sleep_hold);
             })
             .ok();
     }
@@ -248,18 +354,32 @@ fn unix_server_loop(
 #[cfg(target_os = "linux")]
 struct UnixLocalWriter {
     stream: std::os::unix::net::UnixStream,
+    sleep_hold: Option<ClientSleepHold>,
 }
 
 #[cfg(target_os = "linux")]
 impl Writer for UnixLocalWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         use std::io::Write;
+        if self
+            .sleep_hold
+            .as_ref()
+            .is_some_and(ClientSleepHold::should_drop_outbound)
+        {
+            log::debug!("TX paused for LocalInterface client, dropping outbound packet");
+            return Ok(());
+        }
         self.stream.write_all(&hdlc::frame(data))
     }
 }
 
 #[cfg(target_os = "linux")]
-fn unix_reader_loop(mut stream: std::os::unix::net::UnixStream, id: InterfaceId, tx: EventSender) {
+fn unix_reader_loop(
+    mut stream: std::os::unix::net::UnixStream,
+    id: InterfaceId,
+    tx: EventSender,
+    sleep_hold: Option<ClientSleepHold>,
+) {
     use std::io::Read;
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
@@ -271,6 +391,9 @@ fn unix_reader_loop(mut stream: std::os::unix::net::UnixStream, id: InterfaceId,
                 return;
             }
             Ok(n) => {
+                if let Some(ref sleep_hold) = sleep_hold {
+                    sleep_hold.refresh();
+                }
                 for frame in decoder.feed(&buf[..n]) {
                     if tx
                         .send(Event::Frame {
@@ -301,9 +424,11 @@ fn spawn_local_client_handler(stream: TcpStream, client_id: InterfaceId, tx: Eve
         }
     };
 
+    let sleep_hold = android_client_sleep_hold();
     let info = make_local_interface_info(client_id);
     let writer: Box<dyn Writer> = Box::new(LocalWriter {
         stream: writer_stream,
+        sleep_hold: sleep_hold.clone(),
     });
 
     if tx
@@ -316,12 +441,17 @@ fn spawn_local_client_handler(stream: TcpStream, client_id: InterfaceId, tx: Eve
     thread::Builder::new()
         .name(format!("local-reader-{}", client_id.0))
         .spawn(move || {
-            tcp_reader_loop(stream, client_id, tx);
+            tcp_reader_loop(stream, client_id, tx, sleep_hold);
         })
         .ok();
 }
 
-fn tcp_reader_loop(mut stream: TcpStream, id: InterfaceId, tx: EventSender) {
+fn tcp_reader_loop(
+    mut stream: TcpStream,
+    id: InterfaceId,
+    tx: EventSender,
+    sleep_hold: Option<ClientSleepHold>,
+) {
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
 
@@ -333,6 +463,9 @@ fn tcp_reader_loop(mut stream: TcpStream, id: InterfaceId, tx: EventSender) {
                 return;
             }
             Ok(n) => {
+                if let Some(ref sleep_hold) = sleep_hold {
+                    sleep_hold.refresh();
+                }
                 for frame in decoder.feed(&buf[..n]) {
                     if tx
                         .send(Event::Frame {
@@ -398,9 +531,11 @@ impl LocalClientStream {
         match self {
             LocalClientStream::Unix(stream) => Ok(Box::new(UnixLocalWriter {
                 stream: stream.try_clone()?,
+                sleep_hold: None,
             })),
             LocalClientStream::Tcp(stream) => Ok(Box::new(LocalWriter {
                 stream: stream.try_clone()?,
+                sleep_hold: None,
             })),
         }
     }
@@ -413,6 +548,7 @@ type LocalClientStream = TcpStream;
 fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
     Ok(Box::new(LocalWriter {
         stream: stream.try_clone()?,
+        sleep_hold: None,
     }))
 }
 
@@ -466,6 +602,11 @@ fn reconnect_local_client(config: &LocalClientConfig, tx: &EventSender) -> Local
         match try_connect_local_client(config) {
             Ok(stream) => match local_client_stream_writer(&stream) {
                 Ok(writer) => {
+                    let _ = maybe_spawn_local_client_phy_keepalive(
+                        &stream,
+                        config.interface_id,
+                        &config.name,
+                    );
                     let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(writer), None));
                     return stream;
                 }
@@ -527,6 +668,7 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
     let id = config.interface_id;
     let stream = try_connect_local_client(&config)?;
     let writer = local_client_stream_writer(&stream)?;
+    maybe_spawn_local_client_phy_keepalive(&stream, id, &config.name)?;
 
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
@@ -846,6 +988,121 @@ mod tests {
             Event::Frame { data, .. } => assert_eq!(data, payload2),
             other => panic!("expected Frame, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn sleep_hold_drops_outbound_after_timeout_and_refresh_restores() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+
+        let sleep_hold = ClientSleepHold::new(Duration::from_millis(30));
+        let mut writer = LocalWriter {
+            stream: server_stream,
+            sleep_hold: Some(sleep_hold.clone()),
+        };
+
+        writer.send_frame(b"live").unwrap();
+        let mut buf = [0u8; 16];
+        let n = client.read(&mut buf).unwrap();
+        assert!(n > 0);
+
+        thread::sleep(Duration::from_millis(50));
+        writer.send_frame(b"drop").unwrap();
+        let err = client.read(&mut buf).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "paused writer should not emit bytes, got {err:?}"
+        );
+
+        sleep_hold.refresh();
+        writer.send_frame(b"again").unwrap();
+        let n = client.read(&mut buf).unwrap();
+        assert!(n > 0);
+    }
+
+    #[test]
+    fn tcp_reader_refreshes_sleep_hold_on_inbound_data() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let writer_stream = server_stream.try_clone().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+
+        let sleep_hold = ClientSleepHold::new(Duration::from_millis(30));
+        let reader_sleep_hold = sleep_hold.clone();
+        let (tx, rx) = crate::event::channel();
+        thread::spawn(move || {
+            tcp_reader_loop(server_stream, InterfaceId(98), tx, Some(reader_sleep_hold));
+        });
+
+        let mut writer = LocalWriter {
+            stream: writer_stream,
+            sleep_hold: Some(sleep_hold),
+        };
+
+        thread::sleep(Duration::from_millis(50));
+        writer.send_frame(b"drop").unwrap();
+        let mut buf = [0u8; 32];
+        let err = client.read(&mut buf).unwrap_err();
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            "paused writer should not emit bytes, got {err:?}"
+        );
+
+        let inbound = vec![0x42; constants::HEADER_MINSIZE];
+        client.write_all(&hdlc::frame(&inbound)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::Frame { interface_id, data } => {
+                assert_eq!(interface_id, InterfaceId(98));
+                assert_eq!(data, inbound);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+
+        writer.send_frame(b"again").unwrap();
+        let n = client.read(&mut buf).unwrap();
+        assert!(n > 0);
+    }
+
+    #[test]
+    fn physical_keepalive_loop_sends_empty_hdlc_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        let writer: Box<dyn Writer> = Box::new(LocalWriter {
+            stream: server_stream,
+            sleep_hold: None,
+        });
+        spawn_physical_keepalive_loop(
+            writer,
+            InterfaceId(99),
+            "test-local".into(),
+            Duration::from_millis(10),
+        );
+
+        let mut buf = [0u8; 2];
+        client.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, [0x7E, 0x7E]);
     }
 
     #[test]
