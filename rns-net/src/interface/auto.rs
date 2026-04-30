@@ -84,6 +84,12 @@ pub const REVERSE_PEERING_MULTIPLIER: f64 = 3.25;
 /// Interfaces always ignored.
 pub const ALL_IGNORE_IFS: &[&str] = &["lo0"];
 
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+const ANDROID_IGNORE_IFS: &[&str] = &[
+    "dummy0", "lo", "tun0", "rmnet0", "rmnet1", "rmnet2", "rmnet3", "rmnet4", "rmnet5", "rmnet6",
+    "rmnet7",
+];
+
 // ── Configuration ──────────────────────────────────────────────────────────
 
 /// Configuration for an AutoInterface.
@@ -205,11 +211,47 @@ pub struct LocalInterface {
     pub index: u32,
 }
 
+#[cfg(target_os = "android")]
+fn platform_ignored_interfaces() -> &'static [&'static str] {
+    ANDROID_IGNORE_IFS
+}
+
+#[cfg(not(target_os = "android"))]
+fn platform_ignored_interfaces() -> &'static [&'static str] {
+    &[]
+}
+
+fn should_adopt_interface_name(
+    name: &str,
+    allowed: &[String],
+    ignored: &[String],
+    platform_ignored: &[&str],
+) -> bool {
+    let is_allowed = allowed.iter().any(|a| a == name);
+    let is_system_ignored = ALL_IGNORE_IFS.iter().any(|&ig| ig == name)
+        || platform_ignored.iter().any(|&ig| ig == name);
+
+    if is_system_ignored && !is_allowed {
+        return false;
+    }
+
+    if ignored.iter().any(|ig| ig == name) {
+        return false;
+    }
+
+    if !allowed.is_empty() && !is_allowed {
+        return false;
+    }
+
+    true
+}
+
 /// Enumerate network interfaces that have IPv6 link-local addresses (fe80::/10).
 ///
 /// Uses `libc::getifaddrs()`. Filters by allowed/ignored interface lists.
 pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
     let mut result = Vec::new();
+    let platform_ignored = platform_ignored_interfaces();
 
     unsafe {
         let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -238,20 +280,7 @@ pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<Local
                 Err(_) => continue,
             };
 
-            // Check global ignore list
-            if ALL_IGNORE_IFS.iter().any(|&ig| ig == name) {
-                if !allowed.iter().any(|a| a == &name) {
-                    continue;
-                }
-            }
-
-            // Check ignored interfaces
-            if ignored.iter().any(|ig| ig == &name) {
-                continue;
-            }
-
-            // Check allowed interfaces (if non-empty, only allow those)
-            if !allowed.is_empty() && !allowed.iter().any(|a| a == &name) {
+            if !should_adopt_interface_name(&name, allowed, ignored, platform_ignored) {
                 continue;
             }
 
@@ -1361,6 +1390,73 @@ mod tests {
         // Only allow an interface that doesn't exist
         let interfaces = enumerate_interfaces(&["nonexistent_if_12345".to_string()], &[]);
         assert!(interfaces.is_empty());
+    }
+
+    #[test]
+    fn filter_skips_android_system_interfaces() {
+        let allowed = Vec::new();
+        let ignored = Vec::new();
+
+        for name in ["dummy0", "lo", "tun0", "rmnet0", "rmnet7"] {
+            assert!(
+                !should_adopt_interface_name(name, &allowed, &ignored, ANDROID_IGNORE_IFS),
+                "{name} should be skipped by Android AutoInterface defaults"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_does_not_skip_rmnet8_by_android_defaults() {
+        assert!(should_adopt_interface_name(
+            "rmnet8",
+            &[],
+            &[],
+            ANDROID_IGNORE_IFS
+        ));
+    }
+
+    #[test]
+    fn filter_allowed_overrides_system_ignored_interface() {
+        assert!(should_adopt_interface_name(
+            "rmnet0",
+            &["rmnet0".to_string()],
+            &[],
+            ANDROID_IGNORE_IFS
+        ));
+
+        assert!(should_adopt_interface_name(
+            "lo0",
+            &["lo0".to_string()],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn filter_ignored_wins_over_allowed_interface() {
+        assert!(!should_adopt_interface_name(
+            "rmnet0",
+            &["rmnet0".to_string()],
+            &["rmnet0".to_string()],
+            ANDROID_IGNORE_IFS
+        ));
+    }
+
+    #[test]
+    fn filter_allowed_list_excludes_unlisted_interfaces() {
+        assert!(!should_adopt_interface_name(
+            "wlan0",
+            &["eth0".to_string()],
+            &[],
+            ANDROID_IGNORE_IFS
+        ));
+
+        assert!(should_adopt_interface_name(
+            "wlan0",
+            &["wlan0".to_string()],
+            &[],
+            ANDROID_IGNORE_IFS
+        ));
     }
 
     // ── Config defaults ──────────────────────────────────────────────
