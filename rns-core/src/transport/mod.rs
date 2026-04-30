@@ -1225,6 +1225,7 @@ impl TransportEngine {
             public_key: ctx.validated.public_key,
             name_hash: ctx.validated.name_hash,
             random_hash: ctx.validated.random_hash,
+            ratchet: ctx.validated.ratchet,
             app_data: ctx.validated.app_data,
             hops: ctx.packet.hops,
             receiving_interface: ctx.iface,

@@ -542,6 +542,7 @@ impl Driver {
                     identity_hash,
                     public_key,
                     name_hash,
+                    ratchet,
                     app_data,
                     hops,
                     receiving_interface,
@@ -624,6 +625,23 @@ impl Driver {
                             }
                         }
                         // Still cache the identity and notify callbacks
+                    }
+
+                    if let (Some(store), Some(ratchet)) = (&self.ratchet_store, ratchet) {
+                        let entry = crate::storage::RatchetEntry {
+                            ratchet,
+                            received_at: time::now(),
+                        };
+                        if let Err(err) = store.remember(destination_hash, entry) {
+                            log::warn!(
+                                "failed to persist ratchet for {:02x}{:02x}{:02x}{:02x}..: {}",
+                                destination_hash[0],
+                                destination_hash[1],
+                                destination_hash[2],
+                                destination_hash[3],
+                                err
+                            );
+                        }
                     }
 
                     // Cache the announced identity

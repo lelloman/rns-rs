@@ -73,6 +73,8 @@ fn main() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],

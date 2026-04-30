@@ -6,6 +6,7 @@ use rns_core::constants;
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::transport::types::InterfaceInfo;
 use rns_crypto::identity::Identity;
+use std::collections::HashSet;
 use std::io;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -217,6 +218,64 @@ fn make_announced_identity(
         received_at,
         receiving_interface,
     }
+}
+
+#[derive(Default)]
+struct TestRatchetStore {
+    remembered: Mutex<Vec<([u8; 16], crate::storage::RatchetEntry)>>,
+}
+
+impl crate::storage::RatchetStore for TestRatchetStore {
+    fn remember(&self, dest_hash: [u8; 16], entry: crate::storage::RatchetEntry) -> io::Result<()> {
+        self.remembered.lock().unwrap().push((dest_hash, entry));
+        Ok(())
+    }
+
+    fn current(
+        &self,
+        _dest_hash: &[u8; 16],
+        _now: f64,
+        _expiry_secs: f64,
+    ) -> io::Result<Option<crate::storage::RatchetEntry>> {
+        Ok(None)
+    }
+
+    fn cleanup(
+        &self,
+        _known_destinations: &HashSet<[u8; 16]>,
+        _now: f64,
+        _expiry_secs: f64,
+    ) -> io::Result<crate::storage::RatchetCleanupStats> {
+        Ok(Default::default())
+    }
+}
+
+#[test]
+fn dispatch_announce_received_persists_ratchet() {
+    let mut driver = new_test_driver();
+    let store = Arc::new(TestRatchetStore::default());
+    driver.ratchet_store = Some(store.clone());
+    let dest_hash = [0x44; 16];
+    let ratchet = [0x55; 32];
+
+    driver.dispatch_all(vec![
+        rns_core::transport::types::TransportAction::AnnounceReceived {
+            destination_hash: dest_hash,
+            identity_hash: [0x66; 16],
+            public_key: [0x77; 64],
+            name_hash: [0x88; 10],
+            random_hash: [0x99; 10],
+            ratchet: Some(ratchet),
+            app_data: None,
+            hops: 1,
+            receiving_interface: InterfaceId(1),
+        },
+    ]);
+
+    let remembered = store.remembered.lock().unwrap();
+    assert_eq!(remembered.len(), 1);
+    assert_eq!(remembered[0].0, dest_hash);
+    assert_eq!(remembered[0].1.ratchet, ratchet);
 }
 
 fn make_known_destination_state(

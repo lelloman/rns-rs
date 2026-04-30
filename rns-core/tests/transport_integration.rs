@@ -639,6 +639,60 @@ fn test_full_announce_pipeline_from_python() {
     );
 }
 
+#[test]
+fn test_announce_action_includes_validated_ratchet() {
+    let mut identity_rng = FixedRng::new(&[0x12; 32]);
+    let identity = Identity::new(&mut identity_rng);
+    let identity_hash = *identity.hash();
+    let name_hash = rns_core::destination::name_hash("test", &["ratchet"]);
+    let dest_hash =
+        rns_core::destination::destination_hash("test", &["ratchet"], Some(&identity_hash));
+    let random_hash = [0x34; 10];
+    let ratchet = [0x56; 32];
+    let (announce_data, has_ratchet) = AnnounceData::pack(
+        &identity,
+        &dest_hash,
+        &name_hash,
+        &random_hash,
+        Some(&ratchet),
+        None,
+    )
+    .unwrap();
+    assert!(has_ratchet);
+
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_SET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_ANNOUNCE,
+    };
+    let packet = RawPacket::pack(
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
+    )
+    .unwrap();
+
+    let mut harness = TestHarness::new(false);
+    harness.add_interface(1, constants::MODE_FULL);
+    let actions = harness.inbound(&packet.raw, InterfaceId(1));
+
+    assert!(actions.iter().any(|action| {
+        matches!(
+            action,
+            TransportAction::AnnounceReceived {
+                destination_hash,
+                ratchet: Some(action_ratchet),
+                ..
+            } if *destination_hash == dest_hash && *action_ratchet == ratchet
+        )
+    }));
+}
+
 // =============================================================================
 // Integration: Announce → Path → Retransmit → Heard back → Cleared
 // =============================================================================

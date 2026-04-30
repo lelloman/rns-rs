@@ -2,6 +2,7 @@
 //!
 //! Wires together the driver, interfaces, and timer thread.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -411,6 +412,10 @@ pub struct NodeConfig {
     pub rpc_port: u16,
     /// Cache directory for announce cache. If None, announce caching is disabled.
     pub cache_dir: Option<std::path::PathBuf>,
+    /// Store for received ratchets. If None, received ratchets are not persisted or used.
+    pub ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
+    /// TTL for received ratchets.
+    pub ratchet_expiry: Duration,
     /// Remote management configuration.
     pub management: crate::management::ManagementConfig,
     /// Port to run the STUN probe server on (for facilitator nodes).
@@ -486,6 +491,8 @@ impl Default for NodeConfig {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -565,6 +572,8 @@ pub struct RnsNode {
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
+    ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
+    ratchet_expiry: Duration,
 }
 
 impl RnsNode {
@@ -577,6 +586,8 @@ impl RnsNode {
         let config_dir = storage::resolve_config_dir(config_path);
         let paths = storage::ensure_storage_dirs(&config_dir)?;
         let known_destinations_path = paths.storage.join("known_destinations");
+        let ratchet_store: Arc<dyn storage::RatchetStore> =
+            Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone()));
 
         // Parse config file
         let config_file = config_dir.join("config");
@@ -772,6 +783,31 @@ impl RnsNode {
             _ => rns_core::holepunch::ProbeProtocol::Rnsp,
         };
 
+        let known_destinations = match storage::load_known_destinations(&known_destinations_path) {
+            Ok(destinations) => destinations,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Default::default(),
+            Err(err) => {
+                log::warn!("failed to load known destinations: {}", err);
+                Default::default()
+            }
+        };
+        let known_destination_hashes: HashSet<[u8; 16]> =
+            known_destinations.keys().copied().collect();
+        match ratchet_store.cleanup(
+            &known_destination_hashes,
+            time::now(),
+            rns_config.reticulum.ratchet_expiry as f64,
+        ) {
+            Ok(stats) if stats.processed > 0 => log::debug!(
+                "Processed {} ratchets, not in use {}, removed {}",
+                stats.processed,
+                stats.not_known,
+                stats.removed
+            ),
+            Ok(_) => {}
+            Err(err) => log::warn!("failed to clean ratchets: {}", err),
+        }
+
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             identity: Some(identity),
@@ -780,6 +816,8 @@ impl RnsNode {
             shared_instance_port: rns_config.reticulum.shared_instance_port,
             rpc_port: rns_config.reticulum.instance_control_port,
             cache_dir: Some(paths.cache),
+            ratchet_store: Some(Arc::clone(&ratchet_store)),
+            ratchet_expiry: Duration::from_secs(rns_config.reticulum.ratchet_expiry),
             management: crate::management::ManagementConfig {
                 enable_remote_management: rns_config.reticulum.enable_remote_management,
                 remote_management_allowed: mgmt_allowed,
@@ -866,25 +904,23 @@ impl RnsNode {
         )?;
 
         node.known_destinations_path = Some(known_destinations_path.clone());
-        if let Ok(known_destinations) = storage::load_known_destinations(&known_destinations_path) {
-            for (dest_hash, known) in known_destinations {
-                let _ = node.query(QueryRequest::RestoreKnownDestination(
-                    crate::event::KnownDestinationEntry {
-                        dest_hash,
-                        identity_hash: known.identity_hash,
-                        public_key: known.public_key,
-                        app_data: known.app_data,
-                        hops: known.hops,
-                        received_at: known.received_at,
-                        receiving_interface: rns_core::transport::types::InterfaceId(
-                            known.receiving_interface,
-                        ),
-                        was_used: known.was_used,
-                        last_used_at: known.last_used_at,
-                        retained: known.retained,
-                    },
-                ));
-            }
+        for (dest_hash, known) in known_destinations {
+            let _ = node.query(QueryRequest::RestoreKnownDestination(
+                crate::event::KnownDestinationEntry {
+                    dest_hash,
+                    identity_hash: known.identity_hash,
+                    public_key: known.public_key,
+                    app_data: known.app_data,
+                    hops: known.hops,
+                    received_at: known.received_at,
+                    receiving_interface: rns_core::transport::types::InterfaceId(
+                        known.receiving_interface,
+                    ),
+                    was_used: known.was_used,
+                    last_used_at: known.last_used_at,
+                    retained: known.retained,
+                },
+            ));
         }
 
         Ok(node)
@@ -947,6 +983,7 @@ impl RnsNode {
         driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
+        driver.ratchet_store = config.ratchet_store.clone();
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
@@ -1648,6 +1685,8 @@ impl RnsNode {
             tick_interval_ms,
             probe_server,
             known_destinations_path: None,
+            ratchet_store: config.ratchet_store,
+            ratchet_expiry: config.ratchet_expiry,
         })
     }
 
@@ -2039,11 +2078,7 @@ impl RnsNode {
         use rns_core::types::DestinationType;
 
         let payload = match dest.dest_type {
-            DestinationType::Single => {
-                let pub_key = dest.public_key.ok_or(SendError)?;
-                let remote_id = rns_crypto::identity::Identity::from_public_key(&pub_key);
-                remote_id.encrypt(data, &mut OsRng).map_err(|_| SendError)?
-            }
+            DestinationType::Single => self.encrypt_single_payload(dest, data)?,
             DestinationType::Plain => data.to_vec(),
             DestinationType::Group => dest.encrypt(data).map_err(|_| SendError)?,
         };
@@ -2077,6 +2112,34 @@ impl RnsNode {
             .map_err(|_| SendError)?;
 
         Ok(packet_hash)
+    }
+
+    fn encrypt_single_payload(
+        &self,
+        dest: &crate::destination::Destination,
+        data: &[u8],
+    ) -> Result<Vec<u8>, SendError> {
+        let pub_key = dest.public_key.ok_or(SendError)?;
+        let remote_id = rns_crypto::identity::Identity::from_public_key(&pub_key);
+        let ratchet = self.ratchet_store.as_ref().and_then(|store| {
+            match store.current(&dest.hash.0, time::now(), self.ratchet_expiry.as_secs_f64()) {
+                Ok(entry) => entry.map(|entry| entry.ratchet),
+                Err(err) => {
+                    log::warn!(
+                        "failed to load ratchet for {:02x}{:02x}{:02x}{:02x}..: {}",
+                        dest.hash.0[0],
+                        dest.hash.0[1],
+                        dest.hash.0[2],
+                        dest.hash.0[3],
+                        err
+                    );
+                    None
+                }
+            }
+        });
+        remote_id
+            .encrypt_with_ratchet(data, ratchet.as_ref(), &mut OsRng)
+            .map_err(|_| SendError)
     }
 
     /// Register a destination with the transport engine and set its proof strategy.
@@ -2436,6 +2499,8 @@ impl RnsNode {
             tick_interval_ms,
             probe_server: None,
             known_destinations_path: None,
+            ratchet_store: None,
+            ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
         }
     }
 
@@ -2487,6 +2552,7 @@ impl RnsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::RatchetStore;
     use std::fs;
     use tempfile::tempdir;
 
@@ -2502,6 +2568,142 @@ mod tests {
             _: rns_core::types::PacketHash,
         ) {
         }
+    }
+
+    struct TestNodeRatchetStore {
+        entry: storage::RatchetEntry,
+        current_calls: std::sync::Mutex<Vec<[u8; 16]>>,
+    }
+
+    impl storage::RatchetStore for TestNodeRatchetStore {
+        fn remember(&self, _dest_hash: [u8; 16], _entry: storage::RatchetEntry) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn current(
+            &self,
+            dest_hash: &[u8; 16],
+            _now: f64,
+            _expiry_secs: f64,
+        ) -> io::Result<Option<storage::RatchetEntry>> {
+            self.current_calls.lock().unwrap().push(*dest_hash);
+            Ok(Some(self.entry))
+        }
+
+        fn cleanup(
+            &self,
+            _known_destinations: &HashSet<[u8; 16]>,
+            _now: f64,
+            _expiry_secs: f64,
+        ) -> io::Result<storage::RatchetCleanupStats> {
+            Ok(Default::default())
+        }
+    }
+
+    #[test]
+    fn send_packet_checks_ratchet_store_for_single_destinations() {
+        let store = Arc::new(TestNodeRatchetStore {
+            entry: storage::RatchetEntry {
+                ratchet: [0x55; 32],
+                received_at: time::now(),
+            },
+            current_calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let ratchet_store: Arc<dyn storage::RatchetStore> = store.clone();
+        let node = RnsNode::start(
+            NodeConfig {
+                ratchet_store: Some(ratchet_store),
+                ..Default::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        let mut rng = OsRng;
+        let remote_identity = Identity::new(&mut rng);
+        let public_key = remote_identity.get_public_key().unwrap();
+        let announced = crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash([0x22; 16]),
+            identity_hash: rns_core::types::IdentityHash(*remote_identity.hash()),
+            public_key,
+            app_data: None,
+            hops: 1,
+            received_at: time::now(),
+            receiving_interface: rns_core::transport::types::InterfaceId(0),
+        };
+        let dest = crate::destination::Destination::single_out("test", &["ratchet"], &announced);
+
+        node.send_packet(&dest, b"hello").unwrap();
+        assert_eq!(
+            store.current_calls.lock().unwrap().as_slice(),
+            &[dest.hash.0]
+        );
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn single_payload_uses_stored_ratchet_key_material() {
+        let ratchet_prv = rns_crypto::x25519::X25519PrivateKey::from_bytes(&[0x42; 32]);
+        let ratchet_pub = ratchet_prv.public_key().public_bytes();
+        let store = Arc::new(TestNodeRatchetStore {
+            entry: storage::RatchetEntry {
+                ratchet: ratchet_pub,
+                received_at: time::now(),
+            },
+            current_calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let ratchet_store: Arc<dyn storage::RatchetStore> = store.clone();
+        let (tx, _rx) = crate::event::channel();
+        let node = RnsNode {
+            tx,
+            driver_handle: None,
+            verify_handle: None,
+            verify_shutdown: Arc::new(AtomicBool::new(false)),
+            rpc_server: None,
+            tick_interval_ms: Arc::new(AtomicU64::new(1000)),
+            probe_server: None,
+            known_destinations_path: None,
+            ratchet_store: Some(ratchet_store),
+            ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+        };
+
+        let mut rng = OsRng;
+        let remote_identity = Identity::new(&mut rng);
+        let public_key = remote_identity.get_public_key().unwrap();
+        let announced = crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash([0x33; 16]),
+            identity_hash: rns_core::types::IdentityHash(*remote_identity.hash()),
+            public_key,
+            app_data: None,
+            hops: 1,
+            received_at: time::now(),
+            receiving_interface: rns_core::transport::types::InterfaceId(0),
+        };
+        let dest = crate::destination::Destination::single_out("test", &["ratchet"], &announced);
+        let payload = node
+            .encrypt_single_payload(&dest, b"ratchet message")
+            .unwrap();
+
+        assert_eq!(
+            store.current_calls.lock().unwrap().as_slice(),
+            &[dest.hash.0]
+        );
+        assert!(remote_identity.decrypt(&payload).is_err());
+
+        let peer_pub_bytes: [u8; 32] = payload[..32].try_into().unwrap();
+        let peer_pub = rns_crypto::x25519::X25519PublicKey::from_bytes(&peer_pub_bytes);
+        let shared_key = ratchet_prv.exchange(&peer_pub);
+        let derived_key = rns_crypto::hkdf::hkdf(
+            rns_crypto::identity::DERIVED_KEY_LENGTH,
+            &shared_key,
+            Some(remote_identity.hash()),
+            None,
+        )
+        .unwrap();
+        let token = rns_crypto::token::Token::new(&derived_key).unwrap();
+        let plaintext = token.decrypt(&payload[32..]).unwrap();
+        assert_eq!(plaintext, b"ratchet message");
     }
 
     #[test]
@@ -2591,6 +2793,8 @@ mod tests {
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -2687,6 +2891,115 @@ mod tests {
     }
 
     #[test]
+    fn from_config_cleans_persistent_ratchets_after_loading_known_destinations() {
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
+        }
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("config"),
+            "[reticulum]\nenable_transport = False\nshare_instance = False\nratchet_expiry = 300\n",
+        )
+        .unwrap();
+        let paths = storage::ensure_storage_dirs(dir.path()).unwrap();
+        let known_live = [0x01; 16];
+        let known_expired = [0x02; 16];
+        let unknown = [0x03; 16];
+        let known_corrupt = [0x04; 16];
+        let now = time::now();
+
+        let identity = Identity::new(&mut OsRng);
+        let known = std::collections::HashMap::from([
+            (
+                known_live,
+                storage::KnownDestination {
+                    identity_hash: *identity.hash(),
+                    public_key: identity.get_public_key().unwrap(),
+                    app_data: None,
+                    hops: 1,
+                    received_at: now,
+                    receiving_interface: 0,
+                    was_used: false,
+                    last_used_at: None,
+                    retained: false,
+                },
+            ),
+            (
+                known_expired,
+                storage::KnownDestination {
+                    identity_hash: *identity.hash(),
+                    public_key: identity.get_public_key().unwrap(),
+                    app_data: None,
+                    hops: 1,
+                    received_at: now,
+                    receiving_interface: 0,
+                    was_used: false,
+                    last_used_at: None,
+                    retained: false,
+                },
+            ),
+            (
+                known_corrupt,
+                storage::KnownDestination {
+                    identity_hash: *identity.hash(),
+                    public_key: identity.get_public_key().unwrap(),
+                    app_data: None,
+                    hops: 1,
+                    received_at: now,
+                    receiving_interface: 0,
+                    was_used: false,
+                    last_used_at: None,
+                    retained: false,
+                },
+            ),
+        ]);
+        storage::save_known_destinations(&known, &paths.storage.join("known_destinations"))
+            .unwrap();
+
+        let store = storage::FsRatchetStore::new(paths.ratchets.clone());
+        store
+            .remember(
+                known_live,
+                storage::RatchetEntry {
+                    ratchet: [0x11; 32],
+                    received_at: now,
+                },
+            )
+            .unwrap();
+        store
+            .remember(
+                known_expired,
+                storage::RatchetEntry {
+                    ratchet: [0x22; 32],
+                    received_at: now - 1000.0,
+                },
+            )
+            .unwrap();
+        store
+            .remember(
+                unknown,
+                storage::RatchetEntry {
+                    ratchet: [0x33; 32],
+                    received_at: now,
+                },
+            )
+            .unwrap();
+        fs::write(paths.ratchets.join(hex(&known_corrupt)), b"not msgpack").unwrap();
+        fs::write(paths.ratchets.join("0102.out"), b"temp").unwrap();
+
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+
+        assert!(paths.ratchets.join(hex(&known_live)).exists());
+        assert!(!paths.ratchets.join(hex(&known_expired)).exists());
+        assert!(!paths.ratchets.join(hex(&unknown)).exists());
+        assert!(!paths.ratchets.join(hex(&known_corrupt)).exists());
+        assert!(!paths.ratchets.join("0102.out").exists());
+
+        node.shutdown();
+    }
+
+    #[test]
     fn start_with_identity() {
         let identity = Identity::new(&mut OsRng);
         let hash = *identity.hash();
@@ -2701,6 +3014,8 @@ mod tests {
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -2757,6 +3072,8 @@ mod tests {
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3292,6 +3609,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3357,6 +3676,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3418,6 +3739,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3476,6 +3799,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3574,6 +3899,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3640,6 +3967,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3704,6 +4033,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3779,6 +4110,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],
@@ -3846,6 +4179,8 @@ enable_transport = False
                 shared_instance_port: 37428,
                 rpc_port: 0,
                 cache_dir: None,
+                ratchet_store: None,
+                ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
                 management: Default::default(),
                 probe_port: None,
                 probe_addrs: vec![],

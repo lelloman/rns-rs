@@ -89,7 +89,9 @@ pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
 #[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;
-pub use storage::{KnownDestination, StoragePaths};
+pub use storage::{
+    FsRatchetStore, KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore, StoragePaths,
+};
 
 // Re-export commonly used types from rns-core
 pub use rns_core::constants::{

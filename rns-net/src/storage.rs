@@ -1,14 +1,15 @@
-//! Identity and known destinations persistence.
+//! Identity, known destinations, and received ratchet persistence.
 //!
 //! Identity file format: 64 bytes = 32-byte X25519 private key + 32-byte Ed25519 private key.
 //! Same as Python's `Identity.to_file()` / `Identity.from_file()`.
 //!
 //! Known destinations: msgpack binary with 16-byte keys and tuple values.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
@@ -20,6 +21,7 @@ pub struct StoragePaths {
     pub storage: PathBuf,
     pub cache: PathBuf,
     pub identities: PathBuf,
+    pub ratchets: PathBuf,
     /// Directory for discovered interface data: storage/discovery/interfaces
     pub discovered_interfaces: PathBuf,
 }
@@ -38,17 +40,223 @@ pub struct KnownDestination {
     pub retained: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RatchetEntry {
+    pub ratchet: [u8; 32],
+    pub received_at: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RatchetCleanupStats {
+    pub processed: usize,
+    pub not_known: usize,
+    pub removed: usize,
+}
+
+pub trait RatchetStore: Send + Sync {
+    fn remember(&self, dest_hash: [u8; 16], entry: RatchetEntry) -> io::Result<()>;
+    fn current(
+        &self,
+        dest_hash: &[u8; 16],
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<Option<RatchetEntry>>;
+    fn cleanup(
+        &self,
+        known_destinations: &HashSet<[u8; 16]>,
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<RatchetCleanupStats>;
+}
+
+#[derive(Debug)]
+pub struct FsRatchetStore {
+    dir: PathBuf,
+    cache: Mutex<HashMap<[u8; 16], RatchetEntry>>,
+}
+
+impl FsRatchetStore {
+    pub fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn path_for(&self, dest_hash: &[u8; 16]) -> PathBuf {
+        self.dir.join(hex_lower(dest_hash))
+    }
+
+    fn read_entry(path: &Path) -> io::Result<RatchetEntry> {
+        use rns_core::msgpack;
+
+        let data = fs::read(path)?;
+        let (value, _) = msgpack::unpack(&data).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("msgpack error: {}", e))
+        })?;
+        let ratchet = value
+            .map_get("ratchet")
+            .and_then(|v| v.as_bin())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing ratchet"))?;
+        if ratchet.len() != 32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("ratchet must be 32 bytes, got {}", ratchet.len()),
+            ));
+        }
+        let mut ratchet_bytes = [0u8; 32];
+        ratchet_bytes.copy_from_slice(ratchet);
+        let received_at = value
+            .map_get("received")
+            .and_then(|v| v.as_number())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing received"))?;
+
+        Ok(RatchetEntry {
+            ratchet: ratchet_bytes,
+            received_at,
+        })
+    }
+
+    fn write_entry(&self, path: &Path, entry: RatchetEntry) -> io::Result<()> {
+        use rns_core::msgpack::{self, Value};
+
+        fs::create_dir_all(&self.dir)?;
+        let value = Value::Map(vec![
+            (
+                Value::Str("ratchet".into()),
+                Value::Bin(entry.ratchet.to_vec()),
+            ),
+            (
+                Value::Str("received".into()),
+                Value::Float(entry.received_at),
+            ),
+        ]);
+        let packed = msgpack::pack(&value);
+        let tmp = path.with_extension("out");
+        fs::write(&tmp, packed)?;
+        fs::rename(tmp, path)
+    }
+}
+
+impl RatchetStore for FsRatchetStore {
+    fn remember(&self, dest_hash: [u8; 16], entry: RatchetEntry) -> io::Result<()> {
+        if self
+            .cache
+            .lock()
+            .map(|cache| cache.get(&dest_hash).copied() == Some(entry))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let path = self.path_for(&dest_hash);
+        self.write_entry(&path, entry)?;
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(dest_hash, entry);
+        }
+        Ok(())
+    }
+
+    fn current(
+        &self,
+        dest_hash: &[u8; 16],
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<Option<RatchetEntry>> {
+        if let Ok(cache) = self.cache.lock() {
+            if let Some(entry) = cache.get(dest_hash).copied() {
+                if now <= entry.received_at + expiry_secs {
+                    return Ok(Some(entry));
+                }
+            }
+        }
+
+        let path = self.path_for(dest_hash);
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        let entry = Self::read_entry(&path)?;
+        if now > entry.received_at + expiry_secs {
+            let _ = fs::remove_file(path);
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.remove(dest_hash);
+            }
+            return Ok(None);
+        }
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(*dest_hash, entry);
+        }
+        Ok(Some(entry))
+    }
+
+    fn cleanup(
+        &self,
+        known_destinations: &HashSet<[u8; 16]>,
+        now: f64,
+        expiry_secs: f64,
+    ) -> io::Result<RatchetCleanupStats> {
+        let mut stats = RatchetCleanupStats::default();
+        if !self.dir.is_dir() {
+            return Ok(stats);
+        }
+
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            stats.processed += 1;
+            let path = entry.path();
+            let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+                let _ = fs::remove_file(&path);
+                stats.removed += 1;
+                continue;
+            };
+
+            let Some(dest_hash) = parse_dest_hash_hex(filename) else {
+                let _ = fs::remove_file(&path);
+                stats.removed += 1;
+                continue;
+            };
+
+            let unknown = !known_destinations.contains(&dest_hash);
+            if unknown {
+                stats.not_known += 1;
+            }
+
+            let expired_or_corrupt = match Self::read_entry(&path) {
+                Ok(entry) => now > entry.received_at + expiry_secs,
+                Err(_) => true,
+            };
+
+            if unknown || expired_or_corrupt {
+                let _ = fs::remove_file(&path);
+                stats.removed += 1;
+                if let Ok(mut cache) = self.cache.lock() {
+                    cache.remove(&dest_hash);
+                }
+            }
+        }
+
+        Ok(stats)
+    }
+}
+
 /// Ensure all storage directories exist. Creates them if missing.
 pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let storage = config_dir.join("storage");
     let cache = config_dir.join("cache");
     let identities = storage.join("identities");
+    let ratchets = storage.join("ratchets");
     let announces = cache.join("announces");
     let discovered_interfaces = storage.join("discovery").join("interfaces");
 
     fs::create_dir_all(&storage)?;
     fs::create_dir_all(&cache)?;
     fs::create_dir_all(&identities)?;
+    fs::create_dir_all(&ratchets)?;
     fs::create_dir_all(&announces)?;
     fs::create_dir_all(&discovered_interfaces)?;
 
@@ -57,8 +265,29 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
         storage,
         cache,
         identities,
+        ratchets,
         discovered_interfaces,
     })
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{:02x}", byte);
+    }
+    out
+}
+
+fn parse_dest_hash_hex(s: &str) -> Option<[u8; 16]> {
+    if s.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 /// Save an identity's private key to a file (64 bytes).
@@ -380,6 +609,80 @@ mod tests {
     }
 
     #[test]
+    fn ratchet_store_roundtrip() {
+        let dir = temp_dir();
+        let store = FsRatchetStore::new(dir.join("ratchets"));
+        let dest = [0xAA; 16];
+        let entry = RatchetEntry {
+            ratchet: [0xBB; 32],
+            received_at: 1700000000.25,
+        };
+
+        store.remember(dest, entry).unwrap();
+        let loaded = store.current(&dest, 1700000001.0, 60.0).unwrap();
+
+        assert_eq!(loaded, Some(entry));
+        assert!(dir.join("ratchets").join(hex_lower(&dest)).exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ratchet_cleanup_removes_expired_corrupt_unknown_and_temp() {
+        let dir = temp_dir();
+        let ratchets = dir.join("ratchets");
+        fs::create_dir_all(&ratchets).unwrap();
+        let store = FsRatchetStore::new(ratchets.clone());
+
+        let known_live = [0x01; 16];
+        let known_expired = [0x02; 16];
+        let unknown = [0x03; 16];
+        store
+            .remember(
+                known_live,
+                RatchetEntry {
+                    ratchet: [0x11; 32],
+                    received_at: 1000.0,
+                },
+            )
+            .unwrap();
+        store
+            .remember(
+                known_expired,
+                RatchetEntry {
+                    ratchet: [0x22; 32],
+                    received_at: 100.0,
+                },
+            )
+            .unwrap();
+        store
+            .remember(
+                unknown,
+                RatchetEntry {
+                    ratchet: [0x33; 32],
+                    received_at: 1000.0,
+                },
+            )
+            .unwrap();
+        fs::write(ratchets.join(hex_lower(&[0x04; 16])), b"not msgpack").unwrap();
+        fs::write(ratchets.join("0102.out"), b"temp").unwrap();
+
+        let known = HashSet::from([known_live, known_expired, [0x04; 16]]);
+        let stats = store.cleanup(&known, 1000.0, 300.0).unwrap();
+
+        assert_eq!(stats.processed, 5);
+        assert_eq!(stats.not_known, 1);
+        assert_eq!(stats.removed, 4);
+        assert!(ratchets.join(hex_lower(&known_live)).exists());
+        assert!(!ratchets.join(hex_lower(&known_expired)).exists());
+        assert!(!ratchets.join(hex_lower(&unknown)).exists());
+        assert!(!ratchets.join(hex_lower(&[0x04; 16])).exists());
+        assert!(!ratchets.join("0102.out").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn ensure_dirs_creates() {
         let dir = temp_dir().join("new_config");
         let _ = fs::remove_dir_all(&dir);
@@ -389,6 +692,7 @@ mod tests {
         assert!(paths.storage.exists());
         assert!(paths.cache.exists());
         assert!(paths.identities.exists());
+        assert!(paths.ratchets.exists());
         assert!(paths.discovered_interfaces.exists());
 
         let _ = fs::remove_dir_all(&dir);
