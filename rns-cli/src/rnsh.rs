@@ -93,6 +93,10 @@ pub fn main() -> i32 {
                 println!("rnsh {} (protocol {})", VERSION, PROTOCOL_VERSION);
                 return 0;
             }
+            if let Err(err) = init_rnsh_logging(&opts) {
+                eprintln!("{err}");
+                return 1;
+            }
             if opts.print_identity {
                 return match print_identity(&opts) {
                     Ok(()) => 0,
@@ -280,6 +284,45 @@ fn print_usage() {
     eprintln!(
         "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
     );
+}
+
+fn init_rnsh_logging(opts: &CliOptions) -> Result<(), RnshError> {
+    let dir = rnsh_config_dir()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("logfile"))?;
+    let mut builder = env_logger::Builder::new();
+    builder
+        .filter_level(rnsh_log_level(opts.listen, opts.verbose, opts.quiet))
+        .format_timestamp_secs()
+        .target(env_logger::Target::Pipe(Box::new(file)));
+    builder
+        .try_init()
+        .map_err(|err| RnshError::Protocol(format!("failed to initialize rnsh logging: {err}")))
+}
+
+fn rnsh_config_dir() -> Result<PathBuf, RnshError> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let xdg = PathBuf::from(&home).join(".config").join("rnsh");
+    if xdg.is_dir() {
+        return Ok(xdg);
+    }
+    let legacy = PathBuf::from(home).join(".rnsh");
+    fs::create_dir_all(&legacy)?;
+    Ok(legacy)
+}
+
+fn rnsh_log_level(listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
+    let base: i16 = if listen { 3 } else { 1 };
+    match (base + verbose as i16 - quiet as i16).clamp(0, 5) {
+        0 => log::LevelFilter::Off,
+        1 => log::LevelFilter::Error,
+        2 => log::LevelFilter::Warn,
+        3 => log::LevelFilter::Info,
+        4 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1973,6 +2016,14 @@ mod tests {
     #[test]
     fn service_name_is_sanitized_like_upstream() {
         assert_eq!(sanitize_service_name("dev-shell_1!"), "devshell1");
+    }
+
+    #[test]
+    fn rnsh_logging_uses_file_oriented_levels() {
+        assert_eq!(rnsh_log_level(false, 0, 0), log::LevelFilter::Error);
+        assert_eq!(rnsh_log_level(true, 0, 0), log::LevelFilter::Info);
+        assert_eq!(rnsh_log_level(true, 2, 0), log::LevelFilter::Trace);
+        assert_eq!(rnsh_log_level(true, 0, 4), log::LevelFilter::Off);
     }
 
     #[test]

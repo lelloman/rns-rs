@@ -11,6 +11,7 @@ use rns_net::{
 
 use crate::acl::{Access, Operation};
 use crate::config::ServerConfig;
+use crate::logging;
 use crate::protocol;
 use crate::util::{default_reticulum_dir, default_rngit_dir, hex, load_or_create_identity};
 use crate::{git, Error, Result};
@@ -25,6 +26,7 @@ where
     let rngit_dir = options.config_dir.unwrap_or_else(default_rngit_dir);
     let rns_dir = options.rns_config_dir.or_else(default_reticulum_dir);
     let (config, created) = ServerConfig::load_or_create(rngit_dir, rns_dir)?;
+    logging::init_file_logger(&config.dir.join("server_log"), config.log_level)?;
     if created {
         return Err(Error::msg(format!(
             "created default config at {}; edit it and run rngit again",
@@ -350,6 +352,7 @@ mod tests {
             announce_interval_secs: 300,
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
+            log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
 

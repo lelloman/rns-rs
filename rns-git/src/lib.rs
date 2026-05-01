@@ -2,6 +2,7 @@ pub mod acl;
 pub mod client;
 pub mod config;
 pub mod git;
+pub mod logging;
 pub mod protocol;
 pub mod server;
 pub mod util;

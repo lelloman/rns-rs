@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::logging::DEFAULT_LOG_LEVEL;
 use crate::Result;
 
 #[derive(Debug, Clone)]
@@ -14,6 +15,7 @@ pub struct ServerConfig {
     pub announce_interval_secs: u64,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
+    pub log_level: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +25,7 @@ pub struct ClientConfig {
     pub identity_path: PathBuf,
     pub connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
+    pub log_level: u8,
 }
 
 impl ServerConfig {
@@ -47,6 +50,9 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "rngit", "announce_interval") {
             cfg.announce_interval_secs = v.parse().unwrap_or(cfg.announce_interval_secs);
         }
+        if let Some(v) = get(&ini, "logging", "loglevel") {
+            cfg.log_level = parse_log_level(v, cfg.log_level);
+        }
         cfg.allow_read = split_list(get(&ini, "access", "read").unwrap_or("all"));
         cfg.allow_write = split_list(get(&ini, "access", "write").unwrap_or("none"));
         Ok((cfg, false))
@@ -62,6 +68,7 @@ impl ServerConfig {
             announce_interval_secs: 300,
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
+            log_level: DEFAULT_LOG_LEVEL,
         }
     }
 }
@@ -85,6 +92,9 @@ impl ClientConfig {
         if let Some(v) = get(&ini, "client", "request_timeout") {
             cfg.request_timeout_secs = v.parse().unwrap_or(cfg.request_timeout_secs);
         }
+        if let Some(v) = get(&ini, "logging", "loglevel") {
+            cfg.log_level = parse_log_level(v, cfg.log_level);
+        }
         Ok((cfg, false))
     }
 
@@ -95,6 +105,7 @@ impl ClientConfig {
             reticulum_dir,
             connect_timeout_secs: 30,
             request_timeout_secs: 300,
+            log_level: DEFAULT_LOG_LEVEL,
         }
     }
 }
@@ -135,6 +146,13 @@ fn split_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn parse_log_level(value: &str, fallback: u8) -> u8 {
+    value
+        .parse::<u8>()
+        .map(|level| level.min(7))
+        .unwrap_or(fallback)
+}
+
 fn expand_home(value: &str) -> PathBuf {
     if let Some(rest) = value.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -154,11 +172,11 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
-    "[client]\nidentity = client_identity\nconnect_timeout = 30\nrequest_timeout = 300\n"
+    "[client]\nidentity = client_identity\nconnect_timeout = 30\nrequest_timeout = 300\n\n[logging]\nloglevel = 4\n"
 }
 
 #[cfg(test)]
@@ -170,6 +188,19 @@ mod tests {
         let ini = parse_ini("[access]\nread = all, 0011\nwrite = none\n").unwrap();
         assert_eq!(get(&ini, "access", "write"), Some("none"));
         assert_eq!(split_list(get(&ini, "access", "read").unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn parses_and_clamps_log_level() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("client_config"),
+            "[client]\nrequest_timeout = 5\n[logging]\nloglevel = 99\n",
+        )
+        .unwrap();
+        let (cfg, created) = ClientConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(!created);
+        assert_eq!(cfg.log_level, 7);
     }
 
     #[test]
