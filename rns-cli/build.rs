@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[path = "../build/common.rs"]
+#[path = "build_common.rs"]
 mod build_common;
 
 fn main() {
