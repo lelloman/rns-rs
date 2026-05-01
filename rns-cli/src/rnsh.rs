@@ -1026,13 +1026,14 @@ impl ChildProcess {
             None
         };
 
+        let mut reader_handles = Vec::new();
         if let Some(fd) = stdout_fd {
-            spawn_reader(link_id, STREAM_STDOUT, fd, event_tx.clone());
+            reader_handles.push(spawn_reader(link_id, STREAM_STDOUT, fd, event_tx.clone()));
         }
         if let Some(fd) = stderr_fd {
-            spawn_reader(link_id, STREAM_STDERR, fd, event_tx.clone());
+            reader_handles.push(spawn_reader(link_id, STREAM_STDERR, fd, event_tx.clone()));
         }
-        spawn_waiter(link_id, pid, event_tx);
+        spawn_waiter(link_id, pid, reader_handles, event_tx);
 
         Ok(ChildProcess {
             pid,
@@ -1113,7 +1114,12 @@ fn close_unique(fds: &[Option<RawFd>]) {
     }
 }
 
-fn spawn_reader(link_id: [u8; 16], stream_id: u16, fd: RawFd, event_tx: mpsc::Sender<RnshEvent>) {
+fn spawn_reader(
+    link_id: [u8; 16],
+    stream_id: u16,
+    fd: RawFd,
+    event_tx: mpsc::Sender<RnshEvent>,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -1128,10 +1134,15 @@ fn spawn_reader(link_id: [u8; 16], stream_id: u16, fd: RawFd, event_tx: mpsc::Se
                 break;
             }
         }
-    });
+    })
 }
 
-fn spawn_waiter(link_id: [u8; 16], pid: libc::pid_t, event_tx: mpsc::Sender<RnshEvent>) {
+fn spawn_waiter(
+    link_id: [u8; 16],
+    pid: libc::pid_t,
+    reader_handles: Vec<std::thread::JoinHandle<()>>,
+    event_tx: mpsc::Sender<RnshEvent>,
+) {
     std::thread::spawn(move || {
         let mut status = 0;
         let _ = unsafe { libc::waitpid(pid, &mut status, 0) };
@@ -1142,6 +1153,9 @@ fn spawn_waiter(link_id: [u8; 16], pid: libc::pid_t, event_tx: mpsc::Sender<Rnsh
         } else {
             255
         };
+        for handle in reader_handles {
+            let _ = handle.join();
+        }
         let _ = event_tx.send(RnshEvent::ProcessExited { link_id, code });
     });
 }
