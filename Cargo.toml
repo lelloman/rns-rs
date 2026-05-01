@@ -1,6 +1,6 @@
 [workspace]
-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-hooks", "rns-stats-hook", "rns-sentinel-hook"]
-default-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server"]
+members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-hooks", "rns-stats-hook", "rns-sentinel-hook", "rns-git"]
+default-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-git"]
 exclude = ["rns-esp32"]
 resolver = "2"
 

@@ -1298,9 +1298,14 @@ impl Driver {
                     link_id,
                     request_id,
                     data,
+                    metadata,
                 } => {
-                    self.callbacks
-                        .on_response(rns_core::types::LinkId(link_id), request_id, data);
+                    self.callbacks.on_response_with_metadata(
+                        rns_core::types::LinkId(link_id),
+                        request_id,
+                        data,
+                        metadata,
+                    );
                 }
                 LinkManagerAction::LinkRequestReceived {
                     link_id,

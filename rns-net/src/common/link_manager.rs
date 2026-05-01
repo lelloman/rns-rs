@@ -100,6 +100,25 @@ struct LinkDestination {
     resource_strategy: ResourceStrategy,
 }
 
+/// Response produced by an application request handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestResponse {
+    /// Send the response as the normal request response value.
+    Bytes(Vec<u8>),
+    /// Send the response as a resource response with optional metadata.
+    Resource {
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    },
+}
+
+impl From<Vec<u8>> for RequestResponse {
+    fn from(data: Vec<u8>) -> Self {
+        RequestResponse::Bytes(data)
+    }
+}
+
 /// A registered request handler for a path.
 struct RequestHandlerEntry {
     /// The path this handler serves (e.g. "/status").
@@ -108,9 +127,11 @@ struct RequestHandlerEntry {
     path_hash: [u8; 16],
     /// Access control: None means allow all, Some(list) means allow only listed identities.
     allowed_list: Option<Vec<[u8; 16]>>,
-    /// Handler function: (link_id, path, request_id, data, remote_identity) -> Option<response_data>.
-    handler:
-        Box<dyn Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send>,
+    /// Handler function: (link_id, path, request_id, data, remote_identity) -> Option<response>.
+    handler: Box<
+        dyn Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<RequestResponse>
+            + Send,
+    >,
 }
 
 /// Actions produced by LinkManager for the driver to dispatch.
@@ -195,6 +216,7 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         request_id: [u8; 16],
         data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
     },
     /// A link request was received (for hook notification).
     LinkRequestReceived {
@@ -370,6 +392,28 @@ impl LinkManager {
         handler: F,
     ) where
         F: Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>>
+            + Send
+            + 'static,
+    {
+        let path_hash = compute_path_hash(path);
+        self.request_handlers.push(RequestHandlerEntry {
+            path: path.to_string(),
+            path_hash,
+            allowed_list,
+            handler: Box::new(move |link_id, p, data, remote| {
+                handler(link_id, p, data, remote).map(RequestResponse::Bytes)
+            }),
+        });
+    }
+
+    /// Register a request handler that can return resource responses with metadata.
+    pub fn register_request_handler_response<F>(
+        &mut self,
+        path: &str,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: F,
+    ) where
+        F: Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<RequestResponse>
             + Send
             + 'static,
     {
@@ -1215,7 +1259,7 @@ impl LinkManager {
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Unpack msgpack response: [Bin(request_id), response_value]
-                actions.extend(self.handle_response(&link_id, &plaintext));
+                actions.extend(self.handle_response(&link_id, &plaintext, None));
             }
             LinkDataResult::Generic {
                 link_id,
@@ -1371,18 +1415,38 @@ impl LinkManager {
         let response = (handler.handler)(*link_id, &path, &request_data, remote_identity);
 
         let mut actions = Vec::new();
-        if let Some(response_data) = response {
-            let mut response_actions =
-                self.build_response_packet(link_id, &request_id, &response_data, rng);
-            if response_actions.is_empty() {
-                response_actions.extend(self.send_response_resource(
-                    link_id,
-                    &request_id,
-                    &response_data,
-                    rng,
-                ));
+        if let Some(response) = response {
+            match response {
+                RequestResponse::Bytes(response_data) => {
+                    let mut response_actions =
+                        self.build_response_packet(link_id, &request_id, &response_data, rng);
+                    if response_actions.is_empty() {
+                        response_actions.extend(self.send_response_resource(
+                            link_id,
+                            &request_id,
+                            &response_data,
+                            None,
+                            true,
+                            rng,
+                        ));
+                    }
+                    actions.extend(response_actions);
+                }
+                RequestResponse::Resource {
+                    data,
+                    metadata,
+                    auto_compress,
+                } => {
+                    actions.extend(self.send_response_resource(
+                        link_id,
+                        &request_id,
+                        &data,
+                        metadata.as_deref(),
+                        auto_compress,
+                        rng,
+                    ));
+                }
             }
-            actions.extend(response_actions);
         }
 
         actions
@@ -1441,6 +1505,8 @@ impl LinkManager {
         link_id: &LinkId,
         request_id: &[u8; 16],
         response_data: &[u8],
+        metadata: Option<&[u8]>,
+        auto_compress: bool,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
@@ -1467,8 +1533,8 @@ impl LinkManager {
         let senders = match Self::build_resource_senders(
             link,
             &resource_payload,
-            None,
-            true, // auto_compress
+            metadata,
+            auto_compress,
             true, // is_response
             Some(request_id.to_vec()),
             rng,
@@ -1498,7 +1564,14 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         let mut actions = self.build_response_packet(link_id, request_id, response_data, rng);
         if actions.is_empty() {
-            actions.extend(self.send_response_resource(link_id, request_id, response_data, rng));
+            actions.extend(self.send_response_resource(
+                link_id,
+                request_id,
+                response_data,
+                None,
+                true,
+                rng,
+            ));
         }
         actions
     }
@@ -1709,7 +1782,12 @@ impl LinkManager {
     }
 
     /// Handle a response on a link.
-    fn handle_response(&self, link_id: &LinkId, plaintext: &[u8]) -> Vec<LinkManagerAction> {
+    fn handle_response(
+        &self,
+        link_id: &LinkId,
+        plaintext: &[u8],
+        metadata: Option<Vec<u8>>,
+    ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack;
 
         // Python-compatible response: msgpack([Bin(request_id), response_value])
@@ -1731,6 +1809,7 @@ impl LinkManager {
             link_id: *link_id,
             request_id,
             data: response_data,
+            metadata,
         }]
     }
 
@@ -2278,8 +2357,8 @@ impl LinkManager {
             let mut converted = Vec::new();
             for action in out {
                 match action {
-                    LinkManagerAction::ResourceReceived { data, .. } => {
-                        converted.extend(self.handle_response(link_id, &data));
+                    LinkManagerAction::ResourceReceived { data, metadata, .. } => {
+                        converted.extend(self.handle_response(link_id, &data, metadata));
                     }
                     LinkManagerAction::ResourceAcceptQuery { .. } => {
                         // Response resources bypass application acceptance
@@ -5648,6 +5727,101 @@ mod tests {
         });
         assert_eq!(received_request_id, request_id);
         assert_eq!(received_data, response_value);
+    }
+
+    #[test]
+    fn test_response_resource_preserves_metadata() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let payload = b"bundle-data".to_vec();
+        let metadata = b"git-status-ok".to_vec();
+        let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+        resp_mgr.register_request_handler_response("/fetch", None, {
+            let response_value = response_value.clone();
+            let metadata = metadata.clone();
+            move |_link_id, _path, _data, _remote| {
+                Some(RequestResponse::Resource {
+                    data: response_value.clone(),
+                    metadata: Some(metadata.clone()),
+                    auto_compress: false,
+                })
+            }
+        });
+
+        let req_actions = init_mgr.send_request(&link_id, "/fetch", b"\xc0", &mut rng);
+        let req_raw = extract_any_send_packet(&req_actions);
+        let req_pkt = RawPacket::unpack(&req_raw).unwrap();
+        let request_id = req_pkt.get_truncated_hash();
+        let resp_actions = resp_mgr.handle_local_delivery(
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            resp_actions.into_iter().map(|a| ('r', a)).collect();
+        let mut received_response = None;
+
+        for _ in 0..200 {
+            if pending.is_empty() || received_response.is_some() {
+                break;
+            }
+
+            let mut next = Vec::new();
+            for (source, action) in pending.drain(..) {
+                let LinkManagerAction::SendPacket { raw, .. } = action else {
+                    continue;
+                };
+                let pkt = RawPacket::unpack(&raw).unwrap();
+                let target_actions = if source == 'r' {
+                    init_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                } else {
+                    resp_mgr.handle_local_delivery(
+                        pkt.destination_hash,
+                        &raw,
+                        pkt.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                };
+
+                let target_source = if source == 'r' { 'i' } else { 'r' };
+                for target_action in &target_actions {
+                    match target_action {
+                        LinkManagerAction::ResponseReceived {
+                            request_id: rid,
+                            data,
+                            metadata: response_metadata,
+                            ..
+                        } => {
+                            received_response =
+                                Some((*rid, data.clone(), response_metadata.clone()));
+                        }
+                        LinkManagerAction::ResourceReceived { .. } => {
+                            panic!("response resources must complete as ResponseReceived")
+                        }
+                        _ => {}
+                    }
+                }
+                next.extend(target_actions.into_iter().map(|a| (target_source, a)));
+            }
+            pending = next;
+        }
+
+        let (received_request_id, received_data, received_metadata) = received_response
+            .expect("resource response with metadata should complete as ResponseReceived");
+        assert_eq!(received_request_id, request_id);
+        assert_eq!(received_data, response_value);
+        assert_eq!(received_metadata, Some(metadata));
     }
 
     #[test]

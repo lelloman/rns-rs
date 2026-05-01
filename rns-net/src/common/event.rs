@@ -9,6 +9,8 @@ use rns_core::announce::ValidatedAnnounce;
 use rns_core::transport::announce_verify_queue::AnnounceVerifyKey;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
+use crate::common::link_manager::RequestResponse;
+
 /// Policy for handling incoming direct-connect proposals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HolePunchPolicy {
@@ -168,6 +170,15 @@ pub enum Event<W: Send> {
         allowed_list: Option<Vec<[u8; 16]>>,
         handler: Box<
             dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send,
+        >,
+    },
+    /// Register a request handler that may return resource responses with metadata.
+    RegisterRequestHandlerResponse {
+        path: String,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: Box<
+            dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<RequestResponse>
+                + Send,
         >,
     },
     /// Create an outbound link. Response sends (link_id) back.
@@ -823,6 +834,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .finish(),
             Event::RegisterRequestHandler { path, .. } => f
                 .debug_struct("RegisterRequestHandler")
+                .field("path", path)
+                .finish(),
+            Event::RegisterRequestHandlerResponse { path, .. } => f
+                .debug_struct("RegisterRequestHandlerResponse")
                 .field("path", path)
                 .finish(),
             Event::CreateLink { dest_hash, .. } => f

@@ -2014,6 +2014,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-git"
+version = "0.1.0"
+dependencies = [
+ "env_logger 0.10.2",
+ "log",
+ "rns-core",
+ "rns-crypto",
+ "rns-net",
+ "tempfile",
+]
+
+[[package]]
 name = "rns-hooks"
 version = "0.1.5"
 dependencies = [

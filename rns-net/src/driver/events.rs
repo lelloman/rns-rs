@@ -696,6 +696,17 @@ impl Driver {
                         move |link_id, p, data, remote| handler(link_id, p, data, remote),
                     );
                 }
+                Event::RegisterRequestHandlerResponse {
+                    path,
+                    allowed_list,
+                    handler,
+                } => {
+                    self.link_manager.register_request_handler_response(
+                        &path,
+                        allowed_list,
+                        move |link_id, p, data, remote| handler(link_id, p, data, remote),
+                    );
+                }
                 Event::CreateLink {
                     dest_hash,
                     dest_sig_pub_bytes,

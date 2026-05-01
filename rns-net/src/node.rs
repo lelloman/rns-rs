@@ -1810,6 +1810,32 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Register a request handler that can return resource responses with metadata.
+    pub fn register_request_handler_response<F>(
+        &self,
+        path: &str,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: F,
+    ) -> Result<(), SendError>
+    where
+        F: Fn(
+                [u8; 16],
+                &str,
+                &[u8],
+                Option<&([u8; 16], [u8; 64])>,
+            ) -> Option<crate::link_manager::RequestResponse>
+            + Send
+            + 'static,
+    {
+        self.tx
+            .send(Event::RegisterRequestHandlerResponse {
+                path: path.to_string(),
+                allowed_list,
+                handler: Box::new(handler),
+            })
+            .map_err(|_| SendError)
+    }
+
     /// Create an outbound link to a destination.
     ///
     /// Returns the link_id on success.
