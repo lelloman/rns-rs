@@ -58,6 +58,10 @@ name = "rnprobe"
 path = "src/bin/rnprobe.rs"
 
 [[bin]]
+name = "rnsh"
+path = "src/bin/rnsh.rs"
+
+[[bin]]
 name = "rns-statsd"
 path = "src/bin/rns-statsd.rs"
 required-features = ["rns-hooks-wasm"]
