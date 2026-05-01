@@ -35,6 +35,7 @@ Common currently published crates:
 - `rns-core`
 - `rns-net`
 - `rns-cli`
+- `rns-git`
 - `rns-ctl`
 - `rns-hooks`
 - `rns-stats-hook`
@@ -63,6 +64,7 @@ Files commonly involved:
 - [rns-core/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-core/Cargo.toml)
 - [rns-net/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-net/Cargo.toml)
 - [rns-cli/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-cli/Cargo.toml)
+- [rns-git/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-git/Cargo.toml)
 - [rns-ctl/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-ctl/Cargo.toml)
 - [rns-hooks/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/Cargo.toml)
 - [rns-stats-hook/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-stats-hook/Cargo.toml)
@@ -99,7 +101,8 @@ Typical order for this workspace:
 6. `rns-stats-hook`
 7. `rns-net`
 8. `rns-cli`
-9. `rns-ctl`
+9. `rns-git`
+10. `rns-ctl`
 
 Example:
 
@@ -112,6 +115,7 @@ cargo publish --dry-run -p rns-hooks
 cargo publish --dry-run -p rns-stats-hook
 cargo publish --dry-run -p rns-net
 cargo publish --dry-run -p rns-cli
+cargo publish --dry-run -p rns-git
 cargo publish --dry-run -p rns-ctl
 ```
 
@@ -131,6 +135,7 @@ git add Cargo.toml Cargo.lock \
   rns-core/Cargo.toml \
   rns-net/Cargo.toml \
   rns-cli/Cargo.toml \
+  rns-git/Cargo.toml \
   rns-ctl/Cargo.toml
 git commit -m "Release selected crates"
 ```
@@ -159,6 +164,7 @@ cargo publish -p rns-hooks
 cargo publish -p rns-stats-hook
 cargo publish -p rns-net
 cargo publish -p rns-cli
+cargo publish -p rns-git
 cargo publish -p rns-ctl
 ```
 
@@ -176,6 +182,7 @@ Minimal checks:
 cargo search rns-core --limit 1
 cargo search rns-net --limit 1
 cargo search rns-cli --limit 1
+cargo search rns-git --limit 1
 ```
 
 If you want an exact machine-readable check, use the crates.io API.
@@ -186,6 +193,7 @@ Example:
 curl -sS https://crates.io/api/v1/crates/rns-core | jq -r '.crate.newest_version'
 curl -sS https://crates.io/api/v1/crates/rns-net | jq -r '.crate.newest_version'
 curl -sS https://crates.io/api/v1/crates/rns-cli | jq -r '.crate.newest_version'
+curl -sS https://crates.io/api/v1/crates/rns-git | jq -r '.crate.newest_version'
 ```
 
 ## 8. Tag the published commit
@@ -202,6 +210,7 @@ Examples:
 git tag -a rns-core-v0.1.5 HEAD -m "rns-core 0.1.5"
 git tag -a rns-net-v0.5.1 HEAD -m "rns-net 0.5.1"
 git tag -a rns-cli-v0.2.0 HEAD -m "rns-cli 0.2.0"
+git tag -a rns-git-v0.1.0 HEAD -m "rns-git 0.1.0"
 ```
 
 This repo should not rely on a single repo-wide release tag. The crates are
@@ -221,7 +230,8 @@ git push origin master
 git push origin \
   rns-core-v0.1.5 \
   rns-net-v0.5.1 \
-  rns-cli-v0.2.0
+  rns-cli-v0.2.0 \
+  rns-git-v0.1.0
 ```
 
 Adjust the branch and tag list to match the release.
