@@ -21,7 +21,7 @@ use rns_net::compressor::Bzip2Compressor;
 use rns_net::destination::Destination;
 use rns_net::{Callbacks, RnsNode, SendError};
 
-use crate::format::prettyhexrep;
+use crate::format::{prettyb256rep, prettyhexrep};
 
 const APP_NAME: &str = "rnsh";
 const DEFAULT_SERVICE_NAME: &str = "default";
@@ -138,6 +138,7 @@ struct CliOptions {
     verbose: u8,
     quiet: u8,
     print_identity: bool,
+    base256: bool,
     version: bool,
     help: bool,
     listen: bool,
@@ -204,6 +205,7 @@ impl CliOptions {
                     "verbose" => opts.verbose = opts.verbose.saturating_add(1),
                     "quiet" => opts.quiet = opts.quiet.saturating_add(1),
                     "print-identity" => opts.print_identity = true,
+                    "base256" => opts.base256 = true,
                     "version" => opts.version = true,
                     "help" => opts.help = true,
                     "listen" => opts.listen = true,
@@ -259,6 +261,7 @@ impl CliOptions {
                     'v' => opts.verbose = opts.verbose.saturating_add(1),
                     'q' => opts.quiet = opts.quiet.saturating_add(1),
                     'p' => opts.print_identity = true,
+                    'Z' => opts.base256 = true,
                     'l' => opts.listen = true,
                     'n' => opts.no_auth = true,
                     'A' => opts.remote_command_as_args = true,
@@ -282,7 +285,7 @@ impl CliOptions {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
+        "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -Z, --base256            Also print compact base256 display for hashes\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
     );
 }
 
@@ -1805,9 +1808,15 @@ fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
         opts.service.as_deref(),
     )?;
     println!("Identity     : {}", prettyhexrep(identity.hash()));
+    if opts.base256 {
+        println!("Identity b256: {}", prettyb256rep(identity.hash()));
+    }
     if opts.listen {
         let dest = Destination::single_in(APP_NAME, &[], IdentityHash(*identity.hash()));
         println!("Listening on : {}", prettyhexrep(&dest.hash.0));
+        if opts.base256 {
+            println!("Listen b256  : {}", prettyb256rep(&dest.hash.0));
+        }
     }
     Ok(())
 }
@@ -2011,6 +2020,17 @@ mod tests {
         assert!(args.listen);
         assert_eq!(args.service.as_deref(), Some("ops"));
         assert_eq!(args.command, vec!["/bin/sh", "-l"]);
+    }
+
+    #[test]
+    fn cli_parses_base256_display_flag() {
+        let short = CliOptions::parse(vec!["-Zp".into()]).unwrap();
+        assert!(short.base256);
+        assert!(short.print_identity);
+
+        let long = CliOptions::parse(vec!["--base256".into(), "--print-identity".into()]).unwrap();
+        assert!(long.base256);
+        assert!(long.print_identity);
     }
 
     #[test]

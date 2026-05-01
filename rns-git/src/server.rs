@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use rns_core::display::prettyb256rep;
 use rns_core::types::IdentityHash;
 use rns_crypto::identity::Identity;
 use rns_net::link_manager::ResourceStrategy;
@@ -37,7 +38,7 @@ where
     let identity = load_or_create_identity(&config.identity_path)?;
     if options.print_identity {
         let client = load_or_create_identity(&config.client_identity_path)?;
-        print_identity(&identity, &client);
+        print_identity(&identity, &client, options.base256);
         return Ok(());
     }
 
@@ -268,15 +269,27 @@ fn error_response(err: Error) -> Vec<u8> {
     protocol::status_bytes(protocol::RES_INVALID_REQ, err.to_string())
 }
 
-fn print_identity(identity: &Identity, client: &Identity) {
+fn print_identity(identity: &Identity, client: &Identity, base256: bool) {
     let destination = Destination::single_in(
         protocol::APP_NAME,
         &[protocol::ASPECT_REPOSITORIES],
         IdentityHash(*identity.hash()),
     );
     println!("client_identity = {}", hex(client.hash()));
+    if base256 {
+        println!("client_identity_b256 = {}", prettyb256rep(client.hash()));
+    }
     println!("repository_identity = {}", hex(identity.hash()));
+    if base256 {
+        println!(
+            "repository_identity_b256 = {}",
+            prettyb256rep(identity.hash())
+        );
+    }
     println!("destination = {}", hex(&destination.hash.0));
+    if base256 {
+        println!("destination_b256 = {}", prettyb256rep(&destination.hash.0));
+    }
 }
 
 #[derive(Default)]
@@ -296,6 +309,7 @@ struct ServerOptions {
     config_dir: Option<PathBuf>,
     rns_config_dir: Option<PathBuf>,
     print_identity: bool,
+    base256: bool,
 }
 
 impl ServerOptions {
@@ -320,6 +334,7 @@ impl ServerOptions {
                     ));
                 }
                 "--print-identity" => options.print_identity = true,
+                "-Z" | "--base256" => options.base256 = true,
                 "--service" | "--interactive" => {}
                 "-h" | "--help" => return Err(Error::msg(usage())),
                 other => {
@@ -335,7 +350,7 @@ impl ServerOptions {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit [--config DIR] [--rnsconfig DIR] [--print-identity] [--service]"
+    "usage: rngit [--config DIR] [--rnsconfig DIR] [--print-identity] [-Z|--base256] [--service]"
 }
 
 #[cfg(test)]
@@ -354,6 +369,20 @@ mod tests {
             allow_write: vec!["all".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
+    }
+
+    #[test]
+    fn parses_base256_print_identity_options() {
+        let opts = ServerOptions::parse(vec![
+            "--print-identity".to_string(),
+            "--base256".to_string(),
+        ])
+        .unwrap();
+        assert!(opts.print_identity);
+        assert!(opts.base256);
+
+        let short = ServerOptions::parse(vec!["-Z".to_string()]).unwrap();
+        assert!(short.base256);
     }
 
     #[test]

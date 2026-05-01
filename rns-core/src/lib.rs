@@ -6,6 +6,7 @@ pub mod buffer;
 pub mod channel;
 pub mod constants;
 pub mod destination;
+pub mod display;
 pub mod hash;
 pub mod holepunch;
 pub mod link;
