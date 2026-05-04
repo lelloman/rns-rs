@@ -15,6 +15,7 @@ pub struct ServerConfig {
     pub announce_interval_secs: u64,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
+    pub allow_create: Vec<String>,
     pub log_level: u8,
 }
 
@@ -55,6 +56,7 @@ impl ServerConfig {
         }
         cfg.allow_read = split_list(get(&ini, "access", "read").unwrap_or("all"));
         cfg.allow_write = split_list(get(&ini, "access", "write").unwrap_or("none"));
+        cfg.allow_create = split_list(get(&ini, "access", "create").unwrap_or("none"));
         Ok((cfg, false))
     }
 
@@ -68,6 +70,7 @@ impl ServerConfig {
             announce_interval_secs: 300,
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
+            allow_create: vec!["none".to_string()],
             log_level: DEFAULT_LOG_LEVEL,
         }
     }
@@ -172,7 +175,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -185,8 +188,9 @@ mod tests {
 
     #[test]
     fn parses_sections_and_lists() {
-        let ini = parse_ini("[access]\nread = all, 0011\nwrite = none\n").unwrap();
+        let ini = parse_ini("[access]\nread = all, 0011\nwrite = none\ncreate = all\n").unwrap();
         assert_eq!(get(&ini, "access", "write"), Some("none"));
+        assert_eq!(get(&ini, "access", "create"), Some("all"));
         assert_eq!(split_list(get(&ini, "access", "read").unwrap()).len(), 2);
     }
 

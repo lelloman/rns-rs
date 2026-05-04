@@ -17,13 +17,17 @@ pub fn repository_path(root: &Path, repository: &str) -> Result<PathBuf> {
 }
 
 pub fn ensure_bare_repository(path: &Path) -> Result<()> {
-    if path.join("HEAD").exists() && path.join("objects").is_dir() {
+    if is_bare_repository(path) {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     run(Command::new("git").arg("init").arg("--bare").arg(path)).map(|_| ())
+}
+
+pub fn is_bare_repository(path: &Path) -> bool {
+    path.join("HEAD").exists() && path.join("objects").is_dir()
 }
 
 pub fn list_refs(path: &Path) -> Result<Vec<(String, String)>> {
@@ -223,7 +227,7 @@ fn delete_ref(path: &Path, refname: &str, old: Option<&str>, force: bool) -> Res
 }
 
 fn require_repository(path: &Path) -> Result<()> {
-    if path.join("HEAD").exists() && path.join("objects").is_dir() {
+    if is_bare_repository(path) {
         Ok(())
     } else {
         Err(Error::msg("repository not found"))

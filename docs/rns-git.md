@@ -32,7 +32,9 @@ Important config paths:
 - `repositories_dir`: bare repositories served by `rngit`
 - `identity_path`: repository server identity
 - `client_identity_path`: local client identity used by the helper
-- `allow_read` and `allow_write`: repository ACL rules
+- `allow_read`, `allow_write`, and `allow_create`: repository ACL rules.
+  Creating a missing repository requires create access; pushing to an existing
+  repository requires write access.
 
 ## Git Remote Helper
 

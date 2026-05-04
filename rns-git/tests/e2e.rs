@@ -96,6 +96,7 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         announce_interval_secs: 300,
         allow_read: vec!["all".into()],
         allow_write: vec!["all".into()],
+        allow_create: vec!["all".into()],
         log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
     };
     let (sha, bundle) = create_source_bundle(tmp.path());

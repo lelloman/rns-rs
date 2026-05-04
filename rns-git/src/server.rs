@@ -69,6 +69,7 @@ pub fn register_repository_destination(
     let access = Access::new(
         &config.allow_read,
         &config.allow_write,
+        &config.allow_create,
         config.repositories_dir.clone(),
     )?;
     let destination = Destination::single_in(
@@ -224,13 +225,20 @@ pub fn handle_push(
 ) -> Result<Vec<u8>> {
     let (repo, bundle, updates) = protocol::parse_push_request(data)?;
     let remote_hash = remote.map(|(hash, _)| hash);
-    if !access.allows(Operation::Write, &repo, remote_hash)? {
-        return Ok(protocol::status_bytes(
-            protocol::RES_DISALLOWED,
-            b"write denied",
-        ));
-    }
     let path = git::repository_path(&config.repositories_dir, &repo)?;
+    let op = if git::is_bare_repository(&path) {
+        Operation::Write
+    } else {
+        Operation::Create
+    };
+    if !access.allows(op, &repo, remote_hash)? {
+        let message = match op {
+            Operation::Create => b"create denied".as_slice(),
+            Operation::Write => b"write denied".as_slice(),
+            Operation::Read => b"read denied".as_slice(),
+        };
+        return Ok(protocol::status_bytes(protocol::RES_DISALLOWED, message));
+    }
     match git::apply_push(&path, &bundle, &updates) {
         Ok(()) => Ok(protocol::status_bytes(protocol::RES_OK, b"ok")),
         Err(err) => Ok(protocol::status_bytes(
@@ -372,6 +380,7 @@ mod tests {
             announce_interval_secs: 300,
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
+            allow_create: vec!["all".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -406,6 +415,7 @@ mod tests {
         let access = Access::new(
             &config.allow_read,
             &config.allow_write,
+            &config.allow_create,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -419,9 +429,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = cfg(tmp.path());
         config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["none".into()];
         let access = Access::new(
             &config.allow_read,
             &config.allow_write,
+            &config.allow_create,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -431,12 +443,135 @@ mod tests {
     }
 
     #[test]
+    fn push_can_create_missing_repo_with_global_create() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["all".into()];
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(
+            &config.repositories_dir.join("repo")
+        ));
+    }
+
+    #[test]
+    fn global_write_alone_cannot_create_missing_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["all".into()];
+        config.allow_create = vec!["none".into()];
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_DISALLOWED);
+        assert!(!config.repositories_dir.join("repo").exists());
+    }
+
+    #[test]
+    fn existing_repo_push_still_requires_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("repo")).unwrap();
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_DISALLOWED);
+    }
+
+    #[test]
+    fn repo_allowed_file_can_grant_create_for_missing_bare_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["none".into()];
+        let repo = config.repositories_dir.join("group/repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join(".allowed"), "create = all\n").unwrap();
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("group/repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(&repo));
+    }
+
+    #[test]
+    fn group_allowed_file_can_grant_create_for_missing_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["none".into()];
+        let group = config.repositories_dir.join("group");
+        std::fs::create_dir_all(&group).unwrap();
+        std::fs::write(group.join("group.allowed"), "create = all\n").unwrap();
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("group/repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(
+            &config.repositories_dir.join("group/repo")
+        ));
+    }
+
+    #[test]
+    fn push_rejects_invalid_repository_name_before_create_acl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["all".into()];
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("../repo", Vec::new(), Vec::new());
+        assert!(handle_push(&config, &access, &req, None).is_err());
+    }
+
+    #[test]
     fn fetch_existing_repo_can_return_ok_status_or_resource() {
         let tmp = tempfile::tempdir().unwrap();
         let config = cfg(tmp.path());
         let access = Access::new(
             &config.allow_read,
             &config.allow_write,
+            &config.allow_create,
             config.repositories_dir.clone(),
         )
         .unwrap();
