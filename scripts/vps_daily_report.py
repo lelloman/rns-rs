@@ -18,8 +18,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "data" / "vps_daily_reports.db"
 DEFAULT_CONFIG_DIR = "/var/lib/rns-node"
 DEFAULT_HTTP_PORT = 18080
+DEFAULT_MASTER_REF = "origin/master"
+DEFAULT_DEV_REF = "origin/dev"
 MEMSTATS_RE = re.compile(r"MEMSTATS\s+(.*)$")
 KV_RE = re.compile(r"([a-zA-Z0-9_]+)=([^\s]+)")
+PACKAGE_VERSION_RE = re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.[^"]+"')
 MODE_NAMES = {
     0: "Disabled",
     1: "Full",
@@ -43,6 +46,40 @@ def run(cmd: list[str]) -> str:
 def run_ssh(host: str, script: str) -> str:
     remote = f"bash -lc {shlex.quote(script)}"
     return run(["ssh", host, remote])
+
+
+def run_git(args: list[str]) -> str:
+    return run(["git", "-C", str(ROOT), *args]).strip()
+
+
+def expected_binary_version(binary_name: str, ref: str, manifest_path: str) -> str:
+    manifest = run_git(["show", f"{ref}:{manifest_path}"])
+    match = PACKAGE_VERSION_RE.search(manifest)
+    if not match:
+        raise RuntimeError(f"could not parse package version from {ref}:{manifest_path}")
+    major, minor = match.groups()
+    commit_count = run_git(["rev-list", "--count", ref])
+    commit_hash = run_git(["rev-parse", "--short", ref])
+    return f"{binary_name} {major}.{minor}.{commit_count}-{commit_hash}"
+
+
+def expected_binary_versions(master_ref: str, dev_ref: str) -> dict[str, object]:
+    return {
+        "master_ref": master_ref,
+        "dev_ref": dev_ref,
+        "rns_server_master_version": expected_binary_version(
+            "rns-server", master_ref, "rns-server/Cargo.toml"
+        ),
+        "rns_server_dev_version": expected_binary_version(
+            "rns-server", dev_ref, "rns-server/Cargo.toml"
+        ),
+        "rns_ctl_master_version": expected_binary_version(
+            "rns-ctl", master_ref, "rns-ctl/Cargo.toml"
+        ),
+        "rns_ctl_dev_version": expected_binary_version(
+            "rns-ctl", dev_ref, "rns-ctl/Cargo.toml"
+        ),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,6 +112,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--date",
         help="Override report date (YYYY-MM-DD). Default: current UTC date on capture.",
+    )
+    parser.add_argument(
+        "--master-ref",
+        default=DEFAULT_MASTER_REF,
+        help="Local git ref used as the master version baseline",
+    )
+    parser.add_argument(
+        "--dev-ref",
+        default=DEFAULT_DEV_REF,
+        help="Local git ref used as the dev version baseline",
     )
     parser.add_argument(
         "--stdout-summary",
@@ -222,6 +269,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             rns_server_active_since_utc TEXT,
             rns_server_version TEXT NOT NULL,
             rns_ctl_version TEXT NOT NULL,
+            master_ref TEXT NOT NULL,
+            dev_ref TEXT NOT NULL,
+            rns_server_master_version TEXT NOT NULL,
+            rns_server_dev_version TEXT NOT NULL,
+            rns_server_matches_master INTEGER NOT NULL,
+            rns_server_matches_dev INTEGER NOT NULL,
+            rns_ctl_master_version TEXT NOT NULL,
+            rns_ctl_dev_version TEXT NOT NULL,
+            rns_ctl_matches_master INTEGER NOT NULL,
+            rns_ctl_matches_dev INTEGER NOT NULL,
             control_plane_port INTEGER NOT NULL,
             public_listener_present INTEGER NOT NULL,
             rpc_listener_present INTEGER NOT NULL,
@@ -251,6 +308,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(daily_checks)").fetchall()
+    }
+    for column, definition in {
+        "master_ref": "TEXT NOT NULL DEFAULT ''",
+        "dev_ref": "TEXT NOT NULL DEFAULT ''",
+        "rns_server_master_version": "TEXT NOT NULL DEFAULT ''",
+        "rns_server_dev_version": "TEXT NOT NULL DEFAULT ''",
+        "rns_server_matches_master": "INTEGER NOT NULL DEFAULT 0",
+        "rns_server_matches_dev": "INTEGER NOT NULL DEFAULT 0",
+        "rns_ctl_master_version": "TEXT NOT NULL DEFAULT ''",
+        "rns_ctl_dev_version": "TEXT NOT NULL DEFAULT ''",
+        "rns_ctl_matches_master": "INTEGER NOT NULL DEFAULT 0",
+        "rns_ctl_matches_dev": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE daily_checks ADD COLUMN {column} {definition}")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS memstats_samples (
@@ -397,6 +472,7 @@ def collect_snapshot(
     config_dir: str,
     http_port: int,
     report_date_override: str | None,
+    version_refs: dict[str, object],
 ) -> tuple[
     dict[str, object],
     list[dict[str, object]],
@@ -535,6 +611,24 @@ ORDER BY packet_type, direction;
         "rns_server_active_since_utc": basic["RNS_SERVER_ACTIVE_ENTER"] or None,
         "rns_server_version": basic["RNS_SERVER_VERSION"],
         "rns_ctl_version": basic["RNS_CTL_VERSION"],
+        "master_ref": version_refs["master_ref"],
+        "dev_ref": version_refs["dev_ref"],
+        "rns_server_master_version": version_refs["rns_server_master_version"],
+        "rns_server_dev_version": version_refs["rns_server_dev_version"],
+        "rns_server_matches_master": int(
+            basic["RNS_SERVER_VERSION"] == version_refs["rns_server_master_version"]
+        ),
+        "rns_server_matches_dev": int(
+            basic["RNS_SERVER_VERSION"] == version_refs["rns_server_dev_version"]
+        ),
+        "rns_ctl_master_version": version_refs["rns_ctl_master_version"],
+        "rns_ctl_dev_version": version_refs["rns_ctl_dev_version"],
+        "rns_ctl_matches_master": int(
+            basic["RNS_CTL_VERSION"] == version_refs["rns_ctl_master_version"]
+        ),
+        "rns_ctl_matches_dev": int(
+            basic["RNS_CTL_VERSION"] == version_refs["rns_ctl_dev_version"]
+        ),
         "control_plane_port": http_port,
         "public_listener_present": int(basic["LISTENER_PUBLIC"] == "1"),
         "rpc_listener_present": int(basic["LISTENER_RPC"] == "1"),
@@ -597,17 +691,22 @@ def write_db(
                 capture_ts_utc, report_date, host, config_dir, host_uptime, load1, load5,
                 load15, mem_used_mb, mem_total_mb, mem_available_mb, swap_used_mb,
                 swap_total_mb, rns_server_active, rns_server_active_since_utc,
-                rns_server_version, rns_ctl_version, control_plane_port,
-                public_listener_present, rpc_listener_present, control_listener_present,
-                child_rnsd_ready, child_rns_statsd_ready, child_rns_sentineld_ready,
+                rns_server_version, rns_ctl_version, master_ref, dev_ref,
+                rns_server_master_version, rns_server_dev_version,
+                rns_server_matches_master, rns_server_matches_dev,
+                rns_ctl_master_version, rns_ctl_dev_version, rns_ctl_matches_master,
+                rns_ctl_matches_dev, control_plane_port, public_listener_present,
+                rpc_listener_present, control_listener_present, child_rnsd_ready,
+                child_rns_statsd_ready, child_rns_sentineld_ready,
                 established_sessions_4242, transport_uptime, primary_peer_name,
                 primary_peer_up, backbone_up_count, named_peer_up_count,
                 blacklist_total_entries, blacklist_reject_nonzero_entries,
                 blacklist_active_entries, blacklist_connected_entries,
                 provider_bridge_dropped_24h, provider_bridge_disconnected_24h,
                 idle_timeout_events_24h, announce_total, announce_latest_utc,
-                announce_1h, announce_24h, packet_freshness_max_age_seconds, health_state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                announce_1h, announce_24h, packet_freshness_max_age_seconds,
+                health_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 snapshot[key]
@@ -629,6 +728,16 @@ def write_db(
                     "rns_server_active_since_utc",
                     "rns_server_version",
                     "rns_ctl_version",
+                    "master_ref",
+                    "dev_ref",
+                    "rns_server_master_version",
+                    "rns_server_dev_version",
+                    "rns_server_matches_master",
+                    "rns_server_matches_dev",
+                    "rns_ctl_master_version",
+                    "rns_ctl_dev_version",
+                    "rns_ctl_matches_master",
+                    "rns_ctl_matches_dev",
                     "control_plane_port",
                     "public_listener_present",
                     "rpc_listener_present",
@@ -734,8 +843,14 @@ def write_db(
 
 def main() -> int:
     args = parse_args()
+    version_refs = expected_binary_versions(args.master_ref, args.dev_ref)
     snapshot, memstats, packet_rows, interface_rows = collect_snapshot(
-        args.host, args.ssh_target, args.config_dir, args.http_port, args.date
+        args.host,
+        args.ssh_target,
+        args.config_dir,
+        args.http_port,
+        args.date,
+        version_refs,
     )
     db_path = pathlib.Path(args.db_path)
     write_db(db_path, snapshot, memstats, packet_rows, interface_rows)
@@ -748,6 +863,22 @@ def main() -> int:
                     "report_date": snapshot["report_date"],
                     "db_path": str(db_path),
                     "health_state": snapshot["health_state"],
+                    "version_refs": {
+                        "master": snapshot["master_ref"],
+                        "dev": snapshot["dev_ref"],
+                    },
+                    "rns_server_version": snapshot["rns_server_version"],
+                    "rns_server_master_version": snapshot["rns_server_master_version"],
+                    "rns_server_dev_version": snapshot["rns_server_dev_version"],
+                    "rns_server_matches_master": bool(
+                        snapshot["rns_server_matches_master"]
+                    ),
+                    "rns_server_matches_dev": bool(snapshot["rns_server_matches_dev"]),
+                    "rns_ctl_version": snapshot["rns_ctl_version"],
+                    "rns_ctl_master_version": snapshot["rns_ctl_master_version"],
+                    "rns_ctl_dev_version": snapshot["rns_ctl_dev_version"],
+                    "rns_ctl_matches_master": bool(snapshot["rns_ctl_matches_master"]),
+                    "rns_ctl_matches_dev": bool(snapshot["rns_ctl_matches_dev"]),
                     "announce_24h": snapshot["announce_24h"],
                     "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
                     "primary_peer_name": snapshot["primary_peer_name"],
