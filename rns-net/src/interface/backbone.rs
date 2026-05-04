@@ -1379,7 +1379,12 @@ mod tests {
 
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data, rssi, snr } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => {
                 assert_eq!(interface_id, InterfaceId(8100));
                 assert_eq!(data, payload);
             }
@@ -1618,7 +1623,12 @@ mod tests {
 
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data, rssi, snr } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => {
                 assert_eq!(interface_id, InterfaceId(9100));
                 assert_eq!(data, payload);
             }
@@ -1825,7 +1835,12 @@ mod tests {
 
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data, rssi, snr } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => {
                 assert_eq!(interface_id, client_id);
                 assert_eq!(data, vec![1u8; 24]);
             }

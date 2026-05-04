@@ -758,7 +758,12 @@ pub struct NextHopResponse {
 impl<W: Send> fmt::Debug for Event<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Event::Frame { interface_id, data, rssi, snr } => f
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => f
                 .debug_struct("Frame")
                 .field("interface_id", interface_id)
                 .field("data_len", &data.len())

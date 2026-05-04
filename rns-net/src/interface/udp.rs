@@ -313,7 +313,12 @@ mod tests {
         // Should receive Frame event
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data, rssi, snr } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => {
                 assert_eq!(interface_id, InterfaceId(10));
                 assert_eq!(data, payload);
             }

@@ -365,7 +365,12 @@ mod tests {
         // Should receive Frame event (cat echos back the HDLC frame)
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data, rssi, snr } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi,
+                snr,
+            } => {
                 assert_eq!(interface_id, InterfaceId(100));
                 assert_eq!(data, payload);
             }
