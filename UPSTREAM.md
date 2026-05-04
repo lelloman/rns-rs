@@ -1,33 +1,38 @@
 # Upstream Reticulum Tracking
 
-This file tracks the version of [Python Reticulum](https://github.com/markqvist/Reticulum)
-that rns-rs is validated against. When the upstream project advances, compare against
-this baseline to identify what needs to be integrated.
+This repository is a Rust implementation of the Python Reticulum project.
 
-## Current Baseline
+The current upstream reference baseline is:
 
-| Field              | Value                                      |
-|--------------------|--------------------------------------------|
-| **Upstream repo**  | https://github.com/markqvist/Reticulum     |
-| **Release**        | 1.1.3                                      |
-| **Release commit** | `286a78ef8c58ca4503af2b0211b3a2d7e385467c` |
-| **Latest commit**  | `1bee46ed814e671d268801958bb2aa4746e4ed5e`  |
-| **Commit date**    | 2026-01-25                                 |
-| **Commit message** | Updated readme                             |
-| **Verified date**  | 2026-02-18                                 |
+- Project: Reticulum
+- Repository: `https://github.com/markqvist/Reticulum`
+- Local checkout used: `/home/lelloman/Reticulum`
+- Tag: `1.2.0`
+- Commit: `d7c3859f61a08a4330908550c8af9d57659779a6`
+- Commit date: `2026-04-28 21:54:18 +0200`
+- Subject: `Prepare release`
 
-## How to Update
+The previous recorded baseline was Reticulum `1.1.3`, with release commit
+`286a78ef8c58ca4503af2b0211b3a2d7e385467c`. The upstream `1.1.9..1.2.0`
+range was reviewed in `docs/upstream-1.2.0-porting-analysis.md` and ported with
+the following local commits:
 
-1. Check the latest upstream commit:
-   ```bash
-   curl -s https://api.github.com/repos/markqvist/Reticulum/commits/master \
-     | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"sha\"]} {d[\"commit\"][\"committer\"][\"date\"]} {d[\"commit\"][\"message\"][:80]}')"
-   ```
+- `fdcdb91` Gracefully tear down links on shutdown
+- `2446e4c` Port Android local interface sleep handling
+- `d343c0b` Filter Android rmnet auto interfaces
+- `b0bc33f` Document startup inbound readiness behavior
+- `1743069` Add persistent ratchet storage
+- `7919038` Add split resource transfer progress
+- `1061ed5` Add Reticulum Git transport tools
+- `b7afc53` Add rnsh remote shell utility
+- `6313a98` Add utility-specific log targets
+- `2b49017` Add base256 display helper
+- `5931ced` Document Reticulum utility ports
+- `1975197` Fix utility port CI checks
+- `ec5db60` Release Reticulum 1.2 utility ports
+- `13c00ed` Complete rngit upstream parity gaps
 
-2. Compare changes since our baseline:
-   ```bash
-   # In your local Reticulum clone with markqvist remote added
-   git log --oneline 1bee46ed..markqvist/master
-   ```
-
-3. After integrating and validating, update the table above.
+When integrating future upstream changes, compare this baseline against the new
+Reticulum upstream commit, review protocol/runtime/utility changes, port or
+explicitly defer each relevant item, run the interop and focused regression
+tests, then update this file to the new baseline commit.
