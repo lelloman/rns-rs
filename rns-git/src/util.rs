@@ -8,10 +8,22 @@ use rns_net::storage;
 use crate::{Error, Result};
 
 pub fn default_rngit_dir() -> PathBuf {
-    std::env::var_os("RNGIT_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rngit")))
-        .unwrap_or_else(|| PathBuf::from(".rngit"))
+    if let Some(path) = std::env::var_os("RNGIT_CONFIG") {
+        return PathBuf::from(path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        let legacy = home.join(".rngit");
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("rngit");
+        if xdg.exists() || !legacy.exists() {
+            return xdg;
+        }
+        return legacy;
+    }
+    PathBuf::from(".rngit")
 }
 
 pub fn default_reticulum_dir() -> Option<PathBuf> {
@@ -91,6 +103,7 @@ pub fn validate_repo_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn parse_url_extracts_destination_and_repo() {
@@ -106,5 +119,71 @@ mod tests {
         assert!(validate_repo_name("../repo").is_err());
         assert!(validate_repo_name("group/../repo").is_err());
         assert!(validate_repo_name("group/repo").is_ok());
+    }
+
+    #[test]
+    fn default_rngit_dir_prefers_xdg_config_path() {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = SavedEnv::capture();
+        std::env::remove_var("RNGIT_CONFIG");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", tmp.path());
+
+        assert_eq!(
+            default_rngit_dir(),
+            tmp.path().join(".config").join("rngit")
+        );
+
+        saved.restore();
+    }
+
+    #[test]
+    fn default_rngit_dir_keeps_existing_legacy_path() {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = SavedEnv::capture();
+        std::env::remove_var("RNGIT_CONFIG");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", tmp.path());
+        std::fs::create_dir_all(tmp.path().join(".rngit")).unwrap();
+
+        assert_eq!(default_rngit_dir(), tmp.path().join(".rngit"));
+
+        saved.restore();
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct SavedEnv {
+        home: Option<std::ffi::OsString>,
+        xdg_config_home: Option<std::ffi::OsString>,
+        rngit_config: Option<std::ffi::OsString>,
+    }
+
+    impl SavedEnv {
+        fn capture() -> Self {
+            Self {
+                home: std::env::var_os("HOME"),
+                xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
+                rngit_config: std::env::var_os("RNGIT_CONFIG"),
+            }
+        }
+
+        fn restore(self) {
+            restore_var("HOME", self.home);
+            restore_var("XDG_CONFIG_HOME", self.xdg_config_home);
+            restore_var("RNGIT_CONFIG", self.rngit_config);
+        }
+    }
+
+    fn restore_var(key: &str, value: Option<std::ffi::OsString>) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
     }
 }

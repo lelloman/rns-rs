@@ -53,21 +53,25 @@ pub fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub fn create_bundle(path: &Path, _have: &[String]) -> Result<Vec<u8>> {
+pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
     require_repository(path)?;
     if list_refs(path)?.is_empty() {
         return Ok(Vec::new());
     }
     let bundle_path = temp_path("rngit-fetch", "bundle");
-    let result = run(Command::new("git")
-        .arg("--git-dir")
+    let exclusions = valid_repo_objects(path, have);
+    let mut cmd = Command::new("git");
+    cmd.arg("--git-dir")
         .arg(path)
         .arg("bundle")
         .arg("create")
         .arg(&bundle_path)
-        .arg("--all"));
+        .arg("--all");
+    add_exclusions(&mut cmd, &exclusions);
+    let result = run(&mut cmd);
     let bytes = match result {
         Ok(_) => fs::read(&bundle_path)?,
+        Err(err) if is_empty_bundle_error(&err) => Vec::new(),
         Err(err) => {
             let _ = fs::remove_file(&bundle_path);
             return Err(err);
@@ -123,18 +127,28 @@ pub fn local_ref_sha(refname: &str) -> Result<Option<String>> {
     ))
 }
 
-pub fn create_local_bundle(refs: &[String]) -> Result<Vec<u8>> {
+pub fn create_local_bundle(refs: &[String], exclusions: &[String]) -> Result<Vec<u8>> {
+    create_local_bundle_in(Path::new("."), refs, exclusions)
+}
+
+fn create_local_bundle_in(repo: &Path, refs: &[String], exclusions: &[String]) -> Result<Vec<u8>> {
     if refs.is_empty() {
         return Ok(Vec::new());
     }
     let bundle_path = temp_path("rngit-local-push", "bundle");
-    let result = run(Command::new("git")
+    let valid_exclusions = valid_local_objects_in(repo, exclusions);
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(repo)
         .arg("bundle")
         .arg("create")
         .arg(&bundle_path)
-        .args(refs));
+        .args(refs);
+    add_exclusions(&mut cmd, &valid_exclusions);
+    let result = run(&mut cmd);
     let bytes = match result {
         Ok(_) => fs::read(&bundle_path)?,
+        Err(err) if is_empty_bundle_error(&err) => Vec::new(),
         Err(err) => {
             let _ = fs::remove_file(&bundle_path);
             return Err(err);
@@ -142,6 +156,22 @@ pub fn create_local_bundle(refs: &[String]) -> Result<Vec<u8>> {
     };
     let _ = fs::remove_file(&bundle_path);
     Ok(bytes)
+}
+
+pub fn object_exists_local(sha: &str) -> bool {
+    object_exists_local_in(Path::new("."), sha)
+}
+
+fn object_exists_local_in(repo: &Path, sha: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("cat-file")
+        .arg("-e")
+        .arg(format!("{sha}^{{object}}"))
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 pub fn fetch_bundle_into_local(bundle: &[u8], wanted: &[String]) -> Result<()> {
@@ -198,6 +228,45 @@ fn require_repository(path: &Path) -> Result<()> {
     } else {
         Err(Error::msg("repository not found"))
     }
+}
+
+fn valid_repo_objects(path: &Path, shas: &[String]) -> Vec<String> {
+    shas.iter()
+        .filter(|sha| object_exists_in_repo(path, sha))
+        .cloned()
+        .collect()
+}
+
+fn valid_local_objects_in(repo: &Path, shas: &[String]) -> Vec<String> {
+    shas.iter()
+        .filter(|sha| object_exists_local_in(repo, sha))
+        .cloned()
+        .collect()
+}
+
+fn object_exists_in_repo(path: &Path, sha: &str) -> bool {
+    Command::new("git")
+        .arg("--git-dir")
+        .arg(path)
+        .arg("cat-file")
+        .arg("-e")
+        .arg(format!("{sha}^{{object}}"))
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn add_exclusions(cmd: &mut Command, exclusions: &[String]) {
+    for sha in exclusions {
+        cmd.arg(format!("^{sha}"));
+    }
+}
+
+fn is_empty_bundle_error(err: &Error) -> bool {
+    let message = err.to_string();
+    message.contains("Refusing to create empty bundle")
+        || message.contains("does not have any commits")
+        || message.contains("Refusing to create empty")
 }
 
 fn temp_path(prefix: &str, extension: &str) -> PathBuf {
@@ -308,9 +377,60 @@ mod tests {
 
         assert_eq!(
             list_refs(&target).unwrap(),
-            vec![(sha, "refs/heads/main".into())]
+            vec![(sha.clone(), "refs/heads/main".into())]
         );
         assert!(!create_bundle(&target, &[]).unwrap().is_empty());
+        assert!(create_bundle(&target, &[sha]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn local_push_bundle_excludes_known_remote_objects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        fs::create_dir_all(&work).unwrap();
+
+        test_git(Command::new("git").arg("init").arg(&work));
+        fs::write(work.join("README.md"), "hello\n").unwrap();
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("add")
+                .arg("README.md"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("-c")
+                .arg("user.name=RNS Test")
+                .arg("-c")
+                .arg("user.email=rns@example.invalid")
+                .arg("commit")
+                .arg("-m")
+                .arg("init"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("branch")
+                .arg("-M")
+                .arg("main"),
+        );
+        let sha = test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("rev-parse")
+                .arg("refs/heads/main"),
+        )
+        .trim()
+        .to_string();
+        let full = create_local_bundle_in(&work, &["refs/heads/main".into()], &[]).unwrap();
+        let excluded = create_local_bundle_in(&work, &["refs/heads/main".into()], &[sha]).unwrap();
+        assert!(!full.is_empty());
+        assert!(excluded.is_empty());
     }
 
     fn test_git(cmd: &mut Command) -> String {

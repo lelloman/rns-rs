@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
@@ -39,6 +39,7 @@ where
 
 struct RemoteHelper {
     client: SyncClient,
+    remote_refs: Mutex<HashMap<String, String>>,
 }
 
 impl RemoteHelper {
@@ -49,12 +50,17 @@ impl RemoteHelper {
         let client_identity = load_or_create_identity(&config.identity_path)?;
 
         let dest = DestHash(dest_hash);
+        eprintln!("Requesting path to {}...", crate::util::hex(&dest_hash));
         node.request_path(&dest)
             .map_err(|_| Error::msg("failed to request destination path"))?;
         let deadline = Instant::now() + Duration::from_secs(config.connect_timeout_secs);
         while !node.has_path(&dest).unwrap_or(false) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
         }
+        if !node.has_path(&dest).unwrap_or(false) {
+            return Err(Error::msg("destination path resolution timed out"));
+        }
+        eprintln!("Path resolved.");
 
         let recalled = node
             .recall_identity(&dest)
@@ -64,6 +70,7 @@ impl RemoteHelper {
         let link_id = node
             .create_link(dest_hash, sig_pub)
             .map_err(|_| Error::msg("failed to create RNS link"))?;
+        eprintln!("Establishing link...");
         let private_key = client_identity
             .get_private_key()
             .ok_or_else(|| Error::msg("client identity has no private key"))?;
@@ -75,6 +82,7 @@ impl RemoteHelper {
             link_id,
             Duration::from_secs(config.connect_timeout_secs),
         )?;
+        eprintln!("Link established.");
         Ok(Self {
             client: SyncClient {
                 node,
@@ -82,6 +90,7 @@ impl RemoteHelper {
                 state,
                 request_timeout: Duration::from_secs(config.request_timeout_secs),
             },
+            remote_refs: Mutex::new(HashMap::new()),
         })
     }
 
@@ -156,11 +165,13 @@ impl RemoteHelper {
             protocol::repository_request(repository),
         )?;
         let bytes = protocol::response_bin(&response.data)?;
-        decode_status(bytes)
+        let refs = decode_status(bytes)?;
+        self.record_remote_refs(&refs);
+        Ok(refs)
     }
 
     fn fetch(&self, repository: &str, refs: &[FetchRef]) -> Result<()> {
-        let have = refs.iter().map(|r| r.sha.clone()).collect::<Vec<_>>();
+        let have = self.fetch_have_set(refs);
         let response = self.client.request(
             protocol::PATH_FETCH,
             protocol::fetch_request(repository, &have),
@@ -207,7 +218,8 @@ impl RemoteHelper {
             });
         }
 
-        let bundle = git::create_local_bundle(&bundle_refs)?;
+        let exclusions = self.push_exclusion_set();
+        let bundle = git::create_local_bundle(&bundle_refs, &exclusions)?;
         let response = self.client.request(
             protocol::PATH_PUSH,
             protocol::push_request(repository, bundle, updates),
@@ -216,6 +228,70 @@ impl RemoteHelper {
         let _ = decode_status(bytes)?;
         Ok(())
     }
+
+    fn record_remote_refs(&self, refs: &[u8]) {
+        *self.remote_refs.lock().unwrap() = parse_remote_refs(refs);
+    }
+
+    fn fetch_have_set(&self, refs: &[FetchRef]) -> Vec<String> {
+        let remote_refs = self.remote_refs.lock().unwrap();
+        build_fetch_have_set(&remote_refs, refs, |refname| {
+            git::local_ref_sha(refname).ok().flatten()
+        })
+    }
+
+    fn push_exclusion_set(&self) -> Vec<String> {
+        let remote_refs = self.remote_refs.lock().unwrap();
+        build_push_exclusion_set(&remote_refs, git::object_exists_local)
+    }
+}
+
+fn parse_remote_refs(refs: &[u8]) -> HashMap<String, String> {
+    let Ok(text) = std::str::from_utf8(refs) else {
+        return HashMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (sha, name) = line.split_once(' ')?;
+            (name != "HEAD").then(|| (name.to_string(), sha.to_string()))
+        })
+        .collect()
+}
+
+fn build_fetch_have_set(
+    remote_refs: &HashMap<String, String>,
+    refs: &[FetchRef],
+    resolve_local_ref: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut have = BTreeSet::new();
+    for fetch_ref in refs {
+        if let Some(local_sha) = resolve_local_ref(&fetch_ref.name) {
+            if local_sha != fetch_ref.sha {
+                have.insert(local_sha);
+            }
+        }
+    }
+    for (refname, remote_sha) in remote_refs {
+        if let Some(local_sha) = resolve_local_ref(refname) {
+            if &local_sha == remote_sha {
+                have.insert(local_sha);
+            }
+        }
+    }
+    have.into_iter().collect()
+}
+
+fn build_push_exclusion_set(
+    remote_refs: &HashMap<String, String>,
+    object_exists: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    remote_refs
+        .values()
+        .filter(|sha| object_exists(sha))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 struct SyncClient {
@@ -261,6 +337,13 @@ struct SharedCallbacks {
 struct ClientState {
     established: Vec<[u8; 16]>,
     responses: VecDeque<Response>,
+    progress: ProgressState,
+}
+
+#[derive(Default)]
+struct ProgressState {
+    started_at: Option<Instant>,
+    last_percent: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +385,28 @@ impl Callbacks for SharedCallbacks {
             .responses
             .push_back(Response { data, metadata });
         cv.notify_all();
+    }
+
+    fn on_resource_progress(&mut self, _link_id: LinkId, received: usize, total: usize) {
+        if total == 0 {
+            return;
+        }
+        let (lock, _) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        let progress = &mut state.progress;
+        let started_at = *progress.started_at.get_or_insert_with(Instant::now);
+        let percent = ((received.saturating_mul(100)) / total).min(100);
+        if progress.last_percent == Some(percent) && received < total {
+            return;
+        }
+        progress.last_percent = Some(percent);
+        let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
+        let rate = received as f64 / elapsed;
+        eprintln!("rns: transfer {percent}% ({received}/{total} parts, {rate:.1} parts/s)");
+        if received >= total {
+            progress.started_at = None;
+            progress.last_percent = None;
+        }
     }
 }
 
@@ -489,5 +594,64 @@ mod tests {
     fn metadata_status_ok_is_accepted() {
         assert!(ensure_metadata_ok(&protocol::metadata_status(protocol::RES_OK)).is_ok());
         assert!(ensure_metadata_ok(&protocol::metadata_status(protocol::RES_REMOTE_FAIL)).is_err());
+    }
+
+    #[test]
+    fn parses_remote_refs_and_ignores_head() {
+        let refs = parse_remote_refs(
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HEAD\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\nmalformed\n",
+        );
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs["refs/heads/main"],
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+    }
+
+    #[test]
+    fn fetch_have_set_uses_per_ref_and_global_matching_haves() {
+        let remote_refs = HashMap::from([
+            (
+                "refs/heads/main".to_string(),
+                "1111111111111111111111111111111111111111".to_string(),
+            ),
+            (
+                "refs/tags/v1".to_string(),
+                "2222222222222222222222222222222222222222".to_string(),
+            ),
+        ]);
+        let fetch_refs = vec![FetchRef {
+            sha: "3333333333333333333333333333333333333333".into(),
+            name: "refs/heads/feature".into(),
+        }];
+
+        let have = build_fetch_have_set(&remote_refs, &fetch_refs, |name| match name {
+            "refs/heads/main" => Some("1111111111111111111111111111111111111111".into()),
+            "refs/tags/v1" => Some("not-remote".into()),
+            "refs/heads/feature" => Some("4444444444444444444444444444444444444444".into()),
+            _ => None,
+        });
+
+        assert_eq!(
+            have,
+            vec![
+                "1111111111111111111111111111111111111111",
+                "4444444444444444444444444444444444444444"
+            ]
+        );
+    }
+
+    #[test]
+    fn push_exclusion_set_keeps_only_local_known_remote_objects() {
+        let remote_refs = HashMap::from([
+            ("refs/heads/main".to_string(), "aaaa".to_string()),
+            ("refs/heads/dev".to_string(), "bbbb".to_string()),
+            ("refs/tags/v1".to_string(), "aaaa".to_string()),
+        ]);
+
+        let exclusions = build_push_exclusion_set(&remote_refs, |sha| sha == "aaaa");
+
+        assert_eq!(exclusions, vec!["aaaa"]);
     }
 }

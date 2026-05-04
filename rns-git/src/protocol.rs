@@ -19,6 +19,9 @@ pub const RES_REMOTE_FAIL: u8 = 0xff;
 pub const IDX_REPOSITORY: u64 = 0x00;
 pub const IDX_RESULT_CODE: u64 = 0x01;
 
+const ACTION_UPDATE_REF: &str = "update_ref";
+const ACTION_DELETE_REF: &str = "delete_ref";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefUpdate {
     pub refname: String,
@@ -103,8 +106,8 @@ pub fn push_request(repository: &str, bundle: Vec<u8>, updates: Vec<RefUpdate>) 
         ),
         (Value::Str("bundle".to_string()), Value::Bin(bundle)),
         (
-            Value::Str("updates".to_string()),
-            Value::Array(updates.into_iter().map(update_to_value).collect()),
+            Value::Str("operations".to_string()),
+            Value::Array(updates.into_iter().map(update_to_operation_value).collect()),
         ),
     ]))
 }
@@ -123,11 +126,17 @@ pub fn parse_push_request(data: &[u8]) -> Result<(String, Vec<u8>, Vec<RefUpdate
         .and_then(Value::as_bin)
         .map(ToOwned::to_owned)
         .unwrap_or_default();
-    let updates = map_get_str(map, "updates")
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().map(value_to_update).collect::<Result<Vec<_>>>())
-        .transpose()?
-        .unwrap_or_default();
+    let updates = if let Some(arr) = map_get_str(map, "operations").and_then(Value::as_array) {
+        arr.iter()
+            .map(operation_value_to_update)
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        map_get_str(map, "updates")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().map(value_to_update).collect::<Result<Vec<_>>>())
+            .transpose()?
+            .unwrap_or_default()
+    };
     Ok((repo, bundle, updates))
 }
 
@@ -140,6 +149,7 @@ pub fn response_bin(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+#[allow(dead_code)]
 fn update_to_value(update: RefUpdate) -> Value {
     let mut items = vec![
         (Value::Str("ref".to_string()), Value::Str(update.refname)),
@@ -154,6 +164,71 @@ fn update_to_value(update: RefUpdate) -> Value {
         update.new.map(Value::Str).unwrap_or(Value::Nil),
     ));
     Value::Map(items)
+}
+
+fn update_to_operation_value(update: RefUpdate) -> Value {
+    let action = if update.new.is_some() {
+        ACTION_UPDATE_REF
+    } else {
+        ACTION_DELETE_REF
+    };
+    let mut items = vec![
+        (
+            Value::Str("action".to_string()),
+            Value::Str(action.to_string()),
+        ),
+        (Value::Str("ref".to_string()), Value::Str(update.refname)),
+        (Value::Str("force".to_string()), Value::Bool(update.force)),
+    ];
+    if let Some(old) = update.old {
+        items.push((Value::Str("old".to_string()), Value::Str(old)));
+    }
+    if let Some(new) = update.new {
+        items.push((Value::Str("sha".to_string()), Value::Str(new)));
+    }
+    Value::Map(items)
+}
+
+fn operation_value_to_update(value: &Value) -> Result<RefUpdate> {
+    let map = value
+        .as_map()
+        .ok_or_else(|| Error::msg("operation must be a map"))?;
+    let action = map_get_str(map, "action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::msg("operation missing action"))?;
+    let refname = map_get_str(map, "ref")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| Error::msg("operation missing ref"))?;
+    let old = map_get_str(map, "old")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let force = map_get_str(map, "force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    match action {
+        ACTION_UPDATE_REF => {
+            let new = map_get_str(map, "sha")
+                .or_else(|| map_get_str(map, "new"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| Error::msg("update_ref operation missing sha"))?;
+            Ok(RefUpdate {
+                refname,
+                old,
+                new: Some(new),
+                force,
+            })
+        }
+        ACTION_DELETE_REF => Ok(RefUpdate {
+            refname,
+            old,
+            new: None,
+            force,
+        }),
+        other => Err(Error::msg(format!("unknown push operation {other}"))),
+    }
 }
 
 fn value_to_update(value: &Value) -> Result<RefUpdate> {
@@ -226,6 +301,99 @@ mod tests {
         .unwrap();
         assert_eq!(repo, "repo");
         assert_eq!(bundle, b"bundle");
+        assert_eq!(updates, vec![update]);
+    }
+
+    #[test]
+    fn push_request_uses_operations_field() {
+        let update = RefUpdate {
+            refname: "refs/heads/main".to_string(),
+            old: Some("old".to_string()),
+            new: Some("new".to_string()),
+            force: true,
+        };
+        let packed = push_request("repo", Vec::new(), vec![update]);
+        let value = msgpack::unpack_exact(&packed).unwrap();
+        let map = value.as_map().unwrap();
+
+        assert!(map_get_str(map, "operations").is_some());
+        assert!(map_get_str(map, "updates").is_none());
+    }
+
+    #[test]
+    fn parse_push_request_accepts_update_and_delete_operations() {
+        let request = msgpack::pack(&Value::Map(vec![
+            (Value::UInt(IDX_REPOSITORY), Value::Str("repo".into())),
+            (Value::Str("bundle".into()), Value::Bin(Vec::new())),
+            (
+                Value::Str("operations".into()),
+                Value::Array(vec![
+                    Value::Map(vec![
+                        (
+                            Value::Str("action".into()),
+                            Value::Str(ACTION_UPDATE_REF.into()),
+                        ),
+                        (
+                            Value::Str("ref".into()),
+                            Value::Str("refs/heads/main".into()),
+                        ),
+                        (Value::Str("sha".into()), Value::Str("new".into())),
+                        (Value::Str("force".into()), Value::Bool(true)),
+                    ]),
+                    Value::Map(vec![
+                        (
+                            Value::Str("action".into()),
+                            Value::Str(ACTION_DELETE_REF.into()),
+                        ),
+                        (
+                            Value::Str("ref".into()),
+                            Value::Str("refs/heads/old".into()),
+                        ),
+                    ]),
+                ]),
+            ),
+        ]));
+
+        let (_, _, updates) = parse_push_request(&request).unwrap();
+
+        assert_eq!(
+            updates,
+            vec![
+                RefUpdate {
+                    refname: "refs/heads/main".into(),
+                    old: None,
+                    new: Some("new".into()),
+                    force: true
+                },
+                RefUpdate {
+                    refname: "refs/heads/old".into(),
+                    old: None,
+                    new: None,
+                    force: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_push_request_keeps_legacy_updates_compatibility() {
+        let update = RefUpdate {
+            refname: "refs/heads/main".into(),
+            old: Some("old".into()),
+            new: Some("new".into()),
+            force: false,
+        };
+        let request = msgpack::pack(&Value::Map(vec![
+            (Value::UInt(IDX_REPOSITORY), Value::Str("repo".into())),
+            (Value::Str("bundle".into()), Value::Bin(Vec::new())),
+            (
+                Value::Str("updates".into()),
+                Value::Array(vec![update_to_value(update.clone())]),
+            ),
+        ]));
+
+        let (_, _, updates) = parse_push_request(&request).unwrap();
+
         assert_eq!(updates, vec![update]);
     }
 

@@ -335,7 +335,12 @@ impl ServerOptions {
                 }
                 "--print-identity" => options.print_identity = true,
                 "-Z" | "--base256" => options.base256 = true,
-                "--service" | "--interactive" => {}
+                "--service" | "--interactive" => {
+                    return Err(Error::msg(format!(
+                        "{arg} is not supported by this rngit binary\n{}",
+                        usage()
+                    )))
+                }
                 "-h" | "--help" => return Err(Error::msg(usage())),
                 other => {
                     return Err(Error::msg(format!(
@@ -350,7 +355,7 @@ impl ServerOptions {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit [--config DIR] [--rnsconfig DIR] [--print-identity] [-Z|--base256] [--service]"
+    "usage: rngit [--config DIR] [--rnsconfig DIR] [--print-identity] [-Z|--base256]"
 }
 
 #[cfg(test)]
@@ -383,6 +388,15 @@ mod tests {
 
         let short = ServerOptions::parse(vec!["-Z".to_string()]).unwrap();
         assert!(short.base256);
+    }
+
+    #[test]
+    fn rejects_unsupported_service_mode_flags() {
+        let service = ServerOptions::parse(vec!["--service".to_string()]).unwrap_err();
+        assert!(service.to_string().contains("not supported"));
+
+        let interactive = ServerOptions::parse(vec!["--interactive".to_string()]).unwrap_err();
+        assert!(interactive.to_string().contains("not supported"));
     }
 
     #[test]
