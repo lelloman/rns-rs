@@ -357,6 +357,8 @@ fn reader_loop(
     // Initial delay for hardware init (matches Python: sleep(2.0))
     thread::sleep(Duration::from_secs(2));
     let mut connected_once = false;
+    let mut last_rssi: Option<i16> = None;
+    let mut last_snr: Option<f64> = None;
     if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
         log::error!("[{}] initial RNode setup failed: {}", config.name, e);
         return;
@@ -381,12 +383,16 @@ fn reader_loop(
                                 if tx
                                     .send(Event::Frame {
                                         interface_id: sub_id,
-                                        data,
+                                        data: data,
+                                        rssi: last_rssi,
+                                        snr: last_snr,
                                     })
                                     .is_err()
                                 {
                                     return;
                                 }
+                                last_rssi = None;
+                                last_snr = None;
                             }
                             rnode_kiss::RNodeEvent::Ready => {
                                 // Flow control: unlock all subinterfaces that have flow_control
@@ -395,6 +401,12 @@ fn reader_loop(
                                         process_flow_queue(fs, &writer, i as u8);
                                     }
                                 }
+                            }
+                            rnode_kiss::RNodeEvent::StatRssi(rssi) => {
+                                last_rssi = Some(rssi as i16 - 157);
+                            }
+                            rnode_kiss::RNodeEvent::StatSnr(snr) => {
+                                last_snr = Some(snr as f64 * 0.25);
                             }
                             rnode_kiss::RNodeEvent::Error(code) => {
                                 log::error!("[{}] RNode error: 0x{:02X}", config.name, code);

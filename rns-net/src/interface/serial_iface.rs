@@ -115,6 +115,8 @@ fn reader_loop(
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {
@@ -386,6 +388,8 @@ mod tests {
                             let _ = tx.send(Event::Frame {
                                 interface_id: InterfaceId(0),
                                 data: frame,
+                                rssi: None,
+                                snr: None,
                             });
                             return;
                         }
@@ -437,6 +441,8 @@ mod tests {
                             let _ = tx.send(Event::Frame {
                                 interface_id: id,
                                 data: frame,
+                                rssi: None,
+                                snr: None,
                             });
                         }
                     }

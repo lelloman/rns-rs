@@ -139,6 +139,8 @@ fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSe
                     .send(Event::Frame {
                         interface_id: id,
                         data: buf[..n].to_vec(),
+                        rssi: None,
+                        snr: None,
                     })
                     .is_err()
                 {
@@ -311,7 +313,7 @@ mod tests {
         // Should receive Frame event
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data } => {
+            Event::Frame { interface_id, data, rssi, snr } => {
                 assert_eq!(interface_id, InterfaceId(10));
                 assert_eq!(data, payload);
             }

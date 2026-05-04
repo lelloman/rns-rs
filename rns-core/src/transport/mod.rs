@@ -523,8 +523,10 @@ impl TransportEngine {
         iface: InterfaceId,
         now: f64,
         rng: &mut dyn Rng,
+        rssi: Option<i16>,
+        snr: Option<f64>,
     ) -> Vec<TransportAction> {
-        self.handle_inbound_with_announce_queue(raw, iface, now, rng, None)
+        self.handle_inbound_with_announce_queue(raw, iface, now, rng, None, rssi, snr)
     }
 
     pub fn handle_inbound_with_announce_queue(
@@ -534,8 +536,10 @@ impl TransportEngine {
         now: f64,
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
+        rssi: Option<i16>,
+        snr: Option<f64>,
     ) -> Vec<TransportAction> {
-        let Some(ctx) = self.prepare_inbound_packet(raw, iface, now) else {
+        let Some(ctx) = self.prepare_inbound_packet(raw, iface, now, rssi, snr) else {
             return Vec::new();
         };
         let mut actions = Vec::new();
@@ -559,6 +563,8 @@ impl TransportEngine {
         raw: &[u8],
         iface: InterfaceId,
         now: f64,
+        rssi: Option<i16>,
+        snr: Option<f64>,
     ) -> Option<InboundPacketCtx> {
         let mut packet = RawPacket::unpack(raw).ok()?;
         let from_local_client = self
@@ -567,6 +573,8 @@ impl TransportEngine {
             .map(|i| i.is_local_client)
             .unwrap_or(false);
         packet.hops += 1;
+        packet.rssi = rssi;
+        packet.snr = snr;
         if from_local_client {
             packet.hops = packet.hops.saturating_sub(1);
         }
@@ -1228,6 +1236,8 @@ impl TransportEngine {
             app_data: ctx.validated.app_data,
             hops: ctx.packet.hops,
             receiving_interface: ctx.iface,
+            rssi: ctx.packet.rssi,
+            snr: ctx.packet.snr,
         });
 
         actions.push(TransportAction::PathUpdated {
@@ -1480,7 +1490,7 @@ impl TransportEngine {
                 ctx.now,
             ) {
                 let released_actions =
-                    self.handle_inbound(&held.raw, held.receiving_interface, ctx.now, ctx.rng);
+                    self.handle_inbound(&held.raw, held.receiving_interface, ctx.now, ctx.rng, None, None);
                 ctx.actions.extend(released_actions);
             }
         }

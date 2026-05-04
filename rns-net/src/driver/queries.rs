@@ -204,6 +204,8 @@ impl Driver {
                         hops,
                         received_at,
                         receiving_interface: rns_core::transport::types::InterfaceId(0),
+                        rssi: None,
+                        snr: None,
                     },
                 );
                 Some(QueryResponse::InjectIdentity(true))
@@ -220,6 +222,8 @@ impl Driver {
                             hops: entry.hops,
                             received_at: entry.received_at,
                             receiving_interface: entry.receiving_interface,
+                            rssi: None,
+                            snr: None,
                         },
                         was_used: entry.was_used,
                         last_used_at: entry.last_used_at,

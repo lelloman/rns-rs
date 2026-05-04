@@ -110,6 +110,8 @@ pub enum Event<W: Send> {
     Frame {
         interface_id: InterfaceId,
         data: Vec<u8>,
+        rssi: Option<i16>,
+        snr: Option<f64>,
     },
     /// (Internal) An announce was verified off-thread and is ready for driver-side processing.
     AnnounceVerified {
@@ -756,10 +758,12 @@ pub struct NextHopResponse {
 impl<W: Send> fmt::Debug for Event<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Event::Frame { interface_id, data } => f
+            Event::Frame { interface_id, data, rssi, snr } => f
                 .debug_struct("Frame")
                 .field("interface_id", interface_id)
                 .field("data_len", &data.len())
+                .field("rssi", rssi)
+                .field("snr", snr)
                 .finish(),
             Event::AnnounceVerified { key, .. } => f
                 .debug_struct("AnnounceVerified")

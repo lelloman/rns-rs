@@ -162,6 +162,8 @@ fn run_reader(
                     let _ = tx.send(Event::Frame {
                         interface_id,
                         data: buf[..len].to_vec(),
+                        rssi: None,
+                        snr: None,
                     });
                 }
             }

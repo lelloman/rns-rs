@@ -195,6 +195,10 @@ pub struct AnnouncedIdentity {
     pub received_at: f64,
     /// The interface on which this announce was received.
     pub receiving_interface: InterfaceId,
+    /// RSSI when this announce was received.
+    pub rssi: Option<i16>,
+    /// SNR when this announce was received.
+    pub snr: Option<f64>,
 }
 
 #[cfg(test)]

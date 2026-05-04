@@ -1,7 +1,7 @@
 use super::*;
 
 impl Driver {
-    pub(crate) fn handle_frame_event(&mut self, interface_id: InterfaceId, data: Vec<u8>) {
+    pub(crate) fn handle_frame_event(&mut self, interface_id: InterfaceId, data: Vec<u8>, rssi: Option<i16>, snr: Option<f64>) {
         if data.len() > 2 && (data[0] & 0x03) == 0x01 {
             log::debug!(
                 "Announce:frame from iface {} (len={}, flags=0x{:02x})",
@@ -105,10 +105,12 @@ impl Driver {
                 time::now(),
                 &mut self.rng,
                 Some(&mut announce_queue),
+                rssi,
+                snr,
             )
         } else {
             self.engine
-                .handle_inbound(&packet, interface_id, time::now(), &mut self.rng)
+                .handle_inbound(&packet, interface_id, time::now(), &mut self.rng, rssi, snr)
         };
 
         #[cfg(feature = "hooks")]
@@ -596,8 +598,8 @@ impl Driver {
             };
 
             match event {
-                Event::Frame { interface_id, data } => {
-                    self.handle_frame_event(interface_id, data);
+                Event::Frame { interface_id, data, rssi, snr } => {
+                    self.handle_frame_event(interface_id, data, rssi, snr );
                 }
                 Event::AnnounceVerified {
                     key,

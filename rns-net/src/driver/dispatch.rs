@@ -545,6 +545,8 @@ impl Driver {
                     app_data,
                     hops,
                     receiving_interface,
+                    rssi,
+                    snr,
                     ..
                 } => {
                     #[cfg(feature = "hooks")]
@@ -635,6 +637,8 @@ impl Driver {
                         hops,
                         received_at: time::now(),
                         receiving_interface,
+                        rssi,
+                        snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
                     log::info!(

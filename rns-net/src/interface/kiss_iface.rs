@@ -210,7 +210,9 @@ fn reader_loop(
                             if tx
                                 .send(Event::Frame {
                                     interface_id: id,
-                                    data,
+                                    data: data,
+                                    rssi: None,
+                                    snr: None,
                                 })
                                 .is_err()
                             {

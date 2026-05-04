@@ -946,6 +946,8 @@ fn data_receiver_loop(
                     .send(Event::Frame {
                         interface_id: iface_id,
                         data: data.to_vec(),
+                        rssi: None,
+                        snr: None,
                     })
                     .is_err()
                 {

@@ -81,6 +81,8 @@ pub struct RawPacket {
     pub data: Vec<u8>,
     pub raw: Vec<u8>,
     pub packet_hash: [u8; 32],
+    pub rssi: Option<i16>,
+    pub snr: Option<f64>,
 }
 
 impl RawPacket {
@@ -153,6 +155,8 @@ impl RawPacket {
             data: data.to_vec(),
             raw,
             packet_hash,
+            rssi: None,
+            snr: None,
         })
     }
 
@@ -230,6 +234,8 @@ impl RawPacket {
                 data,
                 raw: raw.to_vec(),
                 packet_hash,
+                rssi: None,
+                snr: None,
             })
         } else if flags.header_type == constants::HEADER_1 {
             // HEADER_1: [flags:1][hops:1][dest_hash:16][context:1][data:*]
@@ -255,6 +261,8 @@ impl RawPacket {
                 data,
                 raw: raw.to_vec(),
                 packet_hash,
+                rssi: None,
+                snr: None,
             })
         } else {
             Err(PacketError::InvalidHeaderType)

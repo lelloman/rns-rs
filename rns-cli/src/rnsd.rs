@@ -12,10 +12,20 @@ struct DaemonCallbacks;
 
 impl Callbacks for DaemonCallbacks {
     fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
+        let rssi = match announced.rssi {
+            Some(x) => format!(", rssi:{}", x),
+            None => "".to_string(),
+        };
+        let snr = match announced.snr {
+            Some(x) => format!(", snr:{}", x),
+            None => "".to_string(),
+        };
         log::info!(
-            "Announce received for {} (hops: {})",
+            "Announce received for {} (hops: {}{}{})",
             hex(&announced.dest_hash.0),
             announced.hops,
+            rssi,
+            snr,
         );
     }
 

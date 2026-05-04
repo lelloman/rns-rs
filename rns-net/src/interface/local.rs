@@ -276,6 +276,8 @@ fn unix_reader_loop(mut stream: std::os::unix::net::UnixStream, id: InterfaceId,
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {
@@ -338,6 +340,8 @@ fn tcp_reader_loop(mut stream: TcpStream, id: InterfaceId, tx: EventSender) {
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {
@@ -503,6 +507,8 @@ fn local_client_reader_loop(
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {

@@ -158,6 +158,8 @@ fn reader_loop(
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {
@@ -363,7 +365,7 @@ mod tests {
         // Should receive Frame event (cat echos back the HDLC frame)
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data } => {
+            Event::Frame { interface_id, data, rssi, snr } => {
                 assert_eq!(interface_id, InterfaceId(100));
                 assert_eq!(data, payload);
             }

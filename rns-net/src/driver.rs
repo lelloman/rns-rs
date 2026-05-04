@@ -482,6 +482,8 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     app_data,
                     hops,
                     receiving_interface: InterfaceId(receiving_interface),
+                    rssi: None,
+                    snr: None,
                 },
             }
         })

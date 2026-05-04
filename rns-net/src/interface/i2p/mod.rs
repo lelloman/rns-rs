@@ -507,6 +507,8 @@ fn peer_reader_loop(
                         .send(Event::Frame {
                             interface_id: id,
                             data: frame,
+                            rssi: None,
+                            snr: None,
                         })
                         .is_err()
                     {
