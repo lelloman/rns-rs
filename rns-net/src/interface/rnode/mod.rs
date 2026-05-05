@@ -383,7 +383,7 @@ fn reader_loop(
                                 if tx
                                     .send(Event::Frame {
                                         interface_id: sub_id,
-                                        data: data,
+                                        data,
                                         rssi: last_rssi,
                                         snr: last_snr,
                                     })
@@ -424,6 +424,8 @@ fn reader_loop(
                 }
             }
         };
+
+        clear_pending_rx_metadata(&mut last_rssi, &mut last_snr);
 
         if !disconnected || config.pre_opened_fd.is_some() {
             return;
@@ -577,6 +579,11 @@ fn reset_flow_states(flow_states: &[Arc<Mutex<SubFlowState>>]) {
         state.ready = true;
         state.queue.clear();
     }
+}
+
+fn clear_pending_rx_metadata(last_rssi: &mut Option<i16>, last_snr: &mut Option<f32>) {
+    *last_rssi = None;
+    *last_snr = None;
 }
 
 fn reopen_connection(
@@ -1187,6 +1194,17 @@ mod tests {
         assert!(flow_state.lock().unwrap().ready);
 
         unsafe { libc::close(master_fd) };
+    }
+
+    #[test]
+    fn rnode_reset_clears_pending_rx_metadata() {
+        let mut last_rssi = Some(-101);
+        let mut last_snr = Some(7.25);
+
+        clear_pending_rx_metadata(&mut last_rssi, &mut last_snr);
+
+        assert_eq!(last_rssi, None);
+        assert_eq!(last_snr, None);
     }
 
     #[test]

@@ -271,8 +271,7 @@ fn dispatch_announce_received_persists_ratchet() {
             app_data: None,
             hops: 1,
             receiving_interface: InterfaceId(1),
-            rssi: None,
-            snr: None,
+            rx: rns_core::transport::RxMetadata::default(),
         },
     ]);
 

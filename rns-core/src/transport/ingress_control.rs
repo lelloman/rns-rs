@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use super::types::{IngressControlConfig, InterfaceId};
+use super::RxMetadata;
 
 /// A held announce waiting for release after burst conditions subside.
 #[derive(Debug, Clone)]
@@ -12,6 +13,8 @@ pub struct HeldAnnounce {
     pub hops: u8,
     /// Interface the announce was received on.
     pub receiving_interface: InterfaceId,
+    /// Receive metadata from the original inbound frame.
+    pub rx: RxMetadata,
     /// When the announce was held.
     pub timestamp: f64,
 }
@@ -349,6 +352,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 3,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -410,6 +414,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 3,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -447,6 +452,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 5,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -458,6 +464,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 2,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -469,6 +476,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 8,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -498,6 +506,41 @@ mod tests {
     }
 
     #[test]
+    fn test_released_announce_preserves_rx_metadata() {
+        let mut ic = IngressControl::new();
+        let started = 0.0;
+        let now = 10000.0;
+        let rx = RxMetadata {
+            rssi: Some(-93),
+            snr: Some(4.25),
+        };
+
+        ic.hold_announce(
+            iface(1),
+            &IngressControlConfig::enabled(),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 1,
+                receiving_interface: iface(1),
+                rx,
+                timestamp: now,
+            },
+        );
+
+        let released = ic
+            .process_held_announces(
+                iface(1),
+                &IngressControlConfig::enabled(),
+                1.0,
+                started,
+                now,
+            )
+            .expect("held announce should release");
+        assert_eq!(released.rx, rx);
+    }
+
+    #[test]
     fn test_max_held_announces() {
         let mut ic = IngressControl::new();
 
@@ -513,6 +556,7 @@ mod tests {
                     raw: vec![0; 10],
                     hops: 1,
                     receiving_interface: iface(1),
+                    rx: RxMetadata::default(),
                     timestamp: 0.0,
                 },
             );
@@ -529,6 +573,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 1,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: 0.0,
             },
         );
@@ -552,6 +597,7 @@ mod tests {
                     raw: vec![i as u8],
                     hops: 1,
                     receiving_interface: iface(1),
+                    rx: RxMetadata::default(),
                     timestamp: i as f64,
                 },
             );
@@ -573,6 +619,7 @@ mod tests {
                 raw: vec![1; 10],
                 hops: 5,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: 0.0,
             },
         );
@@ -587,6 +634,7 @@ mod tests {
                 raw: vec![2; 10],
                 hops: 2,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: 1.0,
             },
         );
@@ -606,6 +654,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 1,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: 0.0,
             },
         );
@@ -626,6 +675,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 1,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: 0.0,
             },
         );
@@ -650,6 +700,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 1,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );
@@ -661,6 +712,7 @@ mod tests {
                 raw: vec![0; 10],
                 hops: 2,
                 receiving_interface: iface(1),
+                rx: RxMetadata::default(),
                 timestamp: now,
             },
         );

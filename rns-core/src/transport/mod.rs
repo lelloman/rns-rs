@@ -51,16 +51,34 @@ use self::types::{
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RxMetadata {
     pub rssi: Option<i16>,
     pub snr: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InboundFrame<'a> {
     pub raw: &'a [u8],
     pub iface: InterfaceId,
     pub now: f64,
     pub rx: RxMetadata,
+}
+
+impl<'a> InboundFrame<'a> {
+    pub fn new(raw: &'a [u8], iface: InterfaceId, now: f64) -> Self {
+        Self {
+            raw,
+            iface,
+            now,
+            rx: RxMetadata::default(),
+        }
+    }
+
+    pub fn with_rx(mut self, rx: RxMetadata) -> Self {
+        self.rx = rx;
+        self
+    }
 }
 
 struct InboundPacketCtx {
@@ -806,6 +824,10 @@ impl TransportEngine {
             Err(_) => return,
         };
 
+        if self.should_hold_announce(packet, original_raw, iface, now) {
+            return;
+        }
+
         let sig_cache_key =
             Self::announce_sig_cache_key(packet.destination_hash, &announce.signature);
 
@@ -920,6 +942,10 @@ impl TransportEngine {
                 raw: original_raw.to_vec(),
                 hops: packet.hops,
                 receiving_interface: iface,
+                rx: RxMetadata {
+                    rssi: packet.rssi,
+                    snr: packet.snr,
+                },
                 timestamp: now,
             },
         );
@@ -1234,8 +1260,10 @@ impl TransportEngine {
             app_data: ctx.validated.app_data,
             hops: ctx.packet.hops,
             receiving_interface: ctx.iface,
-            rssi: ctx.packet.rssi,
-            snr: ctx.packet.snr,
+            rx: RxMetadata {
+                rssi: ctx.packet.rssi,
+                snr: ctx.packet.snr,
+            },
         });
 
         actions.push(TransportAction::PathUpdated {
@@ -1492,10 +1520,7 @@ impl TransportEngine {
                         raw: &held.raw,
                         iface: held.receiving_interface,
                         now: ctx.now,
-                        rx: RxMetadata {
-                            rssi: None,
-                            snr: None,
-                        },
+                        rx: held.rx,
                     },
                     ctx.rng,
                 );
@@ -3846,7 +3871,7 @@ mod tests {
         let mut engine = TransportEngine::new(make_config(true));
         let mut inbound = make_interface(1, constants::MODE_FULL);
         inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
-        inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+        inbound.ia_freq = 10_000.0;
         inbound.started = 0.0;
         engine.register_interface(inbound);
         engine.register_interface(make_interface(2, constants::MODE_ACCESS_POINT));
@@ -3940,6 +3965,58 @@ mod tests {
         )
         .unwrap()
         .raw
+    }
+
+    #[test]
+    fn test_ingress_held_announce_preserves_rx_metadata_on_release() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut inbound = make_interface(1, constants::MODE_FULL);
+        inbound.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+        inbound.ia_freq = constants::IC_BURST_FREQ + 1.0;
+        inbound.started = 0.0;
+        engine.register_interface(inbound);
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let dest_hash =
+            crate::destination::destination_hash("ingress", &["rx"], Some(identity.hash()));
+        let name_hash = crate::destination::name_hash("ingress", &["rx"]);
+        let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
+        let rx = RxMetadata {
+            rssi: Some(-91),
+            snr: Some(5.5),
+        };
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
+        let held_actions = engine.handle_inbound(
+            InboundFrame::new(&announce_raw, InterfaceId(1), 10000.0).with_rx(rx),
+            &mut rng,
+        );
+
+        assert!(held_actions.is_empty());
+        assert_eq!(engine.held_announce_count(&InterfaceId(1)), 1);
+        assert!(!engine.has_path(&dest_hash));
+
+        engine
+            .interfaces
+            .get_mut(&InterfaceId(1))
+            .expect("interface must exist")
+            .ia_freq = 0.0;
+
+        let released_actions = engine.tick(10000.0 + constants::IC_BURST_PENALTY + 1.0, &mut rng);
+
+        let released_rx = released_actions.iter().find_map(|action| match action {
+            TransportAction::AnnounceReceived {
+                destination_hash,
+                rx: action_rx,
+                ..
+            } if *destination_hash == dest_hash => Some(*action_rx),
+            _ => None,
+        });
+
+        assert_eq!(released_rx, Some(rx));
+        assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
+        assert!(engine.has_path(&dest_hash));
     }
 
     #[test]

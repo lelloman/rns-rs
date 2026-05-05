@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use super::RxMetadata;
 use crate::constants;
 
 pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
@@ -186,8 +187,7 @@ pub enum TransportAction {
         app_data: Option<Vec<u8>>,
         hops: u8,
         receiving_interface: InterfaceId,
-        rssi: Option<i16>,
-        snr: Option<f32>,
+        rx: RxMetadata,
     },
     /// A path was updated in the path table.
     PathUpdated {
