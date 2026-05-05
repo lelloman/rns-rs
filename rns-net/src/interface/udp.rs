@@ -316,8 +316,8 @@ mod tests {
             Event::Frame {
                 interface_id,
                 data,
-                rssi,
-                snr,
+                rssi: _,
+                snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(10));
                 assert_eq!(data, payload);

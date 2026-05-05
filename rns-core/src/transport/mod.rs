@@ -1916,7 +1916,18 @@ mod tests {
         assert!(!engine.has_path(&dest_hash));
 
         let mut rng = rns_crypto::FixedRng::new(&[0x62; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         assert!(engine.has_path(&dest_hash));
         assert!(
@@ -2054,7 +2065,18 @@ mod tests {
         .unwrap();
         let mut rng = rns_crypto::FixedRng::new(&[0x33; 32]);
 
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 101.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 101.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         assert!(matches!(
             engine
@@ -2458,7 +2480,18 @@ mod tests {
         engine.blackhole_identity(*identity.hash(), now, None, None);
 
         let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), now, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should produce no AnnounceReceived or PathUpdated actions
         assert!(actions
@@ -2523,9 +2556,15 @@ mod tests {
         let mut queue = AnnounceVerifyQueue::new(8);
         let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
         let actions = engine.handle_inbound_with_announce_queue(
-            &packet.raw,
-            InterfaceId(1),
-            1000.0,
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
             &mut rng,
             Some(&mut queue),
         );
@@ -2574,9 +2613,15 @@ mod tests {
         let mut queue = AnnounceVerifyQueue::new(8);
         let mut rng = rns_crypto::FixedRng::new(&[0x77; 32]);
         let actions = engine.handle_inbound_with_announce_queue(
-            &packet.raw,
-            InterfaceId(1),
-            1000.0,
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
             &mut rng,
             Some(&mut queue),
         );
@@ -2603,9 +2648,15 @@ mod tests {
         assert!(engine.announce_sig_cache_contains(&sig_cache_key));
 
         let actions = engine.handle_inbound_with_announce_queue(
-            &packet.raw,
-            InterfaceId(1),
-            1001.0,
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1001.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
             &mut rng,
             Some(&mut queue),
         );
@@ -2711,7 +2762,18 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should have local delivery; hops should still be 0 (not 1)
         // because the local client decrement cancels the increment
@@ -2736,7 +2798,15 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
         let ctx = engine
-            .prepare_inbound_packet(&packet.raw, InterfaceId(9), 1000.0)
+            .prepare_inbound_packet(InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(9),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            })
             .expect("packet should parse and pass filter");
 
         assert!(ctx.original_raw.is_none());
@@ -2758,7 +2828,15 @@ mod tests {
         )
         .unwrap();
         let announce_ctx = engine
-            .prepare_inbound_packet(&announce.raw, InterfaceId(9), 1000.0)
+            .prepare_inbound_packet(InboundFrame {
+                raw: &announce.raw,
+                iface: InterfaceId(9),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            })
             .expect("announce should parse and pass filter");
         assert_eq!(
             announce_ctx.original_raw.as_deref(),
@@ -2785,7 +2863,18 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"deliver").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         let deliver = actions
             .iter()
@@ -2825,7 +2914,18 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should have ForwardPlainBroadcast to external (to_local=false)
         let forward = actions.iter().find(|a| {
@@ -2859,7 +2959,18 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(2), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(2),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should have ForwardPlainBroadcast to local clients (to_local=true)
         let forward = actions.iter().find(|a| {
@@ -2890,7 +3001,18 @@ mod tests {
             RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // No ForwardPlainBroadcast should be emitted
         let has_forward = actions
@@ -2935,7 +3057,18 @@ mod tests {
         .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should have ForwardToLocalClients since we have local clients
         let forward = actions
@@ -2990,7 +3123,18 @@ mod tests {
         .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0x22; 32]);
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // No ForwardToLocalClients should be emitted
         let has_forward = actions
@@ -3036,7 +3180,18 @@ mod tests {
 
         let mut rng = rns_crypto::FixedRng::new(&[0x33; 32]);
         // Feed announce from local client 1
-        let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Should forward to local clients, excluding interface 1 (the sender)
         let forward = actions
@@ -3141,7 +3296,18 @@ mod tests {
         .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0xDD; 32]);
-        engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         // Path should be in path table
         assert!(engine.has_path(&dest_hash));
@@ -3703,7 +3869,18 @@ mod tests {
         );
 
         let mut rng = rns_crypto::FixedRng::new(&[0x88; 32]);
-        let actions = engine.handle_inbound(&announce_raw, InterfaceId(1), 1000.0, &mut rng);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &announce_raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
 
         assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
         assert!(engine.has_path(&dest_hash));
@@ -3786,7 +3963,18 @@ mod tests {
         let mut announce_packet = RawPacket::unpack(&announce_raw).unwrap();
         announce_packet.raw[1] = 1;
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        engine.handle_inbound(&announce_packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        engine.handle_inbound(
+            InboundFrame {
+                raw: &announce_packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
         assert!(engine.has_path(&dest_hash));
         assert_eq!(engine.hops_to(&dest_hash), Some(1));
 
@@ -3860,7 +4048,18 @@ mod tests {
 
         // Feed announce from interface 2 (Bob's side), hops=0 → stored as hops=1
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
-        engine.handle_inbound(&announce_raw, InterfaceId(2), 1000.0, &mut rng);
+        engine.handle_inbound(
+            InboundFrame {
+                raw: &announce_raw,
+                iface: InterfaceId(2),
+                now: 1000.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
         assert_eq!(engine.hops_to(&dest_hash), Some(1));
 
         // Now send a HEADER_2 transport packet addressed to the daemon
@@ -3882,7 +4081,18 @@ mod tests {
         h2_raw.extend_from_slice(b"hello via transport");
 
         let mut rng2 = rns_crypto::FixedRng::new(&[0x22; 32]);
-        let actions = engine.handle_inbound(&h2_raw, InterfaceId(1), 1001.0, &mut rng2);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &h2_raw,
+                iface: InterfaceId(1),
+                now: 1001.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng2,
+        );
 
         // This SHOULD forward via step 5 (transport forwarding)
         let has_send = actions.iter().any(|a| {

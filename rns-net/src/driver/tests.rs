@@ -216,6 +216,8 @@ fn make_announced_identity(
         hops: 1,
         received_at,
         receiving_interface,
+        rssi: Some(-100),
+        snr: Some(10.5),
     }
 }
 
@@ -817,6 +819,8 @@ fn process_inbound_frame() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -1609,6 +1613,8 @@ fn announce_callback() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -2004,6 +2010,8 @@ fn frame_updates_rx_stats() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(-10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -2199,6 +2207,8 @@ fn query_path_table() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
 
@@ -2264,6 +2274,8 @@ fn query_drop_path() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
 
@@ -2394,6 +2406,8 @@ fn register_destination_and_deliver() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -4397,6 +4411,8 @@ fn disabled_interface_drops_ingress_and_egress() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: vec![0x00, 0x01, 0x42],
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -4557,6 +4573,8 @@ fn announce_received_populates_known_destinations() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -4618,6 +4636,8 @@ fn known_destinations_cleanup_respects_ttl() {
                 hops: 1,
                 received_at: time::now() - 20.0,
                 receiving_interface: InterfaceId(1),
+                rssi: Some(-100),
+                snr: Some(10.5),
             },
             was_used: false,
             last_used_at: None,
@@ -4635,6 +4655,8 @@ fn known_destinations_cleanup_respects_ttl() {
                 hops: 1,
                 received_at: time::now() - 5.0,
                 receiving_interface: InterfaceId(1),
+                rssi: Some(-100),
+                snr: Some(10.5),
             },
             was_used: false,
             last_used_at: None,
@@ -4958,6 +4980,8 @@ fn query_has_path() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
 
@@ -5024,6 +5048,8 @@ fn query_hops_to() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
 
@@ -5081,6 +5107,8 @@ fn query_recall_identity() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
 
@@ -5501,6 +5529,8 @@ fn prove_all_generates_proof_on_delivery() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -5579,6 +5609,8 @@ fn prove_none_does_not_generate_proof() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -5648,6 +5680,8 @@ fn no_proof_strategy_does_not_generate_proof() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -5745,6 +5779,8 @@ fn prove_app_calls_callback() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -5849,6 +5885,8 @@ fn inbound_proof_fires_callback() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -5946,6 +5984,8 @@ fn inbound_proof_for_unknown_packet_is_ignored() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -6042,6 +6082,8 @@ fn inbound_implicit_proof_matches_truncated_destination() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -6166,6 +6208,8 @@ fn inbound_proof_with_valid_signature_fires_callback() {
                 hops: 0,
                 received_at: time::now(),
                 receiving_interface: InterfaceId(0),
+                rssi: Some(-100),
+                snr: Some(10.5),
             },
             was_used: false,
             last_used_at: None,
@@ -6196,6 +6240,8 @@ fn inbound_proof_with_valid_signature_fires_callback() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -6281,6 +6327,8 @@ fn inbound_proof_with_invalid_signature_rejected() {
                 hops: 0,
                 received_at: time::now(),
                 receiving_interface: InterfaceId(0),
+                rssi: Some(-100),
+                snr: Some(10.5),
             },
             was_used: false,
             last_used_at: None,
@@ -6311,6 +6359,8 @@ fn inbound_proof_with_invalid_signature_rejected() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -6383,6 +6433,8 @@ fn proof_data_is_valid_explicit_proof() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: data_packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -7010,6 +7062,8 @@ fn inbound_proof_populates_completed_proofs() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: data_packet.raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -7099,6 +7153,8 @@ fn inbound_proof_populates_completed_proofs() {
     tx2.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: proof_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx2.send(Event::Shutdown).unwrap();
@@ -7294,6 +7350,8 @@ fn announce_stores_receiving_interface_in_known_destinations() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -7353,6 +7411,8 @@ fn announce_on_different_interfaces_stores_correct_id() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(2),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -7564,6 +7624,8 @@ fn re_announce_updates_receiving_interface() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw.clone(),
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     // The second announce of the same identity will be dropped by the transport
@@ -7574,6 +7636,8 @@ fn re_announce_updates_receiving_interface() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(2),
         data: announce_raw2,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();

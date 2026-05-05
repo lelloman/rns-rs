@@ -1382,8 +1382,8 @@ mod tests {
             Event::Frame {
                 interface_id,
                 data,
-                rssi,
-                snr,
+                rssi: _,
+                snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(8100));
                 assert_eq!(data, payload);
@@ -1626,8 +1626,8 @@ mod tests {
             Event::Frame {
                 interface_id,
                 data,
-                rssi,
-                snr,
+                rssi: _,
+                snr: _,
             } => {
                 assert_eq!(interface_id, InterfaceId(9100));
                 assert_eq!(data, payload);
@@ -1838,8 +1838,8 @@ mod tests {
             Event::Frame {
                 interface_id,
                 data,
-                rssi,
-                snr,
+                rssi: _,
+                snr: _,
             } => {
                 assert_eq!(interface_id, client_id);
                 assert_eq!(data, vec![1u8; 24]);

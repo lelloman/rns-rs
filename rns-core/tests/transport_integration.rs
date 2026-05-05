@@ -19,10 +19,9 @@ use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::transport::types::{
     InterfaceId, InterfaceInfo, TransportAction, TransportConfig, DEFAULT_MAX_PATH_DESTINATIONS,
 };
-use rns_core::transport::TransportEngine;
+use rns_core::transport::{InboundFrame, RxMetadata, TransportEngine};
 use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
-
 // =============================================================================
 // Fixture loading helpers
 // =============================================================================
@@ -153,8 +152,18 @@ impl TestHarness {
     }
 
     fn inbound(&mut self, raw: &[u8], iface: InterfaceId) -> Vec<TransportAction> {
-        self.engine
-            .handle_inbound(raw, iface, self.now, &mut self.rng)
+        self.engine.handle_inbound(
+            InboundFrame {
+                raw,
+                iface,
+                now: self.now,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut self.rng,
+        )
     }
 
     fn outbound(

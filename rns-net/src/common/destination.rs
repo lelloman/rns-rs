@@ -218,6 +218,8 @@ mod tests {
             hops: 3,
             received_at: 1234567890.0,
             receiving_interface: InterfaceId(0),
+            rssi: Some(-100),
+            snr: Some(10.5),
         }
     }
 

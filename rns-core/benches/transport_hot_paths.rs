@@ -6,7 +6,7 @@ use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::transport::types::{
     IngressControlConfig, InterfaceId, InterfaceInfo, TransportConfig,
 };
-use rns_core::transport::TransportEngine;
+use rns_core::transport::{InboundFrame, RxMetadata, TransportEngine};
 use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
 
@@ -162,9 +162,15 @@ fn bench_path_table_churn(c: &mut Criterion) {
             |(mut engine, mut rng)| {
                 for packet in &packets {
                     black_box(engine.handle_inbound(
-                        &packet.raw,
-                        InterfaceId(1),
-                        1000.0 + f64::from(packet.raw[2]),
+                        InboundFrame {
+                            raw: &packet.raw,
+                            iface: InterfaceId(1),
+                            now: 1000.0 + f64::from(packet.raw[2]),
+                            rx: RxMetadata {
+                                rssi: None,
+                                snr: None,
+                            },
+                        },
                         &mut rng,
                     ));
                 }
