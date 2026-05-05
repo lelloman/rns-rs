@@ -186,7 +186,7 @@ pub enum TransportAction {
         hops: u8,
         receiving_interface: InterfaceId,
         rssi: Option<i16>,
-        snr: Option<f64>,
+        snr: Option<f32>,
     },
     /// A path was updated in the path table.
     PathUpdated {

@@ -51,6 +51,18 @@ use self::types::{
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 
+pub struct RxMetadata {
+    pub rssi: Option<i16>,
+    pub snr: Option<f32>,
+}
+
+pub struct InboundFrame<'a> {
+    pub raw: &'a [u8],
+    pub iface: InterfaceId,
+    pub now: f64,
+    pub rx: RxMetadata,
+}
+
 struct InboundPacketCtx {
     packet: RawPacket,
     original_raw: Option<Vec<u8>>,
@@ -519,27 +531,19 @@ impl TransportEngine {
     /// Returns a list of actions for the caller to execute.
     pub fn handle_inbound(
         &mut self,
-        raw: &[u8],
-        iface: InterfaceId,
-        now: f64,
+        frame: InboundFrame<'_>,
         rng: &mut dyn Rng,
-        rssi: Option<i16>,
-        snr: Option<f64>,
     ) -> Vec<TransportAction> {
-        self.handle_inbound_with_announce_queue(raw, iface, now, rng, None, rssi, snr)
+        self.handle_inbound_with_announce_queue(frame, rng, None)
     }
 
     pub fn handle_inbound_with_announce_queue(
         &mut self,
-        raw: &[u8],
-        iface: InterfaceId,
-        now: f64,
+        frame: InboundFrame<'_>,
         rng: &mut dyn Rng,
         announce_queue: Option<&mut AnnounceVerifyQueue>,
-        rssi: Option<i16>,
-        snr: Option<f64>,
     ) -> Vec<TransportAction> {
-        let Some(ctx) = self.prepare_inbound_packet(raw, iface, now, rssi, snr) else {
+        let Some(ctx) = self.prepare_inbound_packet(frame) else {
             return Vec::new();
         };
         let mut actions = Vec::new();
@@ -558,23 +562,16 @@ impl TransportEngine {
         actions
     }
 
-    fn prepare_inbound_packet(
-        &self,
-        raw: &[u8],
-        iface: InterfaceId,
-        now: f64,
-        rssi: Option<i16>,
-        snr: Option<f64>,
-    ) -> Option<InboundPacketCtx> {
-        let mut packet = RawPacket::unpack(raw).ok()?;
+    fn prepare_inbound_packet(&self, frame: InboundFrame<'_>) -> Option<InboundPacketCtx> {
+        let mut packet = RawPacket::unpack(frame.raw).ok()?;
         let from_local_client = self
             .interfaces
-            .get(&iface)
+            .get(&frame.iface)
             .map(|i| i.is_local_client)
             .unwrap_or(false);
         packet.hops += 1;
-        packet.rssi = rssi;
-        packet.snr = snr;
+        packet.rssi = frame.rx.rssi;
+        packet.snr = frame.rx.snr;
         if from_local_client {
             packet.hops = packet.hops.saturating_sub(1);
         }
@@ -585,12 +582,12 @@ impl TransportEngine {
         Some(InboundPacketCtx {
             packet,
             original_raw: if retain_original_raw {
-                Some(raw.to_vec())
+                Some(frame.raw.to_vec())
             } else {
                 None
             },
-            iface,
-            now,
+            iface: frame.iface,
+            now: frame.now,
             from_local_client,
         })
     }
@@ -1490,12 +1487,16 @@ impl TransportEngine {
                 ctx.now,
             ) {
                 let released_actions = self.handle_inbound(
-                    &held.raw,
-                    held.receiving_interface,
-                    ctx.now,
+                    InboundFrame {
+                        raw: &held.raw,
+                        iface: held.receiving_interface,
+                        now: ctx.now,
+                        rx: RxMetadata {
+                            rssi: None,
+                            snr: None,
+                        },
+                    },
                     ctx.rng,
-                    None,
-                    None,
                 );
                 ctx.actions.extend(released_actions);
             }

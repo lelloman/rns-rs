@@ -1,4 +1,5 @@
 use super::*;
+use rns_core::transport::{InboundFrame, RxMetadata};
 
 impl Driver {
     pub(crate) fn handle_frame_event(
@@ -6,7 +7,7 @@ impl Driver {
         interface_id: InterfaceId,
         data: Vec<u8>,
         rssi: Option<i16>,
-        snr: Option<f64>,
+        snr: Option<f32>,
     ) {
         if data.len() > 2 && (data[0] & 0x03) == 0x01 {
             log::debug!(
@@ -100,23 +101,25 @@ impl Driver {
                 .update_interface_freq(interface_id, entry.stats.incoming_announce_freq());
         }
 
+        let inbound_frame = InboundFrame {
+            raw: &packet,
+            iface: interface_id,
+            now: time::now(),
+            rx: RxMetadata { rssi, snr },
+        };
+
         let actions = if self.async_announce_verification {
             let mut announce_queue = self
                 .announce_verify_queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             self.engine.handle_inbound_with_announce_queue(
-                &packet,
-                interface_id,
-                time::now(),
+                inbound_frame,
                 &mut self.rng,
                 Some(&mut announce_queue),
-                rssi,
-                snr,
             )
         } else {
-            self.engine
-                .handle_inbound(&packet, interface_id, time::now(), &mut self.rng, rssi, snr)
+            self.engine.handle_inbound(inbound_frame, &mut self.rng)
         };
 
         #[cfg(feature = "hooks")]

@@ -82,7 +82,7 @@ pub struct RawPacket {
     pub raw: Vec<u8>,
     pub packet_hash: [u8; 32],
     pub rssi: Option<i16>,
-    pub snr: Option<f64>,
+    pub snr: Option<f32>,
 }
 
 impl RawPacket {

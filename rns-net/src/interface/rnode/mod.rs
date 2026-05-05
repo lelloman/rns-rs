@@ -358,7 +358,7 @@ fn reader_loop(
     thread::sleep(Duration::from_secs(2));
     let mut connected_once = false;
     let mut last_rssi: Option<i16> = None;
-    let mut last_snr: Option<f64> = None;
+    let mut last_snr: Option<f32> = None;
     if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
         log::error!("[{}] initial RNode setup failed: {}", config.name, e);
         return;
@@ -406,7 +406,7 @@ fn reader_loop(
                                 last_rssi = Some(rssi as i16 - 157);
                             }
                             rnode_kiss::RNodeEvent::StatSnr(snr) => {
-                                last_snr = Some(snr as f64 * 0.25);
+                                last_snr = Some(snr as f32 * 0.25);
                             }
                             rnode_kiss::RNodeEvent::Error(code) => {
                                 log::error!("[{}] RNode error: 0x{:02X}", config.name, code);

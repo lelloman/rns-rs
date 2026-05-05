@@ -111,7 +111,7 @@ pub enum Event<W: Send> {
         interface_id: InterfaceId,
         data: Vec<u8>,
         rssi: Option<i16>,
-        snr: Option<f64>,
+        snr: Option<f32>,
     },
     /// (Internal) An announce was verified off-thread and is ready for driver-side processing.
     AnnounceVerified {

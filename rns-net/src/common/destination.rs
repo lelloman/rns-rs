@@ -198,7 +198,7 @@ pub struct AnnouncedIdentity {
     /// RSSI when this announce was received.
     pub rssi: Option<i16>,
     /// SNR when this announce was received.
-    pub snr: Option<f64>,
+    pub snr: Option<f32>,
 }
 
 #[cfg(test)]
