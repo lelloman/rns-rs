@@ -13,6 +13,7 @@ use rns_net::{
 use crate::acl::{Access, Operation};
 use crate::config::ServerConfig;
 use crate::logging;
+use crate::pages;
 use crate::protocol;
 use crate::util::{default_reticulum_dir, default_rngit_dir, hex, load_or_create_identity};
 use crate::{git, Error, Result};
@@ -38,7 +39,7 @@ where
     let identity = load_or_create_identity(&config.identity_path)?;
     if options.print_identity {
         let client = load_or_create_identity(&config.client_identity_path)?;
-        print_identity(&identity, &client, options.base256);
+        print_identity(&identity, &client, options.base256, config.serve_nomadnet);
         return Ok(());
     }
 
@@ -52,12 +53,42 @@ pub fn run_server(config: ServerConfig, identity: Identity) -> Result<()> {
     )?;
 
     let announce_interval = Duration::from_secs(config.announce_interval_secs);
-    let destination = register_repository_destination(&node, config, &identity)?;
+    let destinations = register_server_destinations(&node, config.clone(), &identity)?;
 
     loop {
         thread::sleep(announce_interval);
-        let _ = node.announce(&destination, &identity, None);
+        let _ = node.announce(&destinations.repositories, &identity, None);
+        if let Some(page_destination) = destinations.nomadnet.as_ref() {
+            let _ = node.announce(
+                page_destination,
+                &identity,
+                Some(config.node_name.as_bytes()),
+            );
+        }
     }
+}
+
+#[derive(Debug)]
+pub struct ServerDestinations {
+    pub repositories: Destination,
+    pub nomadnet: Option<Destination>,
+}
+
+pub fn register_server_destinations(
+    node: &RnsNode,
+    config: ServerConfig,
+    identity: &Identity,
+) -> Result<ServerDestinations> {
+    let repositories = register_repository_destination(node, config.clone(), identity)?;
+    let nomadnet = if config.serve_nomadnet {
+        Some(pages::register_nomadnet_destination(node, identity)?)
+    } else {
+        None
+    };
+    Ok(ServerDestinations {
+        repositories,
+        nomadnet,
+    })
 }
 
 pub fn register_repository_destination(
@@ -277,27 +308,65 @@ fn error_response(err: Error) -> Vec<u8> {
     protocol::status_bytes(protocol::RES_INVALID_REQ, err.to_string())
 }
 
-fn print_identity(identity: &Identity, client: &Identity, base256: bool) {
-    let destination = Destination::single_in(
+fn repository_destination(identity: &Identity) -> Destination {
+    Destination::single_in(
         protocol::APP_NAME,
         &[protocol::ASPECT_REPOSITORIES],
         IdentityHash(*identity.hash()),
-    );
-    println!("client_identity = {}", hex(client.hash()));
+    )
+}
+
+fn identity_report(
+    identity: &Identity,
+    client: &Identity,
+    base256: bool,
+    serve_nomadnet: bool,
+) -> String {
+    let destination = repository_destination(identity);
+    let mut out = String::new();
+    out.push_str(&format!("client_identity = {}\n", hex(client.hash())));
     if base256 {
-        println!("client_identity_b256 = {}", prettyb256rep(client.hash()));
+        out.push_str(&format!(
+            "client_identity_b256 = {}\n",
+            prettyb256rep(client.hash())
+        ));
     }
-    println!("repository_identity = {}", hex(identity.hash()));
+    out.push_str(&format!("repository_identity = {}\n", hex(identity.hash())));
     if base256 {
-        println!(
+        out.push_str(&format!(
             "repository_identity_b256 = {}",
             prettyb256rep(identity.hash())
-        );
+        ));
+        out.push('\n');
     }
-    println!("destination = {}", hex(&destination.hash.0));
+    out.push_str(&format!("destination = {}\n", hex(&destination.hash.0)));
     if base256 {
-        println!("destination_b256 = {}", prettyb256rep(&destination.hash.0));
+        out.push_str(&format!(
+            "destination_b256 = {}\n",
+            prettyb256rep(&destination.hash.0)
+        ));
     }
+    if serve_nomadnet {
+        let page_destination = pages::destination_for_identity(identity);
+        out.push_str(&format!(
+            "nomadnet_destination = {}\n",
+            hex(&page_destination.hash.0)
+        ));
+        if base256 {
+            out.push_str(&format!(
+                "nomadnet_destination_b256 = {}\n",
+                prettyb256rep(&page_destination.hash.0)
+            ));
+        }
+    }
+    out
+}
+
+fn print_identity(identity: &Identity, client: &Identity, base256: bool, serve_nomadnet: bool) {
+    print!(
+        "{}",
+        identity_report(identity, client, base256, serve_nomadnet)
+    );
 }
 
 #[derive(Default)]
@@ -369,6 +438,7 @@ fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_crypto::OsRng;
 
     fn cfg(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
@@ -377,7 +447,9 @@ mod tests {
             repositories_dir: root.join("repositories"),
             identity_path: root.join("repositories_identity"),
             client_identity_path: root.join("client_identity"),
+            node_name: "Anonymous Git Node".into(),
             announce_interval_secs: 300,
+            serve_nomadnet: false,
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],
@@ -406,6 +478,29 @@ mod tests {
 
         let interactive = ServerOptions::parse(vec!["--interactive".to_string()]).unwrap_err();
         assert!(interactive.to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn repository_destination_uses_git_repositories_name() {
+        let identity = Identity::new(&mut OsRng);
+        let destination = repository_destination(&identity);
+        let expected =
+            Destination::single_in("git", &["repositories"], IdentityHash(*identity.hash()));
+        assert_eq!(destination.hash, expected.hash);
+    }
+
+    #[test]
+    fn identity_report_includes_nomadnet_destination_only_when_enabled() {
+        let identity = Identity::new(&mut OsRng);
+        let client = Identity::new(&mut OsRng);
+
+        let without_pages = identity_report(&identity, &client, false, false);
+        assert!(!without_pages.contains("nomadnet_destination"));
+
+        let with_pages = identity_report(&identity, &client, true, true);
+        let nomadnet = pages::destination_for_identity(&identity);
+        assert!(with_pages.contains(&format!("nomadnet_destination = {}", hex(&nomadnet.hash.0))));
+        assert!(with_pages.contains("nomadnet_destination_b256 = "));
     }
 
     #[test]

@@ -12,7 +12,9 @@ pub struct ServerConfig {
     pub repositories_dir: PathBuf,
     pub identity_path: PathBuf,
     pub client_identity_path: PathBuf,
+    pub node_name: String,
     pub announce_interval_secs: u64,
+    pub serve_nomadnet: bool,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
     pub allow_create: Vec<String>,
@@ -48,8 +50,14 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "rngit", "client_identity") {
             cfg.client_identity_path = resolve_path(&cfg.dir, v);
         }
+        if let Some(v) = get(&ini, "rngit", "node_name") {
+            cfg.node_name = v.to_string();
+        }
         if let Some(v) = get(&ini, "rngit", "announce_interval") {
             cfg.announce_interval_secs = v.parse().unwrap_or(cfg.announce_interval_secs);
+        }
+        if let Some(v) = get(&ini, "pages", "serve_nomadnet") {
+            cfg.serve_nomadnet = parse_bool(v, cfg.serve_nomadnet);
         }
         if let Some(v) = get(&ini, "logging", "loglevel") {
             cfg.log_level = parse_log_level(v, cfg.log_level);
@@ -65,9 +73,11 @@ impl ServerConfig {
             repositories_dir: dir.join("repositories"),
             identity_path: dir.join("repositories_identity"),
             client_identity_path: dir.join("client_identity"),
+            node_name: "Anonymous Git Node".to_string(),
             dir,
             reticulum_dir,
             announce_interval_secs: 300,
+            serve_nomadnet: false,
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
             allow_create: vec!["none".to_string()],
@@ -156,6 +166,14 @@ fn parse_log_level(value: &str, fallback: u8) -> u8 {
         .unwrap_or(fallback)
 }
 
+fn parse_bool(value: &str, fallback: bool) -> bool {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => fallback,
+    }
+}
+
 fn expand_home(value: &str) -> PathBuf {
     if let Some(rest) = value.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -175,7 +193,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\n\n[pages]\n# serve_nomadnet = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -214,5 +232,29 @@ mod tests {
         assert!(created);
         let (_cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
         assert!(!created);
+    }
+
+    #[test]
+    fn parses_nomadnet_page_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("server_config"),
+            "[rngit]\nnode_name = Public Git Node\n[pages]\nserve_nomadnet = yes\n",
+        )
+        .unwrap();
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(!created);
+        assert_eq!(cfg.node_name, "Public Git Node");
+        assert!(cfg.serve_nomadnet);
+    }
+
+    #[test]
+    fn missing_pages_section_keeps_nomadnet_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("server_config"), "[rngit]\n").unwrap();
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(!created);
+        assert_eq!(cfg.node_name, "Anonymous Git Node");
+        assert!(!cfg.serve_nomadnet);
     }
 }

@@ -11,7 +11,7 @@ use rns_net::{AnnouncedIdentity, Callbacks, DestHash, LinkId, PacketHash, RnsNod
 use rns_git::config::ServerConfig;
 use rns_git::git;
 use rns_git::protocol::{self, RefUpdate};
-use rns_git::server::register_repository_destination;
+use rns_git::server::register_server_destinations;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -93,7 +93,9 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         repositories_dir: tmp.path().join("repositories"),
         identity_path: tmp.path().join("repositories_identity"),
         client_identity_path: tmp.path().join("client_identity"),
+        node_name: "RNS Git Test Node".into(),
         announce_interval_secs: 300,
+        serve_nomadnet: true,
         allow_read: vec!["all".into()],
         allow_write: vec!["all".into()],
         allow_create: vec!["all".into()],
@@ -111,9 +113,14 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         }],
     )
     .unwrap();
-    let destination =
-        register_repository_destination(&server_node, server_config.clone(), &server_identity)
+    let destinations =
+        register_server_destinations(&server_node, server_config.clone(), &server_identity)
             .unwrap();
+    let destination = destinations.repositories.clone();
+    let page_destination = destinations
+        .nomadnet
+        .clone()
+        .expect("Nomad Network destination should be registered");
 
     let client_identity = Identity::new(&mut OsRng);
     let (tx, rx) = mpsc::channel();
@@ -129,6 +136,24 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         TIMEOUT,
     );
     assert_eq!(announced.identity_hash.0, *server_identity.hash());
+
+    server_node
+        .announce(
+            &page_destination,
+            &server_identity,
+            Some(server_config.node_name.as_bytes()),
+        )
+        .unwrap();
+    let page_announced = wait_for_event(&rx, TIMEOUT, |event| match event {
+        Event::Announce(announced) if announced.dest_hash == page_destination.hash => {
+            Some(announced)
+        }
+        _ => None,
+    });
+    assert_eq!(
+        page_announced.app_data.as_deref(),
+        Some(server_config.node_name.as_bytes())
+    );
 
     let sig_pub: [u8; 32] = announced.public_key[32..64].try_into().unwrap();
     let link_id = client_node
