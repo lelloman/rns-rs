@@ -36,8 +36,9 @@ Important config paths:
   Creating a missing repository requires create access; pushing to an existing
   repository requires write access.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
-  with basic repository browser pages. Full upstream rendering polish, stats,
-  syntax highlighting, and custom templates are still pending.
+  with built-in Micron repository browser pages. Stats, syntax highlighting,
+  Markdown-to-Micron conversion, iconsets, and custom templates are still
+  pending.
 
 ## Git Remote Helper
 
