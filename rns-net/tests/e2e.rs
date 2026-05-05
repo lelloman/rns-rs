@@ -603,6 +603,8 @@ fn start_transport_node_with_limits(
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -696,6 +698,8 @@ fn start_client_node_with_packet_hashlist(
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -1169,6 +1173,8 @@ fn test_direct_link_no_transport() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -1767,6 +1773,8 @@ fn test_plain_message_delivery() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -1998,6 +2006,8 @@ fn test_group_message_delivery() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -2111,6 +2121,8 @@ fn test_group_wrong_key_fails() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -2825,6 +2837,77 @@ fn test_resource_multi_part() {
 }
 
 #[test]
+fn test_resource_split_transfer_progress_e2e() {
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
+
+    let mut state = 0x1234_5678u32;
+    let data: Vec<u8> = (0..rns_core::constants::RESOURCE_MAX_EFFICIENT_SIZE + 1024)
+        .map(|_| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 16) as u8
+        })
+        .collect();
+
+    alice_node
+        .send_resource_with_auto_compress(link_id, data.clone(), None, false)
+        .unwrap();
+
+    let mut last_progress = 0usize;
+    let mut saw_progress = false;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut received_data = None;
+
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::ZERO);
+        match bob_rx.recv_timeout(remaining) {
+            Ok(TestEvent::ResourceProgress {
+                received, total, ..
+            }) => {
+                assert!(
+                    received >= last_progress,
+                    "split progress regressed from {last_progress} to {received}"
+                );
+                assert!(received <= total);
+                last_progress = received;
+                saw_progress = true;
+            }
+            Ok(TestEvent::ResourceReceived { data, .. }) => {
+                received_data = Some(data);
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    assert!(
+        saw_progress,
+        "split resource transfer should report progress"
+    );
+    assert_eq!(received_data.as_deref(), Some(data.as_slice()));
+
+    alice_node.teardown_link(link_id).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    alice_node.shutdown();
+    _bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
 fn test_resource_accept_none() {
     let port = find_free_port();
     let transport = start_transport_node(port);
@@ -3264,6 +3347,8 @@ fn test_udp_announce_and_message() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3332,6 +3417,8 @@ fn test_udp_announce_and_message() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3504,6 +3591,8 @@ fn discovery_announce_received_by_client() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3577,6 +3666,8 @@ fn discovery_announce_received_by_client() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: Some(cache_dir.clone()),
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3709,6 +3800,8 @@ fn discovery_announce_through_relay() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3793,6 +3886,8 @@ fn discovery_announce_through_relay() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3864,6 +3959,8 @@ fn discovery_announce_through_relay() {
             shared_instance_port: 37428,
             rpc_port: 0,
             cache_dir: Some(cache_dir.clone()),
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],
@@ -3977,6 +4074,8 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             shared_instance_port: shared_port,
             rpc_port: 0,
             cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
             management: Default::default(),
             probe_port: None,
             probe_addrs: vec![],

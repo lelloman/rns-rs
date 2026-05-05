@@ -6,6 +6,7 @@
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg?label=rns-ctl)](https://crates.io/crates/rns-ctl)
 [![rns-cli](https://img.shields.io/crates/v/rns-cli.svg?label=rns-cli)](https://crates.io/crates/rns-cli)
+[![rns-git](https://img.shields.io/crates/v/rns-git.svg?label=rns-git)](https://crates.io/crates/rns-git)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
 [![rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg?label=rns-hooks)](https://crates.io/crates/rns-hooks)
 [![rns-hooks-sdk](https://img.shields.io/crates/v/rns-hooks-sdk.svg?label=rns-hooks-sdk)](https://crates.io/crates/rns-hooks-sdk)
@@ -23,7 +24,8 @@ This is a faithful port of the Python reference implementation, validated agains
 | `rns-crypto` | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
 | `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
 | `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
-| `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid` |
+| `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh` |
+| `rns-git` | No | Git-over-Reticulum utilities: `rngit` server and `git-remote-rns` helper |
 | `rns-ctl` | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
 | `rns-hooks` | No | Hook runtime: programmable hook points across the transport pipeline with WASM and native dynamic-library backends |
 | `rns-hooks-sdk` | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
@@ -74,6 +76,7 @@ cargo test -p rns-crypto
 cargo test -p rns-core
 cargo test -p rns-net
 cargo test -p rns-cli
+cargo test -p rns-git
 cargo test -p rns-ctl
 cargo test -p rns-hooks
 ```
@@ -182,6 +185,30 @@ cargo run --bin rnprobe
 
 # Identity management
 cargo run --bin rnid
+
+# Remote shell over Reticulum
+cargo run --bin rnsh -- -l -n -- /bin/sh
+cargo run --bin rnsh -- <destination_hash>
+```
+
+Utility docs:
+
+- [docs/rnsh.md](docs/rnsh.md)
+- [docs/rns-git.md](docs/rns-git.md)
+
+## Git over RNS
+
+`rns-git` provides a repository server and Git remote helper for Reticulum links:
+
+```bash
+# Print repository and client identities
+cargo run -p rns-git --bin rngit -- --print-identity
+
+# Start the repository server after editing ~/.config/rngit/server_config
+cargo run -p rns-git --bin rngit
+
+# Configure a repository remote once git-remote-rns is on PATH
+git remote add origin rns://<destination_hash>/<repository>
 ```
 
 ## rns-ctl

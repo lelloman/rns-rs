@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process;
 
 use rns_cli::args::Args;
-use rns_cli::format::{base32_decode, base32_encode, prettyhexrep};
+use rns_cli::format::{base32_decode, base32_encode, prettyb256rep, prettyhexrep};
 use rns_core::destination::destination_hash;
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
@@ -78,6 +78,9 @@ fn generate_identity(file: &str, args: &Args) {
 
     println!("Generated new identity");
     println!("  Hash : {}", prettyhexrep(identity.hash()));
+    if args.has("Z") || args.has("base256") {
+        println!("  B256 : {}", prettyb256rep(identity.hash()));
+    }
     println!("  Saved: {}", file);
 
     // Show base32 if requested
@@ -113,6 +116,9 @@ fn inspect_identity_file(path: &Path, args: &Args) {
 
     println!("Identity <{}>", prettyhexrep(identity.hash()));
     println!("  Hash      : {}", prettyhexrep(identity.hash()));
+    if args.has("Z") || args.has("base256") {
+        println!("  Base256   : {}", prettyb256rep(identity.hash()));
+    }
 
     let show_private = args.has("P");
     let show_public = args.has("p") || show_private;
@@ -139,6 +145,9 @@ fn inspect_identity_file(path: &Path, args: &Args) {
             let aspects: Vec<&str> = parts[1..].to_vec();
             let dest_hash = destination_hash(app_name, &aspects, Some(identity.hash()));
             println!("  Dest hash : {}", prettyhexrep(&dest_hash));
+            if args.has("Z") || args.has("base256") {
+                println!("  Dest b256 : {}", prettyb256rep(&dest_hash));
+            }
         } else {
             eprintln!("  Aspects must be in format: app_name.aspect1.aspect2");
         }
@@ -331,6 +340,9 @@ fn import_from_hex(hex_str: &str, args: &Args) {
         key.copy_from_slice(&bytes);
         let identity = Identity::from_private_key(&key);
         println!("Identity <{}>", prettyhexrep(identity.hash()));
+        if args.has("Z") || args.has("base256") {
+            println!("Base256  {}", prettyb256rep(identity.hash()));
+        }
 
         // Save to file if -w is provided
         if let Some(file) = args.get("w") {
@@ -449,6 +461,7 @@ fn print_usage() {
     println!("  -x                 Export as hex");
     println!("  -b                 Export as base64");
     println!("  -B                 Export/import as base32");
+    println!("  -Z, --base256      Also print compact base256 display for hashes");
     println!("  -f, --force        Force overwrite existing files");
     println!("  --stdin            Read input from stdin");
     println!("  --stdout           Write output to stdout");

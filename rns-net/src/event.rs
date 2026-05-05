@@ -25,3 +25,31 @@ pub fn channel() -> (EventSender, EventReceiver) {
 pub fn channel_with_capacity(capacity: usize) -> (EventSender, EventReceiver) {
     std::sync::mpsc::sync_channel(capacity.max(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::TrySendError;
+    use std::time::Duration;
+
+    #[test]
+    fn bounded_event_queue_backpressures_when_full() {
+        let (tx, rx) = channel_with_capacity(1);
+
+        tx.try_send(Event::Tick).unwrap();
+        match tx.try_send(Event::Shutdown) {
+            Err(TrySendError::Full(Event::Shutdown)) => {}
+            other => panic!("expected full queue for second event, got {other:?}"),
+        }
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::Tick
+        ));
+        tx.try_send(Event::Shutdown).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::Shutdown
+        ));
+    }
+}

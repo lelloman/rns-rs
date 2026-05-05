@@ -74,6 +74,8 @@ pub struct ReticulumSection {
     pub known_destinations_ttl: u64,
     /// Maximum number of recalled known destinations retained.
     pub known_destinations_max_entries: usize,
+    /// TTL for received ratchets, in seconds.
+    pub ratchet_expiry: u64,
     /// TTL for announce retransmission state, in seconds.
     pub announce_table_ttl: u64,
     /// Maximum retained bytes for announce retransmission state.
@@ -147,6 +149,7 @@ impl Default for ReticulumSection {
             max_tunnel_destinations_total: usize::MAX,
             known_destinations_ttl: 48 * 60 * 60,
             known_destinations_max_entries: 8192,
+            ratchet_expiry: rns_core::constants::RATCHET_EXPIRY,
             announce_table_ttl: rns_core::constants::ANNOUNCE_TABLE_TTL as u64,
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             announce_sig_cache_enabled: true,
@@ -649,6 +652,19 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.known_destinations_max_entries = n;
     }
+    if let Some(v) = kvs.get("ratchet_expiry") {
+        let expiry = v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+            key: "ratchet_expiry".into(),
+            value: v.clone(),
+        })?;
+        if expiry == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "ratchet_expiry".into(),
+                value: v.clone(),
+            });
+        }
+        section.ratchet_expiry = expiry;
+    }
     if let Some(v) = kvs.get("destination_timeout_secs") {
         section.known_destinations_ttl =
             v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
@@ -910,6 +926,10 @@ mod tests {
             config.reticulum.announce_table_max_bytes,
             rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES
         );
+        assert_eq!(
+            config.reticulum.ratchet_expiry,
+            rns_core::constants::RATCHET_EXPIRY
+        );
     }
 
     #[cfg(feature = "hooks")]
@@ -981,6 +1001,7 @@ respond_to_probes = True
 network_identity = /home/user/.reticulum/identity
 known_destinations_ttl = 1234
 known_destinations_max_entries = 4321
+ratchet_expiry = 9876
 announce_table_ttl = 45
 announce_table_max_bytes = 65536
 packet_hashlist_max_entries = 321
@@ -1017,6 +1038,7 @@ backbone_peer_pool_cooldown = 300
         );
         assert_eq!(config.reticulum.known_destinations_ttl, 1234);
         assert_eq!(config.reticulum.known_destinations_max_entries, 4321);
+        assert_eq!(config.reticulum.ratchet_expiry, 9876);
         assert_eq!(config.reticulum.announce_table_ttl, 45);
         assert_eq!(config.reticulum.announce_table_max_bytes, 65536);
         assert_eq!(config.reticulum.packet_hashlist_max_entries, 321);
@@ -1075,6 +1097,18 @@ known_destinations_max_entries = 0
         assert!(matches!(
             err,
             ConfigError::InvalidValue { key, .. } if key == "known_destinations_max_entries"
+        ));
+
+        let err = parse(
+            r#"
+[reticulum]
+ratchet_expiry = 0
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "ratchet_expiry"
         ));
 
         let err = parse(

@@ -1,4 +1,4 @@
-#[path = "../build/common.rs"]
+#[path = "build_common.rs"]
 mod build_common;
 
 fn main() {

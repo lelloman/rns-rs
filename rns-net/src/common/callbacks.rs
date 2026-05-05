@@ -76,6 +76,17 @@ pub trait Callbacks: Send {
     /// Called when a response is received on a link.
     fn on_response(&mut self, _link_id: LinkId, _request_id: [u8; 16], _data: Vec<u8>) {}
 
+    /// Called when a response is received on a link, including resource metadata when present.
+    fn on_response_with_metadata(
+        &mut self,
+        link_id: LinkId,
+        request_id: [u8; 16],
+        data: Vec<u8>,
+        _metadata: Option<Vec<u8>>,
+    ) {
+        self.on_response(link_id, request_id, data);
+    }
+
     /// Called when a delivery proof is received for a packet we sent.
     /// `rtt` is the round-trip time in seconds.
     fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {}

@@ -31,6 +31,9 @@ pub const KEYSIZE: usize = 512;
 /// Ratchet key size in bits
 pub const RATCHETSIZE: usize = 256;
 
+/// Received ratchet expiry in seconds (30 days)
+pub const RATCHET_EXPIRY: u64 = 60 * 60 * 24 * 30;
+
 /// Token overhead in bytes (16 IV + 32 HMAC)
 pub const TOKEN_OVERHEAD: usize = 48;
 

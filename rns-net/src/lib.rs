@@ -77,7 +77,7 @@ pub use interface::udp::{UdpConfig, UdpFactory};
 pub use interface::{
     InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
 };
-pub use link_manager::{LinkManager, LinkManagerAction};
+pub use link_manager::{LinkManager, LinkManagerAction, RequestResponse};
 pub use management::ManagementConfig;
 pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 #[cfg(feature = "hooks")]
@@ -89,7 +89,9 @@ pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
 #[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;
-pub use storage::{KnownDestination, StoragePaths};
+pub use storage::{
+    FsRatchetStore, KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore, StoragePaths,
+};
 
 // Re-export commonly used types from rns-core
 pub use rns_core::constants::{

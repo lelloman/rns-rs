@@ -7,6 +7,7 @@ COPY rns-core rns-core
 COPY rns-net rns-net
 COPY rns-cli rns-cli
 COPY rns-ctl rns-ctl
+COPY rns-git rns-git
 COPY rns-hooks rns-hooks
 COPY rns-stats-hook rns-stats-hook
 COPY rns-sentinel-hook rns-sentinel-hook

@@ -75,6 +75,7 @@ const DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE: usize = 10_000;
 const DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS: f64 = 300.0;
+const DEFAULT_LINK_TEARDOWN_FLUSH: Duration = Duration::from_millis(150);
 const SEND_RETRY_BACKOFF_MIN: Duration = Duration::from_millis(25);
 const SEND_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(1000);
 
@@ -479,6 +480,7 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                     public_key,
                     name_hash,
                     random_hash,
+                    ratchet: None,
                     app_data,
                     hops,
                     receiving_interface: InterfaceId(receiving_interface),
@@ -551,6 +553,8 @@ pub struct Driver {
     pub(crate) initial_announce_sent: bool,
     /// Cache of known announced identities and lifecycle state, keyed by destination hash.
     pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
+    /// Store for received remote ratchets, if persistence/use is enabled.
+    pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for known destinations without an active path, in seconds.
     pub(crate) known_destinations_ttl: f64,
     /// Maximum number of retained known destinations.
@@ -749,6 +753,7 @@ impl Driver {
             last_management_announce: 0.0,
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
+            ratchet_store: None,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
             known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,

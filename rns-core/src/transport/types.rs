@@ -182,6 +182,7 @@ pub enum TransportAction {
         public_key: [u8; 64],
         name_hash: [u8; 10],
         random_hash: [u8; 10],
+        ratchet: Option<[u8; 32]>,
         app_data: Option<Vec<u8>>,
         hops: u8,
         receiving_interface: InterfaceId,

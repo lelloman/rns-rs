@@ -712,6 +712,17 @@ impl Driver {
                         move |link_id, p, data, remote| handler(link_id, p, data, remote),
                     );
                 }
+                Event::RegisterRequestHandlerResponse {
+                    path,
+                    allowed_list,
+                    handler,
+                } => {
+                    self.link_manager.register_request_handler_response(
+                        &path,
+                        allowed_list,
+                        move |link_id, p, data, remote| handler(link_id, p, data, remote),
+                    );
+                }
                 Event::CreateLink {
                     dest_hash,
                     dest_sig_pub_bytes,
@@ -750,6 +761,9 @@ impl Driver {
                         mtu,
                         &mut self.rng,
                     );
+                    if let Some(iface) = attached_interface {
+                        self.link_manager.set_link_route_hint(&link_id, iface, None);
+                    }
                     if next_hop_interface.is_none() {
                         if let Some(iface) = attached_interface {
                             for action in &mut link_actions {
@@ -1563,7 +1577,7 @@ impl Driver {
                     let _ = (server_interface_id, peer_ip, penalty_level, blacklist_for);
                 }
                 Event::Shutdown => {
-                    self.lifecycle_state = LifecycleState::Stopped;
+                    self.graceful_shutdown();
                     break;
                 }
             }

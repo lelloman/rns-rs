@@ -150,14 +150,52 @@ and keep the output labelled:
 for host in vps-eu vps-us; do
   echo "== $host =="
   ssh "root@$host" 'systemctl status rns-server --no-pager'
+  ssh "root@$host" '/usr/local/bin/rns-server --version; /usr/local/bin/rns-ctl --version'
 done
 ```
 
-Daily VPS snapshots should also be captured per host:
+Daily VPS snapshots should also be captured per host. Refresh the local refs
+first when an internet connection is available; the version check compares the
+remote binaries against the local `origin/master` and `origin/dev` refs by
+default:
 
 ```bash
-scripts/vps_daily_report.py --host vps-eu --stdout-summary
-scripts/vps_daily_report.py --host vps-us --stdout-summary
+git fetch origin
+python3 scripts/vps_daily_report.py --host vps-eu --ssh-target root@vps-eu --stdout-summary
+python3 scripts/vps_daily_report.py --host vps-us --ssh-target root@vps-us --stdout-summary
+```
+
+The snapshot records `/usr/local/bin/rns-server --version` and
+`/usr/local/bin/rns-ctl --version`, then reconstructs the expected binary
+versions for the configured refs using each package's `major.minor`, the git
+commit count, and the short commit hash. Use `--master-ref` and `--dev-ref` if
+the local baseline refs differ from `origin/master` and `origin/dev`.
+
+For a quick drift check after collecting both hosts:
+
+```bash
+sqlite3 -header -column data/vps_daily_reports.db "
+WITH latest AS (
+  SELECT *,
+         ROW_NUMBER() OVER (PARTITION BY host ORDER BY capture_ts_utc DESC) AS rn
+  FROM daily_checks
+  WHERE report_date = date('now') AND host IN ('vps-eu', 'vps-us')
+)
+SELECT host,
+       rns_server_version,
+       rns_server_master_version,
+       rns_server_matches_master AS server_master,
+       rns_server_dev_version,
+       rns_server_matches_dev AS server_dev,
+       rns_ctl_version,
+       rns_ctl_master_version,
+       rns_ctl_matches_master AS ctl_master,
+       rns_ctl_dev_version,
+       rns_ctl_matches_dev AS ctl_dev
+FROM latest
+WHERE rn = 1
+ORDER BY host;
+"
 ```
 
 The report database stores the SSH target in the `host` column, so use the

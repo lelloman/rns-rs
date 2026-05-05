@@ -42,7 +42,7 @@ impl Args {
                     // Boolean flags that don't take values
                     match key.as_str() {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
-                        | "blackholed" => {
+                        | "blackholed" | "base256" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -62,7 +62,7 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        'a' | 'r' | 't' | 'j' | 'p' | 'P' | 'x' | 'D' | 'l' | 'f' | 'A' => {
+                        'a' | 'r' | 't' | 'j' | 'p' | 'P' | 'x' | 'D' | 'l' | 'f' | 'A' | 'Z' => {
                             flags.insert(c.to_string(), "true".into());
                         }
                         _ => {
@@ -161,20 +161,28 @@ mod tests {
 
     #[test]
     fn parse_new_boolean_flags() {
-        let a = args(&["-l", "-f", "-m", "-A"]);
+        let a = args(&["-l", "-f", "-m", "-A", "-Z"]);
         assert!(a.has("l"));
         assert!(a.has("f"));
         assert!(a.has("m"));
         assert!(a.has("A"));
+        assert!(a.has("Z"));
     }
 
     #[test]
     fn parse_long_boolean_flags() {
-        let a = args(&["--stdin", "--stdout", "--force", "--blackholed"]);
+        let a = args(&[
+            "--stdin",
+            "--stdout",
+            "--force",
+            "--blackholed",
+            "--base256",
+        ]);
         assert!(a.has("stdin"));
         assert!(a.has("stdout"));
         assert!(a.has("force"));
         assert!(a.has("blackholed"));
+        assert!(a.has("base256"));
     }
 
     #[test]

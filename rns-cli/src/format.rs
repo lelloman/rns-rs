@@ -1,5 +1,7 @@
 //! Formatting utilities matching Python RNS output style.
 
+pub use rns_core::display::{b256_rep, prettyb256rep};
+
 /// Format a byte count as a human-readable string.
 /// Matches Python's `RNS.prettysize()`.
 pub fn size_str(num: u64) -> String {

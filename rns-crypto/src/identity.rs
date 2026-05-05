@@ -137,10 +137,33 @@ impl Identity {
 
     pub fn encrypt(&self, plaintext: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>, CryptoError> {
         let pub_key = self.pub_key.as_ref().ok_or(CryptoError::NoPublicKey)?;
+        self.encrypt_to_public_key(plaintext, pub_key, rng)
+    }
 
+    pub fn encrypt_with_ratchet(
+        &self,
+        plaintext: &[u8],
+        ratchet: Option<&[u8; 32]>,
+        rng: &mut dyn Rng,
+    ) -> Result<Vec<u8>, CryptoError> {
+        match ratchet {
+            Some(ratchet_pub_bytes) => {
+                let ratchet_pub = X25519PublicKey::from_bytes(ratchet_pub_bytes);
+                self.encrypt_to_public_key(plaintext, &ratchet_pub, rng)
+            }
+            None => self.encrypt(plaintext, rng),
+        }
+    }
+
+    fn encrypt_to_public_key(
+        &self,
+        plaintext: &[u8],
+        target_public_key: &X25519PublicKey,
+        rng: &mut dyn Rng,
+    ) -> Result<Vec<u8>, CryptoError> {
         let ephemeral = X25519PrivateKey::generate(rng);
         let ephemeral_pub_bytes = ephemeral.public_key().public_bytes();
-        let shared_key = ephemeral.exchange(pub_key);
+        let shared_key = ephemeral.exchange(target_public_key);
 
         let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
             .map_err(CryptoError::HkdfError)?;
@@ -251,6 +274,36 @@ mod tests {
         let ciphertext = id.encrypt(plaintext, &mut rng2).unwrap();
         let decrypted = id.decrypt(&ciphertext).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_identity_encrypt_with_ratchet_targets_ratchet_key() {
+        let mut rng = FixedRng::new(&(0..128).collect::<Vec<u8>>());
+        let remote_identity = Identity::new(&mut rng);
+        let ratchet_prv = X25519PrivateKey::from_bytes(&[0x42; 32]);
+        let ratchet_pub = ratchet_prv.public_key().public_bytes();
+        let plaintext = b"ratcheted";
+
+        let mut encrypt_rng = FixedRng::new(&(128..255).collect::<Vec<u8>>());
+        let ciphertext = remote_identity
+            .encrypt_with_ratchet(plaintext, Some(&ratchet_pub), &mut encrypt_rng)
+            .unwrap();
+
+        let peer_pub_bytes: [u8; 32] = ciphertext[..32].try_into().unwrap();
+        let peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
+        let shared_key = ratchet_prv.exchange(&peer_pub);
+        let derived_key = hkdf::hkdf(
+            DERIVED_KEY_LENGTH,
+            &shared_key,
+            Some(remote_identity.hash()),
+            None,
+        )
+        .unwrap();
+        let token = Token::new(&derived_key).unwrap();
+        let decrypted = token.decrypt(&ciphertext[32..]).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+        assert!(remote_identity.decrypt(&ciphertext).is_err());
     }
 
     #[test]
