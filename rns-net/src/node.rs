@@ -2656,6 +2656,8 @@ mod tests {
             hops: 1,
             received_at: time::now(),
             receiving_interface: rns_core::transport::types::InterfaceId(0),
+            rssi: Some(-100),
+            snr: Some(10.5),
         };
         let dest = crate::destination::Destination::single_out("test", &["ratchet"], &announced);
 
@@ -2705,6 +2707,8 @@ mod tests {
             hops: 1,
             received_at: time::now(),
             receiving_interface: rns_core::transport::types::InterfaceId(0),
+            rssi: Some(-100),
+            snr: Some(10.5),
         };
         let dest = crate::destination::Destination::single_out("test", &["ratchet"], &announced);
         let payload = node

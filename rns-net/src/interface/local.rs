@@ -1073,7 +1073,12 @@ mod tests {
         client.write_all(&hdlc::frame(&inbound)).unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
-            Event::Frame { interface_id, data } => {
+            Event::Frame {
+                interface_id,
+                data,
+                rssi: _,
+                snr: _,
+            } => {
                 assert_eq!(interface_id, InterfaceId(98));
                 assert_eq!(data, inbound);
             }

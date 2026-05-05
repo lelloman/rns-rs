@@ -271,6 +271,8 @@ fn dispatch_announce_received_persists_ratchet() {
             app_data: None,
             hops: 1,
             receiving_interface: InterfaceId(1),
+            rssi: None,
+            snr: None,
         },
     ]);
 
@@ -1015,6 +1017,8 @@ fn queued_startup_events_register_dynamic_interface_before_frame() {
     tx.send(Event::Frame {
         interface_id: InterfaceId(100),
         data: announce_raw,
+        rssi: Some(-100),
+        snr: Some(10.5),
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
