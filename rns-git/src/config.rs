@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::logging::DEFAULT_LOG_LEVEL;
+use crate::util::parse_hex_16;
 use crate::Result;
 
 #[derive(Debug, Clone)]
@@ -15,9 +16,12 @@ pub struct ServerConfig {
     pub node_name: String,
     pub announce_interval_secs: u64,
     pub serve_nomadnet: bool,
+    pub record_stats: bool,
+    pub stats_ignore_identities: Vec<[u8; 16]>,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
     pub allow_create: Vec<String>,
+    pub allow_stats: Vec<String>,
     pub log_level: u8,
 }
 
@@ -56,6 +60,15 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "rngit", "announce_interval") {
             cfg.announce_interval_secs = v.parse().unwrap_or(cfg.announce_interval_secs);
         }
+        if let Some(v) = get(&ini, "rngit", "record_stats") {
+            cfg.record_stats = parse_bool(v, cfg.record_stats);
+        }
+        if let Some(v) = get(&ini, "rngit", "stats_ignore_identities") {
+            cfg.stats_ignore_identities = split_list(v)
+                .into_iter()
+                .filter_map(|value| parse_hex_16(&value).ok())
+                .collect();
+        }
         if let Some(v) = get(&ini, "pages", "serve_nomadnet") {
             cfg.serve_nomadnet = parse_bool(v, cfg.serve_nomadnet);
         }
@@ -65,6 +78,7 @@ impl ServerConfig {
         cfg.allow_read = split_list(get(&ini, "access", "read").unwrap_or("all"));
         cfg.allow_write = split_list(get(&ini, "access", "write").unwrap_or("none"));
         cfg.allow_create = split_list(get(&ini, "access", "create").unwrap_or("none"));
+        cfg.allow_stats = split_list(get(&ini, "access", "stats").unwrap_or("none"));
         Ok((cfg, false))
     }
 
@@ -78,9 +92,12 @@ impl ServerConfig {
             reticulum_dir,
             announce_interval_secs: 300,
             serve_nomadnet: false,
+            record_stats: false,
+            stats_ignore_identities: Vec::new(),
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
             allow_create: vec!["none".to_string()],
+            allow_stats: vec!["none".to_string()],
             log_level: DEFAULT_LOG_LEVEL,
         }
     }
@@ -193,7 +210,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\n\n[pages]\n# serve_nomadnet = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\n\n[pages]\n# serve_nomadnet = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -249,6 +266,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_stats_config_and_permissions() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("server_config"),
+            "[rngit]\nrecord_stats = yes\nstats_ignore_identities = 00112233445566778899aabbccddeeff\n[access]\nstats = all, 0102030405060708090a0b0c0d0e0f10\n",
+        )
+        .unwrap();
+
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(!created);
+        assert!(cfg.record_stats);
+        assert_eq!(
+            cfg.stats_ignore_identities,
+            vec![[
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff
+            ]]
+        );
+        assert_eq!(
+            cfg.allow_stats,
+            vec![
+                "all".to_string(),
+                "0102030405060708090a0b0c0d0e0f10".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn missing_pages_section_keeps_nomadnet_disabled() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("server_config"), "[rngit]\n").unwrap();
@@ -256,5 +301,8 @@ mod tests {
         assert!(!created);
         assert_eq!(cfg.node_name, "Anonymous Git Node");
         assert!(!cfg.serve_nomadnet);
+        assert!(!cfg.record_stats);
+        assert!(cfg.stats_ignore_identities.is_empty());
+        assert_eq!(cfg.allow_stats, vec!["none".to_string()]);
     }
 }

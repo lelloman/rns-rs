@@ -103,6 +103,7 @@ pub fn register_repository_destination(
         &config.allow_read,
         &config.allow_write,
         &config.allow_create,
+        &config.allow_stats,
         config.repositories_dir.clone(),
     )?;
     let destination = Destination::single_in(
@@ -231,15 +232,21 @@ pub fn handle_fetch(
     }
     let path = git::repository_path(&config.repositories_dir, &repo)?;
     match git::create_bundle(&path, &have) {
-        Ok(bundle) if bundle.is_empty() => Ok(RequestResponse::Bytes(protocol::status_bytes(
-            protocol::RES_OK,
-            Vec::new(),
-        ))),
-        Ok(bundle) => Ok(RequestResponse::Resource {
-            data: bundle,
-            metadata: Some(protocol::metadata_status(protocol::RES_OK)),
-            auto_compress: true,
-        }),
+        Ok(bundle) if bundle.is_empty() => {
+            crate::stats::record_fetch(config, &repo, remote_hash);
+            Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_OK,
+                Vec::new(),
+            )))
+        }
+        Ok(bundle) => {
+            crate::stats::record_fetch(config, &repo, remote_hash);
+            Ok(RequestResponse::Resource {
+                data: bundle,
+                metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+                auto_compress: true,
+            })
+        }
         Err(err) if err.to_string() == "repository not found" => Ok(RequestResponse::Bytes(
             protocol::status_bytes(protocol::RES_NOT_FOUND, b"repository not found"),
         )),
@@ -269,11 +276,15 @@ pub fn handle_push(
             Operation::Create => b"create denied".as_slice(),
             Operation::Write => b"write denied".as_slice(),
             Operation::Read => b"read denied".as_slice(),
+            Operation::Stats => b"stats denied".as_slice(),
         };
         return Ok(protocol::status_bytes(protocol::RES_DISALLOWED, message));
     }
     match git::apply_push(&path, &bundle, &updates) {
-        Ok(()) => Ok(protocol::status_bytes(protocol::RES_OK, b"ok")),
+        Ok(()) => {
+            crate::stats::record_push(config, &repo, remote_hash);
+            Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+        }
         Err(err) => Ok(protocol::status_bytes(
             protocol::RES_REMOTE_FAIL,
             err.to_string(),
@@ -452,9 +463,12 @@ mod tests {
             node_name: "Anonymous Git Node".into(),
             announce_interval_secs: 300,
             serve_nomadnet: false,
+            record_stats: false,
+            stats_ignore_identities: Vec::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],
+            allow_stats: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -513,6 +527,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -531,6 +546,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -549,6 +565,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -570,6 +587,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -590,6 +608,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -611,6 +630,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -633,6 +653,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -654,6 +675,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -669,6 +691,7 @@ mod tests {
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap();

@@ -32,17 +32,23 @@ Important config paths:
 - `repositories_dir`: bare repositories served by `rngit`
 - `identity_path`: repository server identity
 - `client_identity_path`: local client identity used by the helper
-- `allow_read`, `allow_write`, and `allow_create`: repository ACL rules.
-  Creating a missing repository requires create access; pushing to an existing
-  repository requires write access.
+- `allow_read`, `allow_write`, `allow_create`, and `allow_stats`: repository
+  ACL rules. Creating a missing repository requires create access; pushing to
+  an existing repository requires write access. Stats pages require stats
+  access, which can also be granted with `stats` or `s` in repository
+  `.allowed` and group `group.allowed` files.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
   Build with `--no-default-features` to disable syntax highlighting and render
-  plain escaped literal blocks instead. Stats, iconsets, custom templates, and
-  rendered/raw blob controls are still pending.
+  plain escaped literal blocks instead. Set `record_stats = yes` in `[rngit]`
+  to persist front/group/repository page views plus successful fetch and push
+  counters in the server config directory `stats` file. Use
+  `stats_ignore_identities` to exclude specific 16-byte identity hashes from
+  collection. Iconsets, custom templates, and rendered/raw blob controls are
+  still pending.
 
 ## Git Remote Helper
 

@@ -70,6 +70,7 @@ pub fn register_nomadnet_destination(
         &config.allow_read,
         &config.allow_write,
         &config.allow_create,
+        &config.allow_stats,
         config.repositories_dir.clone(),
     )?;
     register_page_handlers(node, config.clone(), access)?;
@@ -113,10 +114,33 @@ pub fn render_page(
         PATH_COMMITS => render_commits_page(config, access, remote, &vars)?,
         PATH_COMMIT => render_commit_page(config, access, remote, &vars)?,
         PATH_REFS => render_refs_page(config, access, remote, &vars)?,
-        PATH_STATS => "Stats pages are not implemented yet.\n".to_string(),
+        PATH_STATS => render_stats_page(config, access, remote, &vars)?,
         _ => return Err(Error::msg("unknown page path")),
     };
+    record_page_view(path, config, &vars, remote);
     Ok(render_template(&config.node_name, &content))
+}
+
+fn record_page_view(
+    path: &str,
+    config: &ServerConfig,
+    vars: &BTreeMap<String, String>,
+    remote: Option<&[u8; 16]>,
+) {
+    match path {
+        PATH_INDEX => crate::stats::record_front_view(config, remote),
+        PATH_GROUP => {
+            if let Some(group) = var(vars, "g") {
+                crate::stats::record_group_view(config, group, remote);
+            }
+        }
+        PATH_REPO | PATH_TREE | PATH_BLOB | PATH_COMMITS | PATH_COMMIT | PATH_REFS => {
+            if let (Some(group), Some(repo)) = (var(vars, "g"), var(vars, "r")) {
+                crate::stats::record_repository_view(config, group, repo, remote);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_page_vars(data: &[u8]) -> Result<BTreeMap<String, String>> {
@@ -324,29 +348,36 @@ fn render_repo_page(
     if !description.is_empty() {
         out.push_str(&format!("{}\n\n", m_escape(&description)));
     }
-    out.push_str(&format!(
-        "{} • {} • {} • {}\n\n",
+    let mut nav_links = vec![
         m_link_raw(
             "Files",
             PATH_TREE,
-            &[("g", &group), ("r", &repo), ("ref", "HEAD")]
+            &[("g", &group), ("r", &repo), ("ref", "HEAD")],
         ),
         m_link_raw(
             "Commits",
             PATH_COMMITS,
-            &[("g", &group), ("r", &repo), ("ref", "HEAD")]
+            &[("g", &group), ("r", &repo), ("ref", "HEAD")],
         ),
         m_link_raw(
             &format!("Branches ({branch_count})"),
             PATH_REFS,
-            &[("g", &group), ("r", &repo), ("type", "heads")]
+            &[("g", &group), ("r", &repo), ("type", "heads")],
         ),
         m_link_raw(
             &format!("Tags ({tag_count})"),
             PATH_REFS,
-            &[("g", &group), ("r", &repo), ("type", "tags")]
-        )
-    ));
+            &[("g", &group), ("r", &repo), ("type", "tags")],
+        ),
+    ];
+    if access.allows(Operation::Stats, &format!("{group}/{repo}"), remote)? {
+        nav_links.push(m_link_raw(
+            "Stats",
+            PATH_STATS,
+            &[("g", &group), ("r", &repo)],
+        ));
+    }
+    out.push_str(&format!("{}\n\n", nav_links.join(" • ")));
     if let Some(readme) = readme {
         if !readme.content.trim_start().starts_with('>') {
             out.push_str("-\n");
@@ -581,6 +612,197 @@ fn render_refs_page(
         ));
     }
     Ok(out)
+}
+
+fn render_stats_page(
+    config: &ServerConfig,
+    access: &Access,
+    remote: Option<&[u8; 16]>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (group, repo, _repository) = accessible_repository(config, access, remote, vars)?;
+    if !access.allows(Operation::Stats, &format!("{group}/{repo}"), remote)? {
+        return Ok(">>\n>Error\n\nThe requested repository was not found.\n".to_string());
+    }
+    let Some(stats) = crate::stats::repository_stats(config, access, remote, &group, &repo, 90)?
+    else {
+        return Ok(
+            ">>\n>Stats Unavailable\n\nCould not retrieve statistics for this repository.\n"
+                .to_string(),
+        );
+    };
+
+    let mut out = format!(
+        ">>\n{} / {} / {}\n\n>Stats for {}\n\n",
+        m_link("Node", PATH_INDEX, &[]),
+        m_link(&group, PATH_GROUP, &[("g", &group)]),
+        m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
+        m_escape(&stats.repository)
+    );
+    out.push_str(&format!(
+        "`F66dViews`f    : {:>5}  total `F666(peak: {:>3})`f\n",
+        stats.views.total, stats.views.peak
+    ));
+    out.push_str(&format!(
+        "`F0a0Fetches`f  : {:>5}  total `F666(peak: {:>3})`f\n",
+        stats.fetches.total, stats.fetches.peak
+    ));
+    out.push_str(&format!(
+        "`Faa0Pushes`f   : {:>5}  total `F666(peak: {:>3})`f\n",
+        stats.pushes.total, stats.pushes.peak
+    ));
+    out.push_str(&format!(
+        "`F0aaActivity`f : {:>5} points\n\n",
+        stats.activity_score
+    ));
+    out.push_str(&format!(
+        "{}{}`f over the last {} days ({})\n\n",
+        stats.activity_level.color(),
+        stats.activity_level.label(),
+        stats.actual_days,
+        stats.date_range
+    ));
+
+    if stats.views.total > 0 {
+        out.push_str(">Views\n\n");
+        out.push_str(&render_chart(
+            &stats.views.daily,
+            &stats.timeline_labels,
+            "66d",
+            10,
+        ));
+        out.push('\n');
+    }
+    if stats.fetches.total > 0 {
+        out.push_str(">Fetches\n\n");
+        out.push_str(&render_chart(
+            &stats.fetches.daily,
+            &stats.timeline_labels,
+            "0a0",
+            10,
+        ));
+        out.push('\n');
+    }
+    if stats.pushes.total > 0 {
+        out.push_str(">Pushes\n\n");
+        out.push_str(&render_chart(
+            &stats.pushes.daily,
+            &stats.timeline_labels,
+            "aa0",
+            10,
+        ));
+        out.push('\n');
+    }
+    if stats.activity_score > 0 {
+        out.push_str(">Combined Activity\n\n");
+        out.push_str(&render_combined_chart(
+            &stats.views.daily,
+            &stats.fetches.daily,
+            &stats.pushes.daily,
+            &stats.timeline_labels,
+            4,
+        ));
+    } else {
+        out.push_str(
+            "`*\nNo activity recorded for this repository in the selected time period.\n\n`*",
+        );
+    }
+    Ok(out)
+}
+
+fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) -> String {
+    if data.is_empty() || data.iter().all(|value| *value == 0) {
+        return "No data available\n".to_string();
+    }
+    let max = data.iter().copied().max().unwrap_or(1).max(1);
+    let mut out = format!("`F{color}Peak: {max}`f\n");
+    for row in (1..=height).rev() {
+        let threshold = (row - 1) as f64 / height as f64 * max as f64;
+        out.push('│');
+        for value in data {
+            if *value as f64 > threshold {
+                let block = if row as f64 >= height as f64 * 0.875 {
+                    '█'
+                } else if row as f64 >= height as f64 * 0.625 {
+                    '▓'
+                } else if row as f64 >= height as f64 * 0.375 {
+                    '▒'
+                } else {
+                    '░'
+                };
+                out.push_str(&format!("`F{color}{block}`f"));
+            } else {
+                out.push(' ');
+            }
+        }
+        out.push('\n');
+    }
+    out.push('└');
+    for _ in data {
+        out.push('─');
+    }
+    out.push_str("┘\n");
+    out.push_str(&format!("`F666{:<12}`f", labels[0]));
+    let chart_width = data.len() + 2;
+    let spacing = chart_width.saturating_sub(24);
+    out.push_str(&" ".repeat(spacing));
+    out.push_str(&format!("`F666{:>12}`f\n", labels[1]));
+    out
+}
+
+fn render_combined_chart(
+    views: &[u64],
+    fetches: &[u64],
+    pushes: &[u64],
+    labels: &[String; 2],
+    height: u64,
+) -> String {
+    if views.is_empty() {
+        return "No data available\n".to_string();
+    }
+    let totals: Vec<u64> = views
+        .iter()
+        .zip(fetches.iter())
+        .zip(pushes.iter())
+        .map(|((view, fetch), push)| view + fetch + push)
+        .collect();
+    let max = totals.iter().copied().max().unwrap_or(1).max(1);
+    let mut out = String::from("`F66d██`f Views  `F0a0██`f Fetches  `Faa0██`f Pushes\n\n");
+    for row in (1..=height).rev() {
+        let threshold = (row - 1) as f64 / height as f64 * max as f64;
+        out.push('│');
+        for i in 0..views.len() {
+            let view = views[i] as f64;
+            let fetch = fetches.get(i).copied().unwrap_or(0) as f64;
+            let push = pushes.get(i).copied().unwrap_or(0) as f64;
+            let total = view + fetch + push;
+            if total > threshold {
+                if push > 0.0 && threshold >= view + fetch {
+                    out.push_str("`Faa0█`f");
+                } else if fetch > 0.0 && threshold >= view {
+                    out.push_str("`F0a0▓`f");
+                } else if view > 0.0 {
+                    out.push_str("`F66d░`f");
+                } else {
+                    out.push_str("`F666▒`f");
+                }
+            } else {
+                out.push(' ');
+            }
+        }
+        out.push('\n');
+    }
+    out.push('└');
+    for _ in views {
+        out.push('─');
+    }
+    out.push_str("┘\n");
+    out.push_str(&format!("`F666{:<12}`f", labels[0]));
+    let chart_width = views.len() + 2;
+    let spacing = chart_width.saturating_sub(24);
+    out.push_str(&" ".repeat(spacing));
+    out.push_str(&format!("`F666{:>12}`f\n", labels[1]));
+    out
 }
 
 fn accessible_groups(
@@ -1841,9 +2063,12 @@ Unmatched * marker\n\
             node_name: "Test Git Node".into(),
             announce_interval_secs: 300,
             serve_nomadnet: true,
+            record_stats: false,
+            stats_ignore_identities: Vec::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["none".into()],
             allow_create: vec!["none".into()],
+            allow_stats: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -1853,6 +2078,7 @@ Unmatched * marker\n\
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
+            &config.allow_stats,
             config.repositories_dir.clone(),
         )
         .unwrap()

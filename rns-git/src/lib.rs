@@ -7,6 +7,7 @@ pub mod logging;
 pub mod pages;
 pub mod protocol;
 pub mod server;
+mod stats;
 pub mod util;
 
 pub type Result<T> = std::result::Result<T, Error>;

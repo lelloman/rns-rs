@@ -10,6 +10,7 @@ pub enum Operation {
     Read,
     Write,
     Create,
+    Stats,
 }
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,7 @@ pub struct Access {
     read: Rule,
     write: Rule,
     create: Rule,
+    stats: Rule,
     repositories_dir: PathBuf,
 }
 
@@ -32,12 +34,14 @@ impl Access {
         read: &[String],
         write: &[String],
         create: &[String],
+        stats: &[String],
         repositories_dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             read: Rule::parse(read)?,
             write: Rule::parse(write)?,
             create: Rule::parse(create)?,
+            stats: Rule::parse(stats)?,
             repositories_dir,
         })
     }
@@ -56,6 +60,7 @@ impl Access {
             Operation::Read => self.read.allows(identity),
             Operation::Write => self.write.allows(identity),
             Operation::Create => self.create.allows(identity),
+            Operation::Stats => self.stats.allows(identity),
         })
     }
 
@@ -74,6 +79,7 @@ impl Access {
                 Operation::Read => "read",
                 Operation::Write => "write",
                 Operation::Create => "create",
+                Operation::Stats => "stats",
             }) else {
                 continue;
             };
@@ -133,6 +139,7 @@ fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
             .unwrap_or(("read", line));
         let key = match key.trim().to_ascii_lowercase().as_str() {
             "c" => "create".to_string(),
+            "s" => "stats".to_string(),
             key => key.to_string(),
         };
         values
@@ -156,6 +163,7 @@ mod tests {
             &["all".into()],
             &["none".into()],
             &["none".into()],
+            &["all".into()],
             PathBuf::from("."),
         )
         .unwrap();
@@ -164,6 +172,7 @@ mod tests {
         assert!(!access
             .allows(Operation::Create, "group/repo", None)
             .unwrap());
+        assert!(access.allows(Operation::Stats, "group/repo", None).unwrap());
     }
 
     #[test]
@@ -176,10 +185,31 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
         assert!(access.allows(Operation::Write, "group/repo", None).unwrap());
+    }
+
+    #[test]
+    fn repo_allowed_file_can_grant_stats_with_long_or_short_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("group/repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".allowed"), "stats = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access.allows(Operation::Stats, "group/repo", None).unwrap());
+
+        fs::write(repo.join(".allowed"), "s = all\n").unwrap();
+        assert!(access.allows(Operation::Stats, "group/repo", None).unwrap());
     }
 
     #[test]
@@ -189,6 +219,7 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join(".allowed"), "create = all\n").unwrap();
         let access = Access::new(
+            &["none".into()],
             &["none".into()],
             &["none".into()],
             &["none".into()],
@@ -215,6 +246,7 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
@@ -224,8 +256,26 @@ mod tests {
     }
 
     #[test]
+    fn group_allowed_file_can_grant_stats() {
+        let tmp = tempfile::tempdir().unwrap();
+        let group = tmp.path().join("group");
+        fs::create_dir_all(&group).unwrap();
+        fs::write(group.join("group.allowed"), "s = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access.allows(Operation::Stats, "group/repo", None).unwrap());
+    }
+
+    #[test]
     fn invalid_repository_names_are_rejected_before_acl_files() {
         let access = Access::new(
+            &["all".into()],
             &["all".into()],
             &["all".into()],
             &["all".into()],
@@ -234,5 +284,6 @@ mod tests {
         .unwrap();
         assert!(access.allows(Operation::Read, "../repo", None).is_err());
         assert!(access.allows(Operation::Create, "../repo", None).is_err());
+        assert!(access.allows(Operation::Stats, "../repo", None).is_err());
     }
 }
