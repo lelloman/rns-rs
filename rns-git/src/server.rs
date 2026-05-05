@@ -81,7 +81,9 @@ pub fn register_server_destinations(
 ) -> Result<ServerDestinations> {
     let repositories = register_repository_destination(node, config.clone(), identity)?;
     let nomadnet = if config.serve_nomadnet {
-        Some(pages::register_nomadnet_destination(node, identity)?)
+        Some(pages::register_nomadnet_destination(
+            node, &config, identity,
+        )?)
     } else {
         None
     };

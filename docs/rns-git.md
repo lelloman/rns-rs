@@ -35,8 +35,9 @@ Important config paths:
 - `allow_read`, `allow_write`, and `allow_create`: repository ACL rules.
   Creating a missing repository requires create access; pushing to an existing
   repository requires write access.
-- `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page-node
-  announcement scaffold. Page rendering is still pending.
+- `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
+  with basic repository browser pages. Full upstream rendering polish, stats,
+  syntax highlighting, and custom templates are still pending.
 
 ## Git Remote Helper
 
