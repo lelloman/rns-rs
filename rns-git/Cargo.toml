@@ -7,12 +7,17 @@ license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["syntax-highlighting"]
+syntax-highlighting = ["dep:syntect"]
+
 [dependencies]
 rns-core.workspace = true
 rns-crypto.workspace = true
 rns-net.workspace = true
 env_logger = "0.10"
 log = "0.4"
+syntect = { version = "5", default-features = false, features = ["default-fancy"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -24,4 +29,3 @@ path = "src/bin/rngit.rs"
 [[bin]]
 name = "git-remote-rns"
 path = "src/bin/git-remote-rns.rs"
-

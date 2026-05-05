@@ -452,8 +452,13 @@ fn render_blob_page(
             ("raw", "y"),
         ],
     );
+    let literal = if blob.displayable {
+        crate::highlight::literal_block(&blob.content, Some(path), None)
+    } else {
+        crate::highlight::plain_literal_block(&blob.content)
+    };
     Ok(format!(
-        ">>\n{} / {} / {} / {}\n\n>{} `F666{} ({}, {})`f\n\n{}\n\n`=\n{}\n`=\n",
+        ">>\n{} / {} / {} / {}\n\n>{} `F666{} ({}, {})`f\n\n{}\n\n{}",
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
@@ -463,7 +468,7 @@ fn render_blob_page(
         if blob.binary { "Binary" } else { "Text" },
         format_size(blob.size),
         raw_link,
-        m_escape(&blob.content)
+        literal
     ))
 }
 
@@ -767,25 +772,28 @@ fn readme_content(repo: &Path) -> Result<Option<ReadmeContent>> {
 fn markdown_to_micron(input: &str) -> String {
     let lines: Vec<&str> = input.lines().collect();
     let mut out = String::new();
-    let mut in_code_block = false;
+    let mut code_block: Option<(Option<String>, String)> = None;
     let mut index = 0;
 
     while index < lines.len() {
         let line = lines[index];
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
-            if in_code_block {
-                out.push_str("`=\n`f`b\n");
+            if let Some((language, content)) = code_block.take() {
+                out.push_str(&crate::highlight::literal_block(
+                    &content,
+                    None,
+                    language.as_deref(),
+                ));
             } else {
-                out.push_str("`BT282828`Fddd\n`=\n");
+                code_block = Some((markdown_fence_language(trimmed), String::new()));
             }
-            in_code_block = !in_code_block;
             index += 1;
             continue;
         }
-        if in_code_block {
-            out.push_str(&m_escape(line));
-            out.push('\n');
+        if let Some((_, content)) = code_block.as_mut() {
+            content.push_str(line);
+            content.push('\n');
             index += 1;
             continue;
         }
@@ -821,11 +829,23 @@ fn markdown_to_micron(input: &str) -> String {
         }
         index += 1;
     }
-    if in_code_block {
-        out.push_str("`=\n`f`b\n");
+    if let Some((language, content)) = code_block {
+        out.push_str(&crate::highlight::literal_block(
+            &content,
+            None,
+            language.as_deref(),
+        ));
     }
 
     out
+}
+
+fn markdown_fence_language(trimmed: &str) -> Option<String> {
+    trimmed
+        .strip_prefix("```")
+        .and_then(|info| info.split_whitespace().next())
+        .filter(|language| !language.is_empty())
+        .map(str::to_string)
 }
 
 fn markdown_heading(line: &str) -> Option<(usize, &str)> {
@@ -1156,6 +1176,7 @@ struct BlobInfo {
     content: String,
     size: u64,
     binary: bool,
+    displayable: bool,
 }
 
 fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
@@ -1177,6 +1198,7 @@ fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
             content: format!("File is too large to display ({size} bytes)."),
             size,
             binary: false,
+            displayable: false,
         });
     }
     let output = Command::new("git")
@@ -1190,9 +1212,14 @@ fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
     }
     let binary = output.stdout.contains(&0);
     Ok(BlobInfo {
-        content: String::from_utf8_lossy(&output.stdout).into_owned(),
+        content: if binary {
+            "Binary file is not displayed.".to_string()
+        } else {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        },
         size,
         binary,
+        displayable: !binary,
     })
 }
 
@@ -1431,6 +1458,10 @@ mod tests {
             None,
         )
         .unwrap();
+        assert!(blob.contains("answer"));
+        #[cfg(feature = "syntax-highlighting")]
+        assert!(blob.contains("`FT"));
+        #[cfg(not(feature = "syntax-highlighting"))]
         assert!(blob.contains("pub fn answer()"));
 
         let commits = render_page(
@@ -1557,7 +1588,8 @@ mod tests {
         .unwrap();
         assert!(blob.contains("Text, "));
         assert!(blob.contains("View raw"));
-        assert!(blob.contains("pub fn \\`answer\\`()"));
+        assert!(blob.contains("answer"));
+        assert!(blob.contains("\\`"));
 
         let commit_hash = run_git(
             Command::new("git")
@@ -1621,11 +1653,143 @@ See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
 Unmatched * marker\n\
 1. numbered\n",
         );
-        assert!(out.contains("`BT282828`Fddd"));
-        assert!(out.contains("**not bold** and \\`not inline\\`"));
+        assert!(out.contains("not bold"));
+        assert!(out.contains("\\`not inline\\`"));
+        #[cfg(feature = "syntax-highlighting")]
+        assert!(out.contains("`FT"));
+        #[cfg(not(feature = "syntax-highlighting"))]
+        assert!(out.contains("`=\n**not bold** and \\`not inline\\`\n`=\n"));
         assert!(!out.contains("`!not bold`!"));
         assert!(out.contains("Unmatched * marker"));
         assert!(out.contains("1. numbered"));
+    }
+
+    #[cfg(feature = "syntax-highlighting")]
+    #[test]
+    fn rust_blob_page_uses_syntax_highlighting_and_escapes_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/highlighted"),
+            "src/lib.rs",
+            "pub fn `answer`() -> u8 { 42 }\n",
+        );
+        let access = access(&config);
+
+        let blob = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "highlighted"),
+                ("var_path", "src/lib.rs"),
+            ]),
+            None,
+        )
+        .unwrap();
+
+        assert!(blob.contains("`FT"));
+        assert!(blob.contains("\\`"));
+        assert!(blob.contains("answer"));
+    }
+
+    #[cfg(feature = "syntax-highlighting")]
+    #[test]
+    fn markdown_readme_rust_fence_uses_syntax_highlighting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/readme-code"),
+            "README.md",
+            "# Example\n\n```rust\npub fn `answer`() -> u8 { 42 }\n```\n",
+        );
+        let access = access(&config);
+
+        let page = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "readme-code")]),
+            None,
+        )
+        .unwrap();
+
+        assert!(page.contains("`FT"));
+        assert!(page.contains("\\`"));
+        assert!(page.contains("answer"));
+    }
+
+    #[test]
+    fn unknown_extension_and_fence_language_fall_back_to_plain_literals() {
+        let blob = crate::highlight::literal_block("value `tick`\n", Some("blob.unknown"), None);
+        assert!(!blob.contains("`FT"));
+        assert!(blob.contains("value \\`tick\\`"));
+
+        let markdown = markdown_to_micron("```not-a-language\nvalue `tick`\n```\n");
+        assert!(!markdown.contains("`FT"));
+        assert!(markdown.contains("value \\`tick\\`"));
+    }
+
+    #[test]
+    fn binary_and_oversized_blobs_use_plain_fallback_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo_bytes(
+            config.repositories_dir.join("public/binary"),
+            "payload.bin",
+            b"abc\0def",
+        );
+        let large = vec![b'x'; 256 * 1024 + 1];
+        create_repo_bytes(
+            config.repositories_dir.join("public/large"),
+            "payload.rs",
+            &large,
+        );
+        let access = access(&config);
+
+        let binary = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "binary"),
+                ("var_path", "payload.bin"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(binary.contains("Binary"));
+        assert!(binary.contains("Binary file is not displayed."));
+        assert!(!binary.contains("`FT"));
+
+        let oversized = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "large"),
+                ("var_path", "payload.rs"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(oversized.contains("File is too large to display"));
+        assert!(!oversized.contains("`FT"));
+    }
+
+    #[cfg(not(feature = "syntax-highlighting"))]
+    #[test]
+    fn feature_off_renders_plain_literal_blocks() {
+        let blob = crate::highlight::literal_block("pub fn main() {}\n", Some("main.rs"), None);
+        assert!(!blob.contains("`FT"));
+        assert!(blob.contains("pub fn main() {}"));
+
+        let markdown = markdown_to_micron("```rust\npub fn main() {}\n```\n");
+        assert!(!markdown.contains("`FT"));
+        assert!(markdown.contains("pub fn main() {}"));
     }
 
     #[test]
@@ -1704,6 +1868,14 @@ Unmatched * marker\n\
     }
 
     fn create_repo(path: std::path::PathBuf, file: &str, content: &str) -> std::path::PathBuf {
+        create_repo_bytes(path, file, content.as_bytes())
+    }
+
+    fn create_repo_bytes(
+        path: std::path::PathBuf,
+        file: &str,
+        content: &[u8],
+    ) -> std::path::PathBuf {
         let work = path.with_extension("work");
         fs::create_dir_all(&work).unwrap();
         run_git(Command::new("git").arg("init").arg(&work));
