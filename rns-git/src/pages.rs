@@ -472,24 +472,62 @@ fn render_blob_page(
     validate_git_path(path)?;
     let resolved = resolve_ref(&repository, reference)?;
     let blob = blob_info(&repository, &resolved, path)?;
-    let raw_link = m_link(
-        "View raw",
-        PATH_BLOB,
-        &[
-            ("g", &group),
-            ("r", &repo),
-            ("ref", reference),
-            ("path", path),
-            ("raw", "y"),
-        ],
-    );
-    let literal = if blob.displayable {
-        crate::highlight::literal_block(&blob.content, Some(path), None)
-    } else {
+    let renderable = renderable_blob(path);
+    let raw_requested = var(vars, "raw").is_some();
+    let render_requested = var(vars, "render").is_some();
+    let render =
+        renderable.is_some() && !raw_requested && (render_requested || render_by_default(path));
+    let controls = renderable.map(|_| {
+        let render_link = m_link(
+            "View rendered",
+            PATH_BLOB,
+            &[
+                ("g", &group),
+                ("r", &repo),
+                ("ref", reference),
+                ("path", path),
+                ("render", "y"),
+            ],
+        );
+        let raw_link = m_link(
+            "View raw",
+            PATH_BLOB,
+            &[
+                ("g", &group),
+                ("r", &repo),
+                ("ref", reference),
+                ("path", path),
+                ("raw", "y"),
+            ],
+        );
+        if render {
+            format!("Displaying Rendered • {raw_link}")
+        } else {
+            format!("Displaying Raw • {render_link}")
+        }
+    });
+    let content = if !blob.displayable {
         crate::highlight::plain_literal_block(&blob.content)
+    } else if render {
+        match renderable {
+            Some(RenderableBlob::Markdown) => markdown_to_micron(&blob.content),
+            Some(RenderableBlob::Micron) => {
+                let mut out = blob.content.clone();
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out
+            }
+            None => crate::highlight::literal_block(&blob.content, Some(path), None),
+        }
+    } else {
+        crate::highlight::literal_block(&blob.content, Some(path), None)
     };
+    let controls = controls
+        .map(|controls| format!("{controls}\n\n"))
+        .unwrap_or_default();
     Ok(format!(
-        ">>\n{} / {} / {} / {}\n\n>{} `F666{} ({}, {})`f\n\n{}\n\n{}",
+        ">>\n{} / {} / {} / {}\n\n>{} `F666{} ({}, {})`f\n\n{}{}",
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
@@ -498,9 +536,32 @@ fn render_blob_page(
         &resolved[..8],
         if blob.binary { "Binary" } else { "Text" },
         format_size(blob.size),
-        raw_link,
-        literal
+        controls,
+        content
     ))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RenderableBlob {
+    Markdown,
+    Micron,
+}
+
+fn renderable_blob(path: &str) -> Option<RenderableBlob> {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("md") => Some(RenderableBlob::Markdown),
+        Some("mu") => Some(RenderableBlob::Micron),
+        _ => None,
+    }
+}
+
+fn render_by_default(path: &str) -> bool {
+    renderable_blob(path).is_some()
 }
 
 fn render_commits_page(
@@ -1809,7 +1870,7 @@ mod tests {
         )
         .unwrap();
         assert!(blob.contains("Text, "));
-        assert!(blob.contains("View raw"));
+        assert!(!blob.contains("View raw"));
         assert!(blob.contains("answer"));
         assert!(blob.contains("\\`"));
 
@@ -2000,6 +2061,229 @@ Unmatched * marker\n\
         .unwrap();
         assert!(oversized.contains("File is too large to display"));
         assert!(!oversized.contains("`FT"));
+    }
+
+    #[test]
+    fn markdown_blob_defaults_to_rendered_view_and_raw_view_escapes_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/docs"),
+            "docs/readme.md",
+            "# Title\n\nSee [docs](https://example.invalid) and `tick`.\n",
+        );
+        let access = access(&config);
+
+        let rendered = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(rendered.contains("Displaying Rendered"));
+        assert!(rendered.contains("View raw"));
+        assert!(rendered.contains(">Title"));
+        assert!(rendered.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(rendered.contains("`BT383838`Fdddtick`f`b"));
+        assert!(!rendered.contains("# Title"));
+
+        let raw = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+                ("var_raw", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(raw.contains("Displaying Raw"));
+        assert!(raw.contains("View rendered"));
+        assert!(raw.contains("Title"));
+        assert!(raw.contains("\\`"));
+        assert!(raw.contains("tick"));
+        assert!(!raw.contains("`!`[docs`https://example.invalid]`!"));
+    }
+
+    #[test]
+    fn micron_blob_defaults_to_rendered_passthrough_and_raw_view_is_literal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/micron"),
+            "README.mu",
+            ">Micron\n\n`!Already formatted`!\n",
+        );
+        let access = access(&config);
+
+        let rendered = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "micron"),
+                ("var_path", "README.mu"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(rendered.contains("Displaying Rendered"));
+        assert!(rendered.contains(">Micron"));
+        assert!(rendered.contains("`!Already formatted`!"));
+        assert!(!rendered.contains("\\`!Already formatted\\`!"));
+
+        let raw = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "micron"),
+                ("var_path", "README.mu"),
+                ("var_raw", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(raw.contains("Displaying Raw"));
+        assert!(raw.contains("\\`!Already formatted\\`!"));
+    }
+
+    #[test]
+    fn explicit_render_parameter_renders_markdown_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/docs"),
+            "docs/readme.md",
+            "# Explicit\n",
+        );
+        let access = access(&config);
+
+        let rendered = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+                ("var_raw", "y"),
+                ("var_render", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(rendered.contains("Displaying Raw"));
+        assert!(rendered.contains("#"));
+        assert!(rendered.contains("Explicit"));
+
+        let rendered = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "docs"),
+                ("var_path", "docs/readme.md"),
+                ("var_render", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(rendered.contains("Displaying Rendered"));
+        assert!(rendered.contains(">Explicit"));
+        assert!(!rendered.contains("# Explicit"));
+    }
+
+    #[test]
+    fn unsupported_blob_extension_ignores_render_parameter_and_uses_raw_literal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/text"),
+            "notes.txt",
+            "# Not a heading\n`literal`\n",
+        );
+        let access = access(&config);
+
+        let page = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "text"),
+                ("var_path", "notes.txt"),
+                ("var_render", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(!page.contains("Displaying Rendered"));
+        assert!(!page.contains("View raw"));
+        assert!(page.contains("Not a heading"));
+        assert!(page.contains("\\`literal\\`"));
+    }
+
+    #[test]
+    fn renderable_binary_and_oversized_blobs_do_not_render_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo_bytes(
+            config.repositories_dir.join("public/binary-md"),
+            "payload.md",
+            b"# Binary\0payload\n",
+        );
+        let large = vec![b'#'; 256 * 1024 + 1];
+        create_repo_bytes(
+            config.repositories_dir.join("public/large-md"),
+            "payload.md",
+            &large,
+        );
+        let access = access(&config);
+
+        let binary = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "binary-md"),
+                ("var_path", "payload.md"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(binary.contains("Binary"));
+        assert!(binary.contains("Binary file is not displayed."));
+        assert!(!binary.contains(">Binary"));
+
+        let oversized = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "large-md"),
+                ("var_path", "payload.md"),
+                ("var_render", "y"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(oversized.contains("File is too large to display"));
+        assert!(!oversized.contains("Displaying Rendered\n\n>"));
     }
 
     #[cfg(not(feature = "syntax-highlighting"))]

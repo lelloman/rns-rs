@@ -40,6 +40,9 @@ Important config paths:
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
+  Blob pages for `.md` and `.mu` files default to rendered output and include
+  rendered/raw view controls. Unsupported text blobs remain source views, with
+  binary and oversized blobs kept on safe fallback messages.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
   Build with `--no-default-features` to disable syntax highlighting and render
@@ -47,8 +50,7 @@ Important config paths:
   to persist front/group/repository page views plus successful fetch and push
   counters in the server config directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
-  collection. Iconsets, custom templates, and rendered/raw blob controls are
-  still pending.
+  collection. Iconsets and custom templates are still pending.
 
 ## Git Remote Helper
 
