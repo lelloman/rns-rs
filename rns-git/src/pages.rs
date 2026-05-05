@@ -309,7 +309,7 @@ fn render_repo_page(
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
     let description = repository_description(&repository)?;
     let refs = git_refs(&repository)?;
-    let readme = readme_name(&repository)?;
+    let readme = readme_content(&repository)?;
     let repo_url = format!("rns://<repository-destination>/{group}/{repo}");
 
     let branch_count = refs.heads.len().to_string();
@@ -348,7 +348,17 @@ fn render_repo_page(
         )
     ));
     if let Some(readme) = readme {
-        out.push_str(&format!("README: {}\n", m_escape(&readme)));
+        if !readme.content.trim_start().starts_with('>') {
+            out.push_str("-\n");
+        }
+        if readme.markdown {
+            out.push_str(&markdown_to_micron(&readme.content));
+        } else {
+            out.push_str(&readme.content);
+        }
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
     } else {
         out.push_str("No README file found in this repository.\n");
     }
@@ -713,7 +723,13 @@ fn repository_description(repo: &Path) -> Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_string())
 }
 
-fn readme_name(repo: &Path) -> Result<Option<String>> {
+#[derive(Debug)]
+struct ReadmeContent {
+    content: String,
+    markdown: bool,
+}
+
+fn readme_content(repo: &Path) -> Result<Option<ReadmeContent>> {
     const NAMES: &[&str] = &[
         "README.mu",
         "Readme.mu",
@@ -728,18 +744,307 @@ fn readme_name(repo: &Path) -> Result<Option<String>> {
         "readme.txt",
     ];
     for name in NAMES {
-        if git_success(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(repo)
-                .arg("cat-file")
-                .arg("-e")
-                .arg(format!("HEAD:{name}")),
-        ) {
-            return Ok(Some((*name).to_string()));
+        let output = Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("show")
+            .arg(format!("HEAD:{name}"))
+            .output()?;
+        if output.status.success() {
+            let content = String::from_utf8_lossy(&output.stdout).into_owned();
+            let markdown = name.ends_with(".md");
+            let content = if markdown || name.ends_with(".mu") {
+                content
+            } else {
+                m_escape(&content)
+            };
+            return Ok(Some(ReadmeContent { content, markdown }));
         }
     }
     Ok(None)
+}
+
+fn markdown_to_micron(input: &str) -> String {
+    let lines: Vec<&str> = input.lines().collect();
+    let mut out = String::new();
+    let mut in_code_block = false;
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if in_code_block {
+                out.push_str("`=\n`f`b\n");
+            } else {
+                out.push_str("`BT282828`Fddd\n`=\n");
+            }
+            in_code_block = !in_code_block;
+            index += 1;
+            continue;
+        }
+        if in_code_block {
+            out.push_str(&m_escape(line));
+            out.push('\n');
+            index += 1;
+            continue;
+        }
+        if is_table_start(&lines, index) {
+            let mut table = Vec::new();
+            while index < lines.len() && lines[index].contains('|') {
+                table.push(lines[index]);
+                index += 1;
+            }
+            out.push_str(&format_markdown_table(&table));
+            continue;
+        }
+        if let Some((level, text)) = markdown_heading(line) {
+            out.push_str(&">".repeat(level));
+            out.push_str(&format_markdown_inline(text.trim()));
+            out.push('\n');
+        } else if is_markdown_rule(trimmed) {
+            out.push_str("-\n");
+        } else if let Some((indent, text)) = unordered_list_item(line) {
+            out.push_str(indent);
+            out.push_str(" • ");
+            out.push_str(&format_markdown_inline(text));
+            out.push('\n');
+        } else if let Some((indent, number, text)) = ordered_list_item(line) {
+            out.push_str(indent);
+            out.push_str(number);
+            out.push_str(". ");
+            out.push_str(&format_markdown_inline(text));
+            out.push('\n');
+        } else {
+            out.push_str(&format_markdown_inline(line));
+            out.push('\n');
+        }
+        index += 1;
+    }
+    if in_code_block {
+        out.push_str("`=\n`f`b\n");
+    }
+
+    out
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let level = line.chars().take_while(|ch| *ch == '#').count();
+    if (1..=6).contains(&level) && line.as_bytes().get(level) == Some(&b' ') {
+        Some((level, &line[level + 1..]))
+    } else {
+        None
+    }
+}
+
+fn is_markdown_rule(trimmed: &str) -> bool {
+    trimmed.len() >= 3
+        && ["-", "*", "_", "="]
+            .iter()
+            .any(|marker| trimmed.chars().all(|ch| ch.to_string() == *marker))
+}
+
+fn unordered_list_item(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(text) = trimmed.strip_prefix(marker) {
+            return Some((indent, text));
+        }
+    }
+    None
+}
+
+fn ordered_list_item(line: &str) -> Option<(&str, &str, &str)> {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let Some((number, text)) = trimmed.split_once(". ") else {
+        return None;
+    };
+    if !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit()) {
+        Some((indent, number, text))
+    } else {
+        None
+    }
+}
+
+fn is_table_start(lines: &[&str], index: usize) -> bool {
+    index + 1 < lines.len()
+        && lines[index].contains('|')
+        && lines[index + 1].contains('|')
+        && is_table_separator(lines[index + 1])
+}
+
+fn is_table_separator(line: &str) -> bool {
+    parse_table_row(line)
+        .iter()
+        .all(|cell| !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+}
+
+fn format_markdown_table(lines: &[&str]) -> String {
+    let rows: Vec<Vec<String>> = lines
+        .iter()
+        .map(|line| parse_table_row(line))
+        .filter(|row| {
+            !row.is_empty()
+                && !row
+                    .iter()
+                    .all(|cell| cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+        })
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| format_markdown_inline(cell.trim()))
+                .collect()
+        })
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut widths = vec![0; columns];
+    for row in &rows {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index].max(cell.chars().count());
+        }
+    }
+
+    let mut out = String::new();
+    for row in rows {
+        out.push('│');
+        for index in 0..columns {
+            let cell = row.get(index).map(String::as_str).unwrap_or("");
+            out.push(' ');
+            out.push_str(cell);
+            for _ in cell.chars().count()..widths[index] {
+                out.push(' ');
+            }
+            out.push(' ');
+            out.push('│');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn parse_table_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim().trim_matches('|');
+    trimmed
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+#[derive(Debug)]
+enum InlineToken {
+    Link { label: String, target: String },
+    Code(String),
+}
+
+fn format_markdown_inline(input: &str) -> String {
+    let (with_placeholders, tokens) = extract_markdown_inline_tokens(input);
+    let escaped = m_escape(&with_placeholders);
+    let styled = apply_markdown_style(&escaped, "**", "`!", "`!");
+    let styled = apply_markdown_style(&styled, "__", "`!", "`!");
+    let styled = apply_markdown_style(&styled, "*", "`*", "`*");
+    let styled = apply_markdown_style(&styled, "_", "`*", "`*");
+    restore_markdown_inline_tokens(&styled, &tokens)
+}
+
+fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
+    let mut out = String::new();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+
+    while index < input.len() {
+        let rest = &input[index..];
+        if rest.starts_with('`') {
+            if let Some(end) = rest[1..].find('`') {
+                tokens.push(InlineToken::Code(rest[1..1 + end].to_string()));
+                out.push_str(&markdown_token_placeholder(tokens.len() - 1));
+                index += end + 2;
+                continue;
+            }
+        }
+        if rest.starts_with('[') {
+            if let Some((consumed, label, target)) = parse_markdown_link(rest) {
+                tokens.push(InlineToken::Link { label, target });
+                out.push_str(&markdown_token_placeholder(tokens.len() - 1));
+                index += consumed;
+                continue;
+            }
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+
+    (out, tokens)
+}
+
+fn parse_markdown_link(input: &str) -> Option<(usize, String, String)> {
+    let label_end = input[1..].find(']')? + 1;
+    if !input[label_end + 1..].starts_with('(') {
+        return None;
+    }
+    let target_start = label_end + 2;
+    let target_end = input[target_start..].find(')')? + target_start;
+    Some((
+        target_end + 1,
+        input[1..label_end].replace('`', ""),
+        input[target_start..target_end].to_string(),
+    ))
+}
+
+fn markdown_token_placeholder(index: usize) -> String {
+    format!("\u{1f}{index}\u{1f}")
+}
+
+fn restore_markdown_inline_tokens(input: &str, tokens: &[InlineToken]) -> String {
+    let mut out = input.to_string();
+    for (index, token) in tokens.iter().enumerate() {
+        let replacement = match token {
+            InlineToken::Link { label, target } => format!(
+                "`!`[{}{}{}]`!",
+                sanitize_label(label).trim(),
+                "`",
+                sanitize_markdown_link_target(target)
+            ),
+            InlineToken::Code(value) => format!("`BT383838`Fddd{}`f`b", m_escape(value)),
+        };
+        out = out.replace(&markdown_token_placeholder(index), &replacement);
+    }
+    out
+}
+
+fn sanitize_markdown_link_target(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| *ch != '[' && *ch != ']' && *ch != '`')
+        .collect()
+}
+
+fn apply_markdown_style(input: &str, marker: &str, open: &str, close: &str) -> String {
+    let mut out = String::new();
+    let mut rest = input;
+
+    while let Some(start) = rest.find(marker) {
+        let content_start = start + marker.len();
+        let Some(end) = rest[content_start..].find(marker) else {
+            out.push_str(rest);
+            return out;
+        };
+        let content_end = content_start + end;
+        out.push_str(&rest[..start]);
+        out.push_str(open);
+        out.push_str(&rest[content_start..content_end]);
+        out.push_str(close);
+        rest = &rest[content_end + marker.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[derive(Debug)]
@@ -990,12 +1295,6 @@ fn commit_info(repo: &Path, hash: &str) -> Result<CommitInfo> {
     })
 }
 
-fn git_success(cmd: &mut Command) -> bool {
-    cmd.output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
 fn run_git(cmd: &mut Command) -> Result<String> {
     let output = cmd.output()?;
     if !output.status.success() {
@@ -1091,7 +1390,7 @@ mod tests {
         .unwrap();
         assert!(repo.contains("rns://"));
         assert!(repo.contains("Alpha repository"));
-        assert!(repo.contains("README.md"));
+        assert!(repo.contains(">Alpha"));
     }
 
     #[test]
@@ -1281,6 +1580,91 @@ mod tests {
         assert!(commit.contains("Author: RNS Page Test"));
         assert!(commit.contains("Files changed"));
         assert!(commit.contains("A src/lib.rs"));
+    }
+
+    #[test]
+    fn markdown_converter_handles_links_code_lists_rules_and_tables() {
+        let input = "# Title\n\
+\n\
+See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
+\n\
+- **bold** and *italic*\n\
+---\n\
+| Name | Link |\n\
+| --- | --- |\n\
+| Row | [go](rns://abc) |\n";
+
+        let out = markdown_to_micron(input);
+        assert!(out.contains(">Title"));
+        assert!(out.contains("`!`[the docs`https://example.invalid/a_b]`!"));
+        assert!(out.contains("`BT383838`Fdddliteral *code*`f`b"));
+        assert!(out.contains(" • `!bold`! and `*italic`*"));
+        assert!(out.contains("\n-\n"));
+        assert!(out.contains("│ Name"));
+        assert!(out.contains("`!`[go`rns://abc]`!"));
+    }
+
+    #[test]
+    fn markdown_link_conversion_is_isolated_from_later_substitutions() {
+        let out = markdown_to_micron("[**bold** `code`](https://example.invalid?q=*x*)");
+        assert!(out.contains("`!`[**bold** code`https://example.invalid?q=*x*]`!"));
+        assert!(!out.contains("`!`!"));
+        assert!(!out.contains("`*x`*"));
+    }
+
+    #[test]
+    fn markdown_converter_keeps_code_blocks_and_unmatched_markers_literal() {
+        let out = markdown_to_micron(
+            "```rust\n\
+**not bold** and `not inline`\n\
+```\n\
+Unmatched * marker\n\
+1. numbered\n",
+        );
+        assert!(out.contains("`BT282828`Fddd"));
+        assert!(out.contains("**not bold** and \\`not inline\\`"));
+        assert!(!out.contains("`!not bold`!"));
+        assert!(out.contains("Unmatched * marker"));
+        assert!(out.contains("1. numbered"));
+    }
+
+    #[test]
+    fn repo_page_renders_markdown_readme_and_passes_micron_readme_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/markdown"),
+            "README.md",
+            "# Markdown\n\nSee [docs](https://example.invalid).\n",
+        );
+        create_repo(
+            config.repositories_dir.join("public/micron"),
+            "README.mu",
+            ">Micron\n\n`!Already formatted`!\n",
+        );
+        let access = access(&config);
+
+        let markdown = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "markdown")]),
+            None,
+        )
+        .unwrap();
+        assert!(markdown.contains(">Markdown"));
+        assert!(markdown.contains("`!`[docs`https://example.invalid]`!"));
+
+        let micron = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "micron")]),
+            None,
+        )
+        .unwrap();
+        assert!(micron.contains(">Micron"));
+        assert!(micron.contains("`!Already formatted`!"));
     }
 
     fn cfg(root: &std::path::Path) -> ServerConfig {
