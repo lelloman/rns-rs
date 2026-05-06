@@ -50,7 +50,11 @@ Important config paths:
   to persist front/group/repository page views plus successful fetch and push
   counters in the server config directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
-  collection. Iconsets and custom templates are still pending.
+  collection. Custom page templates can be placed in the configured
+  `templates_dir` with names such as `base.mu`, `repo.mu`, and `blob.mu`.
+  Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
+  `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
+  add simple Unicode icons to page navigation.
 
 ## Git Remote Helper
 

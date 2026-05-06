@@ -96,6 +96,8 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         node_name: "RNS Git Test Node".into(),
         announce_interval_secs: 300,
         serve_nomadnet: true,
+        templates_dir: tmp.path().join("rngit/templates"),
+        unicode_icons: false,
         record_stats: false,
         stats_ignore_identities: Vec::new(),
         allow_read: vec!["all".into()],

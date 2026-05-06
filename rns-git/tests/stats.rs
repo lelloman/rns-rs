@@ -336,6 +336,8 @@ fn cfg(root: &Path) -> ServerConfig {
         node_name: "Stats Test Node".into(),
         announce_interval_secs: 300,
         serve_nomadnet: true,
+        templates_dir: root.join("templates"),
+        unicode_icons: false,
         record_stats: true,
         stats_ignore_identities: Vec::new(),
         allow_read: vec!["all".into()],

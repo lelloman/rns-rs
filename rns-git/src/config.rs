@@ -16,6 +16,8 @@ pub struct ServerConfig {
     pub node_name: String,
     pub announce_interval_secs: u64,
     pub serve_nomadnet: bool,
+    pub templates_dir: PathBuf,
+    pub unicode_icons: bool,
     pub record_stats: bool,
     pub stats_ignore_identities: Vec<[u8; 16]>,
     pub allow_read: Vec<String>,
@@ -72,6 +74,12 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "pages", "serve_nomadnet") {
             cfg.serve_nomadnet = parse_bool(v, cfg.serve_nomadnet);
         }
+        if let Some(v) = get(&ini, "pages", "templates_dir") {
+            cfg.templates_dir = resolve_path(&cfg.dir, v);
+        }
+        if let Some(v) = get(&ini, "pages", "unicode_icons") {
+            cfg.unicode_icons = parse_bool(v, cfg.unicode_icons);
+        }
         if let Some(v) = get(&ini, "logging", "loglevel") {
             cfg.log_level = parse_log_level(v, cfg.log_level);
         }
@@ -88,10 +96,12 @@ impl ServerConfig {
             identity_path: dir.join("repositories_identity"),
             client_identity_path: dir.join("client_identity"),
             node_name: "Anonymous Git Node".to_string(),
-            dir,
+            dir: dir.clone(),
             reticulum_dir,
             announce_interval_secs: 300,
             serve_nomadnet: false,
+            templates_dir: dir.join("templates"),
+            unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             allow_read: vec!["all".to_string()],
@@ -210,7 +220,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\n\n[pages]\n# serve_nomadnet = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -256,13 +266,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("server_config"),
-            "[rngit]\nnode_name = Public Git Node\n[pages]\nserve_nomadnet = yes\n",
+            "[rngit]\nnode_name = Public Git Node\n[pages]\nserve_nomadnet = yes\ntemplates_dir = custom_templates\nunicode_icons = yes\n",
         )
         .unwrap();
         let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
         assert!(!created);
         assert_eq!(cfg.node_name, "Public Git Node");
         assert!(cfg.serve_nomadnet);
+        assert_eq!(cfg.templates_dir, tmp.path().join("custom_templates"));
+        assert!(cfg.unicode_icons);
     }
 
     #[test]
@@ -301,6 +313,8 @@ mod tests {
         assert!(!created);
         assert_eq!(cfg.node_name, "Anonymous Git Node");
         assert!(!cfg.serve_nomadnet);
+        assert_eq!(cfg.templates_dir, tmp.path().join("templates"));
+        assert!(!cfg.unicode_icons);
         assert!(!cfg.record_stats);
         assert!(cfg.stats_ignore_identities.is_empty());
         assert_eq!(cfg.allow_stats, vec!["none".to_string()]);

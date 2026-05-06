@@ -463,6 +463,8 @@ mod tests {
             node_name: "Anonymous Git Node".into(),
             announce_interval_secs: 300,
             serve_nomadnet: false,
+            templates_dir: root.join("templates"),
+            unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
             allow_read: vec!["all".into()],
