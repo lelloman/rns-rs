@@ -1261,58 +1261,212 @@ fn is_table_separator(line: &str) -> bool {
         .all(|cell| !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
 }
 
+#[derive(Clone, Copy)]
+enum TableAlign {
+    Left,
+    Right,
+    Center,
+}
+
 fn format_markdown_table(lines: &[&str]) -> String {
-    let rows: Vec<Vec<String>> = lines
-        .iter()
-        .map(|line| parse_table_row(line))
-        .filter(|row| {
-            !row.is_empty()
-                && !row
-                    .iter()
-                    .all(|cell| cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
-        })
-        .map(|row| {
-            row.into_iter()
-                .map(|cell| format_markdown_inline(cell.trim()))
-                .collect()
-        })
-        .collect();
-    if rows.is_empty() {
+    if lines.len() < 2 {
         return String::new();
     }
+    let header: Vec<String> = parse_table_row(lines[0])
+        .into_iter()
+        .map(|cell| format_markdown_inline(cell.trim()))
+        .collect();
+    if header.is_empty() {
+        return String::new();
+    }
+    let columns = header.len();
+    let mut alignments = parse_table_alignments(lines[1]);
+    while alignments.len() < columns {
+        alignments.push(TableAlign::Left);
+    }
+    alignments.truncate(columns);
 
-    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let mut widths = vec![0; columns];
+    let rows: Vec<Vec<String>> = lines
+        .iter()
+        .skip(2)
+        .map(|line| {
+            let mut row: Vec<String> = parse_table_row(line)
+                .into_iter()
+                .map(|cell| format_markdown_inline(cell.trim()))
+                .collect();
+            while row.len() < columns {
+                row.push(String::new());
+            }
+            row.truncate(columns);
+            row
+        })
+        .collect();
+
+    let mut widths = vec![3; columns];
+    for (index, cell) in header.iter().enumerate() {
+        widths[index] = widths[index].max(markdown_visible_width(cell));
+    }
     for row in &rows {
-        for (index, cell) in row.iter().enumerate() {
-            widths[index] = widths[index].max(cell.chars().count());
+        for (index, cell) in row.iter().enumerate().take(columns) {
+            widths[index] = widths[index].max(markdown_visible_width(cell));
         }
     }
 
     let mut out = String::new();
+    out.push_str(&table_border('┌', '┬', '┐', &widths));
+    out.push_str(&table_row(
+        &header,
+        &widths,
+        &vec![TableAlign::Left; columns],
+    ));
+    out.push_str(&table_border('├', '┼', '┤', &widths));
     for row in rows {
-        out.push('│');
-        for index in 0..columns {
-            let cell = row.get(index).map(String::as_str).unwrap_or("");
-            out.push(' ');
-            out.push_str(cell);
-            for _ in cell.chars().count()..widths[index] {
-                out.push(' ');
-            }
-            out.push(' ');
-            out.push('│');
-        }
-        out.push('\n');
+        out.push_str(&table_row(&row, &widths, &alignments));
     }
+    out.push_str(&table_border('└', '┴', '┘', &widths));
     out
 }
 
 fn parse_table_row(line: &str) -> Vec<String> {
-    let trimmed = line.trim().trim_matches('|');
-    trimmed
-        .split('|')
-        .map(|cell| cell.trim().to_string())
+    let mut trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix('|') {
+        trimmed = rest;
+    }
+    if let Some(rest) = trimmed.strip_suffix('|') {
+        trimmed = rest;
+    }
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for ch in trimmed.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '|' {
+            cells.push(current.trim().to_string());
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    if escaped {
+        current.push('\\');
+    }
+    cells.push(current.trim().to_string());
+    cells
+}
+
+fn parse_table_alignments(line: &str) -> Vec<TableAlign> {
+    parse_table_row(line)
+        .into_iter()
+        .map(|cell| {
+            let cell = cell.trim();
+            if cell.starts_with(':') && cell.ends_with(':') {
+                TableAlign::Center
+            } else if cell.ends_with(':') {
+                TableAlign::Right
+            } else {
+                TableAlign::Left
+            }
+        })
         .collect()
+}
+
+fn table_border(left: char, middle: char, right: char, widths: &[usize]) -> String {
+    let mut out = String::new();
+    out.push(left);
+    for (index, width) in widths.iter().enumerate() {
+        out.push_str(&"─".repeat(width + 2));
+        if index + 1 == widths.len() {
+            out.push(right);
+        } else {
+            out.push(middle);
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn table_row(cells: &[String], widths: &[usize], alignments: &[TableAlign]) -> String {
+    let mut out = String::from("│");
+    for (index, width) in widths.iter().enumerate() {
+        let cell = cells.get(index).map(String::as_str).unwrap_or("");
+        out.push(' ');
+        out.push_str(&pad_table_cell(
+            cell,
+            *width,
+            alignments.get(index).copied().unwrap_or(TableAlign::Left),
+        ));
+        out.push(' ');
+        out.push('│');
+    }
+    out.push('\n');
+    out
+}
+
+fn pad_table_cell(cell: &str, width: usize, alignment: TableAlign) -> String {
+    let visible = markdown_visible_width(cell);
+    let padding = width.saturating_sub(visible);
+    match alignment {
+        TableAlign::Left => format!("{cell}{}", " ".repeat(padding)),
+        TableAlign::Right => format!("{}{cell}", " ".repeat(padding)),
+        TableAlign::Center => {
+            let left = padding / 2;
+            let right = padding - left;
+            format!("{}{cell}{}", " ".repeat(left), " ".repeat(right))
+        }
+    }
+}
+
+fn markdown_visible_width(value: &str) -> usize {
+    let mut width = 0;
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            if matches!(chars.peek(), Some('F') | Some('B')) {
+                chars.next();
+                if matches!(chars.peek(), Some('T')) {
+                    chars.next();
+                    for _ in 0..6 {
+                        chars.next();
+                    }
+                } else {
+                    for _ in 0..3 {
+                        chars.next();
+                    }
+                }
+                continue;
+            }
+            if matches!(chars.peek(), Some('!') | Some('*') | Some('_') | Some('=')) {
+                chars.next();
+                continue;
+            }
+            if matches!(chars.peek(), Some('f') | Some('b') | Some('a')) {
+                chars.next();
+                continue;
+            }
+            if matches!(chars.peek(), Some('[')) {
+                let mut label_width = 0;
+                for link_ch in chars.by_ref() {
+                    if link_ch == '`' {
+                        for target_ch in chars.by_ref() {
+                            if target_ch == ']' {
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    label_width += 1;
+                }
+                width += label_width;
+                continue;
+            }
+        }
+        width += 1;
+    }
+    width
 }
 
 #[derive(Debug)]
@@ -1340,10 +1494,13 @@ fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
         let rest = &input[index..];
         if rest.starts_with('`') {
             if let Some(end) = rest[1..].find('`') {
-                tokens.push(InlineToken::Code(rest[1..1 + end].to_string()));
-                out.push_str(&markdown_token_placeholder(tokens.len() - 1));
-                index += end + 2;
-                continue;
+                let content = &rest[1..1 + end];
+                if is_markdown_inline_code(content) {
+                    tokens.push(InlineToken::Code(content.to_string()));
+                    out.push_str(&markdown_token_placeholder(tokens.len() - 1));
+                    index += end + 2;
+                    continue;
+                }
             }
         }
         if rest.starts_with('[') {
@@ -1362,6 +1519,16 @@ fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
     }
 
     (out, tokens)
+}
+
+fn is_markdown_inline_code(content: &str) -> bool {
+    !content.is_empty()
+        && !content.chars().next().is_some_and(|ch| {
+            matches!(
+                ch,
+                '!' | '*' | '_' | '=' | '[' | 'F' | 'B' | 'f' | 'b' | 'a'
+            )
+        })
 }
 
 fn parse_markdown_link(input: &str) -> Option<(usize, String, String)> {
@@ -2097,6 +2264,48 @@ See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
         assert!(out.contains("`!`[**bold** code`https://example.invalid?q=*x*]`!"));
         assert!(!out.contains("`!`!"));
         assert!(!out.contains("`*x`*"));
+    }
+
+    #[test]
+    fn markdown_tables_handle_empty_cells_escaped_pipes_alignment_and_visible_width() {
+        let input = "| Name | Status | Notes |\n\
+| :--- | ---: | :---: |\n\
+| `code` | **ok** | a\\|b |\n\
+| empty | | [go](rns://abc) |\n";
+
+        let out = markdown_to_micron(input);
+        assert!(out.contains("┌"));
+        assert!(out.contains("├"));
+        assert!(out.contains("└"));
+        assert!(out.contains("│ Name"));
+        assert!(out.contains("`BT383838`Fdddcode`f`b"));
+        assert!(out.contains("`!ok`!"));
+        assert!(out.contains("a|b"));
+        assert!(out.contains("empty"));
+        assert!(out.contains("`!`[go`rns://abc]`!"));
+        assert!(!out.contains("a\\|b"));
+    }
+
+    #[test]
+    fn markdown_table_width_ignores_generated_micron_tags() {
+        let input = "| A | B |\n\
+| --- | --- |\n\
+| [x](rns://abc) | `y` |\n";
+
+        let out = markdown_to_micron(input);
+        assert!(out.contains("│ `!`[x`rns://abc]`! "));
+        assert!(out.contains("│ `BT383838`Fdddy`f`b "));
+        assert!(out.contains("┌─────┬─────┐"));
+    }
+
+    #[test]
+    fn markdown_escaping_does_not_create_or_corrupt_micron_tags() {
+        let out =
+            markdown_to_micron("literal `!not bold`! and [bad`label](rns://abc`def) plus `raw`");
+        assert!(out.contains("literal \\`!not bold\\`!"));
+        assert!(out.contains("`!`[badlabel`rns://abcdef]`!"));
+        assert!(out.contains("`BT383838`Fdddraw`f`b"));
+        assert!(!out.contains("`!not bold`!"));
     }
 
     #[test]

@@ -40,6 +40,9 @@ Important config paths:
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
+  Markdown tables are rendered with Micron box-drawing table output, including
+  escaped pipe support, empty cells, alignment markers, and link/code/emphasis
+  width handling.
   Blob pages for `.md` and `.mu` files default to rendered output and include
   rendered/raw view controls. Unsupported text blobs remain source views, with
   binary and oversized blobs kept on safe fallback messages.
