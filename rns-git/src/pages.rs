@@ -409,6 +409,7 @@ fn render_repo_page(
     let refs = git_refs(&repository)?;
     let readme = readme_content(&repository)?;
     let repo_url = format!("rns://<repository-destination>/{group}/{repo}");
+    let thanks = repository_thanks(&repository, var(vars, "thanks").is_some())?;
 
     let branch_count = refs.heads.len().to_string();
     let tag_count = refs.tags.len().to_string();
@@ -442,6 +443,11 @@ fn render_repo_page(
             &icon_label(config, "tag", &format!("Tags ({tag_count})")),
             PATH_REFS,
             &[("g", &group), ("r", &repo), ("type", "tags")],
+        ),
+        m_link_raw(
+            &icon_label(config, "heart", &format!("Thanks ({thanks})")),
+            PATH_REPO,
+            &[("g", &group), ("r", &repo), ("thanks", "y")],
         ),
     ];
     if access.allows(Operation::Stats, &format!("{group}/{repo}"), remote)? {
@@ -1086,6 +1092,23 @@ fn repository_description(repo: &Path) -> Result<String> {
         return Ok(String::new());
     }
     Ok(fs::read_to_string(path)?.trim().to_string())
+}
+
+fn repository_thanks(repo: &Path, add: bool) -> Result<u64> {
+    let path = repo.with_extension("thanks");
+    let mut count = if path.exists() {
+        fs::read_to_string(&path)?
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if add {
+        count = count.saturating_add(1);
+        fs::write(path, format!("{count}\n"))?;
+    }
+    Ok(count)
 }
 
 #[derive(Debug)]
@@ -2160,6 +2183,88 @@ mod tests {
         assert!(repo.contains("🖹 Commits"));
         assert!(repo.contains("⑃ Branches"));
         assert!(repo.contains("⌆ Tags"));
+    }
+
+    #[test]
+    fn repo_page_renders_and_persists_thanks_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let repo_path = create_repo(
+            config.repositories_dir.join("public/alpha"),
+            "README.md",
+            "# Alpha\n",
+        );
+        let access = access(&config);
+
+        let first = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+            None,
+        )
+        .unwrap();
+        assert!(first.contains("Thanks (0)"));
+        assert!(!repo_path.with_extension("thanks").exists());
+
+        let thanked = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha"), ("var_thanks", "y")]),
+            None,
+        )
+        .unwrap();
+        assert!(thanked.contains("Thanks (1)"));
+        assert_eq!(
+            fs::read_to_string(repo_path.with_extension("thanks")).unwrap(),
+            "1\n"
+        );
+
+        let incremented = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha"), ("var_thanks", "y")]),
+            None,
+        )
+        .unwrap();
+        assert!(incremented.contains("Thanks (2)"));
+
+        let viewed = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+            None,
+        )
+        .unwrap();
+        assert!(viewed.contains("Thanks (2)"));
+    }
+
+    #[test]
+    fn repo_page_uses_unicode_heart_for_thanks_when_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.unicode_icons = true;
+        create_repo(
+            config.repositories_dir.join("public/alpha"),
+            "README.md",
+            "# Alpha\n",
+        );
+        let access = access(&config);
+
+        let page = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+            None,
+        )
+        .unwrap();
+
+        assert!(page.contains("♥ Thanks (0)"));
+        assert!(page.contains("thanks=y"));
     }
 
     #[test]

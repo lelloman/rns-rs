@@ -53,8 +53,10 @@ Important config paths:
   to persist front/group/repository page views plus successful fetch and push
   counters in the server config directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
-  collection. Custom page templates can be placed in the configured
-  `templates_dir` with names such as `base.mu`, `repo.mu`, and `blob.mu`.
+  collection. Repository pages include a persistent Thanks counter stored next
+  to the bare repository as `<repo>.thanks`. Custom page templates can be placed
+  in the configured `templates_dir` with names such as `base.mu`, `repo.mu`, and
+  `blob.mu`.
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
   `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
   add simple Unicode icons to page navigation.
