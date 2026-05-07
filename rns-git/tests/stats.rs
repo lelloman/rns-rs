@@ -285,6 +285,8 @@ fn ignored_identities_and_disabled_recording_do_not_mutate_stats() {
     )
     .unwrap();
     assert!(ignored_stats.contains("Views`f    :     0  total"));
+    assert!(ignored_stats
+        .contains("No activity recorded for this repository in the selected time period.\n\n`*"));
     let ignored_beta = pages::render_page(
         pages::PATH_STATS,
         &ignored,
