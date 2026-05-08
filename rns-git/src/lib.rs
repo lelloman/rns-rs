@@ -6,6 +6,7 @@ mod highlight;
 pub mod logging;
 pub mod pages;
 pub mod protocol;
+pub mod release;
 pub mod server;
 mod stats;
 pub mod util;

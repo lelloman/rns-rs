@@ -117,6 +117,7 @@ impl E2eHarness {
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],
             allow_stats: vec!["none".into()],
+            allow_release: vec!["none".into()],
             log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
         };
         configure(&mut server_config);
@@ -375,6 +376,125 @@ fn rngit_nomadnet_pages_render_over_rns_link() {
     );
 }
 
+#[test]
+fn rngit_release_management_and_downloads_work_over_rns_link() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_release = vec!["all".into()];
+    });
+    let (sha, bundle) = create_source_bundle(harness.tmp.path());
+    let repo_path = harness.server_config.repositories_dir.join("group/repo");
+    git::apply_push(
+        &repo_path,
+        &bundle,
+        &[RefUpdate {
+            refname: "refs/heads/main".into(),
+            old: None,
+            new: Some(sha),
+            force: true,
+        }],
+    )
+    .unwrap();
+    run_git(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo_path)
+            .arg("symbolic-ref")
+            .arg("HEAD")
+            .arg("refs/heads/main"),
+    );
+    run_git(Command::new("git").arg("--git-dir").arg(&repo_path).args([
+        "tag",
+        "v1",
+        "refs/heads/main",
+    ]));
+
+    let link_id = harness.link_to(&harness.destinations.repositories, None);
+    let init = harness.request(
+        link_id,
+        protocol::PATH_RELEASE,
+        &release_request(&[
+            ("repository", Value::Str("group/repo".into())),
+            ("operation", Value::Str("create".into())),
+            ("step", Value::Str("init".into())),
+            ("tag", Value::Str("v1".into())),
+            ("notes", Value::Str("# Release\n\nFrom E2E\n".into())),
+            ("notes_format", Value::Str("markdown".into())),
+        ]),
+    );
+    assert_status_response(&init.data, protocol::RES_OK, b"ok");
+    let artifact = harness.request(
+        link_id,
+        protocol::PATH_RELEASE,
+        &release_request(&[
+            ("repository", Value::Str("group/repo".into())),
+            ("operation", Value::Str("create".into())),
+            ("step", Value::Str("artifact".into())),
+            ("tag", Value::Str("v1".into())),
+            ("artifact_name", Value::Str("dist.tar".into())),
+            ("artifact_data", Value::Bin(b"artifact over rns".to_vec())),
+        ]),
+    );
+    assert_status_response(&artifact.data, protocol::RES_OK, b"ok");
+    let finalize = harness.request(
+        link_id,
+        protocol::PATH_RELEASE,
+        &release_request(&[
+            ("repository", Value::Str("group/repo".into())),
+            ("operation", Value::Str("create".into())),
+            ("step", Value::Str("finalize".into())),
+            ("tag", Value::Str("v1".into())),
+        ]),
+    );
+    assert_status_response(&finalize.data, protocol::RES_OK, b"ok");
+
+    let list = harness.request(
+        link_id,
+        protocol::PATH_RELEASE,
+        &release_request(&[
+            ("repository", Value::Str("group/repo".into())),
+            ("operation", Value::Str("list".into())),
+        ]),
+    );
+    let list_body = decode_ok_body(&list.data);
+    let releases = msgpack::unpack_exact(&list_body).unwrap();
+    assert_eq!(releases.as_array().unwrap().len(), 1);
+
+    let page_destination = harness
+        .destinations
+        .nomadnet
+        .as_ref()
+        .expect("Nomad Network destination should be registered");
+    let page_link = harness.link_to(
+        page_destination,
+        Some(harness.server_config.node_name.as_bytes()),
+    );
+    let release_page = harness.request(
+        page_link,
+        pages::PATH_RELEASE,
+        &page_request(&[("var_g", "group"), ("var_r", "repo"), ("var_tag", "latest")]),
+    );
+    let release_page = decode_page_response(&release_page.data);
+    assert!(release_page.contains(">Release v1"));
+    assert!(release_page.contains("From E2E"));
+    assert!(release_page.contains("dist.tar"));
+
+    let download = harness.request(
+        page_link,
+        pages::PATH_DOWNLOAD,
+        &page_request(&[
+            ("var_g", "group"),
+            ("var_r", "repo"),
+            ("var_tag", "latest"),
+            ("var_artifact", "dist.tar"),
+        ]),
+    );
+    assert_metadata_ok(download.metadata.as_deref().expect("download metadata"));
+    assert_eq!(
+        protocol::response_bin(&download.data).unwrap(),
+        b"artifact over rns"
+    );
+}
+
 fn wait_for_announce(
     rx: &mpsc::Receiver<Event>,
     server_node: &RnsNode,
@@ -439,6 +559,11 @@ fn wait_for_event<T>(
 }
 
 fn decode_status_response(data: &[u8]) -> Vec<u8> {
+    let bytes = decode_ok_body(data);
+    bytes.to_vec()
+}
+
+fn decode_ok_body(data: &[u8]) -> Vec<u8> {
     let bytes = protocol::response_bin(data).unwrap();
     let (&code, body) = bytes
         .split_first()
@@ -465,6 +590,15 @@ fn page_request(fields: &[(&str, &str)]) -> Vec<u8> {
         fields
             .iter()
             .map(|(k, v)| (Value::Str((*k).into()), Value::Str((*v).into())))
+            .collect(),
+    ))
+}
+
+fn release_request(fields: &[(&str, Value)]) -> Vec<u8> {
+    msgpack::pack(&Value::Map(
+        fields
+            .iter()
+            .map(|(k, v)| (Value::Str((*k).into()), v.clone()))
             .collect(),
     ))
 }

@@ -9,6 +9,7 @@ pub const PATH_LIST: &str = "/git/list";
 pub const PATH_FETCH: &str = "/git/fetch";
 pub const PATH_PUSH: &str = "/git/push";
 pub const PATH_DELETE: &str = "/git/delete";
+pub const PATH_RELEASE: &str = "/mgmt/release";
 
 pub const RES_OK: u8 = 0x00;
 pub const RES_DISALLOWED: u8 = 0x01;

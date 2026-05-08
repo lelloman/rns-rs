@@ -32,11 +32,13 @@ Important config paths:
 - `repositories_dir`: bare repositories served by `rngit`
 - `identity_path`: repository server identity
 - `client_identity_path`: local client identity used by the helper
-- `allow_read`, `allow_write`, `allow_create`, and `allow_stats`: repository
-  ACL rules. Creating a missing repository requires create access; pushing to
-  an existing repository requires write access. Stats pages require stats
-  access, which can also be granted with `stats` or `s` in repository
-  `.allowed` and group `group.allowed` files.
+- `allow_read`, `allow_write`, `allow_create`, `allow_stats`, and
+  `allow_release`: repository ACL rules. Creating a missing repository requires
+  create access; pushing to an existing repository requires write access. Stats
+  pages require stats access. Release creation and deletion require release
+  access, while release listing and viewing require read access. Repository
+  `.allowed` and group `group.allowed` files can grant `stats`/`s` and
+  `release`/`rel`.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
@@ -54,9 +56,15 @@ Important config paths:
   counters in the server config directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
   collection. Repository pages include a persistent Thanks counter stored next
-  to the bare repository as `<repo>.thanks`. Custom page templates can be placed
-  in the configured `templates_dir` with names such as `base.mu`, `repo.mu`, and
-  `blob.mu`.
+  to the bare repository as `<repo>.thanks`.
+  Release metadata is stored next to the bare repository as
+  `<repo>.releases/<tag>/`. Published releases appear on `/page/releases.mu`
+  and `/page/release.mu`, support Markdown or Micron release notes, expose
+  artifact download links through `/file/download`, support `latest` release
+  resolution, and keep separate release Thanks counts in each release
+  directory. Custom page templates can be placed in the configured
+  `templates_dir` with names such as `base.mu`, `repo.mu`, `blob.mu`,
+  `releases.mu`, and `release.mu`.
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
   `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
   add simple Unicode icons to page navigation.

@@ -7,10 +7,11 @@ use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
 use rns_crypto::identity::Identity;
 use rns_net::link_manager::ResourceStrategy;
-use rns_net::{Destination, RnsNode};
+use rns_net::{Destination, RequestResponse, RnsNode};
 
 use crate::acl::{Access, Operation};
 use crate::config::ServerConfig;
+use crate::protocol;
 use crate::util::validate_repo_name;
 use crate::{Error, Result};
 
@@ -26,6 +27,9 @@ pub const PATH_COMMITS: &str = "/page/commits.mu";
 pub const PATH_COMMIT: &str = "/page/commit.mu";
 pub const PATH_REFS: &str = "/page/refs.mu";
 pub const PATH_STATS: &str = "/page/stats.mu";
+pub const PATH_RELEASES: &str = "/page/releases.mu";
+pub const PATH_RELEASE: &str = "/page/release.mu";
+pub const PATH_DOWNLOAD: &str = "/file/download";
 
 const PAGE_PATHS: &[&str] = &[
     PATH_INDEX,
@@ -37,6 +41,8 @@ const PAGE_PATHS: &[&str] = &[
     PATH_COMMIT,
     PATH_REFS,
     PATH_STATS,
+    PATH_RELEASES,
+    PATH_RELEASE,
 ];
 
 pub fn destination_for_identity(identity: &Identity) -> Destination {
@@ -71,6 +77,7 @@ pub fn register_nomadnet_destination(
         &config.allow_write,
         &config.allow_create,
         &config.allow_stats,
+        &config.allow_release,
         config.repositories_dir.clone(),
     )?;
     register_page_handlers(node, config.clone(), access)?;
@@ -94,6 +101,20 @@ fn register_page_handlers(node: &RnsNode, config: ServerConfig, access: Access) 
         })
         .map_err(|_| Error::msg(format!("failed to register page handler {handler_path}")))?;
     }
+    let download_config = config.clone();
+    let download_access = access.clone();
+    node.register_request_handler_response(
+        PATH_DOWNLOAD,
+        None,
+        move |_link, _path, data, remote| {
+            let remote_hash = remote.map(|(hash, _)| hash);
+            Some(
+                download_file(&download_config, &download_access, data, remote_hash)
+                    .unwrap_or_else(|err| RequestResponse::Bytes(error_response_bytes(&err))),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register file download handler"))?;
     Ok(())
 }
 
@@ -118,6 +139,14 @@ pub fn render_page(
         PATH_COMMIT => ("commit", render_commit_page(config, access, remote, &vars)?),
         PATH_REFS => ("refs", render_refs_page(config, access, remote, &vars)?),
         PATH_STATS => ("stats", render_stats_page(config, access, remote, &vars)?),
+        PATH_RELEASES => (
+            "releases",
+            render_releases_page(config, access, remote, &vars)?,
+        ),
+        PATH_RELEASE => (
+            "release",
+            render_release_page(config, access, remote, &vars)?,
+        ),
         _ => return Err(Error::msg("unknown page path")),
     };
     record_page_view(path, config, &vars, remote);
@@ -137,7 +166,8 @@ fn record_page_view(
                 crate::stats::record_group_view(config, group, remote);
             }
         }
-        PATH_REPO | PATH_TREE | PATH_BLOB | PATH_COMMITS | PATH_COMMIT | PATH_REFS => {
+        PATH_REPO | PATH_TREE | PATH_BLOB | PATH_COMMITS | PATH_COMMIT | PATH_REFS
+        | PATH_RELEASES | PATH_RELEASE => {
             if let (Some(group), Some(repo)) = (var(vars, "g"), var(vars, "r")) {
                 crate::stats::record_repository_view(config, group, repo, remote);
             }
@@ -193,6 +223,10 @@ fn error_page(node_name: &str, message: &str) -> Vec<u8> {
         .into_bytes()
 }
 
+fn error_response_bytes(err: &Error) -> Vec<u8> {
+    protocol::status_bytes(protocol::RES_INVALID_REQ, err.to_string())
+}
+
 fn base_template(config: &ServerConfig) -> String {
     load_template(config, "base").unwrap_or_else(|| default_base_template().to_string())
 }
@@ -238,6 +272,7 @@ fn icon(config: &ServerConfig, name: &str) -> &'static str {
         "branch" => "⑃",
         "tag" => "⌆",
         "commits" => "🖹",
+        "package" => "▣",
         "stats" => "🗠",
         "heart" => "♥",
         _ => "",
@@ -410,6 +445,11 @@ fn render_repo_page(
     let readme = readme_content(&repository)?;
     let repo_url = format!("rns://<repository-destination>/{group}/{repo}");
     let thanks = repository_thanks(&repository, var(vars, "thanks").is_some())?;
+    let releases_path = crate::release::release_sidecar_path(&repository);
+    let release_count = crate::release::list_releases(&releases_path)?
+        .into_iter()
+        .filter(|release| release.status == "published")
+        .count();
 
     let branch_count = refs.heads.len().to_string();
     let tag_count = refs.tags.len().to_string();
@@ -450,6 +490,13 @@ fn render_repo_page(
             &[("g", &group), ("r", &repo), ("thanks", "y")],
         ),
     ];
+    if release_count > 0 {
+        nav_links.push(m_link_raw(
+            &icon_label(config, "package", &format!("Releases ({release_count})")),
+            PATH_RELEASES,
+            &[("g", &group), ("r", &repo)],
+        ));
+    }
     if access.allows(Operation::Stats, &format!("{group}/{repo}"), remote)? {
         nav_links.push(m_link_raw(
             &icon_label(config, "stats", "Stats"),
@@ -852,6 +899,185 @@ fn render_stats_page(
         );
     }
     Ok(out)
+}
+
+fn render_releases_page(
+    config: &ServerConfig,
+    access: &Access,
+    remote: Option<&[u8; 16]>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
+    let releases_path = crate::release::release_sidecar_path(&repository);
+    let releases: Vec<_> = crate::release::list_releases(&releases_path)?
+        .into_iter()
+        .filter(|release| release.status == "published")
+        .collect();
+    let mut out = format!(
+        ">>\n{} / {} / {} / releases\n\n>Releases ({})\n\n",
+        m_link("Node", PATH_INDEX, &[]),
+        m_link(&group, PATH_GROUP, &[("g", &group)]),
+        m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
+        releases.len()
+    );
+    if releases.is_empty() {
+        out.push_str("No releases available for this repository.\n");
+        return Ok(out);
+    }
+    for release in releases {
+        out.push_str(&format!(
+            "{} `F666{} artifacts`f\n",
+            m_link(
+                &release.tag,
+                PATH_RELEASE,
+                &[("g", &group), ("r", &repo), ("tag", &release.tag)]
+            ),
+            release.artifacts
+        ));
+        if !release.preview.is_empty() {
+            out.push_str(&format!("{}\n", m_escape(&release.preview)));
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn render_release_page(
+    config: &ServerConfig,
+    access: &Access,
+    remote: Option<&[u8; 16]>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
+    let releases_path = crate::release::release_sidecar_path(&repository);
+    let requested_tag = var(vars, "tag").unwrap_or("latest");
+    let tag = if requested_tag == "latest" {
+        let Some(tag) = crate::release::latest_published_tag(&releases_path)? else {
+            return Ok(">Release Not Found\n\nNo latest release exists.\n".to_string());
+        };
+        tag
+    } else {
+        requested_tag.to_string()
+    };
+    let Some(release) = crate::release::release_data(&releases_path, &tag)? else {
+        return Ok(">Release Not Found\n\nThe requested release was not found.\n".to_string());
+    };
+    if release.status != "published" {
+        return Ok(">Release Not Found\n\nThe requested release was not found.\n".to_string());
+    }
+    let release_dir = releases_path.join(&release.tag);
+    let thanks = crate::release::release_thanks(&release_dir, var(vars, "thanks").is_some())?;
+    let mut out = format!(
+        ">>\n{} / {} / {} / {} / {}\n\n>Release {}\n\n",
+        m_link("Node", PATH_INDEX, &[]),
+        m_link(&group, PATH_GROUP, &[("g", &group)]),
+        m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
+        m_link("releases", PATH_RELEASES, &[("g", &group), ("r", &repo)]),
+        m_escape(&release.tag),
+        m_escape(&release.tag)
+    );
+    out.push_str(&format!(
+        "{}\n\n",
+        m_link(
+            &icon_label(config, "heart", &format!("Thanks ({thanks})")),
+            PATH_RELEASE,
+            &[
+                ("g", &group),
+                ("r", &repo),
+                ("tag", &release.tag),
+                ("thanks", "y")
+            ]
+        )
+    ));
+    if !release.notes.is_empty() {
+        match release.notes_format.as_str() {
+            "markdown" => out.push_str(&markdown_to_micron(&release.notes)),
+            "micron" => out.push_str(&release.notes),
+            _ => out.push_str(&m_escape(&release.notes)),
+        }
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out.push_str(">Artifacts\n\n");
+    if release.artifacts.is_empty() {
+        out.push_str("No artifacts for this release.\n");
+    } else {
+        for artifact in release.artifacts {
+            out.push_str(&format!(
+                "{} ({})\n",
+                m_link(
+                    &artifact.name,
+                    PATH_DOWNLOAD,
+                    &[
+                        ("g", &group),
+                        ("r", &repo),
+                        ("tag", &release.tag),
+                        ("artifact", &artifact.name)
+                    ]
+                ),
+                format_size(artifact.size)
+            ));
+        }
+    }
+    Ok(out)
+}
+
+pub fn download_file(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&[u8; 16]>,
+) -> Result<RequestResponse> {
+    let vars = parse_page_vars(data)?;
+    let (_group, _repo, repository) = match accessible_repository(config, access, remote, &vars) {
+        Ok(repo) => repo,
+        Err(_) => {
+            return Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_NOT_FOUND,
+                b"repository not found",
+            )));
+        }
+    };
+    if let Some(artifact) = var(&vars, "artifact") {
+        let tag = var(&vars, "tag").unwrap_or("latest");
+        let releases_path = crate::release::release_sidecar_path(&repository);
+        let Some(path) = crate::release::artifact_path(&releases_path, tag, artifact)? else {
+            return Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_NOT_FOUND,
+                b"file not found",
+            )));
+        };
+        return Ok(RequestResponse::Resource {
+            data: fs::read(path)?,
+            metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+            auto_compress: true,
+        });
+    }
+
+    let reference = var(&vars, "ref").unwrap_or("HEAD");
+    let path = required_var(&vars, "path")?;
+    validate_git_path(path)?;
+    let resolved = resolve_ref(&repository, reference)?;
+    let spec = format!("{resolved}:{path}");
+    let output = Command::new("git")
+        .arg("--git-dir")
+        .arg(&repository)
+        .arg("show")
+        .arg(spec)
+        .output()?;
+    if !output.status.success() {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"file not found",
+        )));
+    }
+    Ok(RequestResponse::Resource {
+        data: output.stdout,
+        metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+        auto_compress: true,
+    })
 }
 
 fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) -> String {
@@ -2841,6 +3067,7 @@ Unmatched * marker\n\
             allow_write: vec!["none".into()],
             allow_create: vec!["none".into()],
             allow_stats: vec!["none".into()],
+            allow_release: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -2851,6 +3078,7 @@ Unmatched * marker\n\
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap()

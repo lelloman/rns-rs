@@ -346,6 +346,7 @@ fn cfg(root: &Path) -> ServerConfig {
         allow_write: vec!["all".into()],
         allow_create: vec!["all".into()],
         allow_stats: vec!["all".into()],
+        allow_release: vec!["none".into()],
         log_level: logging::DEFAULT_LOG_LEVEL,
     }
 }
@@ -356,6 +357,7 @@ fn access(config: &ServerConfig) -> Access {
         &config.allow_write,
         &config.allow_create,
         &config.allow_stats,
+        &config.allow_release,
         config.repositories_dir.clone(),
     )
     .unwrap()

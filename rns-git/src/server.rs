@@ -104,6 +104,7 @@ pub fn register_repository_destination(
         &config.allow_write,
         &config.allow_create,
         &config.allow_stats,
+        &config.allow_release,
         config.repositories_dir.clone(),
     )?;
     let destination = Destination::single_in(
@@ -175,6 +176,20 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
         },
     )
     .map_err(|_| Error::msg("failed to register push handler"))?;
+
+    let release_config = config.clone();
+    let release_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_RELEASE,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_release(&release_config, &release_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register release handler"))?;
 
     node.register_request_handler(
         protocol::PATH_DELETE,
@@ -277,6 +292,7 @@ pub fn handle_push(
             Operation::Write => b"write denied".as_slice(),
             Operation::Read => b"read denied".as_slice(),
             Operation::Stats => b"stats denied".as_slice(),
+            Operation::Release => b"release denied".as_slice(),
         };
         return Ok(protocol::status_bytes(protocol::RES_DISALLOWED, message));
     }
@@ -315,6 +331,77 @@ pub fn handle_delete(
     }
     std::fs::remove_dir_all(path)?;
     Ok(protocol::status_bytes(protocol::RES_OK, b"deleted"))
+}
+
+pub fn handle_release(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let request = crate::release::parse_request(data)?;
+    let repo = request.repository.as_str();
+    if !access.allows(Operation::Read, repo, Some(remote_hash))? {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    let release_access = access.allows(Operation::Release, repo, Some(remote_hash))?;
+    let permitted = match request.operation.as_str() {
+        "list" | "view" => true,
+        "create" | "delete" => release_access,
+        _ => false,
+    };
+    if !permitted {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not allowed",
+        ));
+    }
+
+    let repository_path = git::repository_path(&config.repositories_dir, repo)?;
+    if !git::is_bare_repository(&repository_path) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"repository not found",
+        ));
+    }
+    let releases_path = crate::release::release_sidecar_path(&repository_path);
+    match request.operation.as_str() {
+        "list" => crate::release::list_response(&releases_path),
+        "view" => {
+            let Some(tag) = request.tag.as_deref() else {
+                return Ok(protocol::status_bytes(
+                    protocol::RES_INVALID_REQ,
+                    b"no tag specified",
+                ));
+            };
+            crate::release::view_response(&releases_path, tag)
+        }
+        "create" => match request.step.as_deref() {
+            Some("init") => {
+                crate::release::create_init(&releases_path, &repository_path, &request, remote_hash)
+            }
+            Some("artifact") => crate::release::create_artifact(&releases_path, &request),
+            Some("finalize") => crate::release::create_finalize(&releases_path, &request),
+            _ => Ok(protocol::status_bytes(
+                protocol::RES_INVALID_REQ,
+                b"invalid request",
+            )),
+        },
+        "delete" => crate::release::delete_release(&releases_path, &request),
+        _ => Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        )),
+    }
 }
 
 fn error_response(err: Error) -> Vec<u8> {
@@ -471,6 +558,7 @@ mod tests {
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],
             allow_stats: vec!["none".into()],
+            allow_release: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -530,6 +618,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -549,6 +638,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -568,6 +658,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -590,6 +681,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -611,6 +703,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -633,6 +726,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -656,6 +750,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -678,6 +773,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -694,6 +790,7 @@ mod tests {
             &config.allow_write,
             &config.allow_create,
             &config.allow_stats,
+            &config.allow_release,
             config.repositories_dir.clone(),
         )
         .unwrap();
