@@ -7,30 +7,28 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Tag: `1.2.0`
-- Commit: `d7c3859f61a08a4330908550c8af9d57659779a6`
-- Commit date: `2026-04-28 21:54:18 +0200`
+- Tag: `1.2.1`
+- Commit: `1f3ce7e78f87bcc519c0ffbcdcc87ca4feccc83a`
+- Commit date: `2026-05-04 01:37:51 +0200`
 - Subject: `Prepare release`
 
-The previous recorded baseline was Reticulum `1.1.3`, with release commit
-`286a78ef8c58ca4503af2b0211b3a2d7e385467c`. The upstream `1.1.9..1.2.0`
-range was reviewed in `docs/upstream-1.2.0-porting-analysis.md` and ported with
-the following local commits:
+The previous recorded baseline was Reticulum `1.2.0`, with release commit
+`d7c3859f61a08a4330908550c8af9d57659779a6`. The upstream `1.2.0..1.2.1`
+range was reviewed and the relevant `rngit` changes were ported or explicitly
+deferred with the following local commits:
 
-- `fdcdb91` Gracefully tear down links on shutdown
-- `2446e4c` Port Android local interface sleep handling
-- `d343c0b` Filter Android rmnet auto interfaces
-- `b0bc33f` Document startup inbound readiness behavior
-- `1743069` Add persistent ratchet storage
-- `7919038` Add split resource transfer progress
-- `1061ed5` Add Reticulum Git transport tools
-- `b7afc53` Add rnsh remote shell utility
-- `6313a98` Add utility-specific log targets
-- `2b49017` Add base256 display helper
-- `5931ced` Document Reticulum utility ports
-- `1975197` Fix utility port CI checks
-- `ec5db60` Release Reticulum 1.2 utility ports
-- `13c00ed` Complete rngit upstream parity gaps
+- `0138338` Add rngit create permission
+- `9024178` Add rngit Nomad Network page scaffold
+- `fb12946` Add rngit page browser routes
+- `ba4b067` Improve rngit page rendering
+- `6c3a17d` Add rngit Markdown readme rendering
+- `6445a6f` Add rngit syntax highlighting
+- `cd7f492` Add rngit repository stats
+- `b821da4` Add rendered blob controls
+- `d9fa30b` Add rngit page templates and icons
+- `fa315b0` Improve rngit Markdown table rendering
+- `bccbecc` Add rngit repository thanks counts
+- `8ab43cd` Add rngit stats linebreak regression test
 
 When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or

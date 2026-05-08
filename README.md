@@ -2,16 +2,8 @@
 
 [![CI](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml)
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
-[![rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg?label=rns-crypto)](https://crates.io/crates/rns-crypto)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
-[![rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg?label=rns-ctl)](https://crates.io/crates/rns-ctl)
-[![rns-cli](https://img.shields.io/crates/v/rns-cli.svg?label=rns-cli)](https://crates.io/crates/rns-cli)
-[![rns-git](https://img.shields.io/crates/v/rns-git.svg?label=rns-git)](https://crates.io/crates/rns-git)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
-[![rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg?label=rns-hooks)](https://crates.io/crates/rns-hooks)
-[![rns-hooks-sdk](https://img.shields.io/crates/v/rns-hooks-sdk.svg?label=rns-hooks-sdk)](https://crates.io/crates/rns-hooks-sdk)
-[![rns-hooks-abi](https://img.shields.io/crates/v/rns-hooks-abi.svg?label=rns-hooks-abi)](https://crates.io/crates/rns-hooks-abi)
-[![rns-stats-hook](https://img.shields.io/crates/v/rns-stats-hook.svg?label=rns-stats-hook)](https://crates.io/crates/rns-stats-hook)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
@@ -21,14 +13,15 @@ This is a faithful port of the Python reference implementation, validated agains
 
 | Crate | `no_std` | Description |
 |-------|----------|-------------|
-| `rns-crypto` | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
-| `rns-core` | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
-| `rns-net` | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
-| `rns-cli` | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh` |
-| `rns-git` | No | Git-over-Reticulum utilities: `rngit` server and `git-remote-rns` helper |
-| `rns-ctl` | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
-| `rns-hooks` | No | Hook runtime: programmable hook points across the transport pipeline with WASM and native dynamic-library backends |
-| `rns-hooks-sdk` | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
+| [`rns-crypto`](https://crates.io/crates/rns-crypto) | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
+| [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
+| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
+| [`rns-server`](https://crates.io/crates/rns-server) | No | All-in-one Reticulum node supervisor and default runtime binary |
+| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh` |
+| [`rns-git`](https://crates.io/crates/rns-git) | No | Git-over-Reticulum utilities: `rngit` server and `git-remote-rns` helper |
+| [`rns-ctl`](https://crates.io/crates/rns-ctl) | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
+| [`rns-hooks`](https://crates.io/crates/rns-hooks) | No | Hook runtime: programmable hook points across the transport pipeline with WASM and native dynamic-library backends |
+| [`rns-hooks-sdk`](https://crates.io/crates/rns-hooks-sdk) | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
 
 ## Building
 
