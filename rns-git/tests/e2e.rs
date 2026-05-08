@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_net::{AnnouncedIdentity, Callbacks, DestHash, LinkId, PacketHash, RnsNode};
+use rns_net::{AnnouncedIdentity, Callbacks, DestHash, Destination, LinkId, PacketHash, RnsNode};
 
 use rns_git::config::ServerConfig;
 use rns_git::git;
+use rns_git::pages;
 use rns_git::protocol::{self, RefUpdate};
-use rns_git::server::register_server_destinations;
+use rns_git::server::{register_server_destinations, ServerDestinations};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -71,44 +72,112 @@ impl Callbacks for NoopCallbacks {
     }
 }
 
+struct E2eHarness {
+    tmp: tempfile::TempDir,
+    server_node: RnsNode,
+    client_node: RnsNode,
+    rx: mpsc::Receiver<Event>,
+    server_identity: Identity,
+    client_identity: Identity,
+    server_config: ServerConfig,
+    destinations: ServerDestinations,
+}
+
+impl E2eHarness {
+    fn start(configure: impl FnOnce(&mut ServerConfig)) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let port = find_free_port();
+
+        let server_rns_dir = tmp.path().join("server-rns");
+        let client_rns_dir = tmp.path().join("client-rns");
+        fs::create_dir_all(&server_rns_dir).unwrap();
+        fs::create_dir_all(&client_rns_dir).unwrap();
+        fs::write(server_rns_dir.join("config"), server_rns_config(port)).unwrap();
+        fs::write(client_rns_dir.join("config"), client_rns_config(port)).unwrap();
+
+        let server_node =
+            RnsNode::from_config(Some(&server_rns_dir), Box::new(NoopCallbacks)).unwrap();
+        wait_for_tcp_port(port);
+
+        let server_identity = Identity::new(&mut OsRng);
+        let mut server_config = ServerConfig {
+            dir: tmp.path().join("rngit"),
+            reticulum_dir: Some(server_rns_dir),
+            repositories_dir: tmp.path().join("repositories"),
+            identity_path: tmp.path().join("repositories_identity"),
+            client_identity_path: tmp.path().join("client_identity"),
+            node_name: "RNS Git Test Node".into(),
+            announce_interval_secs: 300,
+            serve_nomadnet: true,
+            templates_dir: tmp.path().join("rngit/templates"),
+            unicode_icons: false,
+            record_stats: false,
+            stats_ignore_identities: Vec::new(),
+            allow_read: vec!["all".into()],
+            allow_write: vec!["all".into()],
+            allow_create: vec!["all".into()],
+            allow_stats: vec!["none".into()],
+            log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
+        };
+        configure(&mut server_config);
+        let destinations =
+            register_server_destinations(&server_node, server_config.clone(), &server_identity)
+                .unwrap();
+
+        let client_identity = Identity::new(&mut OsRng);
+        let (tx, rx) = mpsc::channel();
+        let client_node =
+            RnsNode::from_config(Some(&client_rns_dir), Box::new(ClientCallbacks { tx })).unwrap();
+
+        Self {
+            tmp,
+            server_node,
+            client_node,
+            rx,
+            server_identity,
+            client_identity,
+            server_config,
+            destinations,
+        }
+    }
+
+    fn link_to(&self, destination: &Destination, app_data: Option<&[u8]>) -> [u8; 16] {
+        let announced = wait_for_announce(
+            &self.rx,
+            &self.server_node,
+            destination,
+            &self.server_identity,
+            destination.hash,
+            app_data,
+            TIMEOUT,
+        );
+        if let Some(expected) = app_data {
+            assert_eq!(announced.app_data.as_deref(), Some(expected));
+        }
+        let sig_pub: [u8; 32] = announced.public_key[32..64].try_into().unwrap();
+        let link_id = self
+            .client_node
+            .create_link(destination.hash.0, sig_pub)
+            .expect("client should create link to destination");
+        wait_for_link(&self.rx, link_id, TIMEOUT);
+        self.client_node
+            .identify_on_link(link_id, self.client_identity.get_private_key().unwrap())
+            .unwrap();
+        link_id
+    }
+
+    fn request(&self, link_id: [u8; 16], path: &str, data: &[u8]) -> ResponseEvent {
+        self.client_node.send_request(link_id, path, data).unwrap();
+        wait_for_response(&self.rx, TIMEOUT)
+    }
+}
+
 #[test]
 fn rngit_push_list_fetch_roundtrip_over_rns_link() {
-    let tmp = tempfile::tempdir().unwrap();
-    let port = find_free_port();
-
-    let server_rns_dir = tmp.path().join("server-rns");
-    let client_rns_dir = tmp.path().join("client-rns");
-    fs::create_dir_all(&server_rns_dir).unwrap();
-    fs::create_dir_all(&client_rns_dir).unwrap();
-    fs::write(server_rns_dir.join("config"), server_rns_config(port)).unwrap();
-    fs::write(client_rns_dir.join("config"), client_rns_config(port)).unwrap();
-
-    let server_node = RnsNode::from_config(Some(&server_rns_dir), Box::new(NoopCallbacks)).unwrap();
-    wait_for_tcp_port(port);
-
-    let server_identity = Identity::new(&mut OsRng);
-    let server_config = ServerConfig {
-        dir: tmp.path().join("rngit"),
-        reticulum_dir: Some(server_rns_dir),
-        repositories_dir: tmp.path().join("repositories"),
-        identity_path: tmp.path().join("repositories_identity"),
-        client_identity_path: tmp.path().join("client_identity"),
-        node_name: "RNS Git Test Node".into(),
-        announce_interval_secs: 300,
-        serve_nomadnet: true,
-        templates_dir: tmp.path().join("rngit/templates"),
-        unicode_icons: false,
-        record_stats: false,
-        stats_ignore_identities: Vec::new(),
-        allow_read: vec!["all".into()],
-        allow_write: vec!["all".into()],
-        allow_create: vec!["all".into()],
-        allow_stats: vec!["none".into()],
-        log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
-    };
-    let (sha, bundle) = create_source_bundle(tmp.path());
+    let harness = E2eHarness::start(|_| {});
+    let (sha, bundle) = create_source_bundle(harness.tmp.path());
     git::apply_push(
-        &server_config.repositories_dir.join("group/repo"),
+        &harness.server_config.repositories_dir.join("group/repo"),
         &bundle,
         &[RefUpdate {
             refname: "refs/heads/main".into(),
@@ -118,56 +187,34 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
         }],
     )
     .unwrap();
-    let destinations =
-        register_server_destinations(&server_node, server_config.clone(), &server_identity)
-            .unwrap();
-    let destination = destinations.repositories.clone();
-    let page_destination = destinations
+    run_git(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(harness.server_config.repositories_dir.join("group/repo"))
+            .arg("symbolic-ref")
+            .arg("HEAD")
+            .arg("refs/heads/main"),
+    );
+    let page_destination = harness
+        .destinations
         .nomadnet
-        .clone()
+        .as_ref()
         .expect("Nomad Network destination should be registered");
 
-    let client_identity = Identity::new(&mut OsRng);
-    let (tx, rx) = mpsc::channel();
-    let client_node =
-        RnsNode::from_config(Some(&client_rns_dir), Box::new(ClientCallbacks { tx })).unwrap();
-
-    let announced = wait_for_announce(
-        &rx,
-        &server_node,
-        &destination,
-        &server_identity,
-        destination.hash,
+    let link_id = harness.link_to(&harness.destinations.repositories, None);
+    let page_announced = wait_for_announce(
+        &harness.rx,
+        &harness.server_node,
+        page_destination,
+        &harness.server_identity,
+        page_destination.hash,
+        Some(harness.server_config.node_name.as_bytes()),
         TIMEOUT,
     );
-    assert_eq!(announced.identity_hash.0, *server_identity.hash());
-
-    server_node
-        .announce(
-            &page_destination,
-            &server_identity,
-            Some(server_config.node_name.as_bytes()),
-        )
-        .unwrap();
-    let page_announced = wait_for_event(&rx, TIMEOUT, |event| match event {
-        Event::Announce(announced) if announced.dest_hash == page_destination.hash => {
-            Some(announced)
-        }
-        _ => None,
-    });
     assert_eq!(
         page_announced.app_data.as_deref(),
-        Some(server_config.node_name.as_bytes())
+        Some(harness.server_config.node_name.as_bytes())
     );
-
-    let sig_pub: [u8; 32] = announced.public_key[32..64].try_into().unwrap();
-    let link_id = client_node
-        .create_link(destination.hash.0, sig_pub)
-        .expect("client should create link to rngit server");
-    wait_for_link(&rx, link_id, TIMEOUT);
-    client_node
-        .identify_on_link(link_id, client_identity.get_private_key().unwrap())
-        .unwrap();
 
     let push = protocol::push_request(
         "group/repo",
@@ -179,39 +226,30 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
             force: true,
         }],
     );
-    client_node
-        .send_request(link_id, protocol::PATH_PUSH, &push)
-        .unwrap();
-    let push_response = wait_for_response(&rx, TIMEOUT);
+    let push_response = harness.request(link_id, protocol::PATH_PUSH, &push);
     assert_eq!(decode_status_response(&push_response.data), b"ok");
 
-    client_node
-        .send_request(
-            link_id,
-            protocol::PATH_LIST,
-            &protocol::repository_request("group/repo"),
-        )
-        .unwrap();
-    let list_response = wait_for_response(&rx, TIMEOUT);
+    let list_response = harness.request(
+        link_id,
+        protocol::PATH_LIST,
+        &protocol::repository_request("group/repo"),
+    );
     let refs = String::from_utf8(decode_status_response(&list_response.data)).unwrap();
     assert!(
         refs.contains(&format!("{sha} refs/heads/copy")),
         "refs did not include pushed copy ref: {refs}"
     );
 
-    client_node
-        .send_request(
-            link_id,
-            protocol::PATH_FETCH,
-            &protocol::fetch_request("group/repo", &[]),
-        )
-        .unwrap();
-    let fetch_response = wait_for_response(&rx, TIMEOUT);
+    let fetch_response = harness.request(
+        link_id,
+        protocol::PATH_FETCH,
+        &protocol::fetch_request("group/repo", &[]),
+    );
     assert_metadata_ok(fetch_response.metadata.as_deref().expect("fetch metadata"));
     let fetched_bundle = protocol::response_bin(&fetch_response.data).unwrap();
     assert!(!fetched_bundle.is_empty());
 
-    let fetched_path = tmp.path().join("fetched.bundle");
+    let fetched_path = harness.tmp.path().join("fetched.bundle");
     fs::write(&fetched_path, fetched_bundle).unwrap();
     let fetched_refs = run_git(
         Command::new("git")
@@ -225,18 +263,131 @@ fn rngit_push_list_fetch_roundtrip_over_rns_link() {
     );
 }
 
+#[test]
+fn rngit_create_permission_is_enforced_over_rns_link() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["all".into()];
+    });
+    let link_id = harness.link_to(&harness.destinations.repositories, None);
+
+    let create = protocol::push_request("group/created", Vec::new(), Vec::new());
+    let create_response = harness.request(link_id, protocol::PATH_PUSH, &create);
+    assert_eq!(decode_status_response(&create_response.data), b"ok");
+    assert!(
+        git::is_bare_repository(&harness.server_config.repositories_dir.join("group/created")),
+        "create-permitted push should initialize a bare repository"
+    );
+
+    let update_existing = protocol::push_request("group/created", Vec::new(), Vec::new());
+    let denied_response = harness.request(link_id, protocol::PATH_PUSH, &update_existing);
+    assert_status_response(
+        &denied_response.data,
+        protocol::RES_DISALLOWED,
+        b"write denied",
+    );
+}
+
+#[test]
+fn rngit_nomadnet_pages_render_over_rns_link() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_stats = vec!["all".into()];
+    });
+    let (sha, bundle) = create_source_bundle(harness.tmp.path());
+    git::apply_push(
+        &harness.server_config.repositories_dir.join("group/repo"),
+        &bundle,
+        &[RefUpdate {
+            refname: "refs/heads/main".into(),
+            old: None,
+            new: Some(sha),
+            force: true,
+        }],
+    )
+    .unwrap();
+    run_git(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(harness.server_config.repositories_dir.join("group/repo"))
+            .arg("symbolic-ref")
+            .arg("HEAD")
+            .arg("refs/heads/main"),
+    );
+
+    let page_destination = harness
+        .destinations
+        .nomadnet
+        .as_ref()
+        .expect("Nomad Network destination should be registered");
+    let page_link = harness.link_to(
+        page_destination,
+        Some(harness.server_config.node_name.as_bytes()),
+    );
+
+    let index = harness.request(page_link, pages::PATH_INDEX, &page_request(&[]));
+    let index_page = decode_page_response(&index.data);
+    assert!(
+        index_page.contains("RNS Git Test Node"),
+        "index page did not include node name:\n{index_page}"
+    );
+    assert!(
+        index_page.contains("Groups"),
+        "index page did not include groups heading:\n{index_page}"
+    );
+    assert!(
+        index_page.contains("group"),
+        "index page did not include repository group:\n{index_page}"
+    );
+    assert!(
+        index_page.contains("repo"),
+        "index page did not include repository link:\n{index_page}"
+    );
+
+    let repo = harness.request(
+        page_link,
+        pages::PATH_REPO,
+        &page_request(&[("var_g", "group"), ("var_r", "repo")]),
+    );
+    let repo_page = decode_page_response(&repo.data);
+    assert!(
+        repo_page.contains("RNS Git Test Node"),
+        "repo page did not include node name:\n{repo_page}"
+    );
+    assert!(
+        repo_page.contains("rns://<repository-destination>/group/repo"),
+        "repo page did not include repository URL:\n{repo_page}"
+    );
+    assert!(
+        repo_page.contains("Files"),
+        "repo page did not include Files navigation:\n{repo_page}"
+    );
+    assert!(
+        repo_page.contains("Commits"),
+        "repo page did not include Commits navigation:\n{repo_page}"
+    );
+    assert!(
+        repo_page.contains("Stats"),
+        "repo page did not include Stats navigation:\n{repo_page}"
+    );
+    assert!(
+        repo_page.contains("hello over rns"),
+        "repo page did not render README content:\n{repo_page}"
+    );
+}
+
 fn wait_for_announce(
     rx: &mpsc::Receiver<Event>,
     server_node: &RnsNode,
     destination: &rns_net::Destination,
     server_identity: &Identity,
     dest_hash: DestHash,
+    app_data: Option<&[u8]>,
     timeout: Duration,
 ) -> AnnouncedIdentity {
     let deadline = Instant::now() + timeout;
     loop {
         server_node
-            .announce(destination, server_identity, None)
+            .announce(destination, server_identity, app_data)
             .expect("reannounce should succeed");
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Event::Announce(announced)) if announced.dest_hash == dest_hash => {
@@ -294,6 +445,28 @@ fn decode_status_response(data: &[u8]) -> Vec<u8> {
         .expect("status response must not be empty");
     assert_eq!(code, protocol::RES_OK, "unexpected status body: {body:?}");
     body.to_vec()
+}
+
+fn decode_page_response(data: &[u8]) -> String {
+    String::from_utf8(protocol::response_bin(data).unwrap()).unwrap()
+}
+
+fn assert_status_response(data: &[u8], expected_code: u8, expected_body: &[u8]) {
+    let bytes = protocol::response_bin(data).unwrap();
+    let (&code, body) = bytes
+        .split_first()
+        .expect("status response must not be empty");
+    assert_eq!(code, expected_code, "unexpected status body: {body:?}");
+    assert_eq!(body, expected_body);
+}
+
+fn page_request(fields: &[(&str, &str)]) -> Vec<u8> {
+    msgpack::pack(&Value::Map(
+        fields
+            .iter()
+            .map(|(k, v)| (Value::Str((*k).into()), Value::Str((*v).into())))
+            .collect(),
+    ))
 }
 
 fn assert_metadata_ok(metadata: &[u8]) {
