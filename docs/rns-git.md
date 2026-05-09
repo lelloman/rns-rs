@@ -105,7 +105,8 @@ The release tag must already exist in the remote bare repository. `create`
 initializes the release, uploads every regular file from the artifact directory
 except `RELEASE.md` and `RELEASE.mu`, then finalizes it as published. If no
 `--notes` path is provided, `rngit release create` uses `RELEASE.mu` or
-`RELEASE.md` from the artifact directory when present.
+`RELEASE.md` from the artifact directory when present. Artifact uploads print
+per-file progress as each artifact is sent.
 
 ## Logging
 

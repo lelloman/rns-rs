@@ -227,6 +227,7 @@ fn create_release(
         )));
     }
     let notes = load_notes(artifacts_dir, notes_path)?;
+    writeln!(output, "Initializing release {tag}")?;
     transport.request(request(
         "create",
         &[
@@ -238,8 +239,16 @@ fn create_release(
     ))?;
 
     let artifacts = artifact_files(artifacts_dir)?;
-    for artifact in &artifacts {
+    for (index, artifact) in artifacts.iter().enumerate() {
         let data = fs::read(&artifact.path)?;
+        writeln!(
+            output,
+            "Uploading {} ({}/{}, {} bytes)",
+            artifact.name,
+            index + 1,
+            artifacts.len(),
+            data.len()
+        )?;
         transport.request(request(
             "create",
             &[
@@ -250,6 +259,7 @@ fn create_release(
             ],
         ))?;
     }
+    writeln!(output, "Finalizing release {tag}")?;
     transport.request(request(
         "create",
         &[
@@ -529,10 +539,12 @@ mod tests {
             fake.requests[3].map_get("step").and_then(Value::as_str),
             Some("finalize")
         );
-        assert_eq!(
-            String::from_utf8(out).unwrap(),
-            "Created release v1 with 2 artifact(s)\n"
-        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("Initializing release v1"));
+        assert!(out.contains("Uploading a.bin (1/2, 1 bytes)"));
+        assert!(out.contains("Uploading b.bin (2/2, 1 bytes)"));
+        assert!(out.contains("Finalizing release v1"));
+        assert!(out.ends_with("Created release v1 with 2 artifact(s)\n"));
     }
 
     #[test]
