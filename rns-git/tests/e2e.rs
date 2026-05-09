@@ -118,6 +118,8 @@ impl E2eHarness {
             allow_create: vec!["all".into()],
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
+            allow_interact: vec!["none".into()],
+            allow_admin: vec!["none".into()],
             log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
         };
         configure(&mut server_config);

@@ -12,6 +12,8 @@ pub enum Operation {
     Create,
     Stats,
     Release,
+    Interact,
+    Admin,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +23,8 @@ pub struct Access {
     create: Rule,
     stats: Rule,
     release: Rule,
+    interact: Rule,
+    admin: Rule,
     repositories_dir: PathBuf,
 }
 
@@ -38,6 +42,8 @@ impl Access {
         create: &[String],
         stats: &[String],
         release: &[String],
+        interact: &[String],
+        admin: &[String],
         repositories_dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
@@ -46,6 +52,8 @@ impl Access {
             create: Rule::parse(create)?,
             stats: Rule::parse(stats)?,
             release: Rule::parse(release)?,
+            interact: Rule::parse(interact)?,
+            admin: Rule::parse(admin)?,
             repositories_dir,
         })
     }
@@ -57,6 +65,12 @@ impl Access {
         identity: Option<&[u8; 16]>,
     ) -> Result<bool> {
         validate_repo_name(repository)?;
+        if op != Operation::Admin
+            && (self.repo_allowed(Operation::Admin, repository, identity)?
+                || self.admin.allows(identity))
+        {
+            return Ok(true);
+        }
         if self.repo_allowed(op, repository, identity)? {
             return Ok(true);
         }
@@ -66,6 +80,8 @@ impl Access {
             Operation::Create => self.create.allows(identity),
             Operation::Stats => self.stats.allows(identity),
             Operation::Release => self.release.allows(identity),
+            Operation::Interact => self.interact.allows(identity),
+            Operation::Admin => self.admin.allows(identity),
         })
     }
 
@@ -86,6 +102,8 @@ impl Access {
                 Operation::Create => "create",
                 Operation::Stats => "stats",
                 Operation::Release => "release",
+                Operation::Interact => "interact",
+                Operation::Admin => "admin",
             }) else {
                 continue;
             };
@@ -147,6 +165,8 @@ fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
             "c" => "create".to_string(),
             "s" => "stats".to_string(),
             "rel" => "release".to_string(),
+            "i" => "interact".to_string(),
+            "adm" => "admin".to_string(),
             key => key.to_string(),
         };
         values
@@ -172,6 +192,8 @@ mod tests {
             &["none".into()],
             &["all".into()],
             &["none".into()],
+            &["none".into()],
+            &["none".into()],
             PathBuf::from("."),
         )
         .unwrap();
@@ -184,6 +206,10 @@ mod tests {
         assert!(!access
             .allows(Operation::Release, "group/repo", None)
             .unwrap());
+        assert!(!access
+            .allows(Operation::Interact, "group/repo", None)
+            .unwrap());
+        assert!(!access.allows(Operation::Admin, "group/repo", None).unwrap());
     }
 
     #[test]
@@ -193,6 +219,8 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join(".allowed"), "write = all\n").unwrap();
         let access = Access::new(
+            &["none".into()],
+            &["none".into()],
             &["none".into()],
             &["none".into()],
             &["none".into()],
@@ -216,6 +244,8 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
@@ -232,6 +262,8 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join(".allowed"), "create = all\n").unwrap();
         let access = Access::new(
+            &["none".into()],
+            &["none".into()],
             &["none".into()],
             &["none".into()],
             &["none".into()],
@@ -262,6 +294,8 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
@@ -282,6 +316,8 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
@@ -295,6 +331,8 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join(".allowed"), "release = all\n").unwrap();
         let access = Access::new(
+            &["none".into()],
+            &["none".into()],
             &["none".into()],
             &["none".into()],
             &["none".into()],
@@ -325,6 +363,8 @@ mod tests {
             &["none".into()],
             &["none".into()],
             &["none".into()],
+            &["none".into()],
+            &["none".into()],
             tmp.path().into(),
         )
         .unwrap();
@@ -334,8 +374,99 @@ mod tests {
     }
 
     #[test]
+    fn repo_allowed_file_can_grant_interact_and_admin_with_long_or_short_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("group/repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".allowed"), "interact = all\nadmin = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access
+            .allows(Operation::Interact, "group/repo", None)
+            .unwrap());
+        assert!(access.allows(Operation::Admin, "group/repo", None).unwrap());
+
+        fs::write(repo.join(".allowed"), "i = all\nadm = all\n").unwrap();
+        assert!(access
+            .allows(Operation::Interact, "group/repo", None)
+            .unwrap());
+        assert!(access.allows(Operation::Admin, "group/repo", None).unwrap());
+    }
+
+    #[test]
+    fn group_allowed_file_can_grant_interact_and_admin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let group = tmp.path().join("group");
+        fs::create_dir_all(&group).unwrap();
+        fs::write(group.join("group.allowed"), "i = all\nadm = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access
+            .allows(Operation::Interact, "group/repo", None)
+            .unwrap());
+        assert!(access.allows(Operation::Admin, "group/repo", None).unwrap());
+    }
+
+    #[test]
+    fn admin_identity_satisfies_repository_permission_checks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let admin = [0xA5; 16];
+        let other = [0x5A; 16];
+        let repo = tmp.path().join("group/repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(
+            repo.join(".allowed"),
+            "admin = a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5\n",
+        )
+        .unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+
+        for op in [
+            Operation::Read,
+            Operation::Write,
+            Operation::Create,
+            Operation::Stats,
+            Operation::Release,
+            Operation::Interact,
+        ] {
+            assert!(access.allows(op, "group/repo", Some(&admin)).unwrap());
+            assert!(!access.allows(op, "group/repo", Some(&other)).unwrap());
+        }
+    }
+
+    #[test]
     fn invalid_repository_names_are_rejected_before_acl_files() {
         let access = Access::new(
+            &["all".into()],
+            &["all".into()],
             &["all".into()],
             &["all".into()],
             &["all".into()],
@@ -348,5 +479,7 @@ mod tests {
         assert!(access.allows(Operation::Create, "../repo", None).is_err());
         assert!(access.allows(Operation::Stats, "../repo", None).is_err());
         assert!(access.allows(Operation::Release, "../repo", None).is_err());
+        assert!(access.allows(Operation::Interact, "../repo", None).is_err());
+        assert!(access.allows(Operation::Admin, "../repo", None).is_err());
     }
 }

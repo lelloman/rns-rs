@@ -32,13 +32,14 @@ Important config paths:
 - `repositories_dir`: bare repositories served by `rngit`
 - `identity_path`: repository server identity
 - `client_identity_path`: local client identity used by the helper
-- `allow_read`, `allow_write`, `allow_create`, `allow_stats`, and
-  `allow_release`: repository ACL rules. Creating a missing repository requires
-  create access; pushing to an existing repository requires write access. Stats
-  pages require stats access. Release creation and deletion require release
-  access, while release listing and viewing require read access. Repository
-  `.allowed` and group `group.allowed` files can grant `stats`/`s` and
-  `release`/`rel`.
+- `allow_read`, `allow_write`, `allow_create`, `allow_stats`, `allow_release`,
+  `allow_interact`, and `allow_admin`: repository ACL rules. Creating a missing
+  repository requires create access; pushing to an existing repository requires
+  write access. Stats pages require stats access. Release creation and deletion
+  require release access, while release listing and viewing require read
+  access. Admin identities satisfy repository permission checks. Repository
+  `.allowed` and group `group.allowed` files can grant `stats`/`s`,
+  `release`/`rel`, `interact`/`i`, and `admin`/`adm`.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.

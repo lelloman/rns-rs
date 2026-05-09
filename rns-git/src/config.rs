@@ -25,6 +25,8 @@ pub struct ServerConfig {
     pub allow_create: Vec<String>,
     pub allow_stats: Vec<String>,
     pub allow_release: Vec<String>,
+    pub allow_interact: Vec<String>,
+    pub allow_admin: Vec<String>,
     pub log_level: u8,
 }
 
@@ -89,6 +91,8 @@ impl ServerConfig {
         cfg.allow_create = split_list(get(&ini, "access", "create").unwrap_or("none"));
         cfg.allow_stats = split_list(get(&ini, "access", "stats").unwrap_or("none"));
         cfg.allow_release = split_list(get(&ini, "access", "release").unwrap_or("none"));
+        cfg.allow_interact = split_list(get(&ini, "access", "interact").unwrap_or("none"));
+        cfg.allow_admin = split_list(get(&ini, "access", "admin").unwrap_or("none"));
         Ok((cfg, false))
     }
 
@@ -111,6 +115,8 @@ impl ServerConfig {
             allow_create: vec!["none".to_string()],
             allow_stats: vec!["none".to_string()],
             allow_release: vec!["none".to_string()],
+            allow_interact: vec!["none".to_string()],
+            allow_admin: vec!["none".to_string()],
             log_level: DEFAULT_LOG_LEVEL,
         }
     }
@@ -223,7 +229,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -313,7 +319,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("server_config"),
-            "[access]\nrelease = all, 0102030405060708090a0b0c0d0e0f10\n",
+            "[access]\nrelease = all, 0102030405060708090a0b0c0d0e0f10\ninteract = all\nadmin = 00112233445566778899aabbccddeeff\n",
         )
         .unwrap();
 
@@ -325,6 +331,11 @@ mod tests {
                 "all".to_string(),
                 "0102030405060708090a0b0c0d0e0f10".to_string()
             ]
+        );
+        assert_eq!(cfg.allow_interact, vec!["all".to_string()]);
+        assert_eq!(
+            cfg.allow_admin,
+            vec!["00112233445566778899aabbccddeeff".to_string()]
         );
     }
 
@@ -342,5 +353,7 @@ mod tests {
         assert!(cfg.stats_ignore_identities.is_empty());
         assert_eq!(cfg.allow_stats, vec!["none".to_string()]);
         assert_eq!(cfg.allow_release, vec!["none".to_string()]);
+        assert_eq!(cfg.allow_interact, vec!["none".to_string()]);
+        assert_eq!(cfg.allow_admin, vec!["none".to_string()]);
     }
 }

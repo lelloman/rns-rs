@@ -78,6 +78,8 @@ pub fn register_nomadnet_destination(
         &config.allow_create,
         &config.allow_stats,
         &config.allow_release,
+        &config.allow_interact,
+        &config.allow_admin,
         config.repositories_dir.clone(),
     )?;
     register_page_handlers(node, config.clone(), access)?;
@@ -3107,6 +3109,8 @@ Unmatched * marker\n\
             allow_create: vec!["none".into()],
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
+            allow_interact: vec!["none".into()],
+            allow_admin: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -3118,6 +3122,8 @@ Unmatched * marker\n\
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap()

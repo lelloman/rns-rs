@@ -105,6 +105,8 @@ pub fn register_repository_destination(
         &config.allow_create,
         &config.allow_stats,
         &config.allow_release,
+        &config.allow_interact,
+        &config.allow_admin,
         config.repositories_dir.clone(),
     )?;
     let destination = Destination::single_in(
@@ -293,6 +295,8 @@ pub fn handle_push(
             Operation::Read => b"read denied".as_slice(),
             Operation::Stats => b"stats denied".as_slice(),
             Operation::Release => b"release denied".as_slice(),
+            Operation::Interact => b"interact denied".as_slice(),
+            Operation::Admin => b"admin denied".as_slice(),
         };
         return Ok(protocol::status_bytes(protocol::RES_DISALLOWED, message));
     }
@@ -559,6 +563,8 @@ mod tests {
             allow_create: vec!["all".into()],
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
+            allow_interact: vec!["none".into()],
+            allow_admin: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
     }
@@ -619,6 +625,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -639,6 +647,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -659,6 +669,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -682,6 +694,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -704,6 +718,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -727,6 +743,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -751,6 +769,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -774,6 +794,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
@@ -791,6 +813,8 @@ mod tests {
             &config.allow_create,
             &config.allow_stats,
             &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
             config.repositories_dir.clone(),
         )
         .unwrap();
