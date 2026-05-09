@@ -29,6 +29,8 @@ pub const PATH_REFS: &str = "/page/refs.mu";
 pub const PATH_STATS: &str = "/page/stats.mu";
 pub const PATH_RELEASES: &str = "/page/releases.mu";
 pub const PATH_RELEASE: &str = "/page/release.mu";
+pub const PATH_WORK: &str = "/page/work.mu";
+pub const PATH_WORK_DOC: &str = "/page/work_doc.mu";
 pub const PATH_DOWNLOAD: &str = "/file/download";
 
 const PAGE_PATHS: &[&str] = &[
@@ -43,6 +45,8 @@ const PAGE_PATHS: &[&str] = &[
     PATH_STATS,
     PATH_RELEASES,
     PATH_RELEASE,
+    PATH_WORK,
+    PATH_WORK_DOC,
 ];
 
 pub fn destination_for_identity(identity: &Identity) -> Destination {
@@ -149,6 +153,11 @@ pub fn render_page(
             "release",
             render_release_page(config, access, remote, &vars)?,
         ),
+        PATH_WORK => ("work", render_work_page(config, access, remote, &vars)?),
+        PATH_WORK_DOC => (
+            "work_doc",
+            render_work_doc_page(config, access, remote, &vars)?,
+        ),
         _ => return Err(Error::msg("unknown page path")),
     };
     record_page_view(path, config, &vars, remote);
@@ -169,7 +178,7 @@ fn record_page_view(
             }
         }
         PATH_REPO | PATH_TREE | PATH_BLOB | PATH_COMMITS | PATH_COMMIT | PATH_REFS
-        | PATH_RELEASES | PATH_RELEASE => {
+        | PATH_RELEASES | PATH_RELEASE | PATH_WORK | PATH_WORK_DOC => {
             if let (Some(group), Some(repo)) = (var(vars, "g"), var(vars, "r")) {
                 crate::stats::record_repository_view(config, group, repo, remote);
             }
@@ -452,6 +461,9 @@ fn render_repo_page(
         .into_iter()
         .filter(|release| release.status == "published")
         .count();
+    let work_path = crate::work::work_sidecar_path(&repository);
+    let work_lists = crate::work::list_documents(&work_path, crate::work::WorkListScope::All)?;
+    let work_count = work_lists.active.len() + work_lists.completed.len();
 
     let branch_count = refs.heads.len().to_string();
     let tag_count = refs.tags.len().to_string();
@@ -496,6 +508,13 @@ fn render_repo_page(
         nav_links.push(m_link_raw(
             &icon_label(config, "package", &format!("Releases ({release_count})")),
             PATH_RELEASES,
+            &[("g", &group), ("r", &repo)],
+        ));
+    }
+    if work_count > 0 {
+        nav_links.push(m_link_raw(
+            &icon_label(config, "work", &format!("Work ({work_count})")),
+            PATH_WORK,
             &[("g", &group), ("r", &repo)],
         ));
     }
@@ -1024,6 +1043,181 @@ fn render_release_page(
         }
     }
     Ok(out)
+}
+
+fn render_work_page(
+    config: &ServerConfig,
+    access: &Access,
+    remote: Option<&[u8; 16]>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
+    let scope = var(vars, "scope").unwrap_or("active");
+    let list_scope =
+        crate::work::WorkListScope::parse(scope).ok_or_else(|| Error::msg("invalid scope"))?;
+    let lists =
+        crate::work::list_documents(&crate::work::work_sidecar_path(&repository), list_scope)?;
+    let mut out = format!(
+        ">>\n{} / {} / {} / work\n\n>Work Documents\n\n",
+        m_link("Node", PATH_INDEX, &[]),
+        m_link(&group, PATH_GROUP, &[("g", &group)]),
+        m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)])
+    );
+    let tabs = [
+        m_link_raw(
+            "Active",
+            PATH_WORK,
+            &[("g", &group), ("r", &repo), ("scope", "active")],
+        ),
+        m_link_raw(
+            "Completed",
+            PATH_WORK,
+            &[("g", &group), ("r", &repo), ("scope", "completed")],
+        ),
+        m_link_raw(
+            "All",
+            PATH_WORK,
+            &[("g", &group), ("r", &repo), ("scope", "all")],
+        ),
+    ];
+    out.push_str(&format!(
+        "{}\n\n",
+        tabs.join(&format!(" {} ", icon_sep(config)))
+    ));
+    if matches!(
+        list_scope,
+        crate::work::WorkListScope::Active | crate::work::WorkListScope::All
+    ) {
+        append_work_section(
+            &mut out,
+            &group,
+            &repo,
+            crate::work::WorkScope::Active,
+            &lists.active,
+        );
+    }
+    if matches!(
+        list_scope,
+        crate::work::WorkListScope::Completed | crate::work::WorkListScope::All
+    ) {
+        append_work_section(
+            &mut out,
+            &group,
+            &repo,
+            crate::work::WorkScope::Completed,
+            &lists.completed,
+        );
+    }
+    Ok(out)
+}
+
+fn append_work_section(
+    out: &mut String,
+    group: &str,
+    repo: &str,
+    scope: crate::work::WorkScope,
+    docs: &[crate::work::WorkSummary],
+) {
+    let title = match scope {
+        crate::work::WorkScope::Active => "Active Work Documents",
+        crate::work::WorkScope::Completed => "Completed Work Documents",
+    };
+    out.push_str(&format!(">{title} ({})\n\n", docs.len()));
+    if docs.is_empty() {
+        out.push_str("No work documents found.\n\n");
+        return;
+    }
+    for doc in docs {
+        let doc_id = doc.id.to_string();
+        out.push_str(&format!(
+            "{} `F666{} updates`f\n",
+            m_link(
+                &format!("#{} {}", doc.id, doc.title),
+                PATH_WORK_DOC,
+                &[
+                    ("g", group),
+                    ("r", repo),
+                    ("scope", scope.as_str()),
+                    ("id", &doc_id)
+                ]
+            ),
+            doc.comments
+        ));
+        out.push_str(&format!(
+            "`F666{} by {}`f\n\n",
+            format_unix_time(doc.created as i64),
+            m_escape(&doc.author)
+        ));
+    }
+}
+
+fn render_work_doc_page(
+    config: &ServerConfig,
+    access: &Access,
+    remote: Option<&[u8; 16]>,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
+    let scope = var(vars, "scope").unwrap_or("active");
+    let scope = crate::work::WorkScope::parse(scope).ok_or_else(|| Error::msg("invalid scope"))?;
+    let id = required_var(vars, "id")?
+        .parse::<u64>()
+        .map_err(|_| Error::msg("invalid work document ID"))?;
+    let Some(document) =
+        crate::work::view_document(&crate::work::work_sidecar_path(&repository), scope, id)?
+    else {
+        return Ok(
+            ">Work Document Not Found\n\nThe requested work document was not found.\n".into(),
+        );
+    };
+    let mut out = format!(
+        ">>\n{} / {} / {} / {} / #{}\n\n>{}\n\n",
+        m_link("Node", PATH_INDEX, &[]),
+        m_link(&group, PATH_GROUP, &[("g", &group)]),
+        m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
+        m_link(
+            "work",
+            PATH_WORK,
+            &[("g", &group), ("r", &repo), ("scope", scope.as_str())]
+        ),
+        document.id,
+        m_escape(&document.title)
+    );
+    out.push_str(&format!(
+        "`F666Status: {} | Author: {} | Created: {} | Edited: {}`f\n\n",
+        scope.as_str(),
+        m_escape(&document.author),
+        format_unix_time(document.created as i64),
+        format_unix_time(document.edited as i64)
+    ));
+    append_formatted_content(&mut out, &document.format, &document.content);
+    out.push_str(&format!("\n>Updates ({})\n\n", document.comments.len()));
+    if document.comments.is_empty() {
+        out.push_str("No updates for this work document.\n");
+    } else {
+        for comment in document.comments {
+            out.push_str(&format!(
+                ">#{} by {} at {}\n\n",
+                comment.id,
+                m_escape(&comment.author),
+                format_unix_time(comment.created as i64)
+            ));
+            append_formatted_content(&mut out, &comment.format, &comment.content);
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+fn append_formatted_content(out: &mut String, format: &str, content: &str) {
+    match format {
+        "micron" => out.push_str(content),
+        "markdown" => out.push_str(&markdown_to_micron(content)),
+        _ => out.push_str(&m_escape(content)),
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
 }
 
 pub fn download_file(
@@ -3088,6 +3282,128 @@ Unmatched * marker\n\
         .unwrap();
         assert!(micron.contains(">Micron"));
         assert!(micron.contains("`!Already formatted`!"));
+    }
+
+    #[test]
+    fn work_pages_render_documents_comments_and_repo_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let repo_path = create_repo(
+            config.repositories_dir.join("public/worked"),
+            "README.md",
+            "# Worked\n",
+        );
+        let work_path = crate::work::work_sidecar_path(&repo_path);
+        let created = crate::work::create_document(
+            &work_path,
+            crate::work::WorkInput {
+                title: "Active task".into(),
+                content: "# Active Body\n".into(),
+                format: "markdown".into(),
+                signature: None,
+                author: [0x11; 16],
+            },
+        )
+        .unwrap();
+        crate::work::add_comment(
+            &work_path,
+            crate::work::WorkScope::Active,
+            created.id,
+            crate::work::WorkCommentInput {
+                content: "Progress update".into(),
+                format: "markdown".into(),
+                signature: None,
+                author: [0x22; 16],
+            },
+        )
+        .unwrap();
+        let completed = crate::work::create_document(
+            &work_path,
+            crate::work::WorkInput {
+                title: "Completed task".into(),
+                content: "Done".into(),
+                format: "micron".into(),
+                signature: None,
+                author: [0x11; 16],
+            },
+        )
+        .unwrap();
+        crate::work::complete_document(&work_path, completed.id, &[0x11; 16]).unwrap();
+        let access = access(&config);
+
+        let repo = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked")]),
+            None,
+        )
+        .unwrap();
+        assert!(repo.contains("Work (2)"));
+        assert!(repo.contains(PATH_WORK));
+
+        let active = render_page(
+            PATH_WORK,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked")]),
+            None,
+        )
+        .unwrap();
+        assert!(active.contains(">Active Work Documents (1)"));
+        assert!(active.contains("#1 Active task"));
+        assert!(active.contains("1 updates"));
+        assert!(!active.contains("Completed task"));
+
+        let completed_page = render_page(
+            PATH_WORK,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "worked"),
+                ("var_scope", "completed"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(completed_page.contains(">Completed Work Documents (1)"));
+        assert!(completed_page.contains("Completed task"));
+
+        let doc = render_page(
+            PATH_WORK_DOC,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "worked"), ("var_id", "1")]),
+            None,
+        )
+        .unwrap();
+        assert!(doc.contains(">Active task"));
+        assert!(doc.contains(">Active Body"));
+        assert!(doc.contains(">Updates (1)"));
+        assert!(doc.contains("Progress update"));
+    }
+
+    #[test]
+    fn work_pages_respect_read_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/private-work"),
+            "README.md",
+            "# Private\n",
+        );
+        config.allow_read = vec!["none".into()];
+        let access = access(&config);
+
+        assert!(render_page(
+            PATH_WORK,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "private-work")]),
+            None,
+        )
+        .is_err());
     }
 
     fn cfg(root: &std::path::Path) -> ServerConfig {

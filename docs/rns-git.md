@@ -63,9 +63,13 @@ Important config paths:
   and `/page/release.mu`, support Markdown or Micron release notes, expose
   artifact download links through `/file/download`, support `latest` release
   resolution, and keep separate release Thanks counts in each release
-  directory. Custom page templates can be placed in the configured
+  directory. Work Documents are stored next to the bare repository as
+  `<repo>.work/`; repositories with work documents link to `/page/work.mu` and
+  `/page/work_doc.mu` for active/completed documents, Markdown or Micron
+  content, comments, authors, and timestamps. Custom page templates can be
+  placed in the configured
   `templates_dir` with names such as `base.mu`, `repo.mu`, `blob.mu`,
-  `releases.mu`, and `release.mu`.
+  `releases.mu`, `release.mu`, `work.mu`, and `work_doc.mu`.
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
   `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
   add simple Unicode icons to page navigation.
