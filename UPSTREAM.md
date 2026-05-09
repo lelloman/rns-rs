@@ -21,6 +21,7 @@ changes were ported or explicitly deferred with the following local commits:
 - `4261468` Add rngit release CLI
 - `ab2c70e` Show rngit release upload progress
 - `b9cc3cc` Log tunnel synthesis failures
+- `64e9827` Decode rngit artifact download names
 
 When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
