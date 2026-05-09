@@ -357,6 +357,72 @@ fn release_and_blob_downloads_respect_read_access_and_safe_paths() {
     assert_response_status(denied, protocol::RES_NOT_FOUND);
 }
 
+#[test]
+fn release_artifact_download_decodes_url_escaped_artifact_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    tag_repo(&repo_path, "v1");
+    let access_rules = access(&config);
+
+    assert_eq!(
+        create_release(&config, &access_rules, "public/alpha", "v1", "# Release\n")[0],
+        protocol::RES_OK
+    );
+    assert_eq!(
+        server::handle_release(
+            &config,
+            &access_rules,
+            &release_request(&[
+                ("repository", strv("public/alpha")),
+                ("operation", strv("create")),
+                ("step", strv("artifact")),
+                ("tag", strv("v1")),
+                ("artifact_name", strv("dist file.tar")),
+                ("artifact_data", binv(b"artifact bytes")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap()[0],
+        protocol::RES_OK
+    );
+    assert_eq!(
+        server::handle_release(
+            &config,
+            &access_rules,
+            &release_request(&[
+                ("repository", strv("public/alpha")),
+                ("operation", strv("create")),
+                ("step", strv("finalize")),
+                ("tag", strv("v1")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap()[0],
+        protocol::RES_OK
+    );
+
+    for encoded in ["dist+file.tar", "dist%20file.tar"] {
+        let artifact = pages::download_file(
+            &config,
+            &access_rules,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "alpha"),
+                ("var_tag", "v1"),
+                ("var_artifact", encoded),
+            ]),
+            Some(&REMOTE),
+        )
+        .unwrap();
+        assert_response_bytes(artifact, b"artifact bytes");
+    }
+}
+
 fn cfg(root: &Path) -> ServerConfig {
     ServerConfig {
         dir: root.to_path_buf(),

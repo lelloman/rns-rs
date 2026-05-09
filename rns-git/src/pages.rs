@@ -1041,9 +1041,10 @@ pub fn download_file(
         }
     };
     if let Some(artifact) = var(&vars, "artifact") {
+        let artifact = decode_url_component(artifact);
         let tag = var(&vars, "tag").unwrap_or("latest");
         let releases_path = crate::release::release_sidecar_path(&repository);
-        let Some(path) = crate::release::artifact_path(&releases_path, tag, artifact)? else {
+        let Some(path) = crate::release::artifact_path(&releases_path, tag, &artifact)? else {
             return Ok(RequestResponse::Bytes(protocol::status_bytes(
                 protocol::RES_NOT_FOUND,
                 b"file not found",
@@ -1250,6 +1251,44 @@ fn accessible_repository(
 
 fn required_var<'a>(vars: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
     var(vars, key).ok_or_else(|| Error::msg(format!("missing page variable {key}")))
+}
+
+fn decode_url_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+                {
+                    out.push((high << 4) | low);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn var<'a>(vars: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
