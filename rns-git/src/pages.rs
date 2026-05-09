@@ -1687,7 +1687,7 @@ fn markdown_to_micron(input: &str) -> String {
             out.push_str(&format_markdown_inline(text));
             out.push('\n');
         } else {
-            out.push_str(&format_markdown_inline(line));
+            out.push_str(&format_markdown_line(line));
             out.push('\n');
         }
         index += 1;
@@ -1753,6 +1753,17 @@ fn ordered_list_item(line: &str) -> Option<(&str, &str, &str)> {
         Some((indent, number, text))
     } else {
         None
+    }
+}
+
+fn format_markdown_line(line: &str) -> String {
+    let formatted = format_markdown_inline(line);
+    if (line.starts_with('-') && !line.starts_with("---") && !line.starts_with("- "))
+        || line.starts_with('<')
+    {
+        format!("\\{formatted}")
+    } else {
+        formatted
     }
 }
 
@@ -2940,6 +2951,15 @@ after\n",
         assert!(out.contains("`!`[badlabel`rns://abcdef]`!"));
         assert!(out.contains("`BT383838`Fdddraw`f`b"));
         assert!(!out.contains("`!not bold`!"));
+    }
+
+    #[test]
+    fn markdown_plain_lines_escape_micron_line_start_controls() {
+        let out = markdown_to_micron("-not a list\n<not alignment\n- list item\n---\n");
+        assert!(out.contains("\\-not a list\n"));
+        assert!(out.contains("\\<not alignment\n"));
+        assert!(out.contains(" • list item\n"));
+        assert!(out.contains("-\n"));
     }
 
     #[test]

@@ -150,8 +150,8 @@ fn escape_line_start_controls(value: &str) -> String {
             .strip_suffix('\n')
             .map(|line| (line, "\n"))
             .unwrap_or((segment, ""));
-        if line.starts_with('>') {
-            out.push_str("`>");
+        if line.starts_with('-') || line.starts_with('>') || line.starts_with('<') {
+            out.push('\\');
         }
         out.push_str(line);
         out.push_str(newline);
@@ -169,5 +169,12 @@ mod tests {
         let out = literal_block(">not a heading\nlet value = 1;\n", Some("main.rs"), None);
         assert!(!out.contains("`f\n`f"));
         assert!(out.ends_with("`=\n"));
+    }
+
+    #[cfg(feature = "syntax-highlighting")]
+    #[test]
+    fn highlighted_line_start_micron_controls_are_escaped() {
+        let escaped = escape_line_start_controls("-dash\n>heading\n<align\nplain\n");
+        assert_eq!(escaped, "\\-dash\n\\>heading\n\\<align\nplain\n");
     }
 }
