@@ -90,6 +90,10 @@ enum WorkCommand {
         id: u64,
         content_path: PathBuf,
     },
+    Perms {
+        id: u64,
+        content_path: Option<PathBuf>,
+    },
     Complete {
         id: u64,
     },
@@ -183,6 +187,10 @@ impl WorkOptions {
                 id: id.ok_or_else(|| Error::msg("work comment requires --id"))?,
                 content_path: content_path
                     .ok_or_else(|| Error::msg("work comment requires --content"))?,
+            },
+            "perms" => WorkCommand::Perms {
+                id: id.ok_or_else(|| Error::msg("work perms requires --id"))?,
+                content_path,
             },
             "complete" => WorkCommand::Complete {
                 id: id.ok_or_else(|| Error::msg("work complete requires --id"))?,
@@ -307,6 +315,38 @@ fn run_work_command(
                 "Added update #{} to {scope} document #{id}",
                 value.map_get("id").and_then(Value::as_integer).unwrap_or(0)
             )?;
+            Ok(())
+        }
+        WorkCommand::Perms { id, content_path } => {
+            if let Some(path) = content_path {
+                transport.request(request(
+                    "perms",
+                    &[
+                        ("doc_id", Value::UInt(*id)),
+                        ("step", Value::Str("set".into())),
+                        ("content", Value::Str(fs::read_to_string(path)?)),
+                    ],
+                ))?;
+                writeln!(output, "Updated permissions for work document #{id}")?;
+            } else {
+                let body = transport.request(request(
+                    "perms",
+                    &[
+                        ("doc_id", Value::UInt(*id)),
+                        ("step", Value::Str("get".into())),
+                    ],
+                ))?;
+                let value = msgpack::unpack_exact(&body)
+                    .map_err(|e| Error::msg(format!("invalid permissions response: {e}")))?;
+                write!(
+                    output,
+                    "{}",
+                    value
+                        .map_get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                )?;
+            }
             Ok(())
         }
         WorkCommand::Complete { id } => {
@@ -452,7 +492,7 @@ fn format_for_path(path: &std::path::Path) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit work [--config DIR] [--rnsconfig DIR] [--scope active|completed|all] [--id N] [--title TITLE] [--content PATH] [-y|--yes] <rns://destination/repo> <list|view|create|edit|delete|comment|complete|activate>"
+    "usage: rngit work [--config DIR] [--rnsconfig DIR] [--scope active|completed|all] [--id N] [--title TITLE] [--content PATH] [-y|--yes] <rns://destination/repo> <list|view|create|edit|delete|comment|perms|complete|activate>"
 }
 
 #[cfg(test)]
@@ -508,6 +548,20 @@ mod tests {
             "Task",
         ]))
         .is_err());
+        assert_eq!(
+            WorkOptions::parse(args(&[
+                "rns://00112233445566778899aabbccddeeff/group/repo",
+                "perms",
+                "--id",
+                "7",
+            ]))
+            .unwrap()
+            .command,
+            WorkCommand::Perms {
+                id: 7,
+                content_path: None,
+            }
+        );
     }
 
     #[test]
@@ -657,6 +711,67 @@ mod tests {
             .filter_map(|request| request.map_get("operation").and_then(Value::as_str))
             .collect();
         assert_eq!(ops, vec!["comment", "complete", "activate", "delete"]);
+    }
+
+    #[test]
+    fn perms_get_and_set_send_work_permission_requests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let permissions = tmp.path().join("allowed.txt");
+        fs::write(&permissions, "interact = all\n").unwrap();
+        let mut transport = FakeTransport {
+            requests: Vec::new(),
+            responses: vec![
+                msgpack::pack(&Value::Map(vec![(
+                    Value::Str("content".into()),
+                    Value::Str("admin = all\n".into()),
+                )])),
+                Vec::new(),
+            ],
+        };
+        let mut output = Vec::new();
+        run_work_command(
+            &mut transport,
+            &WorkCommand::Perms {
+                id: 3,
+                content_path: None,
+            },
+            &mut output,
+        )
+        .unwrap();
+        run_work_command(
+            &mut transport,
+            &WorkCommand::Perms {
+                id: 3,
+                content_path: Some(permissions),
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert!(String::from_utf8(output).unwrap().contains("admin = all"));
+        assert_eq!(
+            transport.requests[0]
+                .map_get("operation")
+                .and_then(Value::as_str),
+            Some("perms")
+        );
+        assert_eq!(
+            transport.requests[0]
+                .map_get("step")
+                .and_then(Value::as_str),
+            Some("get")
+        );
+        assert_eq!(
+            transport.requests[1]
+                .map_get("step")
+                .and_then(Value::as_str),
+            Some("set")
+        );
+        assert_eq!(
+            transport.requests[1]
+                .map_get("content")
+                .and_then(Value::as_str),
+            Some("interact = all\n")
+        );
     }
 
     fn args(values: &[&str]) -> Vec<String> {

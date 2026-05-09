@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::util::{parse_hex_16, validate_repo_name};
-use crate::Result;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
@@ -96,15 +96,7 @@ impl Access {
                 continue;
             }
             let rules = parse_allowed_file(&fs::read_to_string(path)?)?;
-            let Some(rule) = rules.get(match op {
-                Operation::Read => "read",
-                Operation::Write => "write",
-                Operation::Create => "create",
-                Operation::Stats => "stats",
-                Operation::Release => "release",
-                Operation::Interact => "interact",
-                Operation::Admin => "admin",
-            }) else {
+            let Some(rule) = rules.get(operation_key(op)) else {
                 continue;
             };
             if rule.allows(identity) {
@@ -121,6 +113,32 @@ impl Access {
             out.push(self.repositories_dir.join(group).join("group.allowed"));
         }
         out
+    }
+}
+
+pub(crate) fn allowed_input_allows(
+    input: &str,
+    op: Operation,
+    identity: Option<&[u8; 16]>,
+) -> Result<bool> {
+    Ok(parse_allowed_file(input)?
+        .get(operation_key(op))
+        .is_some_and(|rule| rule.allows(identity)))
+}
+
+pub(crate) fn validate_allowed_input(input: &str) -> Result<()> {
+    parse_allowed_file(input).map(|_| ())
+}
+
+fn operation_key(op: Operation) -> &'static str {
+    match op {
+        Operation::Read => "read",
+        Operation::Write => "write",
+        Operation::Create => "create",
+        Operation::Stats => "stats",
+        Operation::Release => "release",
+        Operation::Interact => "interact",
+        Operation::Admin => "admin",
     }
 }
 
@@ -161,18 +179,28 @@ fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
             .split_once('=')
             .or_else(|| line.split_once(':'))
             .unwrap_or(("read", line));
-        let key = match key.trim().to_ascii_lowercase().as_str() {
-            "c" => "create".to_string(),
-            "s" => "stats".to_string(),
-            "rel" => "release".to_string(),
-            "i" => "interact".to_string(),
-            "adm" => "admin".to_string(),
-            key => key.to_string(),
+        let raw_key = key.trim().to_ascii_lowercase();
+        let key = match raw_key.as_str() {
+            "r" | "read" => "read",
+            "w" | "write" => "write",
+            "rw" | "readwrite" => "readwrite",
+            "c" | "create" => "create",
+            "s" | "stats" => "stats",
+            "rel" | "release" => "release",
+            "i" | "interact" => "interact",
+            "adm" | "admin" => "admin",
+            _ => return Err(Error::msg(format!("invalid permission \"{raw_key}\""))),
         };
-        values
-            .entry(key)
-            .or_default()
-            .extend(value.split(',').map(|v| v.trim().to_string()));
+        let targets = value.split(',').map(|v| v.trim().to_string());
+        if key == "readwrite" {
+            values
+                .entry("read".into())
+                .or_default()
+                .extend(targets.clone());
+            values.entry("write".into()).or_default().extend(targets);
+        } else {
+            values.entry(key.into()).or_default().extend(targets);
+        }
     }
     values
         .into_iter()

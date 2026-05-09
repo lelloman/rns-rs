@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
 
+use crate::acl::Operation;
 use crate::protocol;
 use crate::util::validate_repo_name;
 use crate::util::{hex, parse_hex_16};
@@ -102,6 +103,7 @@ pub struct WorkComment {
 pub struct WorkRequest {
     pub repository: String,
     pub operation: String,
+    pub step: Option<String>,
     pub scope: Option<String>,
     pub doc_id: Option<u64>,
     pub title: Option<String>,
@@ -144,6 +146,9 @@ pub fn parse_request(data: &[u8]) -> Result<WorkRequest> {
     Ok(WorkRequest {
         repository,
         operation,
+        step: map_get(map, "step")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         scope: map_get(map, "scope")
             .and_then(Value::as_str)
             .map(str::to_string),
@@ -217,6 +222,16 @@ pub fn transition_response(doc_id: u64, scope: WorkScope) -> Vec<u8> {
                 Value::Str(scope.as_str().into()),
             ),
         ])),
+    )
+}
+
+pub fn permissions_response(content: String) -> Vec<u8> {
+    protocol::status_bytes(
+        protocol::RES_OK,
+        msgpack::pack(&Value::Map(vec![(
+            Value::Str("content".into()),
+            Value::Str(content),
+        )])),
     )
 }
 
@@ -375,6 +390,52 @@ pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Re
     )
 }
 
+pub fn document_author(work_path: &Path, doc_id: u64) -> Result<[u8; 16]> {
+    let doc_dir =
+        find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
+    Ok(read_existing_document(&doc_dir.join("root"))?.author)
+}
+
+pub fn document_permission_allows(
+    work_path: &Path,
+    doc_id: u64,
+    op: Operation,
+    identity: Option<&[u8; 16]>,
+) -> Result<bool> {
+    let path = permissions_path(work_path, doc_id);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(path)?;
+    if op != Operation::Admin
+        && crate::acl::allowed_input_allows(&content, Operation::Admin, identity)?
+    {
+        return Ok(true);
+    }
+    crate::acl::allowed_input_allows(&content, op, identity)
+}
+
+pub fn get_document_permissions(work_path: &Path, doc_id: u64) -> Result<String> {
+    find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
+    let path = permissions_path(work_path, doc_id);
+    if path.is_file() {
+        Ok(fs::read_to_string(path)?)
+    } else {
+        Ok(String::new())
+    }
+}
+
+pub fn set_document_permissions(work_path: &Path, doc_id: u64, content: &str) -> Result<()> {
+    find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
+    crate::acl::validate_allowed_input(content)?;
+    fs::create_dir_all(work_path)?;
+    let path = permissions_path(work_path, doc_id);
+    let tmp = path.with_extension("allowed.tmp");
+    fs::write(&tmp, content)?;
+    fs::rename(tmp, path)?;
+    Ok(())
+}
+
 fn move_document(
     work_path: &Path,
     from: WorkScope,
@@ -487,6 +548,20 @@ fn root_path(work_path: &Path, scope: WorkScope, doc_id: u64) -> PathBuf {
 
 fn scope_dir(work_path: &Path, scope: WorkScope) -> PathBuf {
     work_path.join(scope.as_str())
+}
+
+fn permissions_path(work_path: &Path, doc_id: u64) -> PathBuf {
+    work_path.join(format!("{doc_id}.allowed"))
+}
+
+fn find_document_dir(work_path: &Path, doc_id: u64) -> Result<Option<PathBuf>> {
+    for scope in [WorkScope::Active, WorkScope::Completed] {
+        let doc_dir = scope_dir(work_path, scope).join(doc_id.to_string());
+        if doc_dir.join("root").is_file() {
+            return Ok(Some(doc_dir));
+        }
+    }
+    Ok(None)
 }
 
 impl WorkScope {

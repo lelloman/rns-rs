@@ -442,12 +442,32 @@ pub fn handle_work(
             b"not found",
         ));
     }
-    let interact_access = access.allows(Operation::Interact, repo, Some(remote_hash))?;
+    let repository_path = git::repository_path(&config.repositories_dir, repo)?;
+    if !git::is_bare_repository(&repository_path) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"repository not found",
+        ));
+    }
+    let work_path = crate::work::work_sidecar_path(&repository_path);
+    let mut interact_access = access.allows(Operation::Interact, repo, Some(remote_hash))?;
+    if request.operation == "comment" {
+        if let Some(doc_id) = request.doc_id {
+            interact_access |= crate::work::document_permission_allows(
+                &work_path,
+                doc_id,
+                Operation::Interact,
+                Some(remote_hash),
+            )?;
+        }
+    }
     let write_access = access.allows(Operation::Write, repo, Some(remote_hash))?;
+    let manage_access = interact_access && write_access;
     let permitted = match request.operation.as_str() {
         "list" | "view" => true,
         "comment" => interact_access,
-        "create" | "edit" | "delete" | "complete" | "activate" => interact_access && write_access,
+        "create" | "edit" | "delete" | "complete" | "activate" => manage_access,
+        "perms" => true,
         _ => false,
     };
     if !permitted {
@@ -457,14 +477,6 @@ pub fn handle_work(
         ));
     }
 
-    let repository_path = git::repository_path(&config.repositories_dir, repo)?;
-    if !git::is_bare_repository(&repository_path) {
-        return Ok(protocol::status_bytes(
-            protocol::RES_NOT_FOUND,
-            b"repository not found",
-        ));
-    }
-    let work_path = crate::work::work_sidecar_path(&repository_path);
     match request.operation.as_str() {
         "list" => {
             let scope = request
@@ -565,11 +577,65 @@ pub fn handle_work(
                 }),
             )
         }
+        "perms" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let allowed =
+                match work_permissions_allowed(&work_path, doc_id, remote_hash, manage_access) {
+                    Ok(allowed) => allowed,
+                    Err(err) => return Ok(work_error_response(err)),
+                };
+            if !allowed {
+                return Ok(protocol::status_bytes(
+                    protocol::RES_DISALLOWED,
+                    b"not allowed",
+                ));
+            }
+            match request.step.as_deref() {
+                Some("get") => work_status_result(
+                    crate::work::get_document_permissions(&work_path, doc_id)
+                        .map(crate::work::permissions_response),
+                ),
+                Some("set") => work_status_result(
+                    crate::work::set_document_permissions(
+                        &work_path,
+                        doc_id,
+                        request.content.as_deref().unwrap_or(""),
+                    )
+                    .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
+                ),
+                Some(_) => Ok(protocol::status_bytes(
+                    protocol::RES_INVALID_REQ,
+                    b"invalid step",
+                )),
+                None => Ok(protocol::status_bytes(
+                    protocol::RES_INVALID_REQ,
+                    b"invalid request",
+                )),
+            }
+        }
         _ => Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
             b"invalid request",
         )),
     }
+}
+
+fn work_permissions_allowed(
+    work_path: &std::path::Path,
+    doc_id: u64,
+    remote_hash: &[u8; 16],
+    manage_access: bool,
+) -> Result<bool> {
+    let is_author = crate::work::document_author(work_path, doc_id)? == *remote_hash;
+    let doc_admin = crate::work::document_permission_allows(
+        work_path,
+        doc_id,
+        Operation::Admin,
+        Some(remote_hash),
+    )?;
+    Ok((is_author && manage_access) || doc_admin)
 }
 
 fn work_scope(scope: Option<&str>) -> Result<crate::work::WorkScope> {
@@ -588,15 +654,22 @@ fn work_status_result(result: Result<Vec<u8>>) -> Result<Vec<u8>> {
 
 fn work_error_response(err: Error) -> Vec<u8> {
     let message = err.to_string();
-    let code = match message.as_str() {
-        "document not found" => protocol::RES_NOT_FOUND,
-        "no access, not author" => protocol::RES_DISALLOWED,
-        "title is required"
-        | "content is required"
-        | "invalid signature"
-        | "content limit exceeded"
-        | "no changes specified" => protocol::RES_INVALID_REQ,
-        _ => protocol::RES_REMOTE_FAIL,
+    let code = if message.starts_with("invalid permission")
+        || message.starts_with("invalid hex")
+        || message.starts_with("expected 32 hex characters")
+    {
+        protocol::RES_INVALID_REQ
+    } else {
+        match message.as_str() {
+            "document not found" => protocol::RES_NOT_FOUND,
+            "no access, not author" => protocol::RES_DISALLOWED,
+            "title is required"
+            | "content is required"
+            | "invalid signature"
+            | "content limit exceeded"
+            | "no changes specified" => protocol::RES_INVALID_REQ,
+            _ => protocol::RES_REMOTE_FAIL,
+        }
     };
     protocol::status_bytes(code, message)
 }
@@ -1319,6 +1392,229 @@ mod tests {
             .unwrap();
             assert_eq!(denied[0], protocol::RES_DISALLOWED);
         }
+    }
+
+    #[test]
+    fn work_document_local_interact_allows_comments_without_repo_interact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_interact = vec!["none".into()];
+        let repo_path = config.repositories_dir.join("group/repo");
+        git::ensure_bare_repository(&repo_path).unwrap();
+        let work_path = crate::work::work_sidecar_path(&repo_path);
+        crate::work::create_document(
+            &work_path,
+            crate::work::WorkInput {
+                title: "Task".into(),
+                content: "Body".into(),
+                format: "markdown".into(),
+                signature: None,
+                author: REMOTE,
+            },
+        )
+        .unwrap();
+        std::fs::write(work_path.join("1.allowed"), "interact = all\n").unwrap();
+        let access = make_access(&config);
+
+        let comment = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("comment")),
+                ("doc_id", uintv(1)),
+                ("content", strv("Comment from doc ACL")),
+            ]),
+            Some(&(OTHER_REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(comment[0], protocol::RES_OK);
+
+        let edit = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("edit")),
+                ("doc_id", uintv(1)),
+                ("content", strv("Not allowed")),
+            ]),
+            Some(&(OTHER_REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(edit[0], protocol::RES_DISALLOWED);
+    }
+
+    #[test]
+    fn work_permissions_get_set_and_validation_are_author_gated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_interact = vec!["all".into()];
+        let repo_path = config.repositories_dir.join("group/repo");
+        git::ensure_bare_repository(&repo_path).unwrap();
+        let work_path = crate::work::work_sidecar_path(&repo_path);
+        crate::work::create_document(
+            &work_path,
+            crate::work::WorkInput {
+                title: "Task".into(),
+                content: "Body".into(),
+                format: "markdown".into(),
+                signature: None,
+                author: REMOTE,
+            },
+        )
+        .unwrap();
+        let access = make_access(&config);
+
+        let get = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("get")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(
+            body_value(&get).map_get("content").and_then(Value::as_str),
+            Some("")
+        );
+
+        let content = format!(
+            "interact = {}\nadmin = {}\n",
+            crate::util::hex(&OTHER_REMOTE),
+            crate::util::hex(&OTHER_REMOTE)
+        );
+        let set = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("set")),
+                ("doc_id", uintv(1)),
+                ("content", strv(&content)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(set, vec![protocol::RES_OK]);
+        assert_eq!(
+            std::fs::read_to_string(work_path.join("1.allowed")).unwrap(),
+            content
+        );
+
+        let denied = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("get")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&([0x33; 16], REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(denied[0], protocol::RES_DISALLOWED);
+
+        let invalid = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("set")),
+                ("doc_id", uintv(1)),
+                ("content", strv("interact = not-a-hex-identity\n")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(invalid[0], protocol::RES_INVALID_REQ);
+        assert_eq!(
+            std::fs::read_to_string(work_path.join("1.allowed")).unwrap(),
+            content
+        );
+
+        let missing = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("get")),
+                ("doc_id", uintv(99)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(missing[0], protocol::RES_NOT_FOUND);
+    }
+
+    #[test]
+    fn work_document_admin_can_get_and_set_permissions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_interact = vec!["none".into()];
+        let repo_path = config.repositories_dir.join("group/repo");
+        git::ensure_bare_repository(&repo_path).unwrap();
+        let work_path = crate::work::work_sidecar_path(&repo_path);
+        crate::work::create_document(
+            &work_path,
+            crate::work::WorkInput {
+                title: "Task".into(),
+                content: "Body".into(),
+                format: "markdown".into(),
+                signature: None,
+                author: REMOTE,
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            work_path.join("1.allowed"),
+            format!("admin = {}\n", crate::util::hex(&OTHER_REMOTE)),
+        )
+        .unwrap();
+        let access = make_access(&config);
+
+        let get = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("get")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(OTHER_REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(get[0], protocol::RES_OK);
+
+        let set = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("perms")),
+                ("step", strv("set")),
+                ("doc_id", uintv(1)),
+                ("content", strv("interact = all\n")),
+            ]),
+            Some(&(OTHER_REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(set, vec![protocol::RES_OK]);
+        assert_eq!(
+            std::fs::read_to_string(work_path.join("1.allowed")).unwrap(),
+            "interact = all\n"
+        );
     }
 
     fn make_access(config: &ServerConfig) -> Access {

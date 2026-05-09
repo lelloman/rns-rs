@@ -122,6 +122,8 @@ rngit work rns://<destination_hash>/<repository> list --scope all
 rngit work rns://<destination_hash>/<repository> view --id 1
 rngit work rns://<destination_hash>/<repository> create --title "Task" --content ./WORK.md
 rngit work rns://<destination_hash>/<repository> comment --id 1 --content ./UPDATE.md
+rngit work rns://<destination_hash>/<repository> perms --id 1
+rngit work rns://<destination_hash>/<repository> perms --id 1 --content ./WORK.allowed
 rngit work rns://<destination_hash>/<repository> complete --id 1
 rngit work rns://<destination_hash>/<repository> delete --id 1 --yes
 ```
@@ -129,6 +131,14 @@ rngit work rns://<destination_hash>/<repository> delete --id 1 --yes
 Rust `rngit work` is non-interactive: create, edit, and comment operations read
 document bodies from `--content PATH`. Files ending in `.mu` are sent as Micron;
 other content is sent as Markdown.
+
+Document-local permissions are stored as `<repo>.work/<id>.allowed` and use the
+same syntax as repository `.allowed` files. A document-local `interact` grant
+allows comments on that document without granting edit/delete access. The
+document author can get or set permissions when they have repository
+write+interact access; document admins can get or set the document permission
+file. `rngit work perms --id N` prints the current permission file, and
+`--content PATH` atomically replaces it after syntax validation.
 
 ## Logging
 
