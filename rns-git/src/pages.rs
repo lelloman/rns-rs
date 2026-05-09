@@ -332,6 +332,31 @@ fn m_link_raw(label: &str, path: &str, fields: &[(&str, &str)]) -> String {
     out
 }
 
+fn markdown_blob_url_scope(group: &str, repo: &str, reference: &str, current_path: &str) -> String {
+    let directory = current_path
+        .rsplit_once('/')
+        .map(|(directory, _)| format!("{directory}/"))
+        .unwrap_or_default();
+    let mut out = format!(":{PATH_BLOB}`");
+    for (index, (key, value)) in [
+        ("g", group),
+        ("r", repo),
+        ("ref", reference),
+        ("path", directory.as_str()),
+    ]
+    .iter()
+    .enumerate()
+    {
+        if index > 0 {
+            out.push('|');
+        }
+        out.push_str(key);
+        out.push('=');
+        out.push_str(&sanitize_field(value));
+    }
+    out
+}
+
 fn sanitize_label(value: &str) -> String {
     value
         .chars()
@@ -532,7 +557,10 @@ fn render_repo_page(
             out.push_str("-\n");
         }
         if readme.markdown {
-            out.push_str(&markdown_to_micron(&readme.content));
+            out.push_str(&markdown_to_micron_scoped(
+                &readme.content,
+                Some(&markdown_blob_url_scope(&group, &repo, "HEAD", "README.md")),
+            ));
         } else {
             out.push_str(&readme.content);
         }
@@ -661,7 +689,10 @@ fn render_blob_page(
         crate::highlight::plain_literal_block(&blob.content)
     } else if render {
         match renderable {
-            Some(RenderableBlob::Markdown) => markdown_to_micron(&blob.content),
+            Some(RenderableBlob::Markdown) => markdown_to_micron_scoped(
+                &blob.content,
+                Some(&markdown_blob_url_scope(&group, &repo, reference, path)),
+            ),
             Some(RenderableBlob::Micron) => {
                 let mut out = blob.content.clone();
                 if !out.ends_with('\n') {
@@ -1614,6 +1645,10 @@ fn readme_content(repo: &Path) -> Result<Option<ReadmeContent>> {
 }
 
 fn markdown_to_micron(input: &str) -> String {
+    markdown_to_micron_scoped(input, None)
+}
+
+fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) -> String {
     let lines: Vec<&str> = input.lines().collect();
     let mut out = String::new();
     let mut code_block: Option<(Option<String>, String)> = None;
@@ -1652,7 +1687,7 @@ fn markdown_to_micron(input: &str) -> String {
                     break;
                 }
             }
-            let formatted = format_markdown_inline(&parts.join(" "));
+            let formatted = format_markdown_inline_scoped(&parts.join(" "), url_scope);
             for wrapped in markdown_wrap_text(&formatted, 77) {
                 out.push_str(" │ ");
                 out.push_str(&wrapped);
@@ -1666,28 +1701,28 @@ fn markdown_to_micron(input: &str) -> String {
                 table.push(lines[index]);
                 index += 1;
             }
-            out.push_str(&format_markdown_table(&table));
+            out.push_str(&format_markdown_table(&table, url_scope));
             continue;
         }
         if let Some((level, text)) = markdown_heading(line) {
             out.push_str(&">".repeat(level));
-            out.push_str(&format_markdown_inline(text.trim()));
+            out.push_str(&format_markdown_inline_scoped(text.trim(), url_scope));
             out.push('\n');
         } else if is_markdown_rule(trimmed) {
             out.push_str("-\n");
         } else if let Some((indent, text)) = unordered_list_item(line) {
             out.push_str(indent);
             out.push_str(" • ");
-            out.push_str(&format_markdown_inline(text));
+            out.push_str(&format_markdown_inline_scoped(text, url_scope));
             out.push('\n');
         } else if let Some((indent, number, text)) = ordered_list_item(line) {
             out.push_str(indent);
             out.push_str(number);
             out.push_str(". ");
-            out.push_str(&format_markdown_inline(text));
+            out.push_str(&format_markdown_inline_scoped(text, url_scope));
             out.push('\n');
         } else {
-            out.push_str(&format_markdown_line(line));
+            out.push_str(&format_markdown_line(line, url_scope));
             out.push('\n');
         }
         index += 1;
@@ -1756,8 +1791,8 @@ fn ordered_list_item(line: &str) -> Option<(&str, &str, &str)> {
     }
 }
 
-fn format_markdown_line(line: &str) -> String {
-    let formatted = format_markdown_inline(line);
+fn format_markdown_line(line: &str, url_scope: Option<&str>) -> String {
+    let formatted = format_markdown_inline_scoped(line, url_scope);
     if (line.starts_with('-') && !line.starts_with("---") && !line.starts_with("- "))
         || line.starts_with('<')
     {
@@ -1787,13 +1822,13 @@ enum TableAlign {
     Center,
 }
 
-fn format_markdown_table(lines: &[&str]) -> String {
+fn format_markdown_table(lines: &[&str], url_scope: Option<&str>) -> String {
     if lines.len() < 2 {
         return String::new();
     }
     let header: Vec<String> = parse_table_row(lines[0])
         .into_iter()
-        .map(|cell| format_markdown_inline(cell.trim()))
+        .map(|cell| format_markdown_inline_scoped(cell.trim(), url_scope))
         .collect();
     if header.is_empty() {
         return String::new();
@@ -1811,7 +1846,7 @@ fn format_markdown_table(lines: &[&str]) -> String {
         .map(|line| {
             let mut row: Vec<String> = parse_table_row(line)
                 .into_iter()
-                .map(|cell| format_markdown_inline(cell.trim()))
+                .map(|cell| format_markdown_inline_scoped(cell.trim(), url_scope))
                 .collect();
             while row.len() < columns {
                 row.push(String::new());
@@ -2024,14 +2059,14 @@ enum InlineToken {
     Code(String),
 }
 
-fn format_markdown_inline(input: &str) -> String {
+fn format_markdown_inline_scoped(input: &str, url_scope: Option<&str>) -> String {
     let (with_placeholders, tokens) = extract_markdown_inline_tokens(input);
     let escaped = m_escape(&with_placeholders);
     let styled = apply_markdown_style(&escaped, "**", "`!", "`!");
     let styled = apply_markdown_style(&styled, "__", "`!", "`!");
     let styled = apply_markdown_style(&styled, "*", "`*", "`*");
     let styled = apply_markdown_style(&styled, "_", "`*", "`*");
-    restore_markdown_inline_tokens(&styled, &tokens)
+    restore_markdown_inline_tokens(&styled, &tokens, url_scope)
 }
 
 fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
@@ -2098,7 +2133,11 @@ fn markdown_token_placeholder(index: usize) -> String {
     format!("\u{1f}{index}\u{1f}")
 }
 
-fn restore_markdown_inline_tokens(input: &str, tokens: &[InlineToken]) -> String {
+fn restore_markdown_inline_tokens(
+    input: &str,
+    tokens: &[InlineToken],
+    url_scope: Option<&str>,
+) -> String {
     let mut out = input.to_string();
     for (index, token) in tokens.iter().enumerate() {
         let replacement = match token {
@@ -2106,13 +2145,31 @@ fn restore_markdown_inline_tokens(input: &str, tokens: &[InlineToken]) -> String
                 "`!`[{}{}{}]`!",
                 sanitize_label(label).trim(),
                 "`",
-                sanitize_markdown_link_target(target)
+                markdown_link_target(target, url_scope)
             ),
             InlineToken::Code(value) => format!("`BT383838`Fddd{}`f`b", m_escape(value)),
         };
         out = out.replace(&markdown_token_placeholder(index), &replacement);
     }
     out
+}
+
+fn markdown_link_target(value: &str, url_scope: Option<&str>) -> String {
+    if let Some(scope) = url_scope {
+        if !value.contains(":/") {
+            let (path, anchor) = value
+                .split_once('#')
+                .map(|(path, anchor)| (path, Some(anchor)))
+                .unwrap_or((value, None));
+            let mut out = format!("{scope}{}", sanitize_field(path));
+            if let Some(anchor) = anchor.filter(|anchor| !anchor.is_empty()) {
+                out.push_str("|anchor=");
+                out.push_str(&sanitize_field(anchor));
+            }
+            return out;
+        }
+    }
+    sanitize_markdown_link_target(value)
 }
 
 fn sanitize_markdown_link_target(value: &str) -> String {
@@ -3105,7 +3162,7 @@ Unmatched * marker\n\
         create_repo(
             config.repositories_dir.join("public/docs"),
             "docs/readme.md",
-            "# Title\n\nSee [docs](https://example.invalid) and `tick`.\n",
+            "# Title\n\nSee [docs](https://example.invalid), [guide](guide.md#intro) and `tick`.\n",
         );
         let access = access(&config);
 
@@ -3125,6 +3182,9 @@ Unmatched * marker\n\
         assert!(rendered.contains("View raw"));
         assert!(rendered.contains(">Title"));
         assert!(rendered.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(rendered.contains(
+            "`!`[guide`:/page/blob.mu`g=public|r=docs|ref=HEAD|path=docs/guide.md|anchor=intro]`!"
+        ));
         assert!(rendered.contains("`BT383838`Fdddtick`f`b"));
         assert!(!rendered.contains("# Title"));
 
@@ -3340,7 +3400,7 @@ Unmatched * marker\n\
         create_repo(
             config.repositories_dir.join("public/markdown"),
             "README.md",
-            "# Markdown\n\nSee [docs](https://example.invalid).\n",
+            "# Markdown\n\nSee [docs](https://example.invalid) and [local](docs/intro.md).\n",
         );
         create_repo(
             config.repositories_dir.join("public/micron"),
@@ -3359,6 +3419,9 @@ Unmatched * marker\n\
         .unwrap();
         assert!(markdown.contains(">Markdown"));
         assert!(markdown.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(markdown.contains(
+            "`!`[local`:/page/blob.mu`g=public|r=markdown|ref=HEAD|path=docs/intro.md]`!"
+        ));
 
         let micron = render_page(
             PATH_REPO,
