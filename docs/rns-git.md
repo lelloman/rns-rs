@@ -89,6 +89,24 @@ git push origin main
 Repository names are resolved under the server `repositories_dir`. Keep names
 relative and do not include absolute paths.
 
+## Release Management
+
+`rngit release` manages release metadata and downloadable artifacts for a
+repository served by `rngit`.
+
+```bash
+rngit release rns://<destination_hash>/<repository> list
+rngit release rns://<destination_hash>/<repository> view v1.0.0
+rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --notes ./RELEASE.md
+rngit release rns://<destination_hash>/<repository> delete v1.0.0 --yes
+```
+
+The release tag must already exist in the remote bare repository. `create`
+initializes the release, uploads every regular file from the artifact directory
+except `RELEASE.md` and `RELEASE.mu`, then finalizes it as published. If no
+`--notes` path is provided, `rngit release create` uses `RELEASE.mu` or
+`RELEASE.md` from the artifact directory when present.
+
 ## Logging
 
 `rngit` writes `server_log` in the server config directory. `git-remote-rns`

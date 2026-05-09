@@ -44,52 +44,8 @@ struct RemoteHelper {
 
 impl RemoteHelper {
     fn connect(config: ClientConfig, dest_hash: [u8; 16]) -> Result<Self> {
-        let callbacks = SharedCallbacks::default();
-        let state = callbacks.state.clone();
-        let node = RnsNode::from_config(config.reticulum_dir.as_deref(), Box::new(callbacks))?;
-        let client_identity = load_or_create_identity(&config.identity_path)?;
-
-        let dest = DestHash(dest_hash);
-        eprintln!("Requesting path to {}...", crate::util::hex(&dest_hash));
-        node.request_path(&dest)
-            .map_err(|_| Error::msg("failed to request destination path"))?;
-        let deadline = Instant::now() + Duration::from_secs(config.connect_timeout_secs);
-        while !node.has_path(&dest).unwrap_or(false) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        if !node.has_path(&dest).unwrap_or(false) {
-            return Err(Error::msg("destination path resolution timed out"));
-        }
-        eprintln!("Path resolved.");
-
-        let recalled = node
-            .recall_identity(&dest)
-            .map_err(|_| Error::msg("failed to recall destination identity"))?
-            .ok_or_else(|| Error::msg("destination identity is unknown"))?;
-        let sig_pub: [u8; 32] = recalled.public_key[32..64].try_into().unwrap();
-        let link_id = node
-            .create_link(dest_hash, sig_pub)
-            .map_err(|_| Error::msg("failed to create RNS link"))?;
-        eprintln!("Establishing link...");
-        let private_key = client_identity
-            .get_private_key()
-            .ok_or_else(|| Error::msg("client identity has no private key"))?;
-        node.identify_on_link(link_id, private_key)
-            .map_err(|_| Error::msg("failed to identify on RNS link"))?;
-
-        wait_for_link(
-            &state,
-            link_id,
-            Duration::from_secs(config.connect_timeout_secs),
-        )?;
-        eprintln!("Link established.");
         Ok(Self {
-            client: SyncClient {
-                node,
-                link_id,
-                state,
-                request_timeout: Duration::from_secs(config.request_timeout_secs),
-            },
+            client: SyncClient::connect(config, dest_hash)?,
             remote_refs: Mutex::new(HashMap::new()),
         })
     }
@@ -294,7 +250,7 @@ fn build_push_exclusion_set(
         .collect()
 }
 
-struct SyncClient {
+pub(crate) struct SyncClient {
     node: RnsNode,
     link_id: [u8; 16],
     state: Arc<(Mutex<ClientState>, Condvar)>,
@@ -302,7 +258,55 @@ struct SyncClient {
 }
 
 impl SyncClient {
-    fn request(&self, path: &str, data: Vec<u8>) -> Result<Response> {
+    pub(crate) fn connect(config: ClientConfig, dest_hash: [u8; 16]) -> Result<Self> {
+        let callbacks = SharedCallbacks::default();
+        let state = callbacks.state.clone();
+        let node = RnsNode::from_config(config.reticulum_dir.as_deref(), Box::new(callbacks))?;
+        let client_identity = load_or_create_identity(&config.identity_path)?;
+
+        let dest = DestHash(dest_hash);
+        eprintln!("Requesting path to {}...", crate::util::hex(&dest_hash));
+        node.request_path(&dest)
+            .map_err(|_| Error::msg("failed to request destination path"))?;
+        let deadline = Instant::now() + Duration::from_secs(config.connect_timeout_secs);
+        while !node.has_path(&dest).unwrap_or(false) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        if !node.has_path(&dest).unwrap_or(false) {
+            return Err(Error::msg("destination path resolution timed out"));
+        }
+        eprintln!("Path resolved.");
+
+        let recalled = node
+            .recall_identity(&dest)
+            .map_err(|_| Error::msg("failed to recall destination identity"))?
+            .ok_or_else(|| Error::msg("destination identity is unknown"))?;
+        let sig_pub: [u8; 32] = recalled.public_key[32..64].try_into().unwrap();
+        let link_id = node
+            .create_link(dest_hash, sig_pub)
+            .map_err(|_| Error::msg("failed to create RNS link"))?;
+        eprintln!("Establishing link...");
+        let private_key = client_identity
+            .get_private_key()
+            .ok_or_else(|| Error::msg("client identity has no private key"))?;
+        node.identify_on_link(link_id, private_key)
+            .map_err(|_| Error::msg("failed to identify on RNS link"))?;
+
+        wait_for_link(
+            &state,
+            link_id,
+            Duration::from_secs(config.connect_timeout_secs),
+        )?;
+        eprintln!("Link established.");
+        Ok(Self {
+            node,
+            link_id,
+            state,
+            request_timeout: Duration::from_secs(config.request_timeout_secs),
+        })
+    }
+
+    pub(crate) fn request(&self, path: &str, data: Vec<u8>) -> Result<Response> {
         {
             let (lock, _) = &*self.state;
             lock.lock().unwrap().responses.clear();
@@ -347,9 +351,9 @@ struct ProgressState {
 }
 
 #[derive(Debug, Clone)]
-struct Response {
-    data: Vec<u8>,
-    metadata: Option<Vec<u8>>,
+pub(crate) struct Response {
+    pub(crate) data: Vec<u8>,
+    pub(crate) metadata: Option<Vec<u8>>,
 }
 
 impl Callbacks for SharedCallbacks {
@@ -433,7 +437,7 @@ fn wait_for_link(
     }
 }
 
-fn decode_status(bytes: Vec<u8>) -> Result<Vec<u8>> {
+pub(crate) fn decode_status(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let Some((&code, body)) = bytes.split_first() else {
         return Err(Error::msg("empty response"));
     };
@@ -447,7 +451,7 @@ fn decode_status(bytes: Vec<u8>) -> Result<Vec<u8>> {
     }
 }
 
-fn ensure_metadata_ok(metadata: &[u8]) -> Result<()> {
+pub(crate) fn ensure_metadata_ok(metadata: &[u8]) -> Result<()> {
     let value = msgpack::unpack_exact(metadata)
         .map_err(|e| Error::msg(format!("invalid response metadata: {e}")))?;
     let Some(map) = value.as_map() else {

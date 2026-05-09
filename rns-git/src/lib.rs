@@ -7,6 +7,7 @@ pub mod logging;
 pub mod pages;
 pub mod protocol;
 pub mod release;
+pub mod release_cli;
 pub mod server;
 mod stats;
 pub mod util;
