@@ -1641,6 +1641,25 @@ fn markdown_to_micron(input: &str) -> String {
             index += 1;
             continue;
         }
+        if let Some(quote) = markdown_quote(line) {
+            let mut parts = vec![quote.to_string()];
+            index += 1;
+            while index < lines.len() {
+                if let Some(quote) = markdown_quote(lines[index]) {
+                    parts.push(quote.to_string());
+                    index += 1;
+                } else {
+                    break;
+                }
+            }
+            let formatted = format_markdown_inline(&parts.join(" "));
+            for wrapped in markdown_wrap_text(&formatted, 77) {
+                out.push_str(" │ ");
+                out.push_str(&wrapped);
+                out.push('\n');
+            }
+            continue;
+        }
         if is_table_start(&lines, index) {
             let mut table = Vec::new();
             while index < lines.len() && lines[index].contains('|') {
@@ -1690,6 +1709,11 @@ fn markdown_fence_language(trimmed: &str) -> Option<String> {
         .and_then(|info| info.split_whitespace().next())
         .filter(|language| !language.is_empty())
         .map(str::to_string)
+}
+
+fn markdown_quote(line: &str) -> Option<&str> {
+    line.strip_prefix('>')
+        .map(|quote| quote.strip_prefix(' ').unwrap_or(quote))
 }
 
 fn markdown_heading(line: &str) -> Option<(usize, &str)> {
@@ -1951,6 +1975,36 @@ fn markdown_visible_width(value: &str) -> usize {
         width += 1;
     }
     width
+}
+
+fn markdown_wrap_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+    for word in text.split_whitespace() {
+        let word_width = markdown_visible_width(word);
+        if !current.is_empty() && current_width + 1 + word_width > width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        if !current.is_empty() {
+            current.push(' ');
+            current_width += 1;
+        }
+        current.push_str(word);
+        current_width += word_width;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 #[derive(Debug)]
@@ -2822,6 +2876,20 @@ See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
         assert!(out.contains("\n-\n"));
         assert!(out.contains("│ Name"));
         assert!(out.contains("`!`[go`rns://abc]`!"));
+    }
+
+    #[test]
+    fn markdown_converter_handles_blockquotes_and_heading_inline_markup() {
+        let out = markdown_to_micron(
+            "# **Important**\n\
+> **Quoted** text\n\
+> with [link](rns://abc)\n\
+\n\
+after\n",
+        );
+        assert!(out.contains(">`!Important`!"));
+        assert!(out.contains(" │ `!Quoted`! text with `!`[link`rns://abc]`!"));
+        assert!(out.contains("\nafter\n"));
     }
 
     #[test]

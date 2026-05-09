@@ -64,7 +64,7 @@ fn highlighted_content(
         }
     }
 
-    Some(out)
+    Some(escape_line_start_controls(&out))
 }
 
 #[cfg(feature = "syntax-highlighting")]
@@ -115,10 +115,59 @@ fn normalize_language(language: &str) -> Option<&str> {
 
 #[cfg(feature = "syntax-highlighting")]
 fn push_colored_span(out: &mut String, style: Style, text: &str) {
+    let mut escaped = escape_micron(text);
+    while escaped.starts_with('\n') {
+        out.push('\n');
+        escaped.remove(0);
+    }
+    let mut trailing_newlines = 0;
+    while escaped.ends_with('\n') {
+        escaped.pop();
+        trailing_newlines += 1;
+    }
+    if escaped.is_empty() {
+        for _ in 0..trailing_newlines {
+            out.push('\n');
+        }
+        return;
+    }
     out.push_str(&format!(
         "`FT{:02x}{:02x}{:02x}",
         style.foreground.r, style.foreground.g, style.foreground.b
     ));
-    out.push_str(&escape_micron(text));
+    out.push_str(&escaped);
     out.push_str("`f");
+    for _ in 0..trailing_newlines {
+        out.push('\n');
+    }
+}
+
+#[cfg(feature = "syntax-highlighting")]
+fn escape_line_start_controls(value: &str) -> String {
+    let mut out = String::new();
+    for segment in value.split_inclusive('\n') {
+        let (line, newline) = segment
+            .strip_suffix('\n')
+            .map(|line| (line, "\n"))
+            .unwrap_or((segment, ""));
+        if line.starts_with('>') {
+            out.push_str("`>");
+        }
+        out.push_str(line);
+        out.push_str(newline);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "syntax-highlighting")]
+    #[test]
+    fn highlighted_literal_blocks_keep_newlines_outside_color_tags_and_escape_headings() {
+        let out = literal_block(">not a heading\nlet value = 1;\n", Some("main.rs"), None);
+        assert!(!out.contains("`f\n`f"));
+        assert!(out.ends_with("`=\n"));
+    }
 }
