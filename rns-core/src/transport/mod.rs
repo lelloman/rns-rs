@@ -443,6 +443,10 @@ impl TransportEngine {
         let interface_hash = if let Some(info) = self.interfaces.get(&interface_id) {
             hash::full_hash(info.name.as_bytes())
         } else {
+            log::warn!(
+                "Cannot synthesize tunnel on {:?}: unknown interface",
+                interface_id
+            );
             return actions;
         };
 
@@ -460,8 +464,7 @@ impl TransportEngine {
                 });
             }
             Err(e) => {
-                // Can't synthesize — no private key or other error
-                let _ = e;
+                log::warn!("Cannot synthesize tunnel on {:?}: {}", interface_id, e);
             }
         }
 
@@ -3523,6 +3526,35 @@ mod tests {
             }
             _ => panic!("Expected TunnelSynthesize"),
         }
+    }
+
+    #[test]
+    fn test_synthesize_tunnel_missing_interface_is_dropped() {
+        let engine = TransportEngine::new(make_config(true));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+
+        let actions = engine.synthesize_tunnel(&identity, InterfaceId(99), &mut rng);
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_synthesize_tunnel_public_only_identity_is_dropped() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let public_key = identity.get_public_key().unwrap();
+        let public_only_identity = rns_crypto::identity::Identity::from_public_key(&public_key);
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+
+        let actions = engine.synthesize_tunnel(&public_only_identity, InterfaceId(1), &mut rng);
+
+        assert!(actions.is_empty());
     }
 
     // =========================================================================
