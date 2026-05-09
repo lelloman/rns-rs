@@ -113,6 +113,23 @@ except `RELEASE.md` and `RELEASE.mu`, then finalizes it as published. If no
 `RELEASE.md` from the artifact directory when present. Artifact uploads print
 per-file progress as each artifact is sent.
 
+## Work Documents
+
+`rngit work` manages repository Work Documents over `/mgmt/work`.
+
+```bash
+rngit work rns://<destination_hash>/<repository> list --scope all
+rngit work rns://<destination_hash>/<repository> view --id 1
+rngit work rns://<destination_hash>/<repository> create --title "Task" --content ./WORK.md
+rngit work rns://<destination_hash>/<repository> comment --id 1 --content ./UPDATE.md
+rngit work rns://<destination_hash>/<repository> complete --id 1
+rngit work rns://<destination_hash>/<repository> delete --id 1 --yes
+```
+
+Rust `rngit work` is non-interactive: create, edit, and comment operations read
+document bodies from `--content PATH`. Files ending in `.mu` are sent as Micron;
+other content is sent as Markdown.
+
 ## Logging
 
 `rngit` writes `server_log` in the server config directory. `git-remote-rns`

@@ -12,6 +12,7 @@ pub mod server;
 mod stats;
 pub mod util;
 pub mod work;
+pub mod work_cli;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
