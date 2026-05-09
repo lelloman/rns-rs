@@ -481,7 +481,12 @@ fn list_scope(work_path: &Path, scope: WorkScope) -> Result<Vec<WorkSummary>> {
             comments: comment_count(&entry.path())?,
         });
     }
-    out.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
+    out.sort_by(|a, b| {
+        b.created
+            .max(b.edited)
+            .cmp(&a.created.max(a.edited))
+            .then_with(|| b.id.cmp(&a.id))
+    });
     Ok(out)
 }
 
@@ -915,6 +920,22 @@ mod tests {
         let lists = list_documents(&work_path, WorkListScope::All).unwrap();
         assert_eq!(lists.active[0].id, 2);
         assert_eq!(lists.completed[0].id, 1);
+    }
+
+    #[test]
+    fn document_lists_sort_by_latest_created_or_edited_activity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work_path = tmp.path().join("repo.work");
+
+        assert_eq!(create_sample(&work_path, "older edited").unwrap().id, 1);
+        assert_eq!(create_sample(&work_path, "newer untouched").unwrap().id, 2);
+        let mut first = read_document(&root_path(&work_path, WorkScope::Active, 1)).unwrap();
+        first.edited = first.created + 10_000;
+        write_document(&root_path(&work_path, WorkScope::Active, 1), &first).unwrap();
+
+        let lists = list_documents(&work_path, WorkListScope::Active).unwrap();
+        let ids: Vec<_> = lists.active.iter().map(|doc| doc.id).collect();
+        assert_eq!(ids, vec![1, 2]);
     }
 
     #[test]
