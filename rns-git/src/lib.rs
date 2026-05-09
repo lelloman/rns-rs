@@ -11,6 +11,7 @@ pub mod release_cli;
 pub mod server;
 mod stats;
 pub mod util;
+pub mod work;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
