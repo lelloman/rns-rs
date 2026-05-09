@@ -301,6 +301,42 @@ fn release_pages_render_published_releases_latest_artifacts_and_thanks() {
 }
 
 #[test]
+fn release_pages_render_preview_formats() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/previews"),
+        "README.md",
+        "# Previews\n",
+    );
+    create_sidecar_release(
+        &repo_path,
+        "v-md",
+        3,
+        "RELEASE.md",
+        "# Heading\n> quoted preface\n**Markdown** preview\n",
+    );
+    create_sidecar_release(&repo_path, "v-mu", 2, "RELEASE.mu", "`!Micron`! preview\n");
+    create_sidecar_release(&repo_path, "v-txt", 1, "RELEASE.txt", "<text preview>\n");
+    let access_rules = access(&config);
+
+    let releases = pages::render_page(
+        pages::PATH_RELEASES,
+        &config,
+        &access_rules,
+        &page_request(&[("var_g", "public"), ("var_r", "previews")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+
+    assert!(releases.contains("`!Markdown`! preview"));
+    assert!(!releases.contains("Heading"));
+    assert!(!releases.contains("quoted preface"));
+    assert!(releases.contains("`!Micron`! preview"));
+    assert!(releases.contains("\\<text preview>"));
+}
+
+#[test]
 fn release_and_blob_downloads_respect_read_access_and_safe_paths() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = cfg(tmp.path());
@@ -562,6 +598,23 @@ fn create_published_release(
         .unwrap()[0],
         protocol::RES_OK
     );
+}
+
+fn create_sidecar_release(
+    repo_path: &std::path::Path,
+    tag: &str,
+    created: u64,
+    notes_file: &str,
+    notes: &str,
+) {
+    let release_dir = rns_git::release::release_sidecar_path(repo_path).join(tag);
+    fs::create_dir_all(release_dir.join("artifacts")).unwrap();
+    fs::write(
+        release_dir.join("META"),
+        format!("tag = {tag}\ncreated = {created}\nstatus = published\ncreated_by = tester\n"),
+    )
+    .unwrap();
+    fs::write(release_dir.join(notes_file), notes).unwrap();
 }
 
 fn listed_array(response: &[u8]) -> Vec<Value> {

@@ -17,6 +17,7 @@ pub struct ReleaseSummary {
     pub status: String,
     pub created_by: String,
     pub preview: String,
+    pub preview_format: String,
     pub artifacts: u64,
 }
 
@@ -100,6 +101,7 @@ pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
         let meta = read_meta(&meta_path)?;
         let tag = meta_get(&meta, "tag")
             .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned());
+        let (preview, preview_format) = notes_preview(&release_dir)?;
         releases.push(ReleaseSummary {
             tag,
             hash: meta_get(&meta, "hash").unwrap_or_default(),
@@ -108,7 +110,8 @@ pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
                 .unwrap_or(0),
             status: meta_get(&meta, "status").unwrap_or_else(|| "unknown".to_string()),
             created_by: meta_get(&meta, "created_by").unwrap_or_default(),
-            preview: notes_preview(&release_dir)?,
+            preview,
+            preview_format,
             artifacts: artifact_count(&release_dir)?,
         });
     }
@@ -189,10 +192,10 @@ pub fn create_init(
     }
     write_meta(&release_dir.join("META"), &meta)?;
     if let Some(notes) = request.notes.as_deref().filter(|v| !v.is_empty()) {
-        let notes_file = if request.notes_format.as_deref() == Some("micron") {
-            "RELEASE.mu"
-        } else {
-            "RELEASE.md"
+        let notes_file = match request.notes_format.as_deref() {
+            Some("micron") => "RELEASE.mu",
+            Some("text") => "RELEASE.txt",
+            _ => "RELEASE.md",
         };
         fs::write(release_dir.join(notes_file), notes)?;
     }
@@ -346,6 +349,10 @@ fn summary_value(release: ReleaseSummary) -> Value {
         ),
         (Value::Str("preview".into()), Value::Str(release.preview)),
         (
+            Value::Str("preview_format".into()),
+            Value::Str(release.preview_format),
+        ),
+        (
             Value::Str("artifacts".into()),
             Value::UInt(release.artifacts),
         ),
@@ -430,7 +437,11 @@ fn set_meta(values: &mut Vec<(String, String)>, key: &str, value: &str) {
 }
 
 fn read_notes(release_dir: &Path) -> Result<(String, String)> {
-    for (file, format) in [("RELEASE.md", "markdown"), ("RELEASE.mu", "micron")] {
+    for (file, format) in [
+        ("RELEASE.md", "markdown"),
+        ("RELEASE.mu", "micron"),
+        ("RELEASE.txt", "text"),
+    ] {
         let path = release_dir.join(file);
         if path.is_file() {
             return Ok((fs::read_to_string(path)?, format.to_string()));
@@ -439,15 +450,14 @@ fn read_notes(release_dir: &Path) -> Result<(String, String)> {
     Ok((String::new(), "text".to_string()))
 }
 
-fn notes_preview(release_dir: &Path) -> Result<String> {
-    let (notes, _) = read_notes(release_dir)?;
-    let first = notes.lines().next().unwrap_or("").trim();
-    Ok(first
-        .trim_start_matches('#')
-        .trim()
-        .chars()
-        .take(256)
-        .collect())
+fn notes_preview(release_dir: &Path) -> Result<(String, String)> {
+    let (notes, format) = read_notes(release_dir)?;
+    let first = notes
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('>'))
+        .unwrap_or("");
+    Ok((first.chars().take(256).collect(), format))
 }
 
 fn artifacts(release_dir: &Path) -> Result<Vec<Artifact>> {

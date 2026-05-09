@@ -382,6 +382,15 @@ fn m_escape(value: &str) -> String {
     value.replace('`', "\\`")
 }
 
+fn m_escape_line_start_controls(value: &str) -> String {
+    let escaped = m_escape(value);
+    if value.starts_with('-') || value.starts_with('>') || value.starts_with('<') {
+        format!("\\{escaped}")
+    } else {
+        escaped
+    }
+}
+
 fn join_git_path(parent: &str, child: &str) -> String {
     if parent.is_empty() {
         child.to_string()
@@ -987,11 +996,27 @@ fn render_releases_page(
             release.artifacts
         ));
         if !release.preview.is_empty() {
-            out.push_str(&format!("{}\n", m_escape(&release.preview)));
+            append_release_preview(&mut out, &release.preview_format, &release.preview);
         }
         out.push('\n');
     }
     Ok(out)
+}
+
+fn append_release_preview(out: &mut String, format: &str, preview: &str) {
+    match format {
+        "markdown" => out.push_str(&markdown_to_micron(preview)),
+        "micron" => {
+            out.push_str(preview);
+            if !preview.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        _ => {
+            out.push_str(&m_escape_line_start_controls(preview));
+            out.push('\n');
+        }
+    }
 }
 
 fn render_release_page(
