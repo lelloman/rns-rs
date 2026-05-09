@@ -193,6 +193,20 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
     )
     .map_err(|_| Error::msg("failed to register release handler"))?;
 
+    let work_config = config.clone();
+    let work_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_WORK,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_work(&work_config, &work_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register work handler"))?;
+
     node.register_request_handler(
         protocol::PATH_DELETE,
         None,
@@ -408,6 +422,185 @@ pub fn handle_release(
     }
 }
 
+pub fn handle_work(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let request = crate::work::parse_request(data)?;
+    let repo = request.repository.as_str();
+    if !access.allows(Operation::Read, repo, Some(remote_hash))? {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    let interact_access = access.allows(Operation::Interact, repo, Some(remote_hash))?;
+    let write_access = access.allows(Operation::Write, repo, Some(remote_hash))?;
+    let permitted = match request.operation.as_str() {
+        "list" | "view" => true,
+        "comment" => interact_access,
+        "create" | "edit" | "delete" | "complete" | "activate" => interact_access && write_access,
+        _ => false,
+    };
+    if !permitted {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not allowed",
+        ));
+    }
+
+    let repository_path = git::repository_path(&config.repositories_dir, repo)?;
+    if !git::is_bare_repository(&repository_path) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"repository not found",
+        ));
+    }
+    let work_path = crate::work::work_sidecar_path(&repository_path);
+    match request.operation.as_str() {
+        "list" => {
+            let scope = request
+                .scope
+                .as_deref()
+                .map(crate::work::WorkListScope::parse)
+                .unwrap_or(Some(crate::work::WorkListScope::Active))
+                .ok_or_else(|| Error::msg("invalid scope"))?;
+            crate::work::list_response(&work_path, scope)
+        }
+        "view" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let scope = work_scope(request.scope.as_deref())?;
+            crate::work::view_response(&work_path, scope, doc_id)
+        }
+        "create" => work_status_result(
+            crate::work::create_document(
+                &work_path,
+                crate::work::WorkInput {
+                    title: request.title.unwrap_or_default(),
+                    content: request.content.unwrap_or_default(),
+                    format: request.format.unwrap_or_else(|| "markdown".into()),
+                    signature: request.signature,
+                    author: *remote_hash,
+                },
+            )
+            .map(crate::work::created_response),
+        ),
+        "edit" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let scope = work_scope(request.scope.as_deref())?;
+            work_status_result(
+                crate::work::edit_document(
+                    &work_path,
+                    scope,
+                    doc_id,
+                    remote_hash,
+                    crate::work::WorkEdit {
+                        title: request.title,
+                        content: request.content,
+                        signature: request.signature,
+                    },
+                )
+                .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
+            )
+        }
+        "delete" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let scope = work_scope(request.scope.as_deref())?;
+            work_status_result(
+                crate::work::delete_document(&work_path, scope, doc_id, remote_hash)
+                    .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
+            )
+        }
+        "comment" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            let scope = work_scope(request.scope.as_deref())?;
+            work_status_result(
+                crate::work::add_comment(
+                    &work_path,
+                    scope,
+                    doc_id,
+                    crate::work::WorkCommentInput {
+                        content: request.content.unwrap_or_default(),
+                        format: request.format.unwrap_or_else(|| "markdown".into()),
+                        signature: request.signature,
+                        author: *remote_hash,
+                    },
+                )
+                .map(crate::work::comment_response),
+            )
+        }
+        "complete" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            work_status_result(
+                crate::work::complete_document(&work_path, doc_id, remote_hash).map(|_| {
+                    crate::work::transition_response(doc_id, crate::work::WorkScope::Completed)
+                }),
+            )
+        }
+        "activate" => {
+            let doc_id = request
+                .doc_id
+                .ok_or_else(|| Error::msg("no document ID specified"))?;
+            work_status_result(
+                crate::work::activate_document(&work_path, doc_id, remote_hash).map(|_| {
+                    crate::work::transition_response(doc_id, crate::work::WorkScope::Active)
+                }),
+            )
+        }
+        _ => Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        )),
+    }
+}
+
+fn work_scope(scope: Option<&str>) -> Result<crate::work::WorkScope> {
+    scope
+        .map(crate::work::WorkScope::parse)
+        .unwrap_or(Some(crate::work::WorkScope::Active))
+        .ok_or_else(|| Error::msg("invalid scope"))
+}
+
+fn work_status_result(result: Result<Vec<u8>>) -> Result<Vec<u8>> {
+    match result {
+        Ok(response) => Ok(response),
+        Err(err) => Ok(work_error_response(err)),
+    }
+}
+
+fn work_error_response(err: Error) -> Vec<u8> {
+    let message = err.to_string();
+    let code = match message.as_str() {
+        "document not found" => protocol::RES_NOT_FOUND,
+        "no access, not author" => protocol::RES_DISALLOWED,
+        "title is required"
+        | "content is required"
+        | "invalid signature"
+        | "content limit exceeded"
+        | "no changes specified" => protocol::RES_INVALID_REQ,
+        _ => protocol::RES_REMOTE_FAIL,
+    };
+    protocol::status_bytes(code, message)
+}
+
 fn error_response(err: Error) -> Vec<u8> {
     protocol::status_bytes(protocol::RES_INVALID_REQ, err.to_string())
 }
@@ -542,7 +735,12 @@ fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_core::msgpack::{self, Value};
     use rns_crypto::OsRng;
+
+    const REMOTE: [u8; 16] = [0x44; 16];
+    const OTHER_REMOTE: [u8; 16] = [0x55; 16];
+    const REMOTE_SIG: [u8; 64] = [0x66; 64];
 
     fn cfg(root: &std::path::Path) -> ServerConfig {
         ServerConfig {
@@ -825,5 +1023,348 @@ mod tests {
             RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_OK),
             RequestResponse::Resource { metadata, .. } => assert!(metadata.is_some()),
         }
+    }
+
+    #[test]
+    fn work_protocol_enforces_read_interact_and_write_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+
+        config.allow_read = vec!["none".into()];
+        config.allow_write = vec!["all".into()];
+        config.allow_interact = vec!["all".into()];
+        let access = make_access(&config);
+        let list = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("list")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(list[0], protocol::RES_NOT_FOUND);
+
+        config.allow_read = vec!["all".into()];
+        config.allow_write = vec!["all".into()];
+        config.allow_interact = vec!["none".into()];
+        let access = make_access(&config);
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Task")),
+                ("content", strv("Body")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(create[0], protocol::RES_DISALLOWED);
+
+        config.allow_interact = vec!["all".into()];
+        config.allow_write = vec!["none".into()];
+        let access = make_access(&config);
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Task")),
+                ("content", strv("Body")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(create[0], protocol::RES_DISALLOWED);
+
+        config.allow_write = vec!["all".into()];
+        let access = make_access(&config);
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Task")),
+                ("content", strv("Body")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(create[0], protocol::RES_OK);
+
+        config.allow_write = vec!["none".into()];
+        let access = make_access(&config);
+        let comment = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("comment")),
+                ("doc_id", uintv(1)),
+                ("content", strv("Comment")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(comment[0], protocol::RES_OK);
+    }
+
+    #[test]
+    fn work_protocol_lifecycle_round_trips_documents_and_comments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_interact = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+        let access = make_access(&config);
+
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Initial title")),
+                ("content", strv("Initial body")),
+                ("format", strv("micron")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        let created = body_value(&create);
+        assert_eq!(created.map_get("id").and_then(Value::as_integer), Some(1));
+        assert_eq!(
+            created.map_get("scope").and_then(Value::as_str),
+            Some("active")
+        );
+
+        let comment = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("comment")),
+                ("doc_id", uintv(1)),
+                ("content", strv("Progress update")),
+                ("format", strv("markdown")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(
+            body_value(&comment)
+                .map_get("id")
+                .and_then(Value::as_integer),
+            Some(1)
+        );
+
+        let view = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("view")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        let view = body_value(&view);
+        assert_eq!(
+            view.map_get("content").and_then(Value::as_str),
+            Some("Initial body")
+        );
+        let comments = view
+            .map_get("comments")
+            .and_then(Value::as_array)
+            .expect("comments array");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(
+            comments[0].map_get("content").and_then(Value::as_str),
+            Some("Progress update")
+        );
+
+        let edit = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("edit")),
+                ("doc_id", uintv(1)),
+                ("title", strv("Edited title")),
+                ("content", strv("Edited body")),
+                ("signature", binv(&[0xAA; 64])),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(edit, vec![protocol::RES_OK]);
+
+        let complete = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("complete")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(
+            body_value(&complete)
+                .map_get("scope")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let all = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("list")),
+                ("scope", strv("all")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        let all = body_value(&all);
+        assert_eq!(
+            all.map_get("active")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            all.map_get("completed")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let activate = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("activate")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(
+            body_value(&activate)
+                .map_get("scope")
+                .and_then(Value::as_str),
+            Some("active")
+        );
+
+        let delete = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("delete")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(delete, vec![protocol::RES_OK]);
+    }
+
+    #[test]
+    fn work_protocol_rejects_non_author_management_operations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_interact = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+        let access = make_access(&config);
+
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Task")),
+                ("content", strv("Body")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(create[0], protocol::RES_OK);
+
+        for operation in ["edit", "complete", "delete"] {
+            let denied = handle_work(
+                &config,
+                &access,
+                &work_request(&[
+                    ("repository", strv("group/repo")),
+                    ("operation", strv(operation)),
+                    ("doc_id", uintv(1)),
+                    ("content", strv("Other edit")),
+                ]),
+                Some(&(OTHER_REMOTE, REMOTE_SIG)),
+            )
+            .unwrap();
+            assert_eq!(denied[0], protocol::RES_DISALLOWED);
+        }
+    }
+
+    fn make_access(config: &ServerConfig) -> Access {
+        Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            &config.allow_stats,
+            &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
+            config.repositories_dir.clone(),
+        )
+        .unwrap()
+    }
+
+    fn work_request(fields: &[(&str, Value)]) -> Vec<u8> {
+        msgpack::pack(&Value::Map(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    let key = if *key == "repository" {
+                        Value::UInt(protocol::IDX_REPOSITORY)
+                    } else {
+                        Value::Str((*key).into())
+                    };
+                    (key, value.clone())
+                })
+                .collect(),
+        ))
+    }
+
+    fn strv(value: &str) -> Value {
+        Value::Str(value.to_string())
+    }
+
+    fn uintv(value: u64) -> Value {
+        Value::UInt(value)
+    }
+
+    fn binv(value: &[u8]) -> Value {
+        Value::Bin(value.to_vec())
+    }
+
+    fn body_value(response: &[u8]) -> Value {
+        assert_eq!(response[0], protocol::RES_OK);
+        msgpack::unpack_exact(&response[1..]).unwrap()
     }
 }

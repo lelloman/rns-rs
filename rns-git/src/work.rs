@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
 
+use crate::protocol;
+use crate::util::validate_repo_name;
 use crate::util::{hex, parse_hex_16};
 use crate::{Error, Result};
 
@@ -96,6 +98,18 @@ pub struct WorkComment {
     pub signature: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkRequest {
+    pub repository: String,
+    pub operation: String,
+    pub scope: Option<String>,
+    pub doc_id: Option<u64>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub format: Option<String>,
+    pub signature: Option<Vec<u8>>,
+}
+
 #[derive(Debug, Clone)]
 struct StoredDocument {
     content: String,
@@ -111,6 +125,99 @@ pub fn work_sidecar_path(repo: &Path) -> PathBuf {
     let mut name = repo.as_os_str().to_os_string();
     name.push(".work");
     PathBuf::from(name)
+}
+
+pub fn parse_request(data: &[u8]) -> Result<WorkRequest> {
+    let value =
+        msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
+    let map = value
+        .as_map()
+        .ok_or_else(|| Error::msg("request must be a msgpack map"))?;
+    let repository = map_get_repository(map)
+        .ok_or_else(|| Error::msg("request missing repository"))?
+        .to_string();
+    validate_repo_name(&repository)?;
+    let operation = map_get(map, "operation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::msg("request missing operation"))?
+        .to_string();
+    Ok(WorkRequest {
+        repository,
+        operation,
+        scope: map_get(map, "scope")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        doc_id: map_get(map, "doc_id")
+            .and_then(Value::as_integer)
+            .filter(|value| *value >= 0)
+            .map(|value| value as u64),
+        title: map_get(map, "title")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        content: map_get(map, "content")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        format: map_get(map, "format")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        signature: map_get(map, "signature").and_then(value_to_signature),
+    })
+}
+
+pub fn list_response(work_path: &Path, scope: WorkListScope) -> Result<Vec<u8>> {
+    Ok(protocol::status_bytes(
+        protocol::RES_OK,
+        msgpack::pack(&lists_value(list_documents(work_path, scope)?)),
+    ))
+}
+
+pub fn view_response(work_path: &Path, scope: WorkScope, doc_id: u64) -> Result<Vec<u8>> {
+    match view_document(work_path, scope, doc_id)? {
+        Some(document) => Ok(protocol::status_bytes(
+            protocol::RES_OK,
+            msgpack::pack(&document_value_response(document)),
+        )),
+        None => Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"document not found",
+        )),
+    }
+}
+
+pub fn created_response(created: WorkCreated) -> Vec<u8> {
+    protocol::status_bytes(
+        protocol::RES_OK,
+        msgpack::pack(&Value::Map(vec![
+            (Value::Str("id".into()), Value::UInt(created.id)),
+            (
+                Value::Str("scope".into()),
+                Value::Str(created.scope.as_str().into()),
+            ),
+        ])),
+    )
+}
+
+pub fn comment_response(comment_id: u64) -> Vec<u8> {
+    protocol::status_bytes(
+        protocol::RES_OK,
+        msgpack::pack(&Value::Map(vec![(
+            Value::Str("id".into()),
+            Value::UInt(comment_id),
+        )])),
+    )
+}
+
+pub fn transition_response(doc_id: u64, scope: WorkScope) -> Vec<u8> {
+    protocol::status_bytes(
+        protocol::RES_OK,
+        msgpack::pack(&Value::Map(vec![
+            (Value::Str("id".into()), Value::UInt(doc_id)),
+            (
+                Value::Str("scope".into()),
+                Value::Str(scope.as_str().into()),
+            ),
+        ])),
+    )
 }
 
 pub fn create_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
@@ -383,6 +490,14 @@ fn scope_dir(work_path: &Path, scope: WorkScope) -> PathBuf {
 }
 
 impl WorkScope {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(WorkScope::Active),
+            "completed" => Some(WorkScope::Completed),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             WorkScope::Active => "active",
@@ -463,6 +578,67 @@ fn document_value(document: &StoredDocument) -> Value {
     ])
 }
 
+fn lists_value(lists: WorkLists) -> Value {
+    Value::Map(vec![
+        (
+            Value::Str("active".into()),
+            Value::Array(lists.active.into_iter().map(summary_value).collect()),
+        ),
+        (
+            Value::Str("completed".into()),
+            Value::Array(lists.completed.into_iter().map(summary_value).collect()),
+        ),
+    ])
+}
+
+fn summary_value(summary: WorkSummary) -> Value {
+    Value::Map(vec![
+        (Value::Str("id".into()), Value::UInt(summary.id)),
+        (Value::Str("title".into()), Value::Str(summary.title)),
+        (Value::Str("created".into()), Value::UInt(summary.created)),
+        (Value::Str("edited".into()), Value::UInt(summary.edited)),
+        (Value::Str("author".into()), Value::Str(summary.author)),
+        (Value::Str("format".into()), Value::Str(summary.format)),
+        (Value::Str("comments".into()), Value::UInt(summary.comments)),
+    ])
+}
+
+fn document_value_response(document: WorkDocument) -> Value {
+    Value::Map(vec![
+        (Value::Str("id".into()), Value::UInt(document.id)),
+        (
+            Value::Str("scope".into()),
+            Value::Str(document.scope.as_str().into()),
+        ),
+        (Value::Str("content".into()), Value::Str(document.content)),
+        (
+            Value::Str("comments".into()),
+            Value::Array(document.comments.into_iter().map(comment_value).collect()),
+        ),
+        (
+            Value::Str("meta".into()),
+            Value::Map(vec![
+                (Value::Str("title".into()), Value::Str(document.title)),
+                (Value::Str("created".into()), Value::UInt(document.created)),
+                (Value::Str("edited".into()), Value::UInt(document.edited)),
+                (Value::Str("author".into()), Value::Str(document.author)),
+                (Value::Str("format".into()), Value::Str(document.format)),
+            ]),
+        ),
+    ])
+}
+
+fn comment_value(comment: WorkComment) -> Value {
+    Value::Map(vec![
+        (Value::Str("id".into()), Value::UInt(comment.id)),
+        (Value::Str("content".into()), Value::Str(comment.content)),
+        (Value::Str("created".into()), Value::UInt(comment.created)),
+        (Value::Str("edited".into()), Value::UInt(comment.edited)),
+        (Value::Str("author".into()), Value::Str(comment.author)),
+        (Value::Str("format".into()), Value::Str(comment.format)),
+    ])
+}
+
 fn stored_document_from_value(value: &Value) -> Result<StoredDocument> {
     let content = value
         .map_get("content")
@@ -506,6 +682,14 @@ fn stored_document_from_value(value: &Value) -> Result<StoredDocument> {
 fn map_get<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
     map.iter().find_map(|(map_key, value)| match map_key {
         Value::Str(map_key) if map_key == key => Some(value),
+        _ => None,
+    })
+}
+
+fn map_get_repository<'a>(map: &'a [(Value, Value)]) -> Option<&'a str> {
+    map.iter().find_map(|(key, value)| match key {
+        Value::UInt(v) if *v == protocol::IDX_REPOSITORY => value.as_str(),
+        Value::Str(v) if v == "repository" => value.as_str(),
         _ => None,
     })
 }
