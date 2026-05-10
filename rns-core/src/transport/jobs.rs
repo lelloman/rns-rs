@@ -18,8 +18,9 @@ pub fn process_pending_announces(
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
     let mut completed = Vec::new();
+    let mut due = Vec::new();
 
-    for (dest_hash, entry) in announce_table.iter_mut() {
+    for (dest_hash, entry) in announce_table.iter() {
         // Check local rebroadcast limit (Transport.py:523 checks retries >= LOCAL_REBROADCASTS_MAX)
         if entry.retries >= constants::LOCAL_REBROADCASTS_MAX {
             completed.push(*dest_hash);
@@ -34,13 +35,26 @@ pub fn process_pending_announces(
 
         // Check if it's time to retransmit
         if now > entry.retransmit_timeout {
+            due.push((*dest_hash, entry.hops));
+        }
+    }
+
+    due.sort_by_key(|(dest_hash, hops)| (*hops, *dest_hash));
+
+    for (dest_hash, _) in due {
+        let retransmit = if let Some(entry) = announce_table.get_mut(&dest_hash) {
             entry.retransmit_timeout = now + constants::PATHFINDER_G + constants::PATHFINDER_RW;
             entry.retries += 1;
 
             // Build retransmit packet
             let raw = build_retransmit_announce(entry, transport_identity_hash);
+            Some((raw, entry.attached_interface, entry.hops))
+        } else {
+            None
+        };
 
-            if let Some(attached) = entry.attached_interface {
+        if let Some((raw, attached_interface, hops)) = retransmit {
+            if let Some(attached) = attached_interface {
                 actions.push(TransportAction::SendOnInterface {
                     interface: attached,
                     raw: raw.into(),
@@ -53,30 +67,20 @@ pub fn process_pending_announces(
             }
 
             actions.push(TransportAction::AnnounceRetransmit {
-                destination_hash: *dest_hash,
-                hops: entry.hops,
-                interface: entry.attached_interface,
+                destination_hash: dest_hash,
+                hops,
+                interface: attached_interface,
             });
 
             // Check for held announces to reinsert
-            if let Some(held) = held_announces.remove(dest_hash) {
-                // We'll reinsert it after removing completed entries
-                // For now, we just note that we need to handle this
-                // The held entry replaces the current entry after completion
-                // Actually in Python, the held announce is reinserted into announce_table
-                // only after the current retransmit completes. We handle this by
-                // storing it temporarily and reinserting below.
-                held_announces.insert(*dest_hash, held);
+            if let Some(held) = held_announces.remove(&dest_hash) {
+                announce_table.insert(dest_hash, held);
             }
         }
     }
 
     for dest_hash in &completed {
         announce_table.remove(dest_hash);
-        // Reinsert held announces
-        if let Some(held) = held_announces.remove(dest_hash) {
-            announce_table.insert(*dest_hash, held);
-        }
     }
 
     actions
@@ -296,6 +300,66 @@ mod tests {
 
         assert!(actions.is_empty());
         assert!(table.contains_key(&dest)); // still there
+    }
+
+    #[test]
+    fn process_pending_retransmits_due_announces_in_hop_order() {
+        let high_hop_dest = [0x11; 16];
+        let low_hop_dest = [0x22; 16];
+        let mut high_hop = make_announce_entry(high_hop_dest, 999.0, 0, 0);
+        high_hop.hops = 5;
+        let mut low_hop = make_announce_entry(low_hop_dest, 999.0, 0, 0);
+        low_hop.hops = 1;
+        let mut table = BTreeMap::new();
+        table.insert(high_hop_dest, high_hop);
+        table.insert(low_hop_dest, low_hop);
+        let mut held = BTreeMap::new();
+
+        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+
+        let sent_hops: Vec<u8> = actions
+            .iter()
+            .filter_map(|action| match action {
+                TransportAction::BroadcastOnAllInterfaces { raw, .. } => raw.get(1).copied(),
+                TransportAction::SendOnInterface { raw, .. } => raw.get(1).copied(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent_hops, vec![1, 5]);
+    }
+
+    #[test]
+    fn process_pending_reinserts_held_announce_after_path_response_retransmit() {
+        let dest = [0x55; 16];
+        let mut path_response = make_announce_entry(dest, 999.0, 0, 0);
+        path_response.hops = 2;
+        path_response.block_rebroadcasts = true;
+        let mut held_entry = make_announce_entry(dest, 1500.0, 0, 0);
+        held_entry.hops = 7;
+        held_entry.block_rebroadcasts = false;
+        held_entry.packet_data = vec![0x77; 10];
+        let mut table = BTreeMap::new();
+        table.insert(dest, path_response);
+        let mut held = BTreeMap::new();
+        held.insert(dest, held_entry.clone());
+
+        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::AnnounceRetransmit {
+                destination_hash,
+                hops: 2,
+                ..
+            } if *destination_hash == dest
+        )));
+        assert!(held.is_empty());
+        let active = table
+            .get(&dest)
+            .expect("held announce should be reinserted");
+        assert_eq!(active.hops, 7);
+        assert_eq!(active.packet_data, vec![0x77; 10]);
+        assert!(!active.block_rebroadcasts);
     }
 
     #[test]
