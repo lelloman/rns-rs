@@ -240,10 +240,7 @@ pub fn handle_list(
             protocol::RES_NOT_FOUND,
             b"repository not found",
         )),
-        Err(err) => Ok(protocol::status_bytes(
-            protocol::RES_REMOTE_FAIL,
-            err.to_string(),
-        )),
+        Err(err) => Ok(remote_error_response("list", &repo, err)),
     }
 }
 
@@ -287,9 +284,8 @@ pub fn handle_fetch(
         Err(err) if err.to_string() == "repository not found" => Ok(RequestResponse::Bytes(
             protocol::status_bytes(protocol::RES_NOT_FOUND, b"repository not found"),
         )),
-        Err(err) => Ok(RequestResponse::Bytes(protocol::status_bytes(
-            protocol::RES_REMOTE_FAIL,
-            err.to_string(),
+        Err(err) => Ok(RequestResponse::Bytes(remote_error_response(
+            "fetch", &repo, err,
         ))),
     }
 }
@@ -331,10 +327,7 @@ pub fn handle_push(
             crate::stats::record_push(config, &repo, remote_hash);
             Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
         }
-        Err(err) => Ok(protocol::status_bytes(
-            protocol::RES_REMOTE_FAIL,
-            err.to_string(),
-        )),
+        Err(err) => Ok(remote_error_response("push", &repo, err)),
     }
 }
 
@@ -359,7 +352,9 @@ pub fn handle_delete(
             b"repository not found",
         ));
     }
-    std::fs::remove_dir_all(path)?;
+    if let Err(err) = std::fs::remove_dir_all(path) {
+        return Ok(remote_error_response("delete", &repo, err));
+    }
     Ok(protocol::status_bytes(protocol::RES_OK, b"deleted"))
 }
 
@@ -688,6 +683,11 @@ fn work_error_response(err: Error) -> Vec<u8> {
 
 fn error_response(err: Error) -> Vec<u8> {
     protocol::status_bytes(protocol::RES_INVALID_REQ, err.to_string())
+}
+
+fn remote_error_response(context: &str, repository: &str, err: impl std::fmt::Display) -> Vec<u8> {
+    log::error!("rngit {context} failed for {repository}: {err}");
+    protocol::status_bytes(protocol::RES_REMOTE_FAIL, b"Remote error")
 }
 
 fn repository_destination(identity: &Identity) -> Destination {
@@ -1169,6 +1169,46 @@ mod tests {
             panic!("invalid fetch request should return status bytes");
         };
         assert_eq!(bytes[0], protocol::RES_INVALID_REQ);
+    }
+
+    #[test]
+    fn git_failures_return_generic_client_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let access = make_access(&config);
+        let repo = config.repositories_dir.join("broken");
+        create_corrupt_bare_repo(&repo);
+
+        let list = handle_list(
+            &config,
+            &access,
+            &protocol::repository_request("broken"),
+            None,
+        )
+        .unwrap();
+        assert_generic_remote_error(&list);
+
+        let fetch = handle_fetch(
+            &config,
+            &access,
+            &protocol::fetch_request("broken", &[]),
+            None,
+        )
+        .unwrap();
+        let RequestResponse::Bytes(fetch) = fetch else {
+            panic!("corrupt repository fetch should return status bytes");
+        };
+        assert_generic_remote_error(&fetch);
+
+        git::ensure_bare_repository(&config.repositories_dir.join("push-target")).unwrap();
+        let push = handle_push(
+            &config,
+            &access,
+            &protocol::push_request("push-target", b"not a git bundle".to_vec(), Vec::new()),
+            None,
+        )
+        .unwrap();
+        assert_generic_remote_error(&push);
     }
 
     #[test]
@@ -1702,6 +1742,16 @@ mod tests {
             config.repositories_dir.clone(),
         )
         .unwrap()
+    }
+
+    fn create_corrupt_bare_repo(path: &std::path::Path) {
+        std::fs::create_dir_all(path.join("objects")).unwrap();
+        std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    }
+
+    fn assert_generic_remote_error(response: &[u8]) {
+        assert_eq!(response[0], protocol::RES_REMOTE_FAIL);
+        assert_eq!(&response[1..], b"Remote error");
     }
 
     fn work_request(fields: &[(&str, Value)]) -> Vec<u8> {

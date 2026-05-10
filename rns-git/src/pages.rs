@@ -2698,6 +2698,49 @@ mod tests {
     }
 
     #[test]
+    fn page_ref_resolution_rejects_invalid_refs_before_git_lookup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/alpha"),
+            "README.md",
+            "# Alpha\n",
+        );
+        let access = access(&config);
+
+        for (path, vars) in [
+            (
+                PATH_TREE,
+                vec![
+                    ("var_g", "public"),
+                    ("var_r", "alpha"),
+                    ("var_ref", "--upload-pack=/tmp/x"),
+                ],
+            ),
+            (
+                PATH_BLOB,
+                vec![
+                    ("var_g", "public"),
+                    ("var_r", "alpha"),
+                    ("var_path", "README.md"),
+                    ("var_ref", "refs/heads/main:README.md"),
+                ],
+            ),
+            (
+                PATH_COMMITS,
+                vec![
+                    ("var_g", "public"),
+                    ("var_r", "alpha"),
+                    ("var_ref", "refs/heads/main..refs/heads/other"),
+                ],
+            ),
+        ] {
+            let err = render_page(path, &config, &access, &page_request(&vars), None).unwrap_err();
+            assert_eq!(err.to_string(), "invalid git ref");
+        }
+    }
+
+    #[test]
     fn pages_use_base_template_breadcrumbs_and_micron_links() {
         let tmp = tempfile::tempdir().unwrap();
         let config = cfg(tmp.path());
