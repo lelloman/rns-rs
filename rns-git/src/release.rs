@@ -120,7 +120,7 @@ pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
 }
 
 pub fn release_data(releases_path: &Path, tag: &str) -> Result<Option<ReleaseData>> {
-    let tag = clean_component(tag).ok_or_else(|| Error::msg("invalid tag name"))?;
+    let tag = clean_tag(tag).ok_or_else(|| Error::msg("invalid tag name"))?;
     let release_dir = releases_path.join(&tag);
     if !release_dir.is_dir() {
         return Ok(None);
@@ -160,11 +160,12 @@ pub fn create_init(
     request: &ReleaseRequest,
     remote: &[u8; 16],
 ) -> Result<Vec<u8>> {
-    let tag = request
-        .tag
-        .as_deref()
-        .and_then(clean_component)
-        .ok_or_else(|| Error::msg("invalid tag name"))?;
+    let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        ));
+    };
     if let Err(err) = verify_tag(repo_path, &tag) {
         return Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -204,11 +205,12 @@ pub fn create_init(
 }
 
 pub fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
-    let tag = request
-        .tag
-        .as_deref()
-        .and_then(clean_component)
-        .ok_or_else(|| Error::msg("invalid tag name"))?;
+    let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        ));
+    };
     let artifact_name = request
         .artifact_name
         .as_deref()
@@ -240,11 +242,12 @@ pub fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result
 }
 
 pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
-    let tag = request
-        .tag
-        .as_deref()
-        .and_then(clean_component)
-        .ok_or_else(|| Error::msg("invalid tag name"))?;
+    let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        ));
+    };
     let release_dir = releases_path.join(tag);
     if !release_dir.is_dir() {
         return Ok(protocol::status_bytes(
@@ -267,11 +270,12 @@ pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result
 }
 
 pub fn delete_release(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
-    let tag = request
-        .tag
-        .as_deref()
-        .and_then(clean_component)
-        .ok_or_else(|| Error::msg("invalid tag name"))?;
+    let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        ));
+    };
     let release_dir = releases_path.join(tag);
     if !release_dir.is_dir() {
         return Ok(protocol::status_bytes(
@@ -296,7 +300,17 @@ pub fn list_response(releases_path: &Path) -> Result<Vec<u8>> {
 }
 
 pub fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
-    match release_data(releases_path, tag)? {
+    let release = match release_data(releases_path, tag) {
+        Ok(release) => release,
+        Err(err) if err.to_string() == "invalid tag name" => {
+            return Ok(protocol::status_bytes(
+                protocol::RES_INVALID_REQ,
+                b"invalid tag name",
+            ));
+        }
+        Err(err) => return Err(err),
+    };
+    match release {
         Some(release) => Ok(protocol::status_bytes(
             protocol::RES_OK,
             msgpack::pack(&data_value(release)),
@@ -324,7 +338,7 @@ pub fn artifact_path(releases_path: &Path, tag: &str, artifact: &str) -> Result<
         };
         tag
     } else {
-        clean_component(tag).ok_or_else(|| Error::msg("invalid tag name"))?
+        clean_tag(tag).ok_or_else(|| Error::msg("invalid tag name"))?
     };
     let artifact = clean_component(artifact).ok_or_else(|| Error::msg("invalid artifact name"))?;
     let Some(release) = release_data(releases_path, &tag)? else {
@@ -538,6 +552,13 @@ fn unix_time() -> u64 {
 fn clean_component(value: &str) -> Option<String> {
     let name = Path::new(value).file_name()?.to_str()?.trim();
     (!name.is_empty() && name != "." && name != "..").then(|| name.to_string())
+}
+
+fn clean_tag(value: &str) -> Option<String> {
+    if value.contains('/') || value.contains('\\') {
+        return None;
+    }
+    clean_component(value)
 }
 
 fn map_get_repository<'a>(map: &'a [(Value, Value)]) -> Option<&'a str> {

@@ -224,11 +224,70 @@ fn release_delete_removes_sidecar_and_invalid_tags_are_rejected() {
         Some(&(REMOTE, REMOTE_SIG)),
     )
     .unwrap();
-    assert_eq!(delete[0], protocol::RES_OK);
-    assert!(!config
+    assert_eq!(delete[0], protocol::RES_INVALID_REQ);
+    assert!(config
         .repositories_dir
         .join("public/alpha.releases/v1")
         .exists());
+}
+
+#[test]
+fn release_operations_reject_slash_containing_tags() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    tag_repo(&repo_path, "v1");
+    let access_rules = access(&config);
+    assert_eq!(
+        create_release(&config, &access_rules, "public/alpha", "v1", "# Release\n")[0],
+        protocol::RES_OK
+    );
+
+    for fields in [
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("view")),
+            ("tag", strv("nested/v1")),
+        ],
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("create")),
+            ("step", strv("init")),
+            ("tag", strv("nested/v1")),
+        ],
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("create")),
+            ("step", strv("artifact")),
+            ("tag", strv("nested/v1")),
+            ("artifact_name", strv("dist.tar")),
+            ("artifact_data", binv(b"artifact")),
+        ],
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("create")),
+            ("step", strv("finalize")),
+            ("tag", strv("nested/v1")),
+        ],
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("delete")),
+            ("tag", strv("nested/v1")),
+        ],
+    ] {
+        let response = server::handle_release(
+            &config,
+            &access_rules,
+            &release_request(&fields),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(response[0], protocol::RES_INVALID_REQ, "{fields:?}");
+    }
 }
 
 #[test]
