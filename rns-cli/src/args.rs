@@ -44,7 +44,7 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" => {
+                        | "export-prv" | "pr-stats" | "burst" | "hex" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {

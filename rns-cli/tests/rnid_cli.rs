@@ -95,6 +95,24 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+fn rsg_ascii_block(stdout: &str) -> String {
+    let mut block = Vec::new();
+    let mut in_block = false;
+    for line in stdout.lines() {
+        if line.starts_with("#### Start of rsg data ") {
+            in_block = true;
+        }
+        if in_block {
+            block.push(line);
+        }
+        if line.ends_with(" End of rsg data ####") {
+            break;
+        }
+    }
+    assert!(!block.is_empty(), "no wrapped rsg block in:\n{}", stdout);
+    block.join("\n")
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -209,6 +227,39 @@ fn rsg_sign_validate_and_tamper_detection() {
     fs::write(&msg, b"tampered").unwrap();
     let failure = assert_failure(rnid(&["-V", &path_str(&sig)]));
     assert!(failure.contains("Invalid signature"));
+}
+
+#[test]
+fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let msg = dir.path().join("message.txt");
+    let sig = dir.path().join("message.txt.rsg");
+    let rid_s = path_str(&rid);
+    let msg_s = path_str(&msg);
+    let sig_s = path_str(&sig);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&msg, b"ascii wrapped signatures").unwrap();
+    fs::write(&sig, b"keep existing binary signature").unwrap();
+
+    let hex_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "--hex"]));
+    assert_eq!(fs::read(&sig).unwrap(), b"keep existing binary signature");
+    fs::write(&sig, rsg_ascii_block(&hex_stdout)).unwrap();
+    assert_success(rnid(&["-V", &sig_s]));
+
+    let base32_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "-B"]));
+    fs::write(&sig, rsg_ascii_block(&base32_stdout)).unwrap();
+    assert_success(rnid(&["-V", &sig_s]));
+
+    let base64_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "-b"]));
+    fs::write(&sig, rsg_ascii_block(&base64_stdout)).unwrap();
+    assert_success(rnid(&["-V", &sig_s]));
+}
+
+#[test]
+fn hex_base32_and_base64_rsg_flags_are_mutually_exclusive() {
+    let failure = assert_failure(rnid(&["--hex", "-b"]));
+    assert!(failure.contains("-b, -B and --hex"));
 }
 
 #[test]

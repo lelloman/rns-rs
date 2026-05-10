@@ -25,10 +25,21 @@ const PUB_EXT: &str = "pub";
 const SIG_EXT: &str = "rsg";
 const ENCRYPT_EXT: &str = "rfe";
 const SIG_LEN: usize = 64;
+const RSG_ASCII_HEADER: &str = "#### Start of rsg data ";
+const RSG_ASCII_FOOTER: &str = " End of rsg data ####";
+const RSG_ASCII_ROW_WIDTH: usize = 64;
 
 enum IdentityRef {
     Identity(Identity),
     Hash([u8; 16]),
+}
+
+#[derive(Clone, Copy)]
+enum RsgOutputFormat {
+    Binary,
+    Hex,
+    Base32,
+    Base64,
 }
 
 fn main() {
@@ -152,8 +163,16 @@ fn validate_args(args: &Args) -> Result<(), String> {
         return Err("The -i, -g, -m and -M options are mutually exclusive".into());
     }
 
-    if (args.has("b") || args.has("base64")) && (args.has("B") || args.has("base32")) {
-        return Err("The -b and -B options are mutually exclusive".into());
+    let output_formats = [
+        args.has("b") || args.has("base64"),
+        args.has("B") || args.has("base32"),
+        args.has("hex"),
+    ]
+    .into_iter()
+    .filter(|v| *v)
+    .count();
+    if output_formats > 1 {
+        return Err("The -b, -B and --hex options are mutually exclusive".into());
     }
 
     Ok(())
@@ -481,6 +500,7 @@ fn sign_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String>
         .or_else(|| args.get("write"))
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}.{}", path, SIG_EXT));
+    let output_format = rsg_output_format(args);
 
     let signature = if args.has("raw") {
         identity.sign(&data).map(|sig| sig.to_vec()).map_err(|_| {
@@ -493,7 +513,14 @@ fn sign_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String>
         create_rsg(identity, &data)?
     };
 
-    if args.has("stdout") {
+    if !args.has("raw") && !matches!(output_format, RsgOutputFormat::Binary) {
+        println!("{}", wrap_rsg_ascii(&encode_rsg(&signature, output_format)));
+        println!(
+            "Signed file {} with {}",
+            path,
+            prettyhexrep(identity.hash())
+        );
+    } else if args.has("stdout") {
         io::stdout()
             .write_all(&signature)
             .map_err(|e| format!("Error writing to stdout: {}", e))?;
@@ -521,8 +548,14 @@ fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), 
 
     let message = fs::read(&file_path)
         .map_err(|e| format!("Could not read validation target {}: {}", file_path, e))?;
-    let signature = fs::read(&signature_path)
+    let signature_input = fs::read(&signature_path)
         .map_err(|e| format!("Could not read signature {}: {}", signature_path, e))?;
+    let signature = decode_rsg_data(&signature_input).ok_or_else(|| {
+        format!(
+            "Invalid signature {} for file {}",
+            signature_path, file_path
+        )
+    })?;
 
     if signature.len() == SIG_LEN {
         let Some(IdentityRef::Identity(identity)) = required else {
@@ -608,6 +641,108 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
     rsg.extend_from_slice(&signature);
     rsg.extend_from_slice(&envelope);
     Ok(rsg)
+}
+
+fn rsg_output_format(args: &Args) -> RsgOutputFormat {
+    if args.has("hex") {
+        RsgOutputFormat::Hex
+    } else if args.has("B") || args.has("base32") {
+        RsgOutputFormat::Base32
+    } else if args.has("b") || args.has("base64") {
+        RsgOutputFormat::Base64
+    } else {
+        RsgOutputFormat::Binary
+    }
+}
+
+fn encode_rsg(rsg: &[u8], format: RsgOutputFormat) -> String {
+    match format {
+        RsgOutputFormat::Binary => String::from_utf8_lossy(rsg).into_owned(),
+        RsgOutputFormat::Hex => prettyhexrep(rsg),
+        RsgOutputFormat::Base32 => base32_encode(rsg),
+        RsgOutputFormat::Base64 => base64_encode(rsg),
+    }
+}
+
+fn wrap_rsg_ascii(encoded: &str) -> String {
+    let header = format!(
+        "{}{}",
+        RSG_ASCII_HEADER,
+        "#".repeat(RSG_ASCII_ROW_WIDTH - RSG_ASCII_HEADER.len())
+    );
+    let footer = format!(
+        "{}{}",
+        "#".repeat(RSG_ASCII_ROW_WIDTH - RSG_ASCII_FOOTER.len()),
+        RSG_ASCII_FOOTER
+    );
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    for chunk in encoded.as_bytes().chunks(RSG_ASCII_ROW_WIDTH) {
+        let mut line = String::from_utf8_lossy(chunk).into_owned();
+        if line.len() < RSG_ASCII_ROW_WIDTH {
+            line.push_str(&"=".repeat(RSG_ASCII_ROW_WIDTH - line.len()));
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push_str(&footer);
+    out
+}
+
+fn unwrap_rsg_ascii(input: &str) -> Option<String> {
+    let mut out = String::new();
+    for line in input.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        out.push_str(line);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.trim_end_matches('=').to_string())
+    }
+}
+
+fn decode_rsg_data(input: &[u8]) -> Option<Vec<u8>> {
+    if input.len() == SIG_LEN {
+        return Some(input.to_vec());
+    }
+    let Ok(text) = std::str::from_utf8(input) else {
+        return Some(input.to_vec());
+    };
+    let wrapped = text.contains(RSG_ASCII_HEADER);
+    let encoded = unwrap_rsg_ascii(text).unwrap_or_else(|| {
+        text.chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+    });
+    if encoded.is_empty() {
+        return None;
+    }
+    if !wrapped
+        && !encoded
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '-' | '_' | '='))
+    {
+        return Some(input.to_vec());
+    }
+    let encoded = encoded.trim_end_matches('=').to_string();
+    if encoded.len() % 2 == 0 && encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        if let Some(decoded) = parse_hex(&encoded) {
+            return Some(decoded);
+        }
+    }
+    if encoded
+        .chars()
+        .all(|ch| matches!(ch, 'A'..='Z' | 'a'..='z' | '2'..='7'))
+    {
+        if let Some(decoded) = base32_decode(&encoded) {
+            return Some(decoded);
+        }
+    }
+    base64_decode(&encoded).or_else(|| if wrapped { None } else { Some(input.to_vec()) })
 }
 
 enum RsgValidation {
@@ -908,6 +1043,7 @@ fn print_usage() {
     println!("Formatting and I/O:");
     println!("  -b                 Use base64 for identity import/export");
     println!("  -B                 Use base32 for identity import/export");
+    println!("  --hex              Use hex for RSG signature output");
     println!("  -Z, --base256      Also print compact base256 hash display");
     println!("  -f, --force        Force overwrite existing files");
     println!("  --stdin            Read operation input from stdin");
@@ -957,6 +1093,38 @@ mod tests {
             validate_rsg(&rsg, b"message", Some(*other.hash())).unwrap(),
             RsgValidation::WrongSigner { .. }
         ));
+    }
+
+    #[test]
+    fn rsg_ascii_wrapping_pads_rows_and_decodes() {
+        let wrapped = wrap_rsg_ascii("abcdef");
+        let lines: Vec<&str> = wrapped.lines().collect();
+
+        assert_eq!(lines[0].len(), RSG_ASCII_ROW_WIDTH);
+        assert_eq!(lines[1].len(), RSG_ASCII_ROW_WIDTH);
+        assert_eq!(lines[2].len(), RSG_ASCII_ROW_WIDTH);
+        assert_eq!(unwrap_rsg_ascii(&wrapped).unwrap(), "abcdef");
+    }
+
+    #[test]
+    fn rsg_validation_accepts_wrapped_ascii_formats() {
+        let identity = test_identity(5);
+        let message = b"message";
+        let rsg = create_rsg(&identity, message).unwrap();
+
+        for format in [
+            RsgOutputFormat::Hex,
+            RsgOutputFormat::Base32,
+            RsgOutputFormat::Base64,
+        ] {
+            let encoded = encode_rsg(&rsg, format);
+            let wrapped = wrap_rsg_ascii(&encoded);
+            let decoded = decode_rsg_data(wrapped.as_bytes()).unwrap();
+            assert!(matches!(
+                validate_rsg(&decoded, message, None).unwrap(),
+                RsgValidation::Valid { .. }
+            ));
+        }
     }
 
     #[test]
