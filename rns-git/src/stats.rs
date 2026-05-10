@@ -292,7 +292,10 @@ fn load(config: &ServerConfig) -> StatsData {
 
 fn persist(config: &ServerConfig, data: &StatsData) -> Result<()> {
     fs::create_dir_all(&config.dir)?;
-    fs::write(config.dir.join("stats"), msgpack::pack(&data.to_value()))?;
+    let path = config.dir.join("stats");
+    let tmp_path = config.dir.join("stats.tmp");
+    fs::write(&tmp_path, msgpack::pack(&data.to_value()))?;
+    fs::rename(tmp_path, path)?;
     Ok(())
 }
 
@@ -577,5 +580,51 @@ mod tests {
             decoded.groups["public"].repositories["alpha"].fetch["2026-05-05"],
             2
         );
+    }
+
+    #[test]
+    fn persist_keeps_existing_stats_when_temp_write_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(tmp.path());
+        fs::create_dir_all(&config.dir).unwrap();
+        let stats_path = config.dir.join("stats");
+        fs::write(&stats_path, b"old stats").unwrap();
+        fs::create_dir(config.dir.join("stats.tmp")).unwrap();
+
+        let mut data = StatsData::default();
+        data.pages.front.insert("2026-05-05".into(), 1);
+
+        let err = persist(&config, &data).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Is a directory") || err.to_string().contains("os error"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&stats_path).unwrap(), b"old stats");
+    }
+
+    fn test_config(root: &std::path::Path) -> ServerConfig {
+        ServerConfig {
+            dir: root.to_path_buf(),
+            reticulum_dir: None,
+            repositories_dir: root.join("repositories"),
+            identity_path: root.join("repositories_identity"),
+            client_identity_path: root.join("client_identity"),
+            node_name: "Anonymous Git Node".into(),
+            announce_interval_secs: 300,
+            serve_nomadnet: false,
+            templates_dir: root.join("templates"),
+            unicode_icons: false,
+            record_stats: true,
+            stats_ignore_identities: Vec::new(),
+            allow_read: vec!["all".into()],
+            allow_write: vec!["all".into()],
+            allow_create: vec!["all".into()],
+            allow_stats: vec!["all".into()],
+            allow_release: vec!["none".into()],
+            allow_interact: vec!["none".into()],
+            allow_admin: vec!["none".into()],
+            log_level: crate::logging::DEFAULT_LOG_LEVEL,
+        }
     }
 }

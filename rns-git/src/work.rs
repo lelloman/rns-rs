@@ -10,7 +10,7 @@ use crate::util::validate_repo_name;
 use crate::util::{hex, parse_hex_16};
 use crate::{Error, Result};
 
-pub const WORK_DOC_LIMIT: usize = 256 * 1024 * 1024;
+pub const WORK_DOC_LIMIT: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkScope {
@@ -1077,6 +1077,43 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn document_content_limit_matches_upstream_256_kib() {
+        assert_eq!(WORK_DOC_LIMIT, 256 * 1024);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let work_path = tmp.path().join("repo.work");
+        let title = "title";
+        let format = "markdown";
+        let at_limit = "x".repeat(WORK_DOC_LIMIT - title.len() - format.len());
+        let over_limit = "x".repeat(WORK_DOC_LIMIT - title.len() - format.len() + 1);
+
+        create_document(
+            &work_path,
+            WorkInput {
+                title: title.into(),
+                content: at_limit,
+                format: format.into(),
+                signature: None,
+                author: AUTHOR,
+            },
+        )
+        .unwrap();
+
+        let err = create_document(
+            &work_path,
+            WorkInput {
+                title: title.into(),
+                content: over_limit,
+                format: format.into(),
+                signature: None,
+                author: AUTHOR,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "content limit exceeded");
     }
 
     fn create_sample(work_path: &Path, title: &str) -> Result<WorkCreated> {
