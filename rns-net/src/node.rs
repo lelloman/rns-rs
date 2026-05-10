@@ -16,9 +16,9 @@ use rns_crypto::identity::Identity;
 use rns_crypto::{OsRng, Rng};
 
 use crate::config;
+use crate::driver::{AnnounceRateDefaults, Callbacks, Driver};
 #[cfg(feature = "iface-backbone")]
 use crate::driver::{BackbonePeerPoolCandidateConfig, BackbonePeerPoolSettings};
-use crate::driver::{Callbacks, Driver};
 use crate::event::{self, Event, EventSender};
 use crate::ifac;
 #[cfg(feature = "iface-auto")]
@@ -363,12 +363,13 @@ fn register_started_interface(
     tx: &EventSender,
     queue_capacity: usize,
     id: rns_core::transport::types::InterfaceId,
-    info: rns_core::transport::types::InterfaceInfo,
+    mut info: rns_core::transport::types::InterfaceInfo,
     writer: Box<dyn crate::interface::Writer>,
     interface_type_name: String,
     ifac_state: Option<crate::ifac::IfacState>,
     ifac_runtime: &crate::driver::IfacRuntimeConfig,
 ) {
+    driver.apply_announce_rate_defaults(&mut info);
     let (writer, async_writer_metrics) =
         crate::interface::wrap_async_writer(writer, id, &info.name, tx.clone(), queue_capacity);
     driver.register_interface_runtime_defaults(&info);
@@ -461,6 +462,8 @@ pub struct NodeConfig {
     pub driver_event_queue_capacity: usize,
     /// Maximum queued outbound frames per interface writer worker.
     pub interface_writer_queue_capacity: usize,
+    /// Default announce-rate controls applied to interfaces when transport is enabled.
+    pub announce_rate_defaults: AnnounceRateDefaults,
     /// Outbound Backbone peer-pool settings. Disabled when `None`.
     #[cfg(feature = "iface-backbone")]
     pub backbone_peer_pool: Option<BackbonePeerPoolSettings>,
@@ -514,6 +517,7 @@ impl Default for NodeConfig {
             announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
             driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -845,6 +849,11 @@ impl RnsNode {
             announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
             driver_event_queue_capacity: rns_config.reticulum.driver_event_queue_capacity,
             interface_writer_queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
+            announce_rate_defaults: AnnounceRateDefaults {
+                target: rns_config.reticulum.default_ar_target,
+                penalty: rns_config.reticulum.default_ar_penalty,
+                grace: rns_config.reticulum.default_ar_grace,
+            },
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: if rns_config.reticulum.backbone_peer_pool_max_connected > 0 {
                 Some(BackbonePeerPoolSettings {
@@ -985,6 +994,7 @@ impl RnsNode {
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
         driver.ratchet_store = config.ratchet_store.clone();
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
+        driver.set_announce_rate_defaults(config.announce_rate_defaults);
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
         #[cfg(feature = "hooks")]
@@ -2578,6 +2588,7 @@ impl RnsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::driver::IfacRuntimeConfig;
     use crate::storage::RatchetStore;
     use std::fs;
     use tempfile::tempdir;
@@ -2594,6 +2605,96 @@ mod tests {
             _: rns_core::types::PacketHash,
         ) {
         }
+    }
+
+    struct TestWriter;
+
+    impl crate::interface::Writer for TestWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_transport_config(transport_enabled: bool) -> TransportConfig {
+        TransportConfig {
+            transport_enabled,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        }
+    }
+
+    fn test_interface_info(id: u64) -> rns_core::transport::types::InterfaceInfo {
+        rns_core::transport::types::InterfaceInfo {
+            id: rns_core::transport::types::InterfaceId(id),
+            name: format!("test-{id}"),
+            mode: rns_core::constants::MODE_FULL,
+            out_capable: true,
+            in_capable: true,
+            bitrate: None,
+            airtime_profile: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: rns_core::constants::MTU as u32,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+            ia_freq: 0.0,
+            started: 0.0,
+        }
+    }
+
+    #[test]
+    fn static_interface_registration_applies_transport_announce_rate_defaults() {
+        let (tx, rx) = crate::event::channel();
+        let mut driver = Driver::new(
+            test_transport_config(true),
+            rx,
+            tx.clone(),
+            Box::new(NoopCallbacks),
+        );
+        driver.set_announce_rate_defaults(AnnounceRateDefaults {
+            target: Some(7200.0),
+            penalty: 15.0,
+            grace: 7,
+        });
+
+        let id = rns_core::transport::types::InterfaceId(7);
+        register_started_interface(
+            &mut driver,
+            &tx,
+            crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            id,
+            test_interface_info(id.0),
+            Box::new(TestWriter),
+            "TestInterface".to_string(),
+            None,
+            &IfacRuntimeConfig {
+                netname: None,
+                netkey: None,
+                size: 16,
+            },
+        );
+
+        let info = &driver.interfaces[&id].info;
+        assert_eq!(info.announce_rate_target, Some(7200.0));
+        assert_eq!(info.announce_rate_penalty, 15.0);
+        assert_eq!(info.announce_rate_grace, 7);
     }
 
     struct TestNodeRatchetStore {
@@ -2849,6 +2950,7 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3070,6 +3172,7 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3128,6 +3231,7 @@ mod tests {
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3665,6 +3769,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3732,6 +3837,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3795,6 +3901,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3855,6 +3962,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3955,6 +4063,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4023,6 +4132,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4089,6 +4199,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4168,6 +4279,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4237,6 +4349,7 @@ enable_transport = False
                 driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+                announce_rate_defaults: AnnounceRateDefaults::default(),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,

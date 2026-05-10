@@ -39,7 +39,7 @@ pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
 #[cfg(feature = "iface-backbone")]
 pub use driver::BackbonePeerPoolSettings;
-pub use driver::Callbacks;
+pub use driver::{AnnounceRateDefaults, Callbacks};
 pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
     BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry,

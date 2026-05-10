@@ -90,6 +90,12 @@ pub struct ReticulumSection {
     pub announce_queue_max_entries: usize,
     /// Maximum interface-scoped announce queues retained.
     pub announce_queue_max_interfaces: usize,
+    /// Default announce-rate target for transport-node interfaces, in seconds.
+    pub default_ar_target: Option<f64>,
+    /// Default announce-rate penalty for transport-node interfaces, in seconds.
+    pub default_ar_penalty: f64,
+    /// Default announce-rate grace count for transport-node interfaces.
+    pub default_ar_grace: u32,
     /// Maximum retained bytes in the async announce verification queue.
     pub announce_queue_max_bytes: usize,
     /// TTL for queued async announce verification entries, in seconds.
@@ -157,6 +163,9 @@ impl Default for ReticulumSection {
             announce_sig_cache_ttl: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
             announce_queue_max_entries: 256,
             announce_queue_max_interfaces: 1024,
+            default_ar_target: Some(3600.0),
+            default_ar_penalty: 0.0,
+            default_ar_grace: 5,
             announce_queue_max_bytes: 256 * 1024,
             announce_queue_ttl: 30,
             announce_queue_overflow_policy: "drop_worst".into(),
@@ -750,6 +759,39 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         }
         section.announce_queue_max_interfaces = n;
     }
+    if let Some(v) = kvs.get("default_ar_target") {
+        let target = v.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
+            key: "default_ar_target".into(),
+            value: v.clone(),
+        })?;
+        if !target.is_finite() || target < 0.0 {
+            return Err(ConfigError::InvalidValue {
+                key: "default_ar_target".into(),
+                value: v.clone(),
+            });
+        }
+        section.default_ar_target = if target == 0.0 { None } else { Some(target) };
+    }
+    if let Some(v) = kvs.get("default_ar_penalty") {
+        let penalty = v.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
+            key: "default_ar_penalty".into(),
+            value: v.clone(),
+        })?;
+        if !penalty.is_finite() || penalty < 0.0 {
+            return Err(ConfigError::InvalidValue {
+                key: "default_ar_penalty".into(),
+                value: v.clone(),
+            });
+        }
+        section.default_ar_penalty = penalty;
+    }
+    if let Some(v) = kvs.get("default_ar_grace") {
+        let grace = v.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
+            key: "default_ar_grace".into(),
+            value: v.clone(),
+        })?;
+        section.default_ar_grace = grace;
+    }
     if let Some(v) = kvs.get("announce_queue_max_bytes") {
         let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
             key: "announce_queue_max_bytes".into(),
@@ -1062,6 +1104,56 @@ backbone_peer_pool_cooldown = 300
         assert_eq!(config.reticulum.backbone_peer_pool_failure_threshold, 4);
         assert_eq!(config.reticulum.backbone_peer_pool_failure_window, 120);
         assert_eq!(config.reticulum.backbone_peer_pool_cooldown, 300);
+    }
+
+    #[test]
+    fn parse_reticulum_announce_rate_defaults() {
+        let input = r#"
+[reticulum]
+default_ar_target = 7200
+default_ar_penalty = 15
+default_ar_grace = 7
+"#;
+        let config = parse(input).unwrap();
+
+        assert_eq!(config.reticulum.default_ar_target, Some(7200.0));
+        assert_eq!(config.reticulum.default_ar_penalty, 15.0);
+        assert_eq!(config.reticulum.default_ar_grace, 7);
+    }
+
+    #[test]
+    fn parse_reticulum_announce_rate_target_zero_disables_default() {
+        let input = r#"
+[reticulum]
+default_ar_target = 0
+default_ar_penalty = 0
+default_ar_grace = 0
+"#;
+        let config = parse(input).unwrap();
+
+        assert_eq!(config.reticulum.default_ar_target, None);
+        assert_eq!(config.reticulum.default_ar_penalty, 0.0);
+        assert_eq!(config.reticulum.default_ar_grace, 0);
+    }
+
+    #[test]
+    fn parse_reticulum_announce_rate_defaults_reject_negative_values() {
+        for (key, value) in [
+            ("default_ar_target", "-1"),
+            ("default_ar_target", "NaN"),
+            ("default_ar_target", "inf"),
+            ("default_ar_penalty", "-1"),
+            ("default_ar_penalty", "NaN"),
+            ("default_ar_penalty", "inf"),
+            ("default_ar_grace", "-1"),
+        ] {
+            let input = format!("[reticulum]\n{key} = {value}\n");
+            let err = parse(&input).unwrap_err();
+            assert!(
+                err.to_string().contains(key),
+                "error {err:?} should mention {key}"
+            );
+        }
     }
 
     #[test]

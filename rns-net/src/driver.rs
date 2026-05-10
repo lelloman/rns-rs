@@ -79,6 +79,24 @@ const DEFAULT_LINK_TEARDOWN_FLUSH: Duration = Duration::from_millis(150);
 const SEND_RETRY_BACKOFF_MIN: Duration = Duration::from_millis(25);
 const SEND_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(1000);
 
+/// Default announce-rate controls applied to transport-node interfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnnounceRateDefaults {
+    pub target: Option<f64>,
+    pub penalty: f64,
+    pub grace: u32,
+}
+
+impl Default for AnnounceRateDefaults {
+    fn default() -> Self {
+        Self {
+            target: Some(3600.0),
+            penalty: 0.0,
+            grace: 5,
+        }
+    }
+}
+
 mod dispatch;
 mod events;
 mod lifecycle;
@@ -587,6 +605,8 @@ pub struct Driver {
     pub(crate) event_tx: crate::event::EventSender,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
+    /// Default announce-rate controls for interfaces on transport nodes.
+    pub(crate) announce_rate_defaults: AnnounceRateDefaults,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
@@ -770,6 +790,7 @@ impl Driver {
             ),
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: AnnounceRateDefaults::default(),
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
@@ -853,6 +874,31 @@ impl Driver {
             max_stale_secs,
             overflow_policy,
         )));
+    }
+
+    pub fn set_announce_rate_defaults(&mut self, defaults: AnnounceRateDefaults) {
+        self.announce_rate_defaults = defaults;
+    }
+
+    pub(crate) fn apply_announce_rate_defaults(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        if !self.engine.transport_enabled() || info.announce_rate_target.is_some() {
+            return;
+        }
+
+        let Some(target) = self.announce_rate_defaults.target else {
+            return;
+        };
+
+        info.announce_rate_target = Some(target);
+        if info.announce_rate_grace == 0 {
+            info.announce_rate_grace = self.announce_rate_defaults.grace;
+        }
+        if info.announce_rate_penalty == 0.0 {
+            info.announce_rate_penalty = self.announce_rate_defaults.penalty;
+        }
     }
 
     fn wrap_interface_writer(

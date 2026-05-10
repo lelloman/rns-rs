@@ -1113,7 +1113,26 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::String("oa_freq".into()),
             PickleValue::Float(s.oa_freq),
         ),
+        (
+            PickleValue::String("announce_rate_grace".into()),
+            PickleValue::Int(s.announce_rate_grace as i64),
+        ),
+        (
+            PickleValue::String("announce_rate_penalty".into()),
+            PickleValue::Float(s.announce_rate_penalty),
+        ),
     ];
+
+    match s.announce_rate_target {
+        Some(target) => dict.push((
+            PickleValue::String("announce_rate_target".into()),
+            PickleValue::Float(target),
+        )),
+        None => dict.push((
+            PickleValue::String("announce_rate_target".into()),
+            PickleValue::None,
+        )),
+    }
 
     match s.bitrate {
         Some(br) => dict.push((
@@ -2489,6 +2508,9 @@ mod tests {
                             started: 1000.0,
                             ia_freq: 0.0,
                             oa_freq: 0.0,
+                            announce_rate_target: Some(3600.0),
+                            announce_rate_grace: 5,
+                            announce_rate_penalty: 0.0,
                             interface_type: "TestInterface".into(),
                         }],
                         transport_id: None,
@@ -2678,6 +2700,9 @@ mod tests {
                 started: 1000.0,
                 ia_freq: 0.0,
                 oa_freq: 0.0,
+                announce_rate_target: Some(3600.0),
+                announce_rate_grace: 5,
+                announce_rate_penalty: 0.0,
                 interface_type: "TCPClientInterface".into(),
             }],
             transport_id: Some([0xAB; 16]),
@@ -2701,6 +2726,30 @@ mod tests {
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        assert_eq!(
+            ifaces[0]
+                .get("announce_rate_target")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            3600.0
+        );
+        assert_eq!(
+            ifaces[0]
+                .get("announce_rate_grace")
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            ifaces[0]
+                .get("announce_rate_penalty")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            0.0
+        );
     }
 
     #[test]

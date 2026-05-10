@@ -375,11 +375,26 @@ fn print_status(
                     .get("oa_freq")
                     .and_then(|v| v.as_float())
                     .unwrap_or(0.0);
+                let ar_target = iface.get("announce_rate_target").and_then(|v| v.as_float());
+                let ar_penalty = iface
+                    .get("announce_rate_penalty")
+                    .and_then(|v| v.as_float());
+                let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
                 println!(
                     "    Announces : {} in  {} out",
                     prettyfrequency(ia_freq),
                     prettyfrequency(oa_freq),
                 );
+                if let Some(target) = ar_target {
+                    let mut parts = vec![format!("target {}", prettytime(target))];
+                    if let Some(penalty) = ar_penalty {
+                        parts.push(format!("penalty {}", prettytime(penalty)));
+                    }
+                    if let Some(grace) = ar_grace {
+                        parts.push(format!("grace {}", grace));
+                    }
+                    println!("                {}", parts.join(", "));
+                }
             }
             println!();
         }

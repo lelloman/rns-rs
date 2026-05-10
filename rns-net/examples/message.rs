@@ -203,6 +203,7 @@ fn main() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -291,6 +292,7 @@ fn main() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -376,6 +378,7 @@ fn main() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,

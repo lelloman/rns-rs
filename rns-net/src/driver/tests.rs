@@ -178,9 +178,9 @@ impl MockCallbacks {
     }
 }
 
-fn new_test_driver() -> Driver {
-    let transport_config = TransportConfig {
-        transport_enabled: false,
+fn make_transport_config(transport_enabled: bool) -> TransportConfig {
+    TransportConfig {
+        transport_enabled,
         identity_hash: None,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
@@ -196,7 +196,11 @@ fn new_test_driver() -> Driver {
         announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
         announce_queue_max_entries: 256,
         announce_queue_max_interfaces: 1024,
-    };
+    }
+}
+
+fn new_test_driver() -> Driver {
+    let transport_config = make_transport_config(false);
     let (callbacks, _, _, _, _, _) = MockCallbacks::new();
     let (tx, rx) = event::channel();
     let mut driver = Driver::new(transport_config, rx, tx, Box::new(callbacks));
@@ -1952,29 +1956,7 @@ fn interface_up_refreshes_writer() {
 fn dynamic_interface_register() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, iface_ups, _) = MockCallbacks::new();
-    let mut driver = Driver::new(
-        TransportConfig {
-            transport_enabled: false,
-            identity_hash: None,
-            prefer_shorter_path: false,
-            max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
-            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
-            max_path_destinations: usize::MAX,
-            max_tunnel_destinations_total: usize::MAX,
-            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
-            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
-            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
-            announce_sig_cache_enabled: true,
-            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
-            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
-            announce_queue_max_entries: 256,
-            announce_queue_max_interfaces: 1024,
-        },
-        rx,
-        tx.clone(),
-        Box::new(cbs),
-    );
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
 
     let info = make_interface_info(100);
     let (writer, sent) = MockWriter::new();
@@ -2006,6 +1988,93 @@ fn dynamic_interface_register() {
     wait_for_sent_len(&sent, 1);
 
     drop(tx);
+}
+
+#[test]
+fn dynamic_interface_applies_transport_announce_rate_defaults() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx.clone(), Box::new(cbs));
+    driver.set_announce_rate_defaults(AnnounceRateDefaults {
+        target: Some(7200.0),
+        penalty: 15.0,
+        grace: 7,
+    });
+
+    let info = make_interface_info(100);
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let info = &driver.interfaces[&InterfaceId(100)].info;
+    assert_eq!(info.announce_rate_target, Some(7200.0));
+    assert_eq!(info.announce_rate_penalty, 15.0);
+    assert_eq!(info.announce_rate_grace, 7);
+}
+
+#[test]
+fn dynamic_interface_keeps_explicit_announce_rate_values() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx.clone(), Box::new(cbs));
+    driver.set_announce_rate_defaults(AnnounceRateDefaults {
+        target: Some(7200.0),
+        penalty: 15.0,
+        grace: 7,
+    });
+
+    let mut info = make_interface_info(100);
+    info.announce_rate_target = Some(120.0);
+    info.announce_rate_penalty = 2.0;
+    info.announce_rate_grace = 3;
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let info = &driver.interfaces[&InterfaceId(100)].info;
+    assert_eq!(info.announce_rate_target, Some(120.0));
+    assert_eq!(info.announce_rate_penalty, 2.0);
+    assert_eq!(info.announce_rate_grace, 3);
+}
+
+#[test]
+fn dynamic_interface_skips_announce_rate_defaults_without_transport() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+    driver.set_announce_rate_defaults(AnnounceRateDefaults {
+        target: Some(7200.0),
+        penalty: 15.0,
+        grace: 7,
+    });
+
+    let info = make_interface_info(100);
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let info = &driver.interfaces[&InterfaceId(100)].info;
+    assert_eq!(info.announce_rate_target, None);
+    assert_eq!(info.announce_rate_penalty, 0.0);
+    assert_eq!(info.announce_rate_grace, 0);
 }
 
 #[test]
@@ -4291,6 +4360,26 @@ fn runtime_config_lists_generic_interface_keys() {
     assert!(keys.contains(&"interface.public.ifac_netname".to_string()));
     assert!(keys.contains(&"interface.public.ifac_passphrase".to_string()));
     assert!(keys.contains(&"interface.public.ifac_size_bytes".to_string()));
+}
+
+#[test]
+fn interface_stats_include_announce_rate_control_values() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "public");
+
+    let response = driver.handle_query(QueryRequest::InterfaceStats);
+    let QueryResponse::InterfaceStats(stats) = response else {
+        panic!("expected interface stats");
+    };
+    let public = stats
+        .interfaces
+        .iter()
+        .find(|iface| iface.name == "public")
+        .expect("public interface stats should be present");
+
+    assert_eq!(public.announce_rate_target, Some(1.5));
+    assert_eq!(public.announce_rate_grace, 2);
+    assert_eq!(public.announce_rate_penalty, 0.25);
 }
 
 #[test]

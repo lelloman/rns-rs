@@ -627,6 +627,7 @@ fn start_transport_node_with_limits(
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -722,6 +723,7 @@ fn start_client_node_with_packet_hashlist(
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -1197,6 +1199,7 @@ fn test_direct_link_no_transport() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -1797,6 +1800,7 @@ fn test_plain_message_delivery() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -2030,6 +2034,7 @@ fn test_group_message_delivery() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -2145,6 +2150,7 @@ fn test_group_wrong_key_fails() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3371,6 +3377,7 @@ fn test_udp_announce_and_message() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3441,6 +3448,7 @@ fn test_udp_announce_and_message() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3615,6 +3623,7 @@ fn discovery_announce_received_by_client() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3690,6 +3699,7 @@ fn discovery_announce_received_by_client() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3824,6 +3834,7 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3910,6 +3921,7 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3983,6 +3995,7 @@ fn discovery_announce_through_relay() {
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -4098,6 +4111,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,

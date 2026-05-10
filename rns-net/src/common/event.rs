@@ -685,6 +685,12 @@ pub struct SingleInterfaceStat {
     pub ia_freq: f64,
     /// Outgoing announce frequency (per second).
     pub oa_freq: f64,
+    /// Target interval for outgoing announce rate control, in seconds.
+    pub announce_rate_target: Option<f64>,
+    /// Announce-rate control grace count.
+    pub announce_rate_grace: u32,
+    /// Announce-rate control penalty, in seconds.
+    pub announce_rate_penalty: f64,
     /// Human-readable interface type string (e.g. "TCPClientInterface").
     pub interface_type: String,
 }
