@@ -293,19 +293,18 @@ fn load_or_decode_key(spec: &str, expected_len: usize, args: &Args) -> Result<Ve
 }
 
 fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Identity>, String> {
-    let mut client = rpc_client(args)?;
     let mut default_parts = DEFAULT_ASPECTS.split('.');
     let app_name = default_parts.next().unwrap_or("rns");
     let aspects: Vec<&str> = default_parts.collect();
     let id_dest_hash = destination_hash(app_name, &aspects, Some(&requested_hash));
 
-    client
+    rpc_client(args)?
         .call(&rns_net::pickle::PickleValue::Dict(vec![(
             rns_net::pickle::PickleValue::String("request_path".into()),
             rns_net::pickle::PickleValue::Bytes(requested_hash.to_vec()),
         )]))
         .map_err(|e| format!("Could not request destination path: {}", e))?;
-    client
+    rpc_client(args)?
         .call(&rns_net::pickle::PickleValue::Dict(vec![(
             rns_net::pickle::PickleValue::String("request_path".into()),
             rns_net::pickle::PickleValue::Bytes(id_dest_hash.to_vec()),
@@ -319,11 +318,13 @@ fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Iden
     let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
 
     loop {
-        let entries = client
+        let entries = rpc_client(args)?
             .known_destinations()
             .map_err(|e| format!("Could not query known destinations: {}", e))?;
         if let Some(entry) = find_identity_entry(&entries, requested_hash) {
-            let retained = client.retain_identity(entry.identity_hash).unwrap_or(false);
+            let retained = rpc_client(args)?
+                .retain_identity(entry.identity_hash)
+                .unwrap_or(false);
             if retained {
                 println!("Retained Identity {}", prettyhexrep(&entry.identity_hash));
             }

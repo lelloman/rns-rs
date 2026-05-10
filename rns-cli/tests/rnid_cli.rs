@@ -1,6 +1,29 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use rns_core::destination::destination_hash;
+use rns_crypto::identity::Identity;
+use rns_crypto::OsRng;
+use rns_net::{Callbacks, QueryRequest, QueryResponse, RnsNode};
+
+struct NoopCallbacks;
+
+impl Callbacks for NoopCallbacks {
+    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
+
+    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
+
+    fn on_local_delivery(
+        &mut self,
+        _dest_hash: rns_net::DestHash,
+        _raw: Vec<u8>,
+        _packet_hash: rns_net::PacketHash,
+    ) {
+    }
+}
 
 fn rnid(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rnid"))
@@ -66,6 +89,69 @@ fn identity_hash_from_output(stdout: &str) -> String {
             }
         })
         .unwrap_or_else(|| panic!("no identity hash in:\n{}", stdout))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn write_daemon_config(dir: &Path, rpc_port: u16) {
+    fs::write(
+        dir.join("config"),
+        format!(
+            r#"
+[reticulum]
+enable_transport = False
+share_instance = Yes
+instance_control_port = {}
+
+[interfaces]
+"#,
+            rpc_port
+        ),
+    )
+    .unwrap();
+}
+
+fn wait_for_rpc(port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for rnsd RPC on {}",
+            port
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn inject_identity(node: &RnsNode, dest_hash: [u8; 16], identity: &Identity) {
+    let response = node
+        .query(QueryRequest::InjectIdentity {
+            dest_hash,
+            identity_hash: *identity.hash(),
+            public_key: identity.get_public_key().unwrap(),
+            app_data: None,
+            hops: 1,
+            received_at: 1.0,
+        })
+        .unwrap();
+    assert!(matches!(response, QueryResponse::InjectIdentity(true)));
+}
+
+fn write_private_identity(path: &Path, identity: &Identity) {
+    fs::write(path, identity.get_private_key().unwrap()).unwrap();
 }
 
 #[test]
@@ -195,4 +281,113 @@ fn rsg_validation_accepts_required_signer_identity_hash() {
     let wrong_hash = "000102030405060708090a0b0c0d0e0f";
     let failure = assert_failure(rnid(&["-i", wrong_hash, "-V", &path_str(&sig)]));
     assert!(failure.contains(wrong_hash));
+}
+
+#[test]
+fn request_identity_over_rpc_encrypts_and_retains_all_matching_destinations() {
+    let dir = tempdir();
+    let rpc_port = free_port();
+    write_daemon_config(dir.path(), rpc_port);
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    wait_for_rpc(rpc_port);
+
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    let primary_dest = destination_hash("rns", &["id"], Some(&identity_hash));
+    let secondary_dest = [0xA7; 16];
+    inject_identity(&node, primary_dest, &identity);
+    inject_identity(&node, secondary_dest, &identity);
+
+    let message = dir.path().join("network-secret.txt");
+    let encrypted = dir.path().join("network-secret.txt.rfe");
+    let decrypted = dir.path().join("network-secret.out");
+    let private_rid = dir.path().join("network-private.rid");
+    fs::write(&message, b"daemon resolved public identity").unwrap();
+    write_private_identity(&private_rid, &identity);
+
+    let config_dir = path_str(dir.path());
+    let message_s = path_str(&message);
+    let encrypted_s = path_str(&encrypted);
+    let decrypted_s = path_str(&decrypted);
+    let private_rid_s = path_str(&private_rid);
+    let stdout = assert_success(rnid(&[
+        "--config",
+        &config_dir,
+        "-R",
+        "-i",
+        &hex(&identity_hash),
+        "-e",
+        &message_s,
+    ]));
+    assert!(stdout.contains("Retained Identity"));
+    assert!(encrypted.exists());
+
+    assert_success(rnid(&[
+        "-i",
+        &private_rid_s,
+        "-d",
+        &encrypted_s,
+        "-w",
+        &decrypted_s,
+    ]));
+    assert_eq!(
+        fs::read(&decrypted).unwrap(),
+        b"daemon resolved public identity"
+    );
+
+    let entries = node.known_destinations().unwrap();
+    let retained_for_identity = entries
+        .iter()
+        .filter(|entry| entry.identity_hash == identity_hash && entry.retained)
+        .count();
+    assert_eq!(
+        retained_for_identity, 2,
+        "rnid should retain every known destination for the resolved identity"
+    );
+
+    node.shutdown();
+}
+
+#[test]
+fn request_identity_over_rpc_validates_required_signer_by_destination_hash() {
+    let dir = tempdir();
+    let rpc_port = free_port();
+    write_daemon_config(dir.path(), rpc_port);
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    wait_for_rpc(rpc_port);
+
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    let dest_hash = destination_hash("rns", &["id"], Some(&identity_hash));
+    inject_identity(&node, dest_hash, &identity);
+
+    let private_rid = dir.path().join("signer.rid");
+    let message = dir.path().join("required-signer.txt");
+    write_private_identity(&private_rid, &identity);
+    fs::write(&message, b"destination hash signer lookup").unwrap();
+
+    let private_rid_s = path_str(&private_rid);
+    let message_s = path_str(&message);
+    assert_success(rnid(&["-i", &private_rid_s, "-s", &message_s]));
+    let sig = dir.path().join("required-signer.txt.rsg");
+
+    assert_success(rnid(&[
+        "--config",
+        &path_str(dir.path()),
+        "-R",
+        "-i",
+        &hex(&dest_hash),
+        "-V",
+        &path_str(&sig),
+    ]));
+
+    let entry = node
+        .known_destinations()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.dest_hash == dest_hash)
+        .expect("injected destination should still be known");
+    assert!(entry.retained);
+
+    node.shutdown();
 }
