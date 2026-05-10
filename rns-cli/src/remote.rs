@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rns_net::shared_client::SharedClientConfig;
 use rns_net::{Callbacks, RnsNode};
@@ -52,6 +52,7 @@ struct RemoteCallbacks {
     link_established_tx: mpsc::Sender<rns_net::LinkId>,
     response_data: Arc<Mutex<Option<Vec<u8>>>>,
     response_tx: mpsc::Sender<()>,
+    link_closed_tx: mpsc::Sender<()>,
 }
 
 impl Callbacks for RemoteCallbacks {
@@ -81,6 +82,17 @@ impl Callbacks for RemoteCallbacks {
         *lock_response_data(&self.response_data) = Some(data);
         let _ = self.response_tx.send(());
     }
+
+    fn on_link_closed(
+        &mut self,
+        _link_id: rns_net::LinkId,
+        reason: Option<rns_net::TeardownReason>,
+    ) {
+        if reason == Some(rns_net::TeardownReason::InitiatorClosed) {
+            return;
+        }
+        let _ = self.link_closed_tx.send(());
+    }
 }
 
 /// Perform a remote management query.
@@ -103,12 +115,14 @@ pub fn remote_query(
 ) -> Option<RemoteQueryResult> {
     let (link_tx, link_rx) = mpsc::channel();
     let (resp_tx, resp_rx) = mpsc::channel();
+    let (closed_tx, closed_rx) = mpsc::channel();
     let response_data = Arc::new(Mutex::new(None));
 
     let callbacks = RemoteCallbacks {
         link_established_tx: link_tx,
         response_data: response_data.clone(),
         response_tx: resp_tx,
+        link_closed_tx: closed_tx,
     };
 
     // Load config for shared instance connection
@@ -135,7 +149,7 @@ pub fn remote_query(
     let link_id = node.create_link(dest_hash, dest_sig_pub).ok()?;
 
     // Wait for link establishment
-    let _established_link_id = link_rx.recv_timeout(timeout).ok()?;
+    let _established_link_id = wait_for_link_established(&link_rx, &closed_rx, timeout)?;
 
     // Identify on the link
     node.identify_on_link(link_id, identity_prv_key).ok()?;
@@ -145,12 +159,50 @@ pub fn remote_query(
     node.send_request(link_id, path, data).ok()?;
 
     // Wait for response
-    resp_rx.recv_timeout(timeout).ok()?;
+    wait_for_response(&resp_rx, &closed_rx, timeout)?;
 
     let data = lock_response_data(&response_data).take()?;
     node.shutdown();
 
     Some(RemoteQueryResult { data })
+}
+
+fn wait_for_link_established(
+    link_rx: &mpsc::Receiver<rns_net::LinkId>,
+    closed_rx: &mpsc::Receiver<()>,
+    timeout: Duration,
+) -> Option<rns_net::LinkId> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if closed_rx.try_recv().is_ok() {
+            return None;
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        match link_rx.recv_timeout(remaining.min(Duration::from_millis(25))) {
+            Ok(link_id) => return Some(link_id),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
+fn wait_for_response(
+    resp_rx: &mpsc::Receiver<()>,
+    closed_rx: &mpsc::Receiver<()>,
+    timeout: Duration,
+) -> Option<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if closed_rx.try_recv().is_ok() {
+            return None;
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        match resp_rx.recv_timeout(remaining.min(Duration::from_millis(25))) {
+            Ok(()) => return Some(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +227,60 @@ mod tests {
     fn parse_hex_hash_trimmed() {
         let hash = parse_hex_hash("  0123456789abcdef0123456789abcdef  ").unwrap();
         assert_eq!(hash[0], 0x01);
+    }
+
+    #[test]
+    fn remote_callbacks_ignore_initiator_closed_links() {
+        let (link_tx, _link_rx) = mpsc::channel();
+        let (response_tx, _response_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let mut callbacks = RemoteCallbacks {
+            link_established_tx: link_tx,
+            response_data: Arc::new(Mutex::new(None)),
+            response_tx,
+            link_closed_tx: closed_tx,
+        };
+
+        callbacks.on_link_closed(
+            rns_net::LinkId([0x11; 16]),
+            Some(rns_net::TeardownReason::InitiatorClosed),
+        );
+
+        assert!(closed_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn remote_callbacks_report_non_initiator_closed_links() {
+        let (link_tx, _link_rx) = mpsc::channel();
+        let (response_tx, _response_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let mut callbacks = RemoteCallbacks {
+            link_established_tx: link_tx,
+            response_data: Arc::new(Mutex::new(None)),
+            response_tx,
+            link_closed_tx: closed_tx,
+        };
+
+        callbacks.on_link_closed(
+            rns_net::LinkId([0x11; 16]),
+            Some(rns_net::TeardownReason::Timeout),
+        );
+
+        assert!(closed_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn remote_waits_abort_on_reported_link_close() {
+        let (_link_tx, link_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        closed_tx.send(()).unwrap();
+
+        assert!(wait_for_link_established(&link_rx, &closed_rx, Duration::from_secs(1)).is_none());
+
+        let (_resp_tx, resp_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        closed_tx.send(()).unwrap();
+
+        assert!(wait_for_response(&resp_rx, &closed_rx, Duration::from_secs(1)).is_none());
     }
 }
