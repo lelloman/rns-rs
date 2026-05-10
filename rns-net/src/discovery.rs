@@ -45,6 +45,30 @@ impl DiscoveredInterfaceStorage {
         fs::write(&filepath, &data)
     }
 
+    /// Store a newly received interface announce, preserving persistent counters.
+    pub fn store_received(&self, iface: &mut DiscoveredInterface) -> io::Result<()> {
+        match self.load(&iface.discovery_hash) {
+            Ok(Some(existing)) => {
+                iface.discovered = existing.discovered;
+                iface.heard_count = existing.heard_count.saturating_add(1);
+            }
+            Ok(None) => {
+                iface.discovered = iface.last_heard;
+                iface.heard_count = 1;
+            }
+            Err(err) => {
+                log::error!(
+                    "Error while reading existing data for discovered interface, re-creating data: {}",
+                    err
+                );
+                iface.discovered = iface.last_heard;
+                iface.heard_count = 1;
+            }
+        }
+
+        self.store(iface)
+    }
+
     /// Load a discovered interface by its discovery hash
     pub fn load(&self, discovery_hash: &[u8; 32]) -> io::Result<Option<DiscoveredInterface>> {
         let filename = hex_encode(discovery_hash);
@@ -861,6 +885,69 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("transport_id"));
+    }
+
+    #[test]
+    fn store_received_preserves_existing_first_seen_and_increments_heard_count() {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-discovery-received-preserve-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+
+        let mut existing = test_discovered_interface("ExistingDiscovery");
+        existing.discovered = 1000.0;
+        existing.last_heard = 1100.0;
+        existing.heard_count = 7;
+        storage.store(&existing).unwrap();
+
+        let mut received = existing.clone();
+        received.discovered = 2000.0;
+        received.last_heard = 3000.0;
+        received.heard_count = 0;
+        storage.store_received(&mut received).unwrap();
+
+        let loaded = storage.load(&received.discovery_hash).unwrap().unwrap();
+        assert_eq!(received.discovered, 1000.0);
+        assert_eq!(received.last_heard, 3000.0);
+        assert_eq!(received.heard_count, 8);
+        assert_eq!(loaded.discovered, 1000.0);
+        assert_eq!(loaded.last_heard, 3000.0);
+        assert_eq!(loaded.heard_count, 8);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_received_recreates_corrupt_cache_with_received_time_as_first_seen() {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-discovery-corrupt-recreate-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+
+        let mut received = test_discovered_interface("CorruptDiscovery");
+        received.discovered = 1234.0;
+        received.last_heard = 5678.0;
+        received.heard_count = 0;
+        let filepath = dir.join(hex_encode(&received.discovery_hash));
+        fs::write(&filepath, b"not msgpack").unwrap();
+
+        storage.store_received(&mut received).unwrap();
+
+        let loaded = storage.load(&received.discovery_hash).unwrap().unwrap();
+        assert_eq!(received.discovered, 5678.0);
+        assert_eq!(received.heard_count, 1);
+        assert_eq!(loaded.discovered, 5678.0);
+        assert_eq!(loaded.last_heard, 5678.0);
+        assert_eq!(loaded.heard_count, 1);
+        assert_eq!(loaded.name, "CorruptDiscovery");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

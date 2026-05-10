@@ -635,14 +635,9 @@ impl Driver {
                                         self.discovery_required_value,
                                     )
                                 {
-                                    // Check if we already have this interface
-                                    if let Ok(Some(existing)) =
-                                        self.discovered_interfaces.load(&discovered.discovery_hash)
+                                    if let Err(e) =
+                                        self.discovered_interfaces.store_received(&mut discovered)
                                     {
-                                        discovered.discovered = existing.discovered;
-                                        discovered.heard_count = existing.heard_count + 1;
-                                    }
-                                    if let Err(e) = self.discovered_interfaces.store(&discovered) {
                                         log::warn!("Failed to store discovered interface: {}", e);
                                     } else {
                                         log::debug!(
