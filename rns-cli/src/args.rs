@@ -42,7 +42,9 @@ impl Args {
                     // Boolean flags that don't take values
                     match key.as_str() {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
-                        | "blackholed" | "base256" => {
+                        | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
+                        | "no-cache" | "print-identity" | "print-private" | "export-pub"
+                        | "export-prv" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -177,12 +179,30 @@ mod tests {
             "--force",
             "--blackholed",
             "--base256",
+            "--base32",
+            "--base64",
+            "--raw",
+            "--request",
+            "--no-cache",
+            "--print-identity",
+            "--print-private",
+            "--export-pub",
+            "--export-prv",
         ]);
         assert!(a.has("stdin"));
         assert!(a.has("stdout"));
         assert!(a.has("force"));
         assert!(a.has("blackholed"));
         assert!(a.has("base256"));
+        assert!(a.has("base32"));
+        assert!(a.has("base64"));
+        assert!(a.has("raw"));
+        assert!(a.has("request"));
+        assert!(a.has("no-cache"));
+        assert!(a.has("print-identity"));
+        assert!(a.has("print-private"));
+        assert!(a.has("export-pub"));
+        assert!(a.has("export-prv"));
     }
 
     #[test]

@@ -1,20 +1,35 @@
-//! rnid - Reticulum Identity Management
-//!
-//! Generate, inspect, and manage RNS identities. Standalone tool, no RPC needed.
+//! rnid - Reticulum identity, encryption and signature utility.
 
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rns_cli::args::Args;
 use rns_cli::format::{base32_decode, base32_encode, prettyb256rep, prettyhexrep};
 use rns_core::destination::destination_hash;
+use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
+use rns_crypto::sha256::sha256;
 use rns_crypto::OsRng;
+use rns_net::event::KnownDestinationEntry;
+use rns_net::rpc::derive_auth_key;
+use rns_net::{config, storage, RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
-const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024; // 16 MB
+const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024;
+const DEFAULT_ASPECTS: &str = "rns.id";
+const PUB_EXT: &str = "pub";
+const SIG_EXT: &str = "rsg";
+const ENCRYPT_EXT: &str = "rfe";
+const SIG_LEN: usize = 64;
+
+enum IdentityRef {
+    Identity(Identity),
+    Hash([u8; 16]),
+}
 
 fn main() {
     let args = Args::parse();
@@ -29,334 +44,727 @@ fn main() {
         return;
     }
 
-    // Generate new identity
-    if let Some(file) = args.get("g") {
-        generate_identity(file, &args);
-        return;
+    validate_args(&args).unwrap_or_else(|e| die(&e, 1));
+
+    let needs_identity = args.has("p")
+        || args.has("print-identity")
+        || args.has("x")
+        || args.has("export-pub")
+        || args.has("X")
+        || args.has("export-prv")
+        || args.has("s")
+        || args.has("e")
+        || args.has("d")
+        || (args.has("w") && !args.has("e") && !args.has("d"))
+        || args.has("generate")
+        || args.has("g");
+
+    let identity_ref = load_identity_ref(&args, !needs_identity).unwrap_or_else(|e| die(&e, 1));
+    let mut operated = false;
+
+    if args.has("p") || args.has("print-identity") {
+        let identity = require_identity(identity_ref.as_ref());
+        print_identity_information(&args, identity);
+        operated = true;
     }
 
-    // Import from hex
-    if let Some(hex_str) = args.get("m") {
-        import_from_hex(hex_str, &args);
-        return;
+    if let Some(aspects) = args.get("H").or_else(|| args.get("hash")) {
+        print_hash_information(aspects, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
     }
 
-    // Load identity from file or hash
-    if let Some(file_or_hash) = args.get("i") {
-        let path = Path::new(file_or_hash);
-        if path.exists() {
-            inspect_identity_file(path, &args);
-        } else {
-            // Treat as hash
-            println!("Hash: {}", file_or_hash);
-        }
-        return;
+    if args.has("x") || args.has("export-pub") {
+        let identity = require_identity(identity_ref.as_ref());
+        export_public_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
     }
 
-    print_usage();
+    if args.has("X") || args.has("export-prv") {
+        let identity = require_identity(identity_ref.as_ref());
+        export_private_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if let Some(path) = args.get("V").or_else(|| args.get("validate")) {
+        validate_signature(path, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if let Some(path) = args.get("s").or_else(|| args.get("sign")) {
+        let identity = require_identity(identity_ref.as_ref());
+        sign_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if let Some(path) = args.get("e").or_else(|| args.get("encrypt")) {
+        let identity = require_identity(identity_ref.as_ref());
+        encrypt_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if let Some(path) = args.get("d").or_else(|| args.get("decrypt")) {
+        let identity = require_identity(identity_ref.as_ref());
+        decrypt_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if args.has("w") && !args.has("e") && !args.has("d") {
+        let identity = require_identity(identity_ref.as_ref());
+        write_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
+    if args.has("g") || args.has("generate") {
+        operated = true;
+    }
+
+    if !operated {
+        print_usage();
+    }
 }
 
-fn generate_identity(file: &str, args: &Args) {
-    let path = Path::new(file);
-    let force = args.has("f") || args.has("force");
+fn validate_args(args: &Args) -> Result<(), String> {
+    let operations = [
+        args.has("e") || args.has("encrypt"),
+        args.has("d") || args.has("decrypt"),
+        args.has("s") || args.has("sign"),
+        args.has("V") || args.has("validate"),
+    ]
+    .into_iter()
+    .filter(|v| *v)
+    .count();
+    if operations > 1 {
+        return Err(
+            "Only one of encrypt, decrypt, sign or validate is supported per invocation".into(),
+        );
+    }
 
+    let identity_sources = [
+        args.has("g") || args.has("generate"),
+        args.has("i") || args.has("identity"),
+        args.has("m") || args.has("import-pub"),
+        args.has("M") || args.has("import-prv"),
+    ]
+    .into_iter()
+    .filter(|v| *v)
+    .count();
+    if identity_sources > 1 {
+        return Err("The -i, -g, -m and -M options are mutually exclusive".into());
+    }
+
+    if (args.has("b") || args.has("base64")) && (args.has("B") || args.has("base32")) {
+        return Err("The -b and -B options are mutually exclusive".into());
+    }
+
+    Ok(())
+}
+
+fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef>, String> {
+    if let Some(path) = args.get("g").or_else(|| args.get("generate")) {
+        let identity = generate_identity(path, args)?;
+        return Ok(Some(IdentityRef::Identity(identity)));
+    }
+
+    if let Some(spec) = args.get("i").or_else(|| args.get("identity")) {
+        let expanded = Path::new(spec);
+        if expanded.exists() {
+            return load_private_identity_file(expanded).map(|id| Some(IdentityRef::Identity(id)));
+        }
+
+        let hash = parse_identity_hash(spec)?;
+        if args.has("N") || args.has("no-cache") {
+            return Ok(Some(IdentityRef::Hash(hash)));
+        }
+
+        if args.has("R") || args.has("request") {
+            if let Some(identity) = request_identity(args, hash)? {
+                return Ok(Some(IdentityRef::Identity(identity)));
+            }
+        }
+
+        if allow_none {
+            return Ok(Some(IdentityRef::Hash(hash)));
+        }
+
+        return Err(format!(
+            "Could not resolve identity {}. Use -R to request it from the network.",
+            prettyhexrep(&hash)
+        ));
+    }
+
+    if let Some(spec) = args.get("m").or_else(|| args.get("import-pub")) {
+        let public_key = load_or_decode_key(spec, 64, args)?;
+        let key: [u8; 64] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Invalid public identity length".to_string())?;
+        return Ok(Some(IdentityRef::Identity(Identity::from_public_key(&key))));
+    }
+
+    if let Some(spec) = args.get("M").or_else(|| args.get("import-prv")) {
+        let private_key = load_or_decode_key(spec, 64, args)?;
+        let key: [u8; 64] = private_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Invalid private identity length".to_string())?;
+        return Ok(Some(IdentityRef::Identity(Identity::from_private_key(
+            &key,
+        ))));
+    }
+
+    if allow_none {
+        Ok(None)
+    } else {
+        Err("Could not get working identity".into())
+    }
+}
+
+fn generate_identity(path: &str, args: &Args) -> Result<Identity, String> {
+    let force = args.has("f") || args.has("force");
+    let path = Path::new(path);
     if path.exists() && !force {
-        eprintln!("File already exists: {} (use -f to overwrite)", file);
-        process::exit(1);
+        return Err(format!("Identity file {} already exists", path.display()));
     }
 
     let identity = Identity::new(&mut OsRng);
-    let Some(prv_key) = identity.get_private_key() else {
-        eprintln!("Generated identity is missing a private key");
-        process::exit(1);
-    };
-
-    fs::write(path, &prv_key).unwrap_or_else(|e| {
-        eprintln!("Error writing identity: {}", e);
-        process::exit(1);
-    });
+    let private_key = identity
+        .get_private_key()
+        .ok_or_else(|| "Generated identity is missing a private key".to_string())?;
+    fs::write(path, private_key).map_err(|e| format!("Error writing identity: {}", e))?;
 
     println!("Generated new identity");
     println!("  Hash : {}", prettyhexrep(identity.hash()));
     if args.has("Z") || args.has("base256") {
         println!("  B256 : {}", prettyb256rep(identity.hash()));
     }
-    println!("  Saved: {}", file);
+    println!("  Saved: {}", path.display());
+    Ok(identity)
+}
 
-    // Show base32 if requested
-    if args.has("B") {
-        println!("  Base32: {}", base32_encode(&prv_key));
+fn load_private_identity_file(path: &Path) -> Result<Identity, String> {
+    let data = fs::read(path).map_err(|e| format!("Error reading identity: {}", e))?;
+    let key = if data.len() == 64 {
+        data
+    } else if data.len() == 128 {
+        data[..64].to_vec()
+    } else {
+        return Err(format!(
+            "Unknown private identity file format ({} bytes)",
+            data.len()
+        ));
+    };
+    let key: [u8; 64] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid private identity length".to_string())?;
+    Ok(Identity::from_private_key(&key))
+}
+
+fn load_or_decode_key(spec: &str, expected_len: usize, args: &Args) -> Result<Vec<u8>, String> {
+    let path = Path::new(spec);
+    if path.exists() {
+        let data = fs::read(path).map_err(|e| format!("Error reading identity: {}", e))?;
+        if data.len() == expected_len {
+            return Ok(data);
+        }
+        return Err(format!(
+            "Invalid identity file length: expected {} bytes, got {}",
+            expected_len,
+            data.len()
+        ));
+    }
+
+    let decoded = if args.has("B") || args.has("base32") {
+        base32_decode(spec).ok_or_else(|| "Invalid base32 identity data".to_string())?
+    } else if args.has("b") || args.has("base64") {
+        base64_decode(spec).ok_or_else(|| "Invalid base64 identity data".to_string())?
+    } else {
+        parse_hex(spec).ok_or_else(|| "Invalid hexadecimal identity data".to_string())?
+    };
+
+    if decoded.len() != expected_len {
+        return Err(format!(
+            "Invalid identity length: expected {} bytes, got {}",
+            expected_len,
+            decoded.len()
+        ));
+    }
+    Ok(decoded)
+}
+
+fn request_identity(args: &Args, requested_hash: [u8; 16]) -> Result<Option<Identity>, String> {
+    let mut client = rpc_client(args)?;
+    let mut default_parts = DEFAULT_ASPECTS.split('.');
+    let app_name = default_parts.next().unwrap_or("rns");
+    let aspects: Vec<&str> = default_parts.collect();
+    let id_dest_hash = destination_hash(app_name, &aspects, Some(&requested_hash));
+
+    client
+        .call(&rns_net::pickle::PickleValue::Dict(vec![(
+            rns_net::pickle::PickleValue::String("request_path".into()),
+            rns_net::pickle::PickleValue::Bytes(requested_hash.to_vec()),
+        )]))
+        .map_err(|e| format!("Could not request destination path: {}", e))?;
+    client
+        .call(&rns_net::pickle::PickleValue::Dict(vec![(
+            rns_net::pickle::PickleValue::String("request_path".into()),
+            rns_net::pickle::PickleValue::Bytes(id_dest_hash.to_vec()),
+        )]))
+        .map_err(|e| format!("Could not request identity path: {}", e))?;
+
+    let timeout_secs = args
+        .get("t")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(5.0);
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
+
+    loop {
+        let entries = client
+            .known_destinations()
+            .map_err(|e| format!("Could not query known destinations: {}", e))?;
+        if let Some(entry) = find_identity_entry(&entries, requested_hash) {
+            let retained = client.retain_identity(entry.identity_hash).unwrap_or(false);
+            if retained {
+                println!("Retained Identity {}", prettyhexrep(&entry.identity_hash));
+            }
+            return Ok(Some(Identity::from_public_key(&entry.public_key)));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
-fn inspect_identity_file(path: &Path, args: &Args) {
-    let data = fs::read(path).unwrap_or_else(|e| {
-        eprintln!("Error reading file: {}", e);
-        process::exit(1);
-    });
+fn find_identity_entry(
+    entries: &[KnownDestinationEntry],
+    requested_hash: [u8; 16],
+) -> Option<&KnownDestinationEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.identity_hash == requested_hash || entry.dest_hash == requested_hash)
+}
 
-    let identity = if data.len() == 64 {
-        // Private key (32 enc + 32 sig)
-        let mut key = [0u8; 64];
-        key.copy_from_slice(&data);
-        Identity::from_private_key(&key)
-    } else if data.len() == 64 + 64 {
-        let mut key = [0u8; 64];
-        key.copy_from_slice(&data[..64]);
-        Identity::from_private_key(&key)
-    } else if data.len() == 32 + 32 {
-        // Public keys only (32 enc_pub + 32 sig_pub)
-        let mut key = [0u8; 64];
-        key.copy_from_slice(&data);
-        Identity::from_public_key(&key)
+fn rpc_client(args: &Args) -> Result<RpcClient, String> {
+    let config_dir = storage::resolve_config_dir(args.config_path().map(|s| Path::new(s)));
+    let config_file = config_dir.join("config");
+    let rns_config = if config_file.exists() {
+        config::parse_file(&config_file).map_err(|e| format!("Error reading config: {}", e))?
     } else {
-        eprintln!("Unknown identity file format ({} bytes)", data.len());
-        process::exit(1);
+        config::parse("").map_err(|e| format!("Error parsing default config: {}", e))?
     };
+    let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
+    let identity =
+        storage::load_or_create_identity(&paths.identities).map_err(|e| e.to_string())?;
+    let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
+    let rpc_addr = RpcAddr::Tcp(
+        "127.0.0.1".into(),
+        rns_config.reticulum.instance_control_port,
+    );
+    RpcClient::connect(&rpc_addr, &auth_key)
+        .map_err(|e| format!("Could not connect to rnsd: {}", e))
+}
 
-    println!("Identity <{}>", prettyhexrep(identity.hash()));
-    println!("  Hash      : {}", prettyhexrep(identity.hash()));
-    if args.has("Z") || args.has("base256") {
-        println!("  Base256   : {}", prettyb256rep(identity.hash()));
+fn require_identity(identity_ref: Option<&IdentityRef>) -> &Identity {
+    match identity_ref {
+        Some(IdentityRef::Identity(identity)) => identity,
+        Some(IdentityRef::Hash(hash)) => die(
+            &format!(
+                "Identity {} was specified by hash only and has no key data",
+                prettyhexrep(hash)
+            ),
+            1,
+        ),
+        None => die("Could not get working identity", 1),
     }
+}
 
-    let show_private = args.has("P");
-    let show_public = args.has("p") || show_private;
-
-    if show_public {
-        if let Some(pub_key) = identity.get_public_key() {
-            println!("  Public key: {}", prettyhexrep(&pub_key));
-        }
+fn print_identity_information(args: &Args, identity: &Identity) {
+    println!("Identity Hash : {}", prettyhexrep(identity.hash()));
+    if let Some(public_key) = identity.get_public_key() {
+        println!("Public Key    : {}", encode_key(args, &public_key));
     }
-
-    if show_private {
-        if let Some(prv_key) = identity.get_private_key() {
-            println!("  Private key: {}", prettyhexrep(&prv_key));
-        } else {
-            println!("  Private key: (not available)");
-        }
-    }
-
-    // Compute destination hash if -H is given
-    if let Some(aspects_str) = args.get("H") {
-        let parts: Vec<&str> = aspects_str.split('.').collect();
-        if parts.len() >= 2 {
-            let app_name = parts[0];
-            let aspects: Vec<&str> = parts[1..].to_vec();
-            let dest_hash = destination_hash(app_name, &aspects, Some(identity.hash()));
-            println!("  Dest hash : {}", prettyhexrep(&dest_hash));
-            if args.has("Z") || args.has("base256") {
-                println!("  Dest b256 : {}", prettyb256rep(&dest_hash));
-            }
-        } else {
-            eprintln!("  Aspects must be in format: app_name.aspect1.aspect2");
-        }
-    }
-
-    let force = args.has("f") || args.has("force");
-    let use_stdin = args.has("stdin");
-    let use_stdout = args.has("stdout");
-
-    // Encrypt file
-    if let Some(file) = args.get("e") {
-        let plaintext = if use_stdin {
-            read_stdin()
-        } else {
-            check_file_size(file);
-            fs::read(file).unwrap_or_else(|e| {
-                eprintln!("Error reading file: {}", e);
-                process::exit(1);
-            })
-        };
-        let ciphertext = identity
-            .encrypt(&plaintext, &mut OsRng)
-            .unwrap_or_else(|e| {
-                eprintln!("Encryption failed: {:?}", e);
-                process::exit(1);
-            });
-        if use_stdout {
-            io::stdout().write_all(&ciphertext).unwrap_or_else(|e| {
-                eprintln!("Error writing to stdout: {}", e);
-                process::exit(1);
-            });
-        } else {
-            let out_file = format!("{}.enc", file);
-            write_file_checked(&out_file, &ciphertext, force);
-            println!("  Encrypted {} -> {}", file, out_file);
-        }
-    }
-
-    // Decrypt file
-    if let Some(file) = args.get("d") {
-        let ciphertext = if use_stdin {
-            read_stdin()
-        } else {
-            fs::read(file).unwrap_or_else(|e| {
-                eprintln!("Error reading file: {}", e);
-                process::exit(1);
-            })
-        };
-        match identity.decrypt(&ciphertext) {
-            Ok(plaintext) => {
-                if use_stdout {
-                    io::stdout().write_all(&plaintext).unwrap_or_else(|e| {
-                        eprintln!("Error writing to stdout: {}", e);
-                        process::exit(1);
-                    });
-                } else {
-                    let out_file = if file.ends_with(".enc") {
-                        file[..file.len() - 4].to_string()
-                    } else {
-                        format!("{}.dec", file)
-                    };
-                    write_file_checked(&out_file, &plaintext, force);
-                    println!("  Decrypted {} -> {}", file, out_file);
-                }
-            }
-            Err(e) => {
-                eprintln!("  Decryption failed: {:?}", e);
-                process::exit(1);
-            }
-        }
-    }
-
-    // Sign file
-    if let Some(file) = args.get("s") {
-        let data = if use_stdin {
-            read_stdin()
-        } else {
-            fs::read(file).unwrap_or_else(|e| {
-                eprintln!("Error reading file: {}", e);
-                process::exit(1);
-            })
-        };
-        match identity.sign(&data) {
-            Ok(sig) => {
-                if use_stdout {
-                    io::stdout().write_all(&sig).unwrap_or_else(|e| {
-                        eprintln!("Error writing to stdout: {}", e);
-                        process::exit(1);
-                    });
-                } else {
-                    let out_file = format!("{}.sig", file);
-                    write_file_checked(&out_file, &sig, force);
-                    println!("  Signed {} -> {}", file, out_file);
-                }
-            }
-            Err(e) => {
-                eprintln!("  Signing failed: {:?}", e);
-                process::exit(1);
-            }
-        }
-    }
-
-    // Verify signature
-    if let Some(sig_file) = args.get("V") {
-        let sig_data = fs::read(sig_file).unwrap_or_else(|e| {
-            eprintln!("Error reading signature: {}", e);
-            process::exit(1);
-        });
-        if sig_data.len() != 64 {
-            eprintln!(
-                "  Invalid signature (expected 64 bytes, got {})",
-                sig_data.len()
+    if identity.get_private_key().is_some() {
+        if args.has("P") || args.has("print-private") {
+            println!(
+                "Private Key   : {}",
+                encode_key(args, &identity.get_private_key().unwrap())
             );
-            process::exit(1);
-        }
-        let mut sig = [0u8; 64];
-        sig.copy_from_slice(&sig_data);
-
-        // Read the data file (remove .sig extension)
-        let data_file = if sig_file.ends_with(".sig") {
-            &sig_file[..sig_file.len() - 4]
         } else {
-            eprintln!("  Cannot determine data file (expected .sig extension)");
-            process::exit(1);
-        };
-
-        let data = fs::read(data_file).unwrap_or_else(|e| {
-            eprintln!("Error reading {}: {}", data_file, e);
-            process::exit(1);
-        });
-
-        if identity.verify(&sig, &data) {
-            println!("  Signature valid");
-        } else {
-            println!("  Signature INVALID");
-            process::exit(1);
-        }
-    }
-
-    // Export as hex
-    if args.has("x") {
-        if let Some(prv_key) = identity.get_private_key() {
-            println!("{}", prettyhexrep(&prv_key));
-        } else if let Some(pub_key) = identity.get_public_key() {
-            println!("{}", prettyhexrep(&pub_key));
-        }
-    }
-
-    // Export as base64
-    if args.has("b") {
-        if let Some(prv_key) = identity.get_private_key() {
-            println!("{}", base64_encode(&prv_key));
-        } else if let Some(pub_key) = identity.get_public_key() {
-            println!("{}", base64_encode(&pub_key));
-        }
-    }
-
-    // Export as base32
-    if args.has("B") {
-        if let Some(prv_key) = identity.get_private_key() {
-            println!("{}", base32_encode(&prv_key));
-        } else if let Some(pub_key) = identity.get_public_key() {
-            println!("{}", base32_encode(&pub_key));
+            println!("Private Key   : Hidden");
         }
     }
 }
 
-fn import_from_hex(hex_str: &str, args: &Args) {
-    // Check if it's actually base32
-    let bytes = if args.has("B") {
-        match base32_decode(hex_str) {
-            Some(b) => b,
-            None => {
-                eprintln!("Invalid base32 string");
-                process::exit(1);
-            }
-        }
+fn print_hash_information(aspects: &str, identity_ref: Option<&IdentityRef>) -> Result<(), String> {
+    let identity_hash = match identity_ref {
+        Some(IdentityRef::Identity(identity)) => *identity.hash(),
+        Some(IdentityRef::Hash(hash)) => *hash,
+        None => return Err("No identity or identity hash specified".into()),
+    };
+    let mut parts = aspects.split('.');
+    let app_name = parts
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Invalid destination aspects".to_string())?;
+    let aspects: Vec<&str> = parts.collect();
+    let dest_hash = destination_hash(app_name, &aspects, Some(&identity_hash));
+    println!(
+        "The {} destination for this Identity is {}",
+        app_name_and_aspects(app_name, &aspects),
+        prettyhexrep(&dest_hash)
+    );
+    Ok(())
+}
+
+fn app_name_and_aspects(app_name: &str, aspects: &[&str]) -> String {
+    if aspects.is_empty() {
+        app_name.to_string()
     } else {
-        match parse_hex(hex_str) {
-            Some(b) => b,
-            None => {
-                eprintln!("Invalid hex string");
-                process::exit(1);
-            }
-        }
+        format!("{}.{}", app_name, aspects.join("."))
+    }
+}
+
+fn export_public_identity(args: &Args, identity: &Identity) -> Result<(), String> {
+    let public_key = identity
+        .get_public_key()
+        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
+    println!("{}", encode_key(args, &public_key));
+    Ok(())
+}
+
+fn export_private_identity(args: &Args, identity: &Identity) -> Result<(), String> {
+    let private_key = identity
+        .get_private_key()
+        .ok_or_else(|| "Identity does not hold a private key".to_string())?;
+    println!("{}", encode_key(args, &private_key));
+    Ok(())
+}
+
+fn write_identity(args: &Args, identity: &Identity) -> Result<(), String> {
+    let force = args.has("f") || args.has("force");
+    let output = args
+        .get("w")
+        .or_else(|| args.get("write"))
+        .ok_or_else(|| "Missing output path".to_string())?;
+
+    if args.has("X") || args.has("export-prv") {
+        let private_key = identity
+            .get_private_key()
+            .ok_or_else(|| "Identity does not hold a private key".to_string())?;
+        write_file_checked(output, &private_key, force)?;
+        println!("Wrote private identity to {}", output);
+        return Ok(());
+    }
+
+    let public_key = identity
+        .get_public_key()
+        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
+    let output = if output
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{}", PUB_EXT))
+    {
+        output.to_string()
+    } else {
+        format!("{}.{}", output, PUB_EXT)
+    };
+    write_file_checked(&output, &public_key, force)?;
+    println!("Wrote public identity to {}", output);
+    Ok(())
+}
+
+fn sign_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
+    let data = read_input(path, args)?;
+    let output_path = args
+        .get("w")
+        .or_else(|| args.get("write"))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}.{}", path, SIG_EXT));
+
+    let signature = if args.has("raw") {
+        identity.sign(&data).map(|sig| sig.to_vec()).map_err(|_| {
+            format!(
+                "Cannot sign {}, the identity does not hold a private key",
+                path
+            )
+        })?
+    } else {
+        create_rsg(identity, &data)?
     };
 
-    if bytes.len() == 64 {
-        let mut key = [0u8; 64];
-        key.copy_from_slice(&bytes);
-        let identity = Identity::from_private_key(&key);
-        println!("Identity <{}>", prettyhexrep(identity.hash()));
-        if args.has("Z") || args.has("base256") {
-            println!("Base256  {}", prettyb256rep(identity.hash()));
-        }
-
-        // Save to file if -w is provided
-        if let Some(file) = args.get("w") {
-            let force = args.has("f") || args.has("force");
-            write_file_checked(file, &key, force);
-            println!("  Saved to {}", file);
-        }
+    if args.has("stdout") {
+        io::stdout()
+            .write_all(&signature)
+            .map_err(|e| format!("Error writing to stdout: {}", e))?;
     } else {
-        eprintln!(
-            "Expected 64 bytes (128 hex chars or base32), got {} bytes",
-            bytes.len()
+        write_file_checked(&output_path, &signature, args.has("f") || args.has("force"))?;
+        println!(
+            "Signed file {} with {}",
+            path,
+            prettyhexrep(identity.hash())
         );
-        process::exit(1);
     }
+    Ok(())
+}
+
+fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), String> {
+    let sig_ext = format!(".{}", SIG_EXT);
+    let (signature_path, file_path) = if path.to_ascii_lowercase().ends_with(&sig_ext) {
+        (
+            path.to_string(),
+            path[..path.len() - sig_ext.len()].to_string(),
+        )
+    } else {
+        (format!("{}.{}", path, SIG_EXT), path.to_string())
+    };
+
+    let message = fs::read(&file_path)
+        .map_err(|e| format!("Could not read validation target {}: {}", file_path, e))?;
+    let signature = fs::read(&signature_path)
+        .map_err(|e| format!("Could not read signature {}: {}", signature_path, e))?;
+
+    if signature.len() == SIG_LEN {
+        let Some(IdentityRef::Identity(identity)) = required else {
+            return Err(
+                "Cannot validate legacy rsg signatures without an explicit required identity"
+                    .into(),
+            );
+        };
+        let sig: [u8; SIG_LEN] = signature.as_slice().try_into().unwrap();
+        if identity.verify(&sig, &message) {
+            println!(
+                "Signature is valid, the file {} was signed by {}",
+                file_path,
+                prettyhexrep(identity.hash())
+            );
+            return Ok(());
+        }
+        return Err(format!(
+            "Invalid signature {} for file {}",
+            signature_path, file_path
+        ));
+    }
+
+    let required_hash = match required {
+        Some(IdentityRef::Identity(identity)) => Some(*identity.hash()),
+        Some(IdentityRef::Hash(hash)) => Some(*hash),
+        None => None,
+    };
+
+    match validate_rsg(&signature, &message, required_hash)? {
+        RsgValidation::Valid { signer_hash } => {
+            println!(
+                "Signature is valid, the file {} was signed by {}",
+                file_path,
+                prettyhexrep(&signer_hash)
+            );
+            Ok(())
+        }
+        RsgValidation::WrongSigner { signer_hash } => {
+            let required = required_hash.map(|h| prettyhexrep(&h)).unwrap_or_default();
+            Err(format!(
+                "Invalid signature {} for file {}\nThis file was NOT signed by {} (actual signer {})",
+                signature_path,
+                file_path,
+                required,
+                prettyhexrep(&signer_hash)
+            ))
+        }
+        RsgValidation::Invalid => Err(format!(
+            "Invalid signature {} for file {}",
+            signature_path, file_path
+        )),
+    }
+}
+
+fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
+    let public_key = identity
+        .get_public_key()
+        .ok_or_else(|| "Identity does not hold a public key".to_string())?;
+    let envelope = Value::Map(vec![
+        (Value::Str("hashtype".into()), Value::Str("sha256".into())),
+        (
+            Value::Str("hash".into()),
+            Value::Bin(sha256(message).to_vec()),
+        ),
+        (
+            Value::Str("meta".into()),
+            Value::Map(vec![
+                (
+                    Value::Str("signer".into()),
+                    Value::Bin(identity.hash().to_vec()),
+                ),
+                (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
+                (Value::Str("note".into()), Value::Nil),
+            ]),
+        ),
+    ]);
+    let envelope = msgpack::pack(&envelope);
+    let signature = identity
+        .sign(&envelope)
+        .map_err(|_| "Identity does not hold a private key".to_string())?;
+    let mut rsg = Vec::with_capacity(SIG_LEN + envelope.len());
+    rsg.extend_from_slice(&signature);
+    rsg.extend_from_slice(&envelope);
+    Ok(rsg)
+}
+
+enum RsgValidation {
+    Valid { signer_hash: [u8; 16] },
+    WrongSigner { signer_hash: [u8; 16] },
+    Invalid,
+}
+
+fn validate_rsg(
+    rsg: &[u8],
+    message: &[u8],
+    required_signer: Option<[u8; 16]>,
+) -> Result<RsgValidation, String> {
+    if rsg.len() <= SIG_LEN {
+        return Ok(RsgValidation::Invalid);
+    }
+    let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
+    let envelope = &rsg[SIG_LEN..];
+    let value =
+        msgpack::unpack_exact(envelope).map_err(|e| format!("Invalid rsg envelope: {}", e))?;
+
+    if value.map_get("hashtype").and_then(Value::as_str) != Some("sha256") {
+        return Ok(RsgValidation::Invalid);
+    }
+    let Some(signed_hash) = value.map_get("hash").and_then(Value::as_bin) else {
+        return Ok(RsgValidation::Invalid);
+    };
+    if signed_hash != sha256(message) {
+        return Ok(RsgValidation::Invalid);
+    }
+    let Some(meta) = value.map_get("meta") else {
+        return Ok(RsgValidation::Invalid);
+    };
+    let Some(pubkey_bytes) = meta.map_get("pubkey").and_then(Value::as_bin) else {
+        return Ok(RsgValidation::Invalid);
+    };
+    let Ok(public_key) = <[u8; 64]>::try_from(pubkey_bytes) else {
+        return Ok(RsgValidation::Invalid);
+    };
+    let identity = Identity::from_public_key(&public_key);
+    let signer_hash = *identity.hash();
+
+    let Some(meta_signer) = meta.map_get("signer").and_then(Value::as_bin) else {
+        return Ok(RsgValidation::Invalid);
+    };
+    if meta_signer != signer_hash {
+        return Ok(RsgValidation::Invalid);
+    }
+
+    if let Some(required) = required_signer {
+        if signer_hash != required {
+            return Ok(RsgValidation::WrongSigner { signer_hash });
+        }
+    }
+
+    if identity.verify(&signature, envelope) {
+        Ok(RsgValidation::Valid { signer_hash })
+    } else {
+        Ok(RsgValidation::Invalid)
+    }
+}
+
+fn encrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
+    let plaintext = read_input(path, args)?;
+    let ciphertext = identity.encrypt(&plaintext, &mut OsRng).map_err(|_| {
+        format!(
+            "Cannot encrypt {}, the identity does not hold a public key",
+            path
+        )
+    })?;
+    let output = args
+        .get("w")
+        .or_else(|| args.get("write"))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}.{}", path, ENCRYPT_EXT));
+    if args.has("stdout") {
+        io::stdout()
+            .write_all(&ciphertext)
+            .map_err(|e| format!("Error writing to stdout: {}", e))?;
+    } else {
+        write_file_checked(&output, &ciphertext, args.has("f") || args.has("force"))?;
+        println!("File {} encrypted to {}", path, output);
+    }
+    Ok(())
+}
+
+fn decrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
+    if !path
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{}", ENCRYPT_EXT))
+    {
+        return Err(format!(
+            "The file {} does not appear to be a Reticulum encrypted file",
+            path
+        ));
+    }
+    let ciphertext = read_input(path, args)?;
+    let plaintext = identity.decrypt(&ciphertext).map_err(|_| {
+        format!(
+            "Cannot decrypt {}, the identity does not hold a private key",
+            path
+        )
+    })?;
+    let output = args
+        .get("w")
+        .or_else(|| args.get("write"))
+        .map(str::to_string)
+        .unwrap_or_else(|| path[..path.len() - ENCRYPT_EXT.len() - 1].to_string());
+    if args.has("stdout") {
+        io::stdout()
+            .write_all(&plaintext)
+            .map_err(|e| format!("Error writing to stdout: {}", e))?;
+    } else {
+        write_file_checked(&output, &plaintext, args.has("f") || args.has("force"))?;
+        println!("File {} decrypted to {}", path, output);
+    }
+    Ok(())
+}
+
+fn read_input(path: &str, args: &Args) -> Result<Vec<u8>, String> {
+    if args.has("stdin") {
+        let mut buf = Vec::new();
+        io::stdin()
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("Error reading stdin: {}", e))?;
+        return Ok(buf);
+    }
+    check_file_size(path);
+    fs::read(path).map_err(|e| format!("Error reading {}: {}", path, e))
+}
+
+fn check_file_size(file: &str) {
+    if let Ok(meta) = fs::metadata(file) {
+        if meta.len() > LARGE_FILE_WARN {
+            eprintln!(
+                "Warning: file is {} - encryption is done in-memory",
+                rns_cli::format::size_str(meta.len()),
+            );
+        }
+    }
+}
+
+fn write_file_checked(path: &str, data: &[u8], force: bool) -> Result<(), String> {
+    let p = Path::new(path);
+    if p.exists() && !force {
+        return Err(format!(
+            "File already exists: {} (use -f to overwrite)",
+            path
+        ));
+    }
+    fs::write(p, data).map_err(|e| format!("Error writing {}: {}", path, e))
+}
+
+fn parse_identity_hash(s: &str) -> Result<[u8; 16], String> {
+    let data = parse_hex(s).ok_or_else(|| "Invalid hexadecimal identity hash".to_string())?;
+    data.as_slice()
+        .try_into()
+        .map_err(|_| "Invalid identity hash length".to_string())
 }
 
 fn parse_hex(s: &str) -> Option<Vec<u8>> {
@@ -372,6 +780,16 @@ fn parse_hex(s: &str) -> Option<Vec<u8>> {
         }
     }
     Some(bytes)
+}
+
+fn encode_key(args: &Args, key: &[u8]) -> String {
+    if args.has("B") || args.has("base32") {
+        base32_encode(key)
+    } else if args.has("b") || args.has("base64") {
+        base64_encode(key)
+    } else {
+        prettyhexrep(key)
+    }
 }
 
 fn base64_encode(data: &[u8]) -> String {
@@ -390,81 +808,191 @@ fn base64_encode(data: &[u8]) -> String {
         } else {
             0
         };
-
         let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 18) & 0x3f) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3f) as usize] as char);
         if i + 1 < data.len() {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+            result.push(CHARS[((triple >> 6) & 0x3f) as usize] as char);
         } else {
             result.push('=');
         }
         if i + 2 < data.len() {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
+            result.push(CHARS[(triple & 0x3f) as usize] as char);
         } else {
             result.push('=');
         }
-
         i += 3;
     }
     result
 }
 
-fn read_stdin() -> Vec<u8> {
-    let mut buf = Vec::new();
-    io::stdin().read_to_end(&mut buf).unwrap_or_else(|e| {
-        eprintln!("Error reading stdin: {}", e);
-        process::exit(1);
-    });
-    buf
-}
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut chars: Vec<char> = s.trim().chars().filter(|c| !c.is_whitespace()).collect();
+    if chars.len() % 4 == 1 {
+        return None;
+    }
+    while chars.len() % 4 != 0 {
+        chars.push('=');
+    }
 
-fn check_file_size(file: &str) {
-    if let Ok(meta) = fs::metadata(file) {
-        if meta.len() > LARGE_FILE_WARN {
-            eprintln!(
-                "Warning: file is {} — encryption is done in-memory",
-                rns_cli::format::size_str(meta.len()),
-            );
+    let mut out = Vec::with_capacity(chars.len() / 4 * 3);
+    for chunk in chars.chunks(4) {
+        let mut pad = 0usize;
+        let mut sextets = [0u8; 4];
+        for (i, c) in chunk.iter().copied().enumerate() {
+            if c == '=' {
+                pad += 1;
+                sextets[i] = 0;
+                continue;
+            }
+            if pad > 0 {
+                return None;
+            }
+            sextets[i] = match c {
+                'A'..='Z' => c as u8 - b'A',
+                'a'..='z' => c as u8 - b'a' + 26,
+                '0'..='9' => c as u8 - b'0' + 52,
+                '+' | '-' => 62,
+                '/' | '_' => 63,
+                _ => return None,
+            };
+        }
+        if pad > 2 {
+            return None;
+        }
+        let triple = ((sextets[0] as u32) << 18)
+            | ((sextets[1] as u32) << 12)
+            | ((sextets[2] as u32) << 6)
+            | (sextets[3] as u32);
+        out.push(((triple >> 16) & 0xff) as u8);
+        if pad < 2 {
+            out.push(((triple >> 8) & 0xff) as u8);
+        }
+        if pad < 1 {
+            out.push((triple & 0xff) as u8);
         }
     }
+    Some(out)
 }
 
-fn write_file_checked(path: &str, data: &[u8], force: bool) {
-    let p = Path::new(path);
-    if p.exists() && !force {
-        eprintln!("File already exists: {} (use -f to overwrite)", path);
-        process::exit(1);
-    }
-    fs::write(p, data).unwrap_or_else(|e| {
-        eprintln!("Error writing: {}", e);
-        process::exit(1);
-    });
+fn die(message: &str, code: i32) -> ! {
+    eprintln!("{}", message);
+    process::exit(code);
 }
 
 fn print_usage() {
     println!("Usage: rnid [OPTIONS]");
     println!();
-    println!("Options:");
-    println!("  -g FILE            Generate new identity and save to file");
-    println!("  -i FILE            Load and inspect identity from file");
-    println!("  -p                 Print public key");
-    println!("  -P                 Print private key (implies -p)");
+    println!("Identity:");
+    println!("  -g FILE            Generate private identity and save to file");
+    println!("  -i FILE|HASH       Load private identity file or require identity hash");
+    println!("  -m KEY|FILE        Import public identity from hex/base32/base64 or .pub file");
+    println!("  -M KEY|FILE        Import private identity from hex/base32/base64 or .rid file");
+    println!("  -w FILE            Write identity or operation output");
+    println!("  -x                 Export public identity");
+    println!("  -X                 Export private identity");
+    println!("  -p                 Print identity info");
+    println!("  -P                 Print private key when printing identity info");
+    println!();
+    println!("Operations:");
     println!("  -H APP.ASPECT      Compute destination hash");
-    println!("  -e FILE            Encrypt file with identity");
-    println!("  -d FILE            Decrypt file with identity");
-    println!("  -s FILE            Sign file with identity");
-    println!("  -V FILE.sig        Verify signature");
-    println!("  -m HEX             Import identity from hex string");
-    println!("  -w FILE            Write imported identity to file");
-    println!("  -x                 Export as hex");
-    println!("  -b                 Export as base64");
-    println!("  -B                 Export/import as base32");
-    println!("  -Z, --base256      Also print compact base256 display for hashes");
+    println!("  -e FILE            Encrypt file to .rfe");
+    println!("  -d FILE.rfe        Decrypt file");
+    println!("  -s FILE            Sign file to .rsg");
+    println!("  -V FILE[.rsg]      Validate signature");
+    println!("  --raw              Create legacy raw 64-byte signature");
+    println!("  -R                 Request unknown identity from the local daemon");
+    println!("  -N                 Do not use cache/network identity resolution");
+    println!();
+    println!("Formatting and I/O:");
+    println!("  -b                 Use base64 for identity import/export");
+    println!("  -B                 Use base32 for identity import/export");
+    println!("  -Z, --base256      Also print compact base256 hash display");
     println!("  -f, --force        Force overwrite existing files");
-    println!("  --stdin            Read input from stdin");
-    println!("  --stdout           Write output to stdout");
+    println!("  --stdin            Read operation input from stdin");
+    println!("  --stdout           Write operation output to stdout");
     println!("  --version          Print version and exit");
     println!("  --help, -h         Print this help");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rns_crypto::FixedRng;
+
+    fn test_identity(seed: u8) -> Identity {
+        let bytes = (0..64).map(|i| seed.wrapping_add(i)).collect::<Vec<u8>>();
+        let mut rng = FixedRng::new(&bytes);
+        Identity::new(&mut rng)
+    }
+
+    #[test]
+    fn rsg_roundtrip_validates_without_required_signer() {
+        let identity = test_identity(1);
+        let message = b"message";
+        let rsg = create_rsg(&identity, message).unwrap();
+        match validate_rsg(&rsg, message, None).unwrap() {
+            RsgValidation::Valid { signer_hash } => assert_eq!(signer_hash, *identity.hash()),
+            _ => panic!("expected valid rsg"),
+        }
+    }
+
+    #[test]
+    fn rsg_validation_rejects_wrong_message() {
+        let identity = test_identity(2);
+        let rsg = create_rsg(&identity, b"message").unwrap();
+        assert!(matches!(
+            validate_rsg(&rsg, b"other", None).unwrap(),
+            RsgValidation::Invalid
+        ));
+    }
+
+    #[test]
+    fn rsg_validation_reports_wrong_required_signer() {
+        let identity = test_identity(3);
+        let other = test_identity(4);
+        let rsg = create_rsg(&identity, b"message").unwrap();
+        assert!(matches!(
+            validate_rsg(&rsg, b"message", Some(*other.hash())).unwrap(),
+            RsgValidation::WrongSigner { .. }
+        ));
+    }
+
+    #[test]
+    fn find_identity_entry_matches_identity_or_destination_hash() {
+        let entry = KnownDestinationEntry {
+            dest_hash: [0x11; 16],
+            identity_hash: [0x22; 16],
+            public_key: [0x33; 64],
+            app_data: None,
+            hops: 1,
+            received_at: 0.0,
+            receiving_interface: rns_core::transport::types::InterfaceId(1),
+            was_used: false,
+            last_used_at: None,
+            retained: false,
+        };
+        assert!(find_identity_entry(&[entry.clone()], [0x22; 16]).is_some());
+        assert!(find_identity_entry(&[entry.clone()], [0x11; 16]).is_some());
+        assert!(find_identity_entry(&[entry], [0x44; 16]).is_none());
+    }
+
+    #[test]
+    fn base64_roundtrip() {
+        let data = b"abcdefg";
+        assert_eq!(base64_decode(&base64_encode(data)).unwrap(), data);
+        assert_eq!(base64_decode(&base64_encode(b"ab")).unwrap(), b"ab");
+        assert_eq!(base64_decode(&base64_encode(b"a")).unwrap(), b"a");
+    }
+
+    #[test]
+    fn parse_identity_hash_requires_16_bytes() {
+        assert!(parse_identity_hash("000102030405060708090a0b0c0d0e0f").is_ok());
+        assert!(parse_identity_hash("000102").is_err());
+    }
+
+    #[test]
+    fn default_aspects_are_stable() {
+        assert_eq!(DEFAULT_ASPECTS, "rns.id");
+    }
 }
