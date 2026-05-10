@@ -308,6 +308,22 @@ impl TransportEngine {
         self.ingress_control.held_count(interface)
     }
 
+    pub fn burst_active(&self, interface: &InterfaceId) -> bool {
+        self.ingress_control.burst_active(interface)
+    }
+
+    pub fn burst_activated(&self, interface: &InterfaceId) -> f64 {
+        self.ingress_control.burst_activated(interface)
+    }
+
+    pub fn pr_burst_active(&self, interface: &InterfaceId) -> bool {
+        self.ingress_control.pr_burst_active(interface)
+    }
+
+    pub fn pr_burst_activated(&self, interface: &InterfaceId) -> f64 {
+        self.ingress_control.pr_burst_activated(interface)
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathSet> {

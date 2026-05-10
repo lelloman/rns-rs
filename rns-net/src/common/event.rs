@@ -694,6 +694,14 @@ pub struct SingleInterfaceStat {
     pub op_freq: f64,
     /// Outgoing path request samples currently retained.
     pub op_samples: usize,
+    /// Whether announce ingress-control burst limiting is currently active.
+    pub burst_active: bool,
+    /// Timestamp when announce ingress-control burst limiting activated.
+    pub burst_activated: f64,
+    /// Whether path-request ingress-control burst limiting is currently active.
+    pub pr_burst_active: bool,
+    /// Timestamp when path-request burst limiting activated.
+    pub pr_burst_activated: f64,
     /// Connected client count for aggregate server interfaces, if reported.
     pub clients: Option<u64>,
     /// Target interval for outgoing announce rate control, in seconds.

@@ -8,8 +8,9 @@ impl Driver {
         for entry in self.interfaces.values() {
             total_rxb += entry.stats.rxb;
             total_txb += entry.stats.txb;
+            let interface_id = entry.info.id;
             interfaces.push(SingleInterfaceStat {
-                id: entry.info.id.0,
+                id: interface_id.0,
                 name: entry.info.name.clone(),
                 status: entry.online && entry.enabled,
                 mode: entry.info.mode,
@@ -25,6 +26,10 @@ impl Driver {
                 ip_freq: entry.stats.incoming_path_request_freq(),
                 op_freq: entry.stats.outgoing_path_request_freq(),
                 op_samples: entry.stats.outgoing_path_request_samples(),
+                burst_active: self.engine.burst_active(&interface_id),
+                burst_activated: self.engine.burst_activated(&interface_id),
+                pr_burst_active: self.engine.pr_burst_active(&interface_id),
+                pr_burst_activated: self.engine.pr_burst_activated(&interface_id),
                 clients: None,
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,

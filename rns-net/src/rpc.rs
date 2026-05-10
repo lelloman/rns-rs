@@ -1131,6 +1131,22 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Float(s.op_freq),
         ),
         (
+            PickleValue::String("burst_active".into()),
+            PickleValue::Bool(s.burst_active),
+        ),
+        (
+            PickleValue::String("burst_activated".into()),
+            PickleValue::Float(s.burst_activated),
+        ),
+        (
+            PickleValue::String("pr_burst_active".into()),
+            PickleValue::Bool(s.pr_burst_active),
+        ),
+        (
+            PickleValue::String("pr_burst_activated".into()),
+            PickleValue::Float(s.pr_burst_activated),
+        ),
+        (
             PickleValue::String("clients".into()),
             s.clients
                 .map(|clients| PickleValue::Int(clients as i64))
@@ -2547,6 +2563,10 @@ mod tests {
                             ip_freq: 0.0,
                             op_freq: 0.0,
                             op_samples: 0,
+                            burst_active: false,
+                            burst_activated: 0.0,
+                            pr_burst_active: false,
+                            pr_burst_activated: 0.0,
                             oa_freq: 0.0,
                             clients: Some(2),
                             announce_rate_target: Some(3600.0),
@@ -2743,6 +2763,10 @@ mod tests {
                 ip_freq: 2.0,
                 op_freq: 3.0,
                 op_samples: 0,
+                burst_active: true,
+                burst_activated: 1200.0,
+                pr_burst_active: true,
+                pr_burst_activated: 1300.0,
                 oa_freq: 4.0,
                 clients: Some(3),
                 announce_rate_target: Some(3600.0),
@@ -2775,6 +2799,30 @@ mod tests {
         assert_eq!(ifaces[0].get("ip_freq").unwrap().as_float().unwrap(), 2.0);
         assert_eq!(ifaces[0].get("op_freq").unwrap().as_float().unwrap(), 3.0);
         assert_eq!(ifaces[0].get("oa_freq").unwrap().as_float().unwrap(), 4.0);
+        assert_eq!(
+            ifaces[0].get("burst_active").unwrap().as_bool().unwrap(),
+            true
+        );
+        assert_eq!(
+            ifaces[0]
+                .get("burst_activated")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            1200.0
+        );
+        assert_eq!(
+            ifaces[0].get("pr_burst_active").unwrap().as_bool().unwrap(),
+            true
+        );
+        assert_eq!(
+            ifaces[0]
+                .get("pr_burst_activated")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            1300.0
+        );
         assert_eq!(
             ifaces[0]
                 .get("announce_rate_target")

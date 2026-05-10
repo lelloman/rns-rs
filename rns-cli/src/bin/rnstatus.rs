@@ -2,6 +2,7 @@
 //!
 //! Connects to a running rnsd via RPC and displays interface statistics.
 
+use std::cmp::Ordering;
 use std::path::Path;
 use std::process;
 
@@ -46,6 +47,8 @@ fn main() {
     let show_totals = args.has("t");
     let show_links = args.has("l");
     let show_announces = args.has("A");
+    let show_pr_stats = args.has("P") || args.has("pr-stats");
+    let show_bursts = args.has("B") || args.has("burst");
     let monitor_mode = args.has("m");
     let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let remote_hash = args.get("R").map(|s| s.to_string());
@@ -222,6 +225,8 @@ fn main() {
                 filter.as_deref(),
                 show_totals,
                 show_announces,
+                show_pr_stats,
+                show_bursts,
             );
         }
 
@@ -246,6 +251,8 @@ fn print_status(
     filter: Option<&str>,
     show_totals: bool,
     show_announces: bool,
+    show_pr_stats: bool,
+    show_bursts: bool,
 ) {
     // Print transport info
     if let Some(PickleValue::Bool(true)) = response.get("transport_enabled").map(|v| v) {
@@ -277,39 +284,17 @@ fn print_status(
                 name.to_lowercase().contains(&f.to_lowercase())
             });
         }
+        if show_bursts {
+            iface_list.retain(|iface| interface_has_active_burst(iface));
+        }
 
         // Sort if requested
         if let Some(sort_key) = sort_by {
             iface_list.sort_by(|a, b| {
-                let cmp = match sort_key {
-                    "rate" => {
-                        let ra = a.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
-                        let rb = b.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
-                        ra.cmp(&rb)
-                    }
-                    "traffic" => {
-                        let ta = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
-                            + a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let tb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
-                            + b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ta.cmp(&tb)
-                    }
-                    "rx" => {
-                        let ra = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let rb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ra.cmp(&rb)
-                    }
-                    "tx" => {
-                        let ta = a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let tb = b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ta.cmp(&tb)
-                    }
-                    _ => {
-                        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        na.cmp(nb)
-                    }
-                };
+                let cmp = compare_sort_values(
+                    &interface_sort_value(a, sort_key),
+                    &interface_sort_value(b, sort_key),
+                );
                 if reverse {
                     cmp.reverse()
                 } else {
@@ -391,6 +376,27 @@ fn print_status(
                     println!("{}", line);
                 }
             }
+            if show_pr_stats {
+                let ip_freq = iface
+                    .get("ip_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let op_freq = iface
+                    .get("op_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let clients = iface
+                    .get("clients")
+                    .and_then(|v| v.as_int())
+                    .filter(|n| *n > 0)
+                    .map(|n| n as u64);
+                for line in path_request_status_lines(ip_freq, op_freq, clients) {
+                    println!("{}", line);
+                }
+            }
+            for line in burst_status_lines(iface, rns_net::time::now()) {
+                println!("{}", line);
+            }
             println!();
         }
     }
@@ -437,6 +443,65 @@ fn pickle_to_json(value: &PickleValue) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum SortValue {
+    Int(i64),
+    Float(f64),
+    String(String),
+}
+
+fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
+    match sort_key {
+        "rate" => SortValue::Int(iface.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0)),
+        "traffic" => {
+            let total = iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
+                + iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+            SortValue::Int(total)
+        }
+        "rx" => SortValue::Int(iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "tx" => SortValue::Int(iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "prx" => SortValue::Float(
+            iface
+                .get("ip_freq")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0),
+        ),
+        "ptx" => SortValue::Float(
+            iface
+                .get("op_freq")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0),
+        ),
+        _ => SortValue::String(
+            iface
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        ),
+    }
+}
+
+fn compare_sort_values(a: &SortValue, b: &SortValue) -> Ordering {
+    match (a, b) {
+        (SortValue::Int(a), SortValue::Int(b)) => a.cmp(b),
+        (SortValue::Float(a), SortValue::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (SortValue::String(a), SortValue::String(b)) => a.cmp(b),
+        _ => Ordering::Equal,
+    }
+}
+
+fn interface_has_active_burst(iface: &PickleValue) -> bool {
+    iface
+        .get("burst_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || iface
+            .get("pr_burst_active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+}
+
 fn announce_status_lines(
     ia_freq: f64,
     oa_freq: f64,
@@ -469,6 +534,59 @@ fn announce_status_lines(
         lines.push(format!("                {}", parts.join(", ")));
     }
     lines
+}
+
+fn path_request_status_lines(ip_freq: f64, op_freq: f64, clients: Option<u64>) -> Vec<String> {
+    let mut line = format!(
+        "    Path reqs : {} in  {} out",
+        prettyfrequency(ip_freq),
+        prettyfrequency(op_freq),
+    );
+    if let Some(clients) = clients.filter(|clients| *clients > 0) {
+        line.push_str(&format!(
+            "  {}/c",
+            prettyfrequency(op_freq / clients as f64)
+        ));
+    }
+    vec![line]
+}
+
+fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
+    let mut parts = Vec::new();
+    if iface
+        .get("burst_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let activated = iface
+            .get("burst_activated")
+            .and_then(|v| v.as_float())
+            .unwrap_or(now);
+        parts.push(format!(
+            "announces {}",
+            prettytime((now - activated).max(0.0))
+        ));
+    }
+    if iface
+        .get("pr_burst_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let activated = iface
+            .get("pr_burst_activated")
+            .and_then(|v| v.as_float())
+            .unwrap_or(now);
+        parts.push(format!(
+            "path requests {}",
+            prettytime((now - activated).max(0.0))
+        ));
+    }
+
+    if parts.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("    Bursts    : {}", parts.join(", "))]
+    }
 }
 
 fn remote_status(hash_str: &str, config_path: Option<&str>) {
@@ -748,11 +866,13 @@ fn print_usage() {
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -l                      Show link count");
     println!("  -A                      Show announce statistics");
+    println!("  -P, --pr-stats          Show path request statistics");
+    println!("  -B, --burst             Only show interfaces with active burst limiting");
     println!("  -d                      Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
@@ -779,5 +899,80 @@ mod tests {
         let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, None, None, None);
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out");
+    }
+
+    #[test]
+    fn path_request_line_includes_per_client_outgoing_frequency_when_clients_present() {
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, Some(4));
+
+        assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out  2.0/h/c");
+    }
+
+    #[test]
+    fn path_request_line_omits_per_client_frequency_without_clients() {
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None);
+
+        assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out");
+    }
+
+    #[test]
+    fn burst_filter_matches_announce_or_path_request_bursts() {
+        let inactive = PickleValue::Dict(vec![]);
+        let announce = PickleValue::Dict(vec![(
+            PickleValue::String("burst_active".into()),
+            PickleValue::Bool(true),
+        )]);
+        let path_request = PickleValue::Dict(vec![(
+            PickleValue::String("pr_burst_active".into()),
+            PickleValue::Bool(true),
+        )]);
+
+        assert!(!interface_has_active_burst(&inactive));
+        assert!(interface_has_active_burst(&announce));
+        assert!(interface_has_active_burst(&path_request));
+    }
+
+    #[test]
+    fn sort_value_supports_path_request_frequency_keys() {
+        let iface = PickleValue::Dict(vec![
+            (
+                PickleValue::String("ip_freq".into()),
+                PickleValue::Float(1.25),
+            ),
+            (
+                PickleValue::String("op_freq".into()),
+                PickleValue::Float(2.5),
+            ),
+        ]);
+
+        assert_eq!(interface_sort_value(&iface, "prx"), SortValue::Float(1.25));
+        assert_eq!(interface_sort_value(&iface, "ptx"), SortValue::Float(2.5));
+    }
+
+    #[test]
+    fn burst_status_line_shows_announce_and_path_request_durations() {
+        let iface = PickleValue::Dict(vec![
+            (
+                PickleValue::String("burst_active".into()),
+                PickleValue::Bool(true),
+            ),
+            (
+                PickleValue::String("burst_activated".into()),
+                PickleValue::Float(90.0),
+            ),
+            (
+                PickleValue::String("pr_burst_active".into()),
+                PickleValue::Bool(true),
+            ),
+            (
+                PickleValue::String("pr_burst_activated".into()),
+                PickleValue::Float(95.0),
+            ),
+        ]);
+
+        assert_eq!(
+            burst_status_lines(&iface, 100.0),
+            vec!["    Bursts    : announces 10s, path requests 5s"]
+        );
     }
 }

@@ -44,7 +44,7 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" => {
+                        | "export-prv" | "pr-stats" | "burst" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -163,11 +163,12 @@ mod tests {
 
     #[test]
     fn parse_new_boolean_flags() {
-        let a = args(&["-l", "-f", "-m", "-A", "-Z"]);
+        let a = args(&["-l", "-f", "-m", "-A", "-P", "-Z"]);
         assert!(a.has("l"));
         assert!(a.has("f"));
         assert!(a.has("m"));
         assert!(a.has("A"));
+        assert!(a.has("P"));
         assert!(a.has("Z"));
     }
 
@@ -188,6 +189,8 @@ mod tests {
             "--print-private",
             "--export-pub",
             "--export-prv",
+            "--pr-stats",
+            "--burst",
         ]);
         assert!(a.has("stdin"));
         assert!(a.has("stdout"));
@@ -203,6 +206,8 @@ mod tests {
         assert!(a.has("print-private"));
         assert!(a.has("export-pub"));
         assert!(a.has("export-prv"));
+        assert!(a.has("pr-stats"));
+        assert!(a.has("burst"));
     }
 
     #[test]
