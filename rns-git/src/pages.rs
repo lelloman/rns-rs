@@ -379,7 +379,10 @@ fn sanitize_field(value: &str) -> String {
 }
 
 fn m_escape(value: &str) -> String {
-    value.replace('`', "\\`")
+    value
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace('\t', "   ")
 }
 
 fn m_escape_line_start_controls(value: &str) -> String {
@@ -664,7 +667,17 @@ fn render_blob_page(
     let render_requested = var(vars, "render").is_some();
     let render =
         renderable.is_some() && !raw_requested && (render_requested || render_by_default(path));
-    let controls = renderable.map(|_| {
+    let download_link = m_link(
+        "Download",
+        PATH_DOWNLOAD,
+        &[
+            ("g", &group),
+            ("r", &repo),
+            ("ref", reference),
+            ("path", path),
+        ],
+    );
+    let controls = if renderable.is_some() {
         let render_link = m_link(
             "View rendered",
             PATH_BLOB,
@@ -688,12 +701,17 @@ fn render_blob_page(
             ],
         );
         let sep = icon_sep(config);
-        if render {
+        Some(if render {
             format!("Displaying Rendered {sep} {raw_link}")
         } else {
-            format!("Displaying Raw {sep} {render_link}")
-        }
-    });
+            format!("Displaying Raw {sep} {render_link} {sep} {download_link}")
+        })
+    } else {
+        Some(format!(
+            "Displaying Raw {} {download_link}",
+            icon_sep(config)
+        ))
+    };
     let content = if !blob.displayable {
         crate::highlight::plain_literal_block(&blob.content)
     } else if render {
@@ -3045,6 +3063,14 @@ after\n",
     }
 
     #[test]
+    fn markdown_escapes_backslashes_and_expands_tabs_before_inline_formatting() {
+        let out = markdown_to_micron("plain\\path\t**bold\\path** and `code\\path`\n");
+
+        assert!(out.contains("plain\\\\path   `!bold\\\\path`!"));
+        assert!(out.contains("`BT383838`Fdddcode\\\\path`f`b"));
+    }
+
+    #[test]
     fn markdown_plain_lines_escape_micron_line_start_controls() {
         let out = markdown_to_micron("-not a list\n<not alignment\n- list item\n---\n");
         assert!(out.contains("\\-not a list\n"));
@@ -3342,7 +3368,7 @@ Unmatched * marker\n\
         create_repo(
             config.repositories_dir.join("public/text"),
             "notes.txt",
-            "# Not a heading\n`literal`\n",
+            "# Not a heading\npath\\name\t`literal`\n",
         );
         let access = access(&config);
 
@@ -3361,7 +3387,10 @@ Unmatched * marker\n\
         .unwrap();
         assert!(!page.contains("Displaying Rendered"));
         assert!(!page.contains("View raw"));
+        assert!(page.contains("Displaying Raw"));
+        assert!(page.contains("Download"));
         assert!(page.contains("Not a heading"));
+        assert!(page.contains("path\\\\name   \\`literal\\`"));
         assert!(page.contains("\\`literal\\`"));
     }
 

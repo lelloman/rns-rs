@@ -33,7 +33,10 @@ fn block_from_body(body: &str) -> String {
 }
 
 fn escape_micron(value: &str) -> String {
-    value.replace('`', "\\`")
+    value
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace('\t', "   ")
 }
 
 #[cfg(not(feature = "syntax-highlighting"))]
@@ -162,6 +165,21 @@ fn escape_line_start_controls(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_literal_blocks_escape_backslashes_ticks_and_expand_tabs() {
+        let out = plain_literal_block("path\\name\t`tick`\n");
+
+        assert!(out.contains("path\\\\name   \\`tick\\`"));
+    }
+
+    #[test]
+    fn literal_block_fallback_escape_backslashes_ticks_and_expand_tabs() {
+        let out = literal_block("path\\name\t`tick`\n", Some("blob.unknown"), None);
+
+        assert!(!out.contains("`FT"));
+        assert!(out.contains("path\\\\name   \\`tick\\`"));
+    }
 
     #[cfg(feature = "syntax-highlighting")]
     #[test]
