@@ -102,6 +102,19 @@ fn parse_ingress_control_config(
     if let Some(v) = params.get("ic_burst_freq") {
         config.burst_freq = parse_nonnegative_f64("ic_burst_freq", v)?;
     }
+    if let Some(v) = params.get("ic_pr_burst_freq_new") {
+        config.pr_burst_freq_new = parse_nonnegative_f64("ic_pr_burst_freq_new", v)?;
+    }
+    if let Some(v) = params.get("ic_pr_burst_freq") {
+        config.pr_burst_freq = parse_nonnegative_f64("ic_pr_burst_freq", v)?;
+    }
+    if let Some(v) = params.get("egress_control") {
+        config.egress_enabled = config::parse_bool_pub(v)
+            .ok_or_else(|| format!("egress_control must be a boolean, got '{}'", v))?;
+    }
+    if let Some(v) = params.get("ec_pr_freq") {
+        config.egress_pr_freq = parse_nonnegative_f64("ec_pr_freq", v)?;
+    }
     if let Some(v) = params.get("ic_new_time") {
         config.new_time = parse_nonnegative_f64("ic_new_time", v)?;
     }
@@ -2898,6 +2911,10 @@ mod tests {
         params.insert("ic_burst_hold".to_string(), "1.5".to_string());
         params.insert("ic_burst_freq_new".to_string(), "2.5".to_string());
         params.insert("ic_burst_freq".to_string(), "3.5".to_string());
+        params.insert("ic_pr_burst_freq_new".to_string(), "3.25".to_string());
+        params.insert("ic_pr_burst_freq".to_string(), "8.25".to_string());
+        params.insert("egress_control".to_string(), "Yes".to_string());
+        params.insert("ec_pr_freq".to_string(), "5.25".to_string());
         params.insert("ic_new_time".to_string(), "4.5".to_string());
         params.insert("ic_burst_penalty".to_string(), "5.5".to_string());
         params.insert("ic_held_release_interval".to_string(), "6.5".to_string());
@@ -2909,6 +2926,10 @@ mod tests {
         assert_eq!(config.burst_hold, 1.5);
         assert_eq!(config.burst_freq_new, 2.5);
         assert_eq!(config.burst_freq, 3.5);
+        assert_eq!(config.pr_burst_freq_new, 3.25);
+        assert_eq!(config.pr_burst_freq, 8.25);
+        assert!(config.egress_enabled);
+        assert_eq!(config.egress_pr_freq, 5.25);
         assert_eq!(config.new_time, 4.5);
         assert_eq!(config.burst_penalty, 5.5);
         assert_eq!(config.held_release_interval, 6.5);

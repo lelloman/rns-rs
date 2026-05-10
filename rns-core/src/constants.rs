@@ -250,15 +250,23 @@ pub const LINKS_CHECK_INTERVAL: f64 = 1.0;
 /// Interface "new" period in seconds (2 hours).
 pub const IC_NEW_TIME: f64 = 7200.0;
 /// Announce frequency threshold for new interfaces (announces/sec).
-pub const IC_BURST_FREQ_NEW: f64 = 6.0;
+pub const IC_BURST_FREQ_NEW: f64 = 3.0;
 /// Announce frequency threshold for mature interfaces (announces/sec).
-pub const IC_BURST_FREQ: f64 = 35.0;
+pub const IC_BURST_FREQ: f64 = 10.0;
+/// Path request frequency threshold for new interfaces (requests/sec).
+pub const IC_PR_BURST_FREQ_NEW: f64 = 3.0;
+/// Path request frequency threshold for mature interfaces (requests/sec).
+pub const IC_PR_BURST_FREQ: f64 = 8.0;
 /// Minimum burst active duration in seconds.
-pub const IC_BURST_HOLD: f64 = 60.0;
+pub const IC_BURST_HOLD: f64 = 15.0;
 /// Penalty delay before releasing held announces (seconds).
 pub const IC_BURST_PENALTY: f64 = 15.0;
 /// Interval between individual held announce releases (seconds).
-pub const IC_HELD_RELEASE_INTERVAL: f64 = 2.0;
+pub const IC_HELD_RELEASE_INTERVAL: f64 = 5.0;
+/// Minimum path request samples before burst deactivation/egress limiting.
+pub const IC_BURST_MIN_SAMPLES: usize = 6;
+/// Default egress path request limit (requests/sec).
+pub const EC_PR_FREQ: f64 = 5.0;
 /// Maximum held announces per interface.
 pub const IC_MAX_HELD_ANNOUNCES: usize = 256;
 

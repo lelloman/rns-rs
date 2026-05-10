@@ -85,9 +85,13 @@ fn lora_airtime_secs(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IngressControlConfig {
     pub enabled: bool,
+    pub egress_enabled: bool,
     pub max_held_announces: usize,
     pub burst_freq_new: f64,
     pub burst_freq: f64,
+    pub pr_burst_freq_new: f64,
+    pub pr_burst_freq: f64,
+    pub egress_pr_freq: f64,
     pub new_time: f64,
     pub burst_hold: f64,
     pub burst_penalty: f64,
@@ -114,9 +118,13 @@ impl Default for IngressControlConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            egress_enabled: false,
             max_held_announces: constants::IC_MAX_HELD_ANNOUNCES,
             burst_freq_new: constants::IC_BURST_FREQ_NEW,
             burst_freq: constants::IC_BURST_FREQ,
+            pr_burst_freq_new: constants::IC_PR_BURST_FREQ_NEW,
+            pr_burst_freq: constants::IC_PR_BURST_FREQ,
+            egress_pr_freq: constants::EC_PR_FREQ,
             new_time: constants::IC_NEW_TIME,
             burst_hold: constants::IC_BURST_HOLD,
             burst_penalty: constants::IC_BURST_PENALTY,

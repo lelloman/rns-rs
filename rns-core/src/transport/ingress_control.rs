@@ -24,6 +24,8 @@ pub struct HeldAnnounce {
 struct IngressControlState {
     burst_active: bool,
     burst_activated: f64,
+    pr_burst_active: bool,
+    pr_burst_activated: f64,
     held_release: f64,
     held_announces: BTreeMap<[u8; 16], HeldAnnounce>,
 }
@@ -33,6 +35,8 @@ impl IngressControlState {
         IngressControlState {
             burst_active: false,
             burst_activated: 0.0,
+            pr_burst_active: false,
+            pr_burst_activated: 0.0,
             held_release: 0.0,
             held_announces: BTreeMap::new(),
         }
@@ -95,6 +99,62 @@ impl IngressControl {
         } else {
             false
         }
+    }
+
+    /// Determine whether an incoming path request should be ingress-limited.
+    ///
+    /// Path request burst state is tracked independently from announce burst
+    /// state. Unlike announces, path requests are not held for later release;
+    /// callers use this as a forwarding gate.
+    pub fn should_ingress_limit_pr(
+        &mut self,
+        interface: InterfaceId,
+        config: &IngressControlConfig,
+        pr_freq: f64,
+        interface_started: f64,
+        now: f64,
+    ) -> bool {
+        if !config.enabled {
+            return false;
+        }
+
+        let state = self
+            .states
+            .entry(interface)
+            .or_insert_with(IngressControlState::new);
+        let interface_age = now - interface_started;
+        let threshold = if interface_age < config.new_time {
+            config.pr_burst_freq_new
+        } else {
+            config.pr_burst_freq
+        };
+
+        if state.pr_burst_active {
+            if pr_freq < threshold && now > state.pr_burst_activated + config.burst_hold {
+                state.pr_burst_active = false;
+                return false;
+            }
+            true
+        } else if pr_freq > threshold {
+            state.pr_burst_active = true;
+            state.pr_burst_activated = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Determine whether an outgoing recursive path request should be skipped.
+    pub fn should_egress_limit_pr(
+        &mut self,
+        _interface: InterfaceId,
+        config: &IngressControlConfig,
+        pr_freq: f64,
+        sample_count: usize,
+    ) -> bool {
+        config.egress_enabled
+            && pr_freq > config.egress_pr_freq
+            && sample_count >= crate::constants::IC_BURST_MIN_SAMPLES
     }
 
     /// Store a held announce for later release.
@@ -199,6 +259,38 @@ impl IngressControl {
             .map(|s| s.held_announces.len())
             .unwrap_or(0)
     }
+
+    /// Whether announce burst limiting is currently active for an interface.
+    pub fn burst_active(&self, interface: &InterfaceId) -> bool {
+        self.states
+            .get(interface)
+            .map(|s| s.burst_active)
+            .unwrap_or(false)
+    }
+
+    /// When announce burst limiting was activated for an interface.
+    pub fn burst_activated(&self, interface: &InterfaceId) -> f64 {
+        self.states
+            .get(interface)
+            .map(|s| s.burst_activated)
+            .unwrap_or(0.0)
+    }
+
+    /// Whether path-request burst limiting is currently active for an interface.
+    pub fn pr_burst_active(&self, interface: &InterfaceId) -> bool {
+        self.states
+            .get(interface)
+            .map(|s| s.pr_burst_active)
+            .unwrap_or(false)
+    }
+
+    /// When path-request burst limiting was activated for an interface.
+    pub fn pr_burst_activated(&self, interface: &InterfaceId) -> f64 {
+        self.states
+            .get(interface)
+            .map(|s| s.pr_burst_activated)
+            .unwrap_or(0.0)
+    }
 }
 
 impl Default for IngressControl {
@@ -292,7 +384,7 @@ mod tests {
         ));
 
         // Freq drops but within hold period
-        let now2 = now + 30.0; // < IC_BURST_HOLD (60s)
+        let now2 = now + (constants::IC_BURST_HOLD / 2.0);
         assert!(ic.should_ingress_limit(
             iface(1),
             &IngressControlConfig::enabled(),
@@ -750,5 +842,108 @@ mod tests {
                 ok_time
             )
             .is_some());
+    }
+
+    #[test]
+    fn test_upstream_1_2_5_default_thresholds() {
+        let config = IngressControlConfig::enabled();
+
+        assert_eq!(constants::IC_BURST_FREQ_NEW, 3.0);
+        assert_eq!(constants::IC_BURST_FREQ, 10.0);
+        assert_eq!(constants::IC_PR_BURST_FREQ_NEW, 3.0);
+        assert_eq!(constants::IC_PR_BURST_FREQ, 8.0);
+        assert_eq!(constants::IC_BURST_HOLD, 15.0);
+        assert_eq!(constants::IC_HELD_RELEASE_INTERVAL, 5.0);
+        assert_eq!(constants::EC_PR_FREQ, 5.0);
+
+        assert_eq!(config.pr_burst_freq_new, constants::IC_PR_BURST_FREQ_NEW);
+        assert_eq!(config.pr_burst_freq, constants::IC_PR_BURST_FREQ);
+        assert_eq!(config.egress_pr_freq, constants::EC_PR_FREQ);
+        assert!(!config.egress_enabled);
+    }
+
+    #[test]
+    fn test_pr_burst_activates_independently_from_announce_burst() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let started = 0.0;
+        let now = 10000.0;
+
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &config,
+            constants::IC_BURST_FREQ - 1.0,
+            started,
+            now
+        ));
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            constants::IC_PR_BURST_FREQ + 0.25,
+            started,
+            now
+        ));
+        assert!(!ic.burst_active(&iface(1)));
+        assert!(ic.pr_burst_active(&iface(1)));
+    }
+
+    #[test]
+    fn test_pr_burst_deactivates_after_hold_period() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let started = 0.0;
+        let now = 10000.0;
+
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            constants::IC_PR_BURST_FREQ + 1.0,
+            started,
+            now
+        ));
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            0.1,
+            started,
+            now + constants::IC_BURST_HOLD - 1.0
+        ));
+        assert!(!ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            0.1,
+            started,
+            now + constants::IC_BURST_HOLD + 1.0
+        ));
+        assert!(!ic.pr_burst_active(&iface(1)));
+    }
+
+    #[test]
+    fn test_egress_pr_limit_requires_enabled_config_threshold_and_samples() {
+        let mut ic = IngressControl::new();
+        let mut config = IngressControlConfig::enabled();
+        let interface = iface(1);
+
+        assert!(!ic.should_egress_limit_pr(interface, &config, constants::EC_PR_FREQ + 1.0, 64));
+
+        config.egress_enabled = true;
+        assert!(!ic.should_egress_limit_pr(
+            interface,
+            &config,
+            constants::EC_PR_FREQ,
+            constants::IC_BURST_MIN_SAMPLES
+        ));
+        assert!(!ic.should_egress_limit_pr(
+            interface,
+            &config,
+            constants::EC_PR_FREQ + 1.0,
+            constants::IC_BURST_MIN_SAMPLES - 1
+        ));
+        assert!(ic.should_egress_limit_pr(
+            interface,
+            &config,
+            constants::EC_PR_FREQ + 1.0,
+            constants::IC_BURST_MIN_SAMPLES
+        ));
     }
 }
