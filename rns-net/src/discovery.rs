@@ -274,23 +274,28 @@ impl DiscoveredInterfaceStorage {
                 })
         };
 
-        let transport_id_bytes = get_bytes(&value, "transport_id")?;
+        let fixed_bytes = |key: &str, expected_len: usize| -> io::Result<Vec<u8>> {
+            let bytes = get_bytes(&value, key)?;
+            if bytes.len() != expected_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{} must be {} bytes", key, expected_len),
+                ));
+            }
+            Ok(bytes)
+        };
+
+        let transport_id_bytes = fixed_bytes("transport_id", 16)?;
         let mut transport_id = [0u8; 16];
-        if transport_id_bytes.len() == 16 {
-            transport_id.copy_from_slice(&transport_id_bytes);
-        }
+        transport_id.copy_from_slice(&transport_id_bytes);
 
-        let network_id_bytes = get_bytes(&value, "network_id")?;
+        let network_id_bytes = fixed_bytes("network_id", 16)?;
         let mut network_id = [0u8; 16];
-        if network_id_bytes.len() == 16 {
-            network_id.copy_from_slice(&network_id_bytes);
-        }
+        network_id.copy_from_slice(&network_id_bytes);
 
-        let discovery_hash_bytes = get_bytes(&value, "discovery_hash")?;
+        let discovery_hash_bytes = fixed_bytes("discovery_hash", 32)?;
         let mut discovery_hash = [0u8; 32];
-        if discovery_hash_bytes.len() == 32 {
-            discovery_hash.copy_from_slice(&discovery_hash_bytes);
-        }
+        discovery_hash.copy_from_slice(&discovery_hash_bytes);
 
         let status_str = get_str(&value, "status")?;
         let status = match status_str.as_str() {
@@ -300,10 +305,15 @@ impl DiscoveredInterfaceStorage {
             _ => DiscoveredStatus::Unknown,
         };
 
+        let interface_type = get_str(&value, "type")?;
+        let raw_name = get_str(&value, "name")?;
+        let name = sanitize_discovered_name(&raw_name)
+            .unwrap_or_else(|| format!("Discovered {}", interface_type));
+
         Ok(DiscoveredInterface {
-            interface_type: get_str(&value, "type")?,
+            interface_type,
             transport: get_bool(&value, "transport")?,
-            name: get_str(&value, "name")?,
+            name,
             discovered: get_float(&value, "discovered")?,
             last_heard: get_float(&value, "last_heard")?,
             heard_count: get_uint(&value, "heard_count")? as u32,
@@ -736,23 +746,11 @@ mod tests {
         assert_eq!(iface.compute_status(), DiscoveredStatus::Stale);
     }
 
-    #[test]
-    fn test_storage_roundtrip() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("rns-discovery-test-{}-{}", std::process::id(), id));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let storage = DiscoveredInterfaceStorage::new(dir.clone());
-
-        let iface = DiscoveredInterface {
+    fn test_discovered_interface(name: &str) -> DiscoveredInterface {
+        DiscoveredInterface {
             interface_type: "BackboneInterface".into(),
             transport: true,
-            name: "TestNode".into(),
+            name: name.into(),
             discovered: 1700000000.0,
             last_heard: 1700001000.0,
             heard_count: 5,
@@ -776,8 +774,24 @@ mod tests {
             ifac_netname: Some("mynetwork".into()),
             ifac_netkey: Some("secretkey".into()),
             config_entry: Some("test config".into()),
-            discovery_hash: compute_discovery_hash(&[0x01u8; 16], "TestNode"),
-        };
+            discovery_hash: compute_discovery_hash(&[0x01u8; 16], name),
+        }
+    }
+
+    #[test]
+    fn test_storage_roundtrip() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("rns-discovery-test-{}-{}", std::process::id(), id));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+
+        let iface = test_discovered_interface("TestNode");
 
         // Store
         storage.store(&iface).unwrap();
@@ -804,6 +818,49 @@ mod tests {
         assert!(list.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn storage_load_sanitizes_cached_interface_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-discovery-sanitize-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+        let iface = test_discovered_interface("\t**Cached     Name!!!\n");
+
+        storage.store(&iface).unwrap();
+
+        let loaded = storage.load(&iface.discovery_hash).unwrap().unwrap();
+        let listed = storage.list().unwrap();
+
+        assert_eq!(loaded.name, "Cached Name");
+        assert_eq!(listed[0].name, "Cached Name");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn storage_rejects_cached_transport_id_with_invalid_length() {
+        let storage = DiscoveredInterfaceStorage::new(std::env::temp_dir());
+        let iface = test_discovered_interface("BadTransportId");
+        let mut data = storage.serialize_interface(&iface).unwrap();
+        let (mut value, _) = msgpack::unpack(&data).unwrap();
+        if let Value::Map(ref mut entries) = value {
+            for (key, val) in entries {
+                if key.as_str() == Some("transport_id") {
+                    *val = Value::Bin(vec![0x01; 15]);
+                }
+            }
+        }
+        data = msgpack::pack(&value);
+
+        let err = storage.deserialize_interface(&data).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("transport_id"));
     }
 
     #[test]

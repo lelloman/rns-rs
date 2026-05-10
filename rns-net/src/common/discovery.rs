@@ -262,7 +262,10 @@ pub fn parse_interface_announce(
     };
 
     // Extract required fields
-    let interface_type = get_u8_val(INTERFACE_TYPE)?.as_str()?.to_string();
+    let interface_type = match get_u8_val(INTERFACE_TYPE)? {
+        Value::Str(value) => value,
+        _ => return None,
+    };
     if !is_discoverable_type(&interface_type) {
         log::debug!(
             "Ignoring discovered interface with unsupported type '{}'",
@@ -271,24 +274,35 @@ pub fn parse_interface_announce(
         return None;
     }
 
-    let transport = get_u8_val(TRANSPORT)?.as_bool()?;
-    let name = get_u8_val(NAME)?
-        .as_str()
-        .unwrap_or(&format!("Discovered {}", interface_type))
-        .to_string();
+    let transport = match get_u8_val(TRANSPORT)? {
+        Value::Bool(value) => value,
+        _ => return None,
+    };
+    let raw_name = match get_u8_val(NAME) {
+        Some(Value::Str(value)) => value,
+        Some(_) | None => String::new(),
+    };
+    let name = sanitize_discovered_name(&raw_name)
+        .unwrap_or_else(|| format!("Discovered {}", interface_type));
 
     let transport_id_val = get_u8_val(TRANSPORT_ID)?;
     let transport_id_bytes = transport_id_val.as_bin()?;
-    let mut transport_id = [0u8; 16];
-    if transport_id_bytes.len() >= 16 {
-        transport_id.copy_from_slice(&transport_id_bytes[..16]);
+    if transport_id_bytes.len() != 16 {
+        log::debug!("Ignoring discovered interface with invalid transport_id length");
+        return None;
     }
+    let mut transport_id = [0u8; 16];
+    transport_id.copy_from_slice(transport_id_bytes);
 
     // Extract optional fields
-    let latitude = get_u8_val(LATITUDE).and_then(|v| v.as_float());
-    let longitude = get_u8_val(LONGITUDE).and_then(|v| v.as_float());
-    let height = get_u8_val(HEIGHT).and_then(|v| v.as_float());
-    let reachable_on = get_u8_val(REACHABLE_ON).and_then(|v| v.as_str().map(|s| s.to_string()));
+    let latitude = optional_f64_field(get_u8_val(LATITUDE))?;
+    let longitude = optional_f64_field(get_u8_val(LONGITUDE))?;
+    let height = optional_f64_field(get_u8_val(HEIGHT))?;
+    let reachable_on = match get_u8_val(REACHABLE_ON) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Str(value)) => Some(value),
+        Some(_) => return None,
+    };
     if let Some(ref reachable_on) = reachable_on {
         if !(is_ip_address(reachable_on) || is_hostname(reachable_on)) {
             log::debug!(
@@ -306,8 +320,8 @@ pub fn parse_interface_announce(
     let coding_rate = get_u8_val(CODINGRATE).and_then(|v| v.as_uint().map(|n| n as u8));
     let modulation = get_u8_val(MODULATION).and_then(|v| v.as_str().map(|s| s.to_string()));
     let channel = get_u8_val(CHANNEL).and_then(|v| v.as_uint().map(|n| n as u8));
-    let ifac_netname = get_u8_val(IFAC_NETNAME).and_then(|v| v.as_str().map(|s| s.to_string()));
-    let ifac_netkey = get_u8_val(IFAC_NETKEY).and_then(|v| v.as_str().map(|s| s.to_string()));
+    let ifac_netname = get_u8_val(IFAC_NETNAME).map(|v| discovery_value_to_string(&v));
+    let ifac_netkey = get_u8_val(IFAC_NETKEY).map(|v| discovery_value_to_string(&v));
 
     // Compute discovery hash
     let discovery_hash = compute_discovery_hash(&transport_id, &name);
@@ -384,6 +398,10 @@ fn generate_config_entry(
     ifac_netname: Option<&str>,
     ifac_netkey: Option<&str>,
 ) -> Option<String> {
+    if reachable_on.is_some_and(is_ygg_ipv6) {
+        return None;
+    }
+
     let transport_id_hex = hex_encode(transport_id);
     let netname_str = ifac_netname
         .map(|n| format!("\n  network_name = {}", n))
@@ -454,6 +472,54 @@ fn generate_config_entry(
 // Helper Functions
 // ============================================================================
 
+fn optional_f64_field(value: Option<Value>) -> Option<Option<f64>> {
+    match value {
+        None | Some(Value::Nil) => Some(None),
+        Some(Value::Float(value)) if value.is_finite() => Some(Some(value)),
+        Some(_) => None,
+    }
+}
+
+fn discovery_value_to_string(value: &Value) -> String {
+    match value {
+        Value::Nil => "None".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::UInt(value) => value.to_string(),
+        Value::Int(value) => value.to_string(),
+        Value::Float(value) => value.to_string(),
+        Value::Bin(value) => hex_encode(value),
+        Value::Str(value) => value.clone(),
+        Value::Array(_) => "[]".to_string(),
+        Value::Map(_) => "{}".to_string(),
+    }
+}
+
+/// Sanitize a discovered interface name like upstream Reticulum.
+pub fn sanitize_discovered_name(name: &str) -> Option<String> {
+    let ascii: String = name.chars().filter(|ch| ch.is_ascii()).collect();
+    let mut sanitized = ascii.trim().to_string();
+    while sanitized.contains("  ") {
+        sanitized = sanitized.replace("  ", " ");
+    }
+
+    let start = sanitized
+        .char_indices()
+        .find(|(_, ch)| ch.is_ascii_alphanumeric())
+        .map(|(idx, _)| idx)?;
+    let end = sanitized
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_ascii_alphanumeric() || *ch == ')')
+        .map(|(idx, ch)| idx + ch.len_utf8())?;
+
+    if start >= end {
+        return None;
+    }
+
+    let sanitized = sanitized[start..end].to_string();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
 /// Encode bytes as hex string (no delimiters)
 pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
@@ -462,6 +528,17 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 /// Check if a string is a valid IP address
 pub fn is_ip_address(s: &str) -> bool {
     s.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// Check if an address belongs to Yggdrasil's `200::/7` IPv6 range.
+pub fn is_ygg_ipv6(s: &str) -> bool {
+    match s.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(addr)) => {
+            let segments = addr.segments();
+            (segments[0] & 0xfe00) == 0x0200
+        }
+        _ => false,
+    }
 }
 
 /// Check if a string is a valid hostname
@@ -564,7 +641,16 @@ pub fn discovery_name_hash() -> [u8; 10] {
 mod tests {
     use super::*;
 
-    fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
+    fn pack_discovery_entries(entries: Vec<(Value, Value)>) -> Vec<u8> {
+        let packed = msgpack::pack(&Value::Map(entries));
+        let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
+        app_data.push(0x00);
+        app_data.extend_from_slice(&packed);
+        app_data.extend_from_slice(&[0u8; STAMP_SIZE]);
+        app_data
+    }
+
+    fn discovery_entries(interface_type: &str, reachable_on: Option<&str>) -> Vec<(Value, Value)> {
         let mut entries = vec![
             (
                 Value::UInt(INTERFACE_TYPE as u64),
@@ -585,12 +671,11 @@ mod tests {
             ));
         }
 
-        let packed = msgpack::pack(&Value::Map(entries));
-        let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
-        app_data.push(0x00);
-        app_data.extend_from_slice(&packed);
-        app_data.extend_from_slice(&[0u8; STAMP_SIZE]);
-        app_data
+        entries
+    }
+
+    fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
+        pack_discovery_entries(discovery_entries(interface_type, reachable_on))
     }
 
     #[test]
@@ -615,6 +700,90 @@ mod tests {
             parsed.is_none(),
             "discovered interfaces with invalid reachable_on values must be ignored"
         );
+    }
+
+    #[test]
+    fn parse_sanitizes_discovered_interface_name() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.retain(|(key, _)| key.as_uint() != Some(NAME as u64));
+        entries.push((
+            Value::UInt(NAME as u64),
+            Value::Str("\t**Alpha     Beta!!!\n".to_string()),
+        ));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.name, "Alpha Beta");
+        assert!(parsed.config_entry.unwrap().starts_with("[[Alpha Beta]]"));
+    }
+
+    #[test]
+    fn parse_falls_back_when_discovered_interface_name_sanitizes_empty() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.retain(|(key, _)| key.as_uint() != Some(NAME as u64));
+        entries.push((Value::UInt(NAME as u64), Value::Str("!!!".to_string())));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.name, "Discovered BackboneInterface");
+    }
+
+    #[test]
+    fn parse_rejects_invalid_discovered_interface_field_types() {
+        for (field, replacement) in [
+            (TRANSPORT, Value::Str("yes".to_string())),
+            (LATITUDE, Value::Str("45.0".to_string())),
+            (LONGITUDE, Value::Str("9.0".to_string())),
+            (HEIGHT, Value::Str("100".to_string())),
+            (INTERFACE_TYPE, Value::UInt(123)),
+            (REACHABLE_ON, Value::UInt(123)),
+        ] {
+            let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+            entries.retain(|(key, _)| key.as_uint() != Some(field as u64));
+            entries.push((Value::UInt(field as u64), replacement));
+            let app_data = pack_discovery_entries(entries);
+
+            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+
+            assert!(parsed.is_none(), "field {field} should reject invalid type");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_invalid_transport_id_length() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.retain(|(key, _)| key.as_uint() != Some(TRANSPORT_ID as u64));
+        entries.push((Value::UInt(TRANSPORT_ID as u64), Value::Bin(vec![0x42; 15])));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0);
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn parse_converts_ifac_fields_to_strings() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(IFAC_NETNAME as u64), Value::UInt(123)));
+        entries.push((Value::UInt(IFAC_NETKEY as u64), Value::Bool(true)));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.ifac_netname.as_deref(), Some("123"));
+        assert_eq!(parsed.ifac_netkey.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn parse_yggdrasil_reachable_on_keeps_record_without_config_entry() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("200:1234::1"));
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.reachable_on.as_deref(), Some("200:1234::1"));
+        assert!(parsed.config_entry.is_none());
     }
 
     #[test]
