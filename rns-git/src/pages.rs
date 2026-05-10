@@ -2132,12 +2132,10 @@ fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
 
 fn is_markdown_inline_code(content: &str) -> bool {
     !content.is_empty()
-        && !content.chars().next().is_some_and(|ch| {
-            matches!(
-                ch,
-                '!' | '*' | '_' | '=' | '[' | 'F' | 'B' | 'f' | 'b' | 'a'
-            )
-        })
+        && !content
+            .chars()
+            .next()
+            .is_some_and(|ch| matches!(ch, '!' | '*' | '_' | '=' | 'F' | 'B' | 'f' | 'b' | 'a'))
 }
 
 fn parse_markdown_link(input: &str) -> Option<(usize, String, String)> {
@@ -2991,6 +2989,17 @@ after\n",
         assert!(out.contains("`!`[**bold** code`https://example.invalid?q=*x*]`!"));
         assert!(!out.contains("`!`!"));
         assert!(!out.contains("`*x`*"));
+    }
+
+    #[test]
+    fn markdown_inline_code_that_looks_like_link_does_not_hide_real_links() {
+        let out = markdown_to_micron(
+            "`[literal](https://example.invalid/no)` and [real](https://example.invalid/yes)",
+        );
+
+        assert!(out.contains("`BT383838`Fddd[literal](https://example.invalid/no)`f`b"));
+        assert!(out.contains("`!`[real`https://example.invalid/yes]`!"));
+        assert!(!out.contains("`!`[literal`https://example.invalid/no]`!"));
     }
 
     #[test]
