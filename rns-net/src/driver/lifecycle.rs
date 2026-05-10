@@ -197,6 +197,14 @@ impl Driver {
             self.wait_for_writer_flush(DEFAULT_LINK_TEARDOWN_FLUSH);
         }
 
+        self.engine.void_queues();
+        self.announce_verify_queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.sent_packets.clear();
+        self.completed_proofs.clear();
+
         self.lifecycle_state = LifecycleState::Stopped;
     }
 

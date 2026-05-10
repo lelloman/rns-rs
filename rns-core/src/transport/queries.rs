@@ -186,6 +186,11 @@ impl TransportEngine {
         self.ingress_control.clear();
     }
 
+    pub fn void_queues(&mut self) {
+        self.drop_announce_queues();
+        self.reverse_table.clear();
+    }
+
     pub fn identity_hash(&self) -> Option<&[u8; 16]> {
         self.config.identity_hash.as_ref()
     }

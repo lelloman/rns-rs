@@ -172,6 +172,11 @@ impl AnnounceVerifyQueue {
         self.queued_bytes
     }
 
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.queued_bytes = 0;
+    }
+
     fn select_eviction_candidate(
         &self,
         incoming_entry: &PendingAnnounce,
@@ -389,5 +394,24 @@ mod tests {
         let taken = queue.take_pending(10.0);
         assert_eq!(taken.len(), 1);
         assert_eq!(taken[0].0, k2);
+    }
+
+    #[test]
+    fn clear_removes_pending_and_inflight_entries_and_resets_bytes() {
+        let mut queue = AnnounceVerifyQueue::new(4);
+        let (pending_key, pending) = make_pending([1; 16], [1; 10], [1; 16], 4);
+        let (inflight_key, inflight) = make_pending([2; 16], [2; 10], [2; 16], 3);
+        assert!(queue.enqueue(pending_key, pending));
+        assert!(queue.enqueue(inflight_key, inflight));
+        let _ = queue.take_pending(10.0);
+
+        assert_eq!(queue.len(), 2);
+        assert!(queue.queued_bytes() > 0);
+
+        queue.clear();
+
+        assert!(queue.is_empty());
+        assert_eq!(queue.queued_bytes(), 0);
+        assert!(queue.take_pending(10.0).is_empty());
     }
 }

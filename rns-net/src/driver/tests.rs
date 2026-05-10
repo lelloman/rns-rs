@@ -4,6 +4,7 @@ use crate::interface::Writer;
 use rns_core::announce::AnnounceData;
 use rns_core::constants;
 use rns_core::packet::{PacketFlags, RawPacket};
+use rns_core::transport::announce_verify_queue::{AnnounceVerifyKey, PendingAnnounce};
 use rns_core::transport::types::InterfaceInfo;
 use rns_crypto::identity::Identity;
 use std::collections::HashSet;
@@ -897,6 +898,43 @@ fn make_entry(id: u64, writer: Box<dyn Writer>, online: bool) -> InterfaceEntry 
     }
 }
 
+fn make_pending_verify_announce(dest: [u8; 16]) -> (AnnounceVerifyKey, PendingAnnounce) {
+    let random_blob = [0xA1; 10];
+    let received_from = [0xB2; 16];
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        1,
+        &dest,
+        None,
+        constants::CONTEXT_NONE,
+        &[0xCC; 16],
+    )
+    .unwrap();
+    (
+        AnnounceVerifyKey {
+            destination_hash: dest,
+            random_blob,
+            received_from,
+        },
+        PendingAnnounce {
+            original_raw: packet.raw.clone(),
+            packet,
+            interface: InterfaceId(1),
+            received_from,
+            queued_at: 100.0,
+            best_hops: 1,
+            emission_ts: 42,
+            random_blob,
+        },
+    )
+}
+
 /// Build a valid announce packet that the engine will accept.
 fn build_announce_packet(identity: &Identity) -> Vec<u8> {
     let dest_hash =
@@ -1245,6 +1283,31 @@ fn shutdown_event() {
 
     tx.send(Event::Shutdown).unwrap();
     driver.run(); // Should return immediately
+}
+
+#[test]
+fn graceful_shutdown_voids_async_announce_and_receipt_state() {
+    let mut driver = new_test_driver();
+    let (key, pending) = make_pending_verify_announce([0xD1; 16]);
+    {
+        let mut queue = driver.announce_verify_queue.lock().unwrap();
+        assert!(queue.enqueue(key, pending));
+        assert!(!queue.is_empty());
+        assert!(queue.queued_bytes() > 0);
+    }
+    driver.sent_packets.insert([0xA1; 32], ([0xB1; 16], 100.0));
+    driver.completed_proofs.insert([0xA2; 32], (0.25, 101.0));
+
+    driver.graceful_shutdown();
+
+    assert_eq!(driver.lifecycle_state, LifecycleState::Stopped);
+    {
+        let queue = driver.announce_verify_queue.lock().unwrap();
+        assert!(queue.is_empty());
+        assert_eq!(queue.queued_bytes(), 0);
+    }
+    assert!(driver.sent_packets.is_empty());
+    assert!(driver.completed_proofs.is_empty());
 }
 
 #[test]
@@ -5783,14 +5846,7 @@ fn send_outbound_tracks_sent_packets() {
         RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test data").unwrap();
     let expected_hash = packet.packet_hash;
 
-    tx.send(Event::SendOutbound {
-        raw: packet.raw,
-        dest_type: constants::DESTINATION_PLAIN,
-        attached_interface: None,
-    })
-    .unwrap();
-    tx.send(Event::Shutdown).unwrap();
-    driver.run();
+    driver.handle_send_outbound_event(packet.raw, constants::DESTINATION_PLAIN, None);
 
     // Should be tracking the sent packet
     assert!(driver.sent_packets.contains_key(&expected_hash));
@@ -7142,41 +7198,29 @@ fn send_probe_known_dest_returns_packet_hash() {
     );
 
     // First inject the identity via announce
-    let (inject_tx, inject_rx) = mpsc::channel();
-    tx.send(Event::Query(
-        QueryRequest::InjectIdentity {
-            dest_hash,
-            identity_hash: *remote_identity.hash(),
-            public_key: remote_identity.get_public_key().unwrap(),
-            app_data: None,
-            hops: 1,
-            received_at: 0.0,
-        },
-        inject_tx,
-    ))
-    .unwrap();
+    let inject_response = driver.handle_query_mut(QueryRequest::InjectIdentity {
+        dest_hash,
+        identity_hash: *remote_identity.hash(),
+        public_key: remote_identity.get_public_key().unwrap(),
+        app_data: None,
+        hops: 1,
+        received_at: 0.0,
+    });
 
     // Now send the probe
-    let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(
-        QueryRequest::SendProbe {
-            dest_hash,
-            payload_size: 16,
-        },
-        resp_tx,
-    ))
-    .unwrap();
-    tx.send(Event::Shutdown).unwrap();
-    driver.run();
+    let probe_response = driver.handle_query_mut(QueryRequest::SendProbe {
+        dest_hash,
+        payload_size: 16,
+    });
 
     // Verify injection succeeded
-    match inject_rx.recv().unwrap() {
+    match inject_response {
         QueryResponse::InjectIdentity(true) => {}
         other => panic!("expected InjectIdentity(true), got {:?}", other),
     }
 
     // Verify probe sent
-    match resp_rx.recv().unwrap() {
+    match probe_response {
         QueryResponse::SendProbe(Some((packet_hash, _hops))) => {
             // Packet hash should be non-zero
             assert_ne!(packet_hash, [0u8; 32]);
@@ -7480,16 +7524,9 @@ fn inbound_proof_populates_completed_proofs() {
         .sent_packets
         .insert(data_packet_hash, (dest, time::now()));
 
-    // Feed the proof frame
-    tx2.send(Event::Frame {
-        interface_id: InterfaceId(1),
-        data: proof_raw,
-        rssi: Some(-100),
-        snr: Some(10.5),
-    })
-    .unwrap();
-    tx2.send(Event::Shutdown).unwrap();
-    driver2.run();
+    // Feed the proof frame without shutting down, since shutdown now clears
+    // completed proof state.
+    driver2.handle_frame_event(InterfaceId(1), proof_raw, Some(-100), Some(10.5));
 
     // The on_proof callback should have fired
     let proof_events = proofs2.lock().unwrap();

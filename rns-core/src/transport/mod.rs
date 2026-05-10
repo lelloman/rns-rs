@@ -2426,6 +2426,69 @@ mod tests {
     }
 
     #[test]
+    fn test_void_queues_clears_shutdown_transients() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+        let active_dest = [0x91; 16];
+        let held_dest = [0x92; 16];
+        assert!(engine.insert_announce_entry(
+            active_dest,
+            make_announce_entry(active_dest, 100.0, 16),
+            100.0,
+        ));
+        assert!(engine.insert_held_announce(
+            held_dest,
+            make_announce_entry(held_dest, 100.0, 16),
+            100.0,
+        ));
+        engine.reverse_table.insert(
+            [0x93; 16],
+            tables::ReverseEntry {
+                receiving_interface: InterfaceId(1),
+                outbound_interface: InterfaceId(2),
+                timestamp: 100.0,
+            },
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0xAA; 32].into(),
+            [0x94; 16],
+            2,
+            100.0,
+            100.0,
+            Some(1000),
+            None,
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(1),
+            vec![0xBB; 32].into(),
+            [0x95; 16],
+            3,
+            100.0,
+            100.0,
+            Some(1000),
+            None,
+            constants::ANNOUNCE_CAP,
+        );
+
+        assert_eq!(engine.announce_table_count(), 1);
+        assert_eq!(engine.held_announces_count(), 1);
+        assert_eq!(engine.reverse_table_count(), 1);
+        assert_eq!(engine.queued_announce_count(), 1);
+
+        engine.void_queues();
+
+        assert_eq!(engine.announce_table_count(), 0);
+        assert_eq!(engine.held_announces_count(), 0);
+        assert_eq!(engine.reverse_table_count(), 0);
+        assert_eq!(engine.queued_announce_count(), 0);
+        assert_eq!(engine.nonempty_announce_queue_count(), 0);
+        assert_eq!(engine.announce_retained_bytes(), 0);
+    }
+
+    #[test]
     fn test_blackhole_identity() {
         let mut engine = TransportEngine::new(make_config(false));
         let hash = [0xAA; 16];
