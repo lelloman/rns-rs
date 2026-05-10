@@ -365,13 +365,18 @@ fn print_status(
                     .and_then(|v| v.as_int())
                     .filter(|n| *n > 0)
                     .map(|n| n as u64);
+                let peers = iface
+                    .get("peers")
+                    .and_then(|v| v.as_int())
+                    .filter(|n| *n > 0)
+                    .map(|n| n as u64);
                 let ar_target = iface.get("announce_rate_target").and_then(|v| v.as_float());
                 let ar_penalty = iface
                     .get("announce_rate_penalty")
                     .and_then(|v| v.as_float());
                 let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
                 for line in announce_status_lines(
-                    ia_freq, oa_freq, clients, ar_target, ar_penalty, ar_grace,
+                    ia_freq, oa_freq, clients, peers, ar_target, ar_penalty, ar_grace,
                 ) {
                     println!("{}", line);
                 }
@@ -390,7 +395,12 @@ fn print_status(
                     .and_then(|v| v.as_int())
                     .filter(|n| *n > 0)
                     .map(|n| n as u64);
-                for line in path_request_status_lines(ip_freq, op_freq, clients) {
+                let peers = iface
+                    .get("peers")
+                    .and_then(|v| v.as_int())
+                    .filter(|n| *n > 0)
+                    .map(|n| n as u64);
+                for line in path_request_status_lines(ip_freq, op_freq, clients, peers) {
                     println!("{}", line);
                 }
             }
@@ -506,6 +516,7 @@ fn announce_status_lines(
     ia_freq: f64,
     oa_freq: f64,
     clients: Option<u64>,
+    peers: Option<u64>,
     ar_target: Option<f64>,
     ar_penalty: Option<f64>,
     ar_grace: Option<i64>,
@@ -515,10 +526,11 @@ fn announce_status_lines(
         prettyfrequency(ia_freq),
         prettyfrequency(oa_freq),
     );
-    if let Some(clients) = clients.filter(|clients| *clients > 0) {
+    if let Some((count, label)) = outgoing_denominator(clients, peers) {
         line.push_str(&format!(
-            "  {}/c",
-            prettyfrequency(oa_freq / clients as f64)
+            "  {}/{}",
+            prettyfrequency(oa_freq / count as f64),
+            label
         ));
     }
 
@@ -536,19 +548,32 @@ fn announce_status_lines(
     lines
 }
 
-fn path_request_status_lines(ip_freq: f64, op_freq: f64, clients: Option<u64>) -> Vec<String> {
+fn path_request_status_lines(
+    ip_freq: f64,
+    op_freq: f64,
+    clients: Option<u64>,
+    peers: Option<u64>,
+) -> Vec<String> {
     let mut line = format!(
         "    Path reqs : {} in  {} out",
         prettyfrequency(ip_freq),
         prettyfrequency(op_freq),
     );
-    if let Some(clients) = clients.filter(|clients| *clients > 0) {
+    if let Some((count, label)) = outgoing_denominator(clients, peers) {
         line.push_str(&format!(
-            "  {}/c",
-            prettyfrequency(op_freq / clients as f64)
+            "  {}/{}",
+            prettyfrequency(op_freq / count as f64),
+            label
         ));
     }
     vec![line]
+}
+
+fn outgoing_denominator(clients: Option<u64>, peers: Option<u64>) -> Option<(u64, &'static str)> {
+    clients
+        .filter(|count| *count > 0)
+        .map(|count| (count, "c"))
+        .or_else(|| peers.filter(|count| *count > 0).map(|count| (count, "p")))
 }
 
 fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
@@ -889,28 +914,44 @@ mod tests {
 
     #[test]
     fn announce_line_includes_per_client_outgoing_frequency_when_clients_present() {
-        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, Some(4), None, None, None);
+        let lines =
+            announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, Some(4), None, None, None, None);
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out  1.0/h/c");
     }
 
     #[test]
     fn announce_line_omits_per_client_frequency_without_clients() {
-        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, None, None, None);
+        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, None, None, None, None);
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out");
     }
 
     #[test]
+    fn announce_line_uses_per_peer_frequency_when_clients_are_absent() {
+        let lines =
+            announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, Some(2), None, None, None);
+
+        assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out  2.0/h/p");
+    }
+
+    #[test]
     fn path_request_line_includes_per_client_outgoing_frequency_when_clients_present() {
-        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, Some(4));
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, Some(4), None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out  2.0/h/c");
     }
 
     #[test]
+    fn path_request_line_uses_per_peer_frequency_when_clients_are_absent() {
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, Some(2));
+
+        assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out  4.0/h/p");
+    }
+
+    #[test]
     fn path_request_line_omits_per_client_frequency_without_clients() {
-        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None);
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out");
     }
