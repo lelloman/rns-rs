@@ -96,6 +96,28 @@ pub struct ReticulumSection {
     pub default_ar_penalty: f64,
     /// Default announce-rate grace count for transport-node interfaces.
     pub default_ar_grace: u32,
+    /// Default maximum held announces for ingress control.
+    pub default_ic_max_held_announces: usize,
+    /// Default announce burst hold time for ingress control.
+    pub default_ic_burst_hold: f64,
+    /// Default new-interface announce burst threshold.
+    pub default_ic_burst_freq_new: f64,
+    /// Default mature-interface announce burst threshold.
+    pub default_ic_burst_freq: f64,
+    /// Default new-interface path request burst threshold.
+    pub default_ic_pr_burst_freq_new: f64,
+    /// Default mature-interface path request burst threshold.
+    pub default_ic_pr_burst_freq: f64,
+    /// Default new-interface age window for ingress control.
+    pub default_ic_new_time: f64,
+    /// Default burst penalty before releasing held announces.
+    pub default_ic_burst_penalty: f64,
+    /// Default interval between released held announces.
+    pub default_ic_held_release_interval: f64,
+    /// Default egress path request limiting state.
+    pub default_egress_control: bool,
+    /// Default egress path request frequency threshold.
+    pub default_ec_pr_freq: f64,
     /// Maximum retained bytes in the async announce verification queue.
     pub announce_queue_max_bytes: usize,
     /// TTL for queued async announce verification entries, in seconds.
@@ -166,6 +188,17 @@ impl Default for ReticulumSection {
             default_ar_target: Some(3600.0),
             default_ar_penalty: 0.0,
             default_ar_grace: 5,
+            default_ic_max_held_announces: rns_core::constants::IC_MAX_HELD_ANNOUNCES,
+            default_ic_burst_hold: rns_core::constants::IC_BURST_HOLD,
+            default_ic_burst_freq_new: rns_core::constants::IC_BURST_FREQ_NEW,
+            default_ic_burst_freq: rns_core::constants::IC_BURST_FREQ,
+            default_ic_pr_burst_freq_new: rns_core::constants::IC_PR_BURST_FREQ_NEW,
+            default_ic_pr_burst_freq: rns_core::constants::IC_PR_BURST_FREQ,
+            default_ic_new_time: rns_core::constants::IC_NEW_TIME,
+            default_ic_burst_penalty: rns_core::constants::IC_BURST_PENALTY,
+            default_ic_held_release_interval: rns_core::constants::IC_HELD_RELEASE_INTERVAL,
+            default_egress_control: false,
+            default_ec_pr_freq: rns_core::constants::EC_PR_FREQ,
             announce_queue_max_bytes: 256 * 1024,
             announce_queue_ttl: 30,
             announce_queue_overflow_policy: "drop_worst".into(),
@@ -395,6 +428,40 @@ fn parse_bool(value: &str) -> Option<bool> {
         "no" | "false" | "0" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn parse_nonnegative_f64_option(
+    kvs: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<f64>, ConfigError> {
+    let Some(v) = kvs.get(key) else {
+        return Ok(None);
+    };
+    let parsed = v.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
+        key: key.into(),
+        value: v.clone(),
+    })?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(ConfigError::InvalidValue {
+            key: key.into(),
+            value: v.clone(),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_usize_option(
+    kvs: &HashMap<String, String>,
+    key: &str,
+) -> Result<Option<usize>, ConfigError> {
+    let Some(v) = kvs.get(key) else {
+        return Ok(None);
+    };
+    let parsed = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+        key: key.into(),
+        value: v.clone(),
+    })?;
+    Ok(Some(parsed))
 }
 
 fn build_parsed_interface(name: String, mut kvs: HashMap<String, String>) -> ParsedInterface {
@@ -792,6 +859,43 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.default_ar_grace = grace;
     }
+    if let Some(v) = parse_usize_option(kvs, "ic_max_held_announces")? {
+        section.default_ic_max_held_announces = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_burst_hold")? {
+        section.default_ic_burst_hold = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_burst_freq_new")? {
+        section.default_ic_burst_freq_new = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_burst_freq")? {
+        section.default_ic_burst_freq = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_pr_burst_freq_new")? {
+        section.default_ic_pr_burst_freq_new = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_pr_burst_freq")? {
+        section.default_ic_pr_burst_freq = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_new_time")? {
+        section.default_ic_new_time = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_burst_penalty")? {
+        section.default_ic_burst_penalty = v;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ic_held_release_interval")? {
+        section.default_ic_held_release_interval = v;
+    }
+    if let Some(v) = kvs.get("egress_control") {
+        section.default_egress_control =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "egress_control".into(),
+                value: v.clone(),
+            })?;
+    }
+    if let Some(v) = parse_nonnegative_f64_option(kvs, "ec_pr_freq")? {
+        section.default_ec_pr_freq = v;
+    }
     if let Some(v) = kvs.get("announce_queue_max_bytes") {
         let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
             key: "announce_queue_max_bytes".into(),
@@ -1152,6 +1256,62 @@ default_ar_grace = 0
             assert!(
                 err.to_string().contains(key),
                 "error {err:?} should mention {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_reticulum_ingress_and_egress_control_defaults() {
+        let input = r#"[reticulum]
+ic_max_held_announces = 17
+ic_burst_hold = 1.5
+ic_burst_freq_new = 2.5
+ic_burst_freq = 3.5
+ic_pr_burst_freq_new = 4.5
+ic_pr_burst_freq = 5.5
+ic_new_time = 6.5
+ic_burst_penalty = 7.5
+ic_held_release_interval = 8.5
+egress_control = Yes
+ec_pr_freq = 9.5
+"#;
+
+        let config = parse(input).unwrap();
+
+        assert_eq!(config.reticulum.default_ic_max_held_announces, 17);
+        assert_eq!(config.reticulum.default_ic_burst_hold, 1.5);
+        assert_eq!(config.reticulum.default_ic_burst_freq_new, 2.5);
+        assert_eq!(config.reticulum.default_ic_burst_freq, 3.5);
+        assert_eq!(config.reticulum.default_ic_pr_burst_freq_new, 4.5);
+        assert_eq!(config.reticulum.default_ic_pr_burst_freq, 5.5);
+        assert_eq!(config.reticulum.default_ic_new_time, 6.5);
+        assert_eq!(config.reticulum.default_ic_burst_penalty, 7.5);
+        assert_eq!(config.reticulum.default_ic_held_release_interval, 8.5);
+        assert!(config.reticulum.default_egress_control);
+        assert_eq!(config.reticulum.default_ec_pr_freq, 9.5);
+    }
+
+    #[test]
+    fn parse_reticulum_ingress_and_egress_defaults_reject_invalid_values() {
+        for (key, value) in [
+            ("ic_max_held_announces", "-1"),
+            ("ic_burst_hold", "-1"),
+            ("ic_burst_hold", "NaN"),
+            ("ic_burst_freq_new", "-1"),
+            ("ic_burst_freq", "inf"),
+            ("ic_pr_burst_freq_new", "-1"),
+            ("ic_pr_burst_freq", "NaN"),
+            ("ic_new_time", "-1"),
+            ("ic_burst_penalty", "-1"),
+            ("ic_held_release_interval", "-1"),
+            ("ec_pr_freq", "-1"),
+            ("ec_pr_freq", "inf"),
+        ] {
+            let input = format!("[reticulum]\n{key} = {value}\n");
+            let err = parse(&input).unwrap_err();
+            assert!(
+                format!("{err}").contains(key),
+                "error {err} should mention {key}"
             );
         }
     }

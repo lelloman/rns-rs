@@ -383,6 +383,7 @@ fn register_started_interface(
     ifac_runtime: &crate::driver::IfacRuntimeConfig,
 ) {
     driver.apply_announce_rate_defaults(&mut info);
+    driver.apply_ingress_control_defaults(&mut info);
     let (writer, async_writer_metrics) =
         crate::interface::wrap_async_writer(writer, id, &info.name, tx.clone(), queue_capacity);
     driver.register_interface_runtime_defaults(&info);
@@ -477,6 +478,8 @@ pub struct NodeConfig {
     pub interface_writer_queue_capacity: usize,
     /// Default announce-rate controls applied to interfaces when transport is enabled.
     pub announce_rate_defaults: AnnounceRateDefaults,
+    /// Default ingress/egress controls applied to interfaces when transport is enabled.
+    pub ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Outbound Backbone peer-pool settings. Disabled when `None`.
     #[cfg(feature = "iface-backbone")]
     pub backbone_peer_pool: Option<BackbonePeerPoolSettings>,
@@ -531,6 +534,7 @@ impl Default for NodeConfig {
             driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -867,6 +871,20 @@ impl RnsNode {
                 penalty: rns_config.reticulum.default_ar_penalty,
                 grace: rns_config.reticulum.default_ar_grace,
             },
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig {
+                enabled: true,
+                egress_enabled: rns_config.reticulum.default_egress_control,
+                max_held_announces: rns_config.reticulum.default_ic_max_held_announces,
+                burst_freq_new: rns_config.reticulum.default_ic_burst_freq_new,
+                burst_freq: rns_config.reticulum.default_ic_burst_freq,
+                pr_burst_freq_new: rns_config.reticulum.default_ic_pr_burst_freq_new,
+                pr_burst_freq: rns_config.reticulum.default_ic_pr_burst_freq,
+                egress_pr_freq: rns_config.reticulum.default_ec_pr_freq,
+                new_time: rns_config.reticulum.default_ic_new_time,
+                burst_hold: rns_config.reticulum.default_ic_burst_hold,
+                burst_penalty: rns_config.reticulum.default_ic_burst_penalty,
+                held_release_interval: rns_config.reticulum.default_ic_held_release_interval,
+            },
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: if rns_config.reticulum.backbone_peer_pool_max_connected > 0 {
                 Some(BackbonePeerPoolSettings {
@@ -1008,6 +1026,7 @@ impl RnsNode {
         driver.ratchet_store = config.ratchet_store.clone();
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.set_announce_rate_defaults(config.announce_rate_defaults);
+        driver.set_ingress_control_defaults(config.ingress_control_defaults);
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
         #[cfg(feature = "hooks")]
@@ -2726,6 +2745,46 @@ mod tests {
         assert_eq!(info.announce_rate_grace, 7);
     }
 
+    #[test]
+    fn static_interface_registration_applies_transport_ingress_control_defaults() {
+        let (tx, rx) = crate::event::channel();
+        let mut driver = Driver::new(
+            test_transport_config(true),
+            rx,
+            tx.clone(),
+            Box::new(NoopCallbacks),
+        );
+        let mut defaults = rns_core::transport::types::IngressControlConfig::enabled();
+        defaults.burst_hold = 1.5;
+        defaults.pr_burst_freq = 5.5;
+        defaults.egress_enabled = true;
+        defaults.egress_pr_freq = 9.5;
+        driver.set_ingress_control_defaults(defaults);
+
+        let id = rns_core::transport::types::InterfaceId(8);
+        register_started_interface(
+            &mut driver,
+            &tx,
+            crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            id,
+            test_interface_info(id.0),
+            Box::new(TestWriter),
+            "TestInterface".to_string(),
+            None,
+            &IfacRuntimeConfig {
+                netname: None,
+                netkey: None,
+                size: 16,
+            },
+        );
+
+        let ic = driver.interfaces[&id].info.ingress_control;
+        assert_eq!(ic.burst_hold, 1.5);
+        assert_eq!(ic.pr_burst_freq, 5.5);
+        assert!(ic.egress_enabled);
+        assert_eq!(ic.egress_pr_freq, 9.5);
+    }
+
     struct TestNodeRatchetStore {
         entry: storage::RatchetEntry,
         current_calls: std::sync::Mutex<Vec<[u8; 16]>>,
@@ -2988,6 +3047,8 @@ mod tests {
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3210,6 +3271,8 @@ mod tests {
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3269,6 +3332,8 @@ mod tests {
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3807,6 +3872,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3875,6 +3942,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -3939,6 +4008,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4000,6 +4071,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4101,6 +4174,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4170,6 +4245,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4237,6 +4314,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4317,6 +4396,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,
@@ -4387,6 +4468,8 @@ enable_transport = False
                 interface_writer_queue_capacity:
                     crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
                 announce_rate_defaults: AnnounceRateDefaults::default(),
+                ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(
+                ),
                 #[cfg(feature = "iface-backbone")]
                 backbone_peer_pool: None,
                 announce_sig_cache_enabled: true,

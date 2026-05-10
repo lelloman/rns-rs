@@ -2422,6 +2422,10 @@ impl Driver {
                 "ic_burst_hold",
                 "ic_burst_freq_new",
                 "ic_burst_freq",
+                "ic_pr_burst_freq_new",
+                "ic_pr_burst_freq",
+                "egress_control",
+                "ec_pr_freq",
                 "ic_new_time",
                 "ic_burst_penalty",
                 "ic_held_release_interval",
@@ -2628,6 +2632,42 @@ impl Driver {
                     RuntimeConfigValue::Float(startup.ingress_control.burst_freq),
                     RuntimeConfigApplyMode::Immediate,
                     "Announce frequency threshold for established interfaces.",
+                ))
+            }
+            "ic_pr_burst_freq_new" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.pr_burst_freq_new),
+                    RuntimeConfigValue::Float(startup.ingress_control.pr_burst_freq_new),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Path request frequency threshold for new interfaces.",
+                ))
+            }
+            "ic_pr_burst_freq" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.pr_burst_freq),
+                    RuntimeConfigValue::Float(startup.ingress_control.pr_burst_freq),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Path request frequency threshold for established interfaces.",
+                ))
+            }
+            "egress_control" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Bool(current.ingress_control.egress_enabled),
+                    RuntimeConfigValue::Bool(startup.ingress_control.egress_enabled),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Whether egress path request limiting is enabled for this interface.",
+                ))
+            }
+            "ec_pr_freq" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.ingress_control.egress_pr_freq),
+                    RuntimeConfigValue::Float(startup.ingress_control.egress_pr_freq),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Outgoing path request frequency threshold for egress control.",
                 ))
             }
             "ic_new_time" => {
@@ -2871,6 +2911,18 @@ impl Driver {
             "ic_burst_freq" => {
                 entry.info.ingress_control.burst_freq = Self::expect_f64(value, key)?
             }
+            "ic_pr_burst_freq_new" => {
+                entry.info.ingress_control.pr_burst_freq_new = Self::expect_f64(value, key)?
+            }
+            "ic_pr_burst_freq" => {
+                entry.info.ingress_control.pr_burst_freq = Self::expect_f64(value, key)?
+            }
+            "egress_control" => {
+                entry.info.ingress_control.egress_enabled = Self::expect_bool(value, key)?
+            }
+            "ec_pr_freq" => {
+                entry.info.ingress_control.egress_pr_freq = Self::expect_f64(value, key)?
+            }
             "ic_new_time" => entry.info.ingress_control.new_time = Self::expect_f64(value, key)?,
             "ic_burst_penalty" => {
                 entry.info.ingress_control.burst_penalty = Self::expect_f64(value, key)?
@@ -2991,6 +3043,19 @@ impl Driver {
             }
             "ic_burst_freq" => {
                 entry.info.ingress_control.burst_freq = startup.ingress_control.burst_freq
+            }
+            "ic_pr_burst_freq_new" => {
+                entry.info.ingress_control.pr_burst_freq_new =
+                    startup.ingress_control.pr_burst_freq_new
+            }
+            "ic_pr_burst_freq" => {
+                entry.info.ingress_control.pr_burst_freq = startup.ingress_control.pr_burst_freq
+            }
+            "egress_control" => {
+                entry.info.ingress_control.egress_enabled = startup.ingress_control.egress_enabled
+            }
+            "ec_pr_freq" => {
+                entry.info.ingress_control.egress_pr_freq = startup.ingress_control.egress_pr_freq
             }
             "ic_new_time" => entry.info.ingress_control.new_time = startup.ingress_control.new_time,
             "ic_burst_penalty" => {

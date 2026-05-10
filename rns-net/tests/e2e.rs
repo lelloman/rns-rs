@@ -628,6 +628,7 @@ fn start_transport_node_with_limits(
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -724,6 +725,7 @@ fn start_client_node_with_packet_hashlist(
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -760,6 +762,10 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
     ic_burst_hold = 1.5
     ic_burst_freq_new = 2.5
     ic_burst_freq = 3.5
+    ic_pr_burst_freq_new = 3.25
+    ic_pr_burst_freq = 8.25
+    egress_control = Yes
+    ec_pr_freq = 5.25
     ic_new_time = 4.5
     ic_burst_penalty = 5.5
     ic_held_release_interval = 6.5
@@ -819,6 +825,22 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
     assert_eq!(
         runtime_config_value(&node, &format!("{}.ic_burst_freq", prefix)),
         RuntimeConfigValue::Float(3.5)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_pr_burst_freq_new", prefix)),
+        RuntimeConfigValue::Float(3.25)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ic_pr_burst_freq", prefix)),
+        RuntimeConfigValue::Float(8.25)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.egress_control", prefix)),
+        RuntimeConfigValue::Bool(true)
+    );
+    assert_eq!(
+        runtime_config_value(&node, &format!("{}.ec_pr_freq", prefix)),
+        RuntimeConfigValue::Float(5.25)
     );
     assert_eq!(
         runtime_config_value(&node, &format!("{}.ic_new_time", prefix)),
@@ -1200,6 +1222,7 @@ fn test_direct_link_no_transport() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -1801,6 +1824,7 @@ fn test_plain_message_delivery() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -2035,6 +2059,7 @@ fn test_group_message_delivery() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -2151,6 +2176,7 @@ fn test_group_wrong_key_fails() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3378,6 +3404,7 @@ fn test_udp_announce_and_message() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3449,6 +3476,7 @@ fn test_udp_announce_and_message() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3624,6 +3652,7 @@ fn discovery_announce_received_by_client() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3700,6 +3729,7 @@ fn discovery_announce_received_by_client() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3835,6 +3865,7 @@ fn discovery_announce_through_relay() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3922,6 +3953,7 @@ fn discovery_announce_through_relay() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -3996,6 +4028,7 @@ fn discovery_announce_through_relay() {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,
@@ -4112,6 +4145,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             announce_sig_cache_enabled: true,

@@ -607,6 +607,8 @@ pub struct Driver {
     pub(crate) interface_writer_queue_capacity: usize,
     /// Default announce-rate controls for interfaces on transport nodes.
     pub(crate) announce_rate_defaults: AnnounceRateDefaults,
+    /// Default ingress/egress controls for interfaces on transport nodes.
+    pub(crate) ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
@@ -791,6 +793,7 @@ impl Driver {
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
@@ -880,6 +883,13 @@ impl Driver {
         self.announce_rate_defaults = defaults;
     }
 
+    pub fn set_ingress_control_defaults(
+        &mut self,
+        defaults: rns_core::transport::types::IngressControlConfig,
+    ) {
+        self.ingress_control_defaults = defaults;
+    }
+
     pub(crate) fn apply_announce_rate_defaults(
         &self,
         info: &mut rns_core::transport::types::InterfaceInfo,
@@ -898,6 +908,57 @@ impl Driver {
         }
         if info.announce_rate_penalty == 0.0 {
             info.announce_rate_penalty = self.announce_rate_defaults.penalty;
+        }
+    }
+
+    pub(crate) fn apply_ingress_control_defaults(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        if !self.engine.transport_enabled() {
+            return;
+        }
+
+        let baseline = if info.ingress_control.enabled {
+            rns_core::transport::types::IngressControlConfig::enabled()
+        } else {
+            rns_core::transport::types::IngressControlConfig::disabled()
+        };
+        let defaults = self.ingress_control_defaults;
+        let ic = &mut info.ingress_control;
+
+        if ic.max_held_announces == baseline.max_held_announces {
+            ic.max_held_announces = defaults.max_held_announces;
+        }
+        if ic.burst_hold == baseline.burst_hold {
+            ic.burst_hold = defaults.burst_hold;
+        }
+        if ic.burst_freq_new == baseline.burst_freq_new {
+            ic.burst_freq_new = defaults.burst_freq_new;
+        }
+        if ic.burst_freq == baseline.burst_freq {
+            ic.burst_freq = defaults.burst_freq;
+        }
+        if ic.pr_burst_freq_new == baseline.pr_burst_freq_new {
+            ic.pr_burst_freq_new = defaults.pr_burst_freq_new;
+        }
+        if ic.pr_burst_freq == baseline.pr_burst_freq {
+            ic.pr_burst_freq = defaults.pr_burst_freq;
+        }
+        if ic.new_time == baseline.new_time {
+            ic.new_time = defaults.new_time;
+        }
+        if ic.burst_penalty == baseline.burst_penalty {
+            ic.burst_penalty = defaults.burst_penalty;
+        }
+        if ic.held_release_interval == baseline.held_release_interval {
+            ic.held_release_interval = defaults.held_release_interval;
+        }
+        if ic.egress_enabled == baseline.egress_enabled {
+            ic.egress_enabled = defaults.egress_enabled;
+        }
+        if ic.egress_pr_freq == baseline.egress_pr_freq {
+            ic.egress_pr_freq = defaults.egress_pr_freq;
         }
     }
 

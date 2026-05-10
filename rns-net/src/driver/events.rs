@@ -365,6 +365,7 @@ impl Driver {
         if let Some(mut info) = info {
             log::info!("[{}] dynamic interface registered", id.0);
             self.apply_announce_rate_defaults(&mut info);
+            self.apply_ingress_control_defaults(&mut info);
             wants_tunnel = info.wants_tunnel;
             let iface_type = infer_interface_type(&info.name);
             info.started = time::now();

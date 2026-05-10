@@ -2144,6 +2144,106 @@ fn dynamic_interface_skips_announce_rate_defaults_without_transport() {
 }
 
 #[test]
+fn dynamic_interface_applies_transport_ingress_control_defaults() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx.clone(), Box::new(cbs));
+    let mut defaults = rns_core::transport::types::IngressControlConfig::enabled();
+    defaults.max_held_announces = 17;
+    defaults.burst_hold = 1.5;
+    defaults.burst_freq_new = 2.5;
+    defaults.burst_freq = 3.5;
+    defaults.pr_burst_freq_new = 4.5;
+    defaults.pr_burst_freq = 5.5;
+    defaults.new_time = 6.5;
+    defaults.burst_penalty = 7.5;
+    defaults.held_release_interval = 8.5;
+    defaults.egress_enabled = true;
+    defaults.egress_pr_freq = 9.5;
+    driver.set_ingress_control_defaults(defaults);
+
+    let info = make_interface_info(100);
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let ic = driver.interfaces[&InterfaceId(100)].info.ingress_control;
+    assert_eq!(ic.max_held_announces, 17);
+    assert_eq!(ic.burst_hold, 1.5);
+    assert_eq!(ic.burst_freq_new, 2.5);
+    assert_eq!(ic.burst_freq, 3.5);
+    assert_eq!(ic.pr_burst_freq_new, 4.5);
+    assert_eq!(ic.pr_burst_freq, 5.5);
+    assert_eq!(ic.new_time, 6.5);
+    assert_eq!(ic.burst_penalty, 7.5);
+    assert_eq!(ic.held_release_interval, 8.5);
+    assert!(ic.egress_enabled);
+    assert_eq!(ic.egress_pr_freq, 9.5);
+}
+
+#[test]
+fn dynamic_interface_keeps_explicit_ingress_control_values() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx.clone(), Box::new(cbs));
+    let mut defaults = rns_core::transport::types::IngressControlConfig::enabled();
+    defaults.burst_hold = 1.5;
+    defaults.pr_burst_freq = 5.5;
+    defaults.egress_enabled = true;
+    driver.set_ingress_control_defaults(defaults);
+
+    let mut info = make_interface_info(100);
+    info.ingress_control.burst_hold = 12.0;
+    info.ingress_control.pr_burst_freq = 13.0;
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let ic = driver.interfaces[&InterfaceId(100)].info.ingress_control;
+    assert_eq!(ic.burst_hold, 12.0);
+    assert_eq!(ic.pr_burst_freq, 13.0);
+    assert!(ic.egress_enabled);
+}
+
+#[test]
+fn dynamic_interface_skips_ingress_control_defaults_without_transport() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
+    let mut defaults = rns_core::transport::types::IngressControlConfig::enabled();
+    defaults.burst_hold = 1.5;
+    defaults.egress_enabled = true;
+    driver.set_ingress_control_defaults(defaults);
+
+    let info = make_interface_info(100);
+    let (writer, _sent) = MockWriter::new();
+    tx.send(Event::InterfaceUp(
+        InterfaceId(100),
+        Some(Box::new(writer)),
+        Some(info),
+    ))
+    .unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let ic = driver.interfaces[&InterfaceId(100)].info.ingress_control;
+    assert_eq!(ic.burst_hold, rns_core::constants::IC_BURST_HOLD);
+    assert!(!ic.egress_enabled);
+}
+
+#[test]
 fn dynamic_interface_deregister() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, iface_downs) = MockCallbacks::new();
@@ -4420,6 +4520,10 @@ fn runtime_config_lists_generic_interface_keys() {
     assert!(keys.contains(&"interface.public.ic_burst_hold".to_string()));
     assert!(keys.contains(&"interface.public.ic_burst_freq_new".to_string()));
     assert!(keys.contains(&"interface.public.ic_burst_freq".to_string()));
+    assert!(keys.contains(&"interface.public.ic_pr_burst_freq_new".to_string()));
+    assert!(keys.contains(&"interface.public.ic_pr_burst_freq".to_string()));
+    assert!(keys.contains(&"interface.public.egress_control".to_string()));
+    assert!(keys.contains(&"interface.public.ec_pr_freq".to_string()));
     assert!(keys.contains(&"interface.public.ic_new_time".to_string()));
     assert!(keys.contains(&"interface.public.ic_burst_penalty".to_string()));
     assert!(keys.contains(&"interface.public.ic_held_release_interval".to_string()));
@@ -4543,6 +4647,42 @@ fn runtime_config_sets_generic_interface_values() {
     assert_eq!(entry.value, RuntimeConfigValue::Float(3.5));
 
     let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.ic_pr_burst_freq_new".into(),
+        value: RuntimeConfigValue::Float(3.25),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Float(3.25));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.ic_pr_burst_freq".into(),
+        value: RuntimeConfigValue::Float(8.25),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Float(8.25));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.egress_control".into(),
+        value: RuntimeConfigValue::Bool(true),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.ec_pr_freq".into(),
+        value: RuntimeConfigValue::Float(5.25),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Float(5.25));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
         key: "interface.public.ic_new_time".into(),
         value: RuntimeConfigValue::Float(4.5),
     });
@@ -4577,6 +4717,10 @@ fn runtime_config_sets_generic_interface_values() {
     assert_eq!(ingress_control.burst_hold, 1.5);
     assert_eq!(ingress_control.burst_freq_new, 2.5);
     assert_eq!(ingress_control.burst_freq, 3.5);
+    assert_eq!(ingress_control.pr_burst_freq_new, 3.25);
+    assert_eq!(ingress_control.pr_burst_freq, 8.25);
+    assert!(ingress_control.egress_enabled);
+    assert_eq!(ingress_control.egress_pr_freq, 5.25);
     assert_eq!(ingress_control.new_time, 4.5);
     assert_eq!(ingress_control.burst_penalty, 5.5);
     assert_eq!(ingress_control.held_release_interval, 6.5);
@@ -4591,6 +4735,25 @@ fn runtime_config_sets_generic_interface_values() {
         entry.value,
         RuntimeConfigValue::Int(rns_core::constants::IC_MAX_HELD_ANNOUNCES as i64)
     );
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "interface.public.ic_pr_burst_freq".into(),
+    });
+    let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+        panic!("expected reset ok");
+    };
+    assert_eq!(
+        entry.value,
+        RuntimeConfigValue::Float(rns_core::constants::IC_PR_BURST_FREQ)
+    );
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "interface.public.egress_control".into(),
+    });
+    let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+        panic!("expected reset ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
 
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
         key: "interface.public.enabled".into(),

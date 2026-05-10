@@ -269,6 +269,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             registry: None,
@@ -339,6 +340,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             registry: None,
