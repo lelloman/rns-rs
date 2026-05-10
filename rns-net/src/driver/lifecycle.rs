@@ -68,6 +68,17 @@ impl Driver {
         true
     }
 
+    pub(crate) fn retain_identity(&mut self, identity_hash: &[u8; 16]) -> bool {
+        let mut retained = false;
+        for state in self.known_destinations.values_mut() {
+            if &state.announced.identity_hash.0 == identity_hash {
+                state.retained = true;
+                retained = true;
+            }
+        }
+        retained
+    }
+
     pub(crate) fn unretain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
         let Some(state) = self.known_destinations.get_mut(dest_hash) else {
             return false;

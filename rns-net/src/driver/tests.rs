@@ -5275,6 +5275,43 @@ fn retained_known_destination_survives_cleanup() {
 }
 
 #[test]
+fn retain_identity_marks_all_matching_known_destinations() {
+    let mut driver = new_test_driver();
+    let identity_hash = [0x42; 16];
+    let other_identity = [0x43; 16];
+    let dest_a = [0xA1; 16];
+    let dest_b = [0xA2; 16];
+    let dest_c = [0xA3; 16];
+
+    let mut announced_a = make_announced_identity(dest_a, 10.0, InterfaceId(1));
+    announced_a.identity_hash = IdentityHash(identity_hash);
+    let mut announced_b = make_announced_identity(dest_b, 11.0, InterfaceId(1));
+    announced_b.identity_hash = IdentityHash(identity_hash);
+    let mut announced_c = make_announced_identity(dest_c, 12.0, InterfaceId(1));
+    announced_c.identity_hash = IdentityHash(other_identity);
+
+    driver.upsert_known_destination(dest_a, announced_a);
+    driver.upsert_known_destination(dest_b, announced_b);
+    driver.upsert_known_destination(dest_c, announced_c);
+
+    assert!(driver.retain_identity(&identity_hash));
+
+    assert!(driver.known_destinations[&dest_a].retained);
+    assert!(driver.known_destinations[&dest_b].retained);
+    assert!(!driver.known_destinations[&dest_c].retained);
+}
+
+#[test]
+fn retain_identity_returns_false_when_no_known_destination_matches() {
+    let mut driver = new_test_driver();
+    let dest = [0xB1; 16];
+    driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
+
+    assert!(!driver.retain_identity(&[0xFE; 16]));
+    assert!(!driver.known_destinations[&dest].retained);
+}
+
+#[test]
 fn used_known_destination_cleanup_uses_last_used_time() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

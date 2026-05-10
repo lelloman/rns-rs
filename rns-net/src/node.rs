@@ -2270,6 +2270,19 @@ impl RnsNode {
         }
     }
 
+    /// Mark all known destinations announced by an identity as retained.
+    pub fn retain_identity(
+        &self,
+        identity_hash: &rns_core::types::IdentityHash,
+    ) -> Result<bool, SendError> {
+        match self.query(QueryRequest::RetainIdentity {
+            identity_hash: identity_hash.0,
+        })? {
+            QueryResponse::RetainIdentity(ok) => Ok(ok),
+            _ => Ok(false),
+        }
+    }
+
     /// Clear the retained flag on a known destination.
     pub fn unretain_known_destination(
         &self,

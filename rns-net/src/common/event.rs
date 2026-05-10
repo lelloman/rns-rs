@@ -521,6 +521,8 @@ pub enum QueryRequest {
     RestoreKnownDestination(KnownDestinationEntry),
     /// Mark a known destination as explicitly retained.
     RetainKnownDestination { dest_hash: [u8; 16] },
+    /// Mark all known destinations announced by an identity as retained.
+    RetainIdentity { identity_hash: [u8; 16] },
     /// Clear the retained flag on a known destination.
     UnretainKnownDestination { dest_hash: [u8; 16] },
     /// Mark a known destination as used.
@@ -598,6 +600,7 @@ pub enum QueryResponse {
     InjectIdentity(bool),
     RestoreKnownDestination(bool),
     RetainKnownDestination(bool),
+    RetainIdentity(bool),
     UnretainKnownDestination(bool),
     MarkKnownDestinationUsed(bool),
     /// List of discovered interfaces.

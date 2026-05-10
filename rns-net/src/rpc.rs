@@ -471,6 +471,15 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 Ok(PickleValue::None)
             };
         }
+        if set_val == "identity_retained" {
+            let identity_hash = extract_dest_hash(request, "identity_hash")?;
+            let resp = send_query(event_tx, QueryRequest::RetainIdentity { identity_hash })?;
+            return if let QueryResponse::RetainIdentity(ok) = resp {
+                Ok(PickleValue::Bool(ok))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
         if set_val == "known_destination_used" {
             let dest_hash = extract_dest_hash(request, "dest_hash")?;
             let resp = send_query(
@@ -2184,6 +2193,20 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    pub fn retain_identity(&mut self, identity_hash: [u8; 16]) -> io::Result<bool> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("identity_retained".into()),
+            ),
+            (
+                PickleValue::String("identity_hash".into()),
+                PickleValue::Bytes(identity_hash.to_vec()),
+            ),
+        ]))?;
+        Ok(response.as_bool().unwrap_or(false))
+    }
+
     pub fn unretain_known_destination(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![
             (
@@ -2822,6 +2845,40 @@ mod tests {
         let ph = response.get("packet_hash").unwrap().as_bytes().unwrap();
         assert_eq!(ph, &[0xBB; 32]);
         assert_eq!(response.get("hops").unwrap().as_int().unwrap(), 3);
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn retain_identity_rpc_sends_identity_hash_query() {
+        let (event_tx, event_rx) = crate::event::channel();
+        let identity_hash = [0x44; 16];
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(
+                QueryRequest::RetainIdentity {
+                    identity_hash: hash,
+                },
+                resp_tx,
+            )) = event_rx.recv()
+            {
+                assert_eq!(hash, identity_hash);
+                let _ = resp_tx.send(QueryResponse::RetainIdentity(true));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("identity_retained".into()),
+            ),
+            (
+                PickleValue::String("identity_hash".into()),
+                PickleValue::Bytes(identity_hash.to_vec()),
+            ),
+        ]);
+
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(response, PickleValue::Bool(true));
         driver.join().unwrap();
     }
 

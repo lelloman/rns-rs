@@ -239,6 +239,9 @@ impl Driver {
             QueryRequest::RetainKnownDestination { dest_hash } => Some(
                 QueryResponse::RetainKnownDestination(self.retain_known_destination(&dest_hash)),
             ),
+            QueryRequest::RetainIdentity { identity_hash } => Some(QueryResponse::RetainIdentity(
+                self.retain_identity(&identity_hash),
+            )),
             QueryRequest::UnretainKnownDestination { dest_hash } => {
                 Some(QueryResponse::UnretainKnownDestination(
                     self.unretain_known_destination(&dest_hash),
@@ -307,6 +310,7 @@ impl Driver {
             QueryRequest::RetainKnownDestination { .. } => {
                 QueryResponse::RetainKnownDestination(false)
             }
+            QueryRequest::RetainIdentity { .. } => QueryResponse::RetainIdentity(false),
             QueryRequest::UnretainKnownDestination { .. } => {
                 QueryResponse::UnretainKnownDestination(false)
             }
@@ -420,6 +424,7 @@ impl Driver {
             QueryRequest::RetainKnownDestination { .. } => {
                 QueryResponse::RetainKnownDestination(false)
             }
+            QueryRequest::RetainIdentity { .. } => QueryResponse::RetainIdentity(false),
             QueryRequest::UnretainKnownDestination { .. } => {
                 QueryResponse::UnretainKnownDestination(false)
             }
@@ -499,6 +504,7 @@ impl Driver {
             | QueryRequest::InjectIdentity { .. }
             | QueryRequest::RestoreKnownDestination(..)
             | QueryRequest::RetainKnownDestination { .. }
+            | QueryRequest::RetainIdentity { .. }
             | QueryRequest::UnretainKnownDestination { .. }
             | QueryRequest::MarkKnownDestinationUsed { .. }) => {
                 let fallback = Self::mutation_query_fallback(&request);
