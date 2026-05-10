@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
@@ -32,6 +34,8 @@ pub const PATH_RELEASE: &str = "/page/release.mu";
 pub const PATH_WORK: &str = "/page/work.mu";
 pub const PATH_WORK_DOC: &str = "/page/work_doc.mu";
 pub const PATH_DOWNLOAD: &str = "/file/download";
+
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 
 const PAGE_PATHS: &[&str] = &[
     PATH_INDEX,
@@ -1332,12 +1336,14 @@ pub fn download_file(
     validate_git_path(path)?;
     let resolved = resolve_ref(&repository, reference)?;
     let spec = format!("{resolved}:{path}");
-    let output = Command::new("git")
-        .arg("--git-dir")
-        .arg(&repository)
-        .arg("show")
-        .arg(spec)
-        .output()?;
+    let output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&repository)
+            .arg("show")
+            .arg(spec),
+        GIT_COMMAND_TIMEOUT,
+    )?;
     if !output.status.success() {
         return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
@@ -1667,21 +1673,28 @@ fn readme_content(repo: &Path) -> Result<Option<ReadmeContent>> {
         "readme.txt",
     ];
     for name in NAMES {
-        let output = Command::new("git")
-            .arg("--git-dir")
-            .arg(repo)
-            .arg("show")
-            .arg(format!("HEAD:{name}"))
-            .output()?;
-        if output.status.success() {
-            let content = String::from_utf8_lossy(&output.stdout).into_owned();
-            let markdown = name.ends_with(".md");
-            let content = if markdown || name.ends_with(".mu") {
-                content
-            } else {
-                m_escape(&content)
-            };
-            return Ok(Some(ReadmeContent { content, markdown }));
+        match run_git_output(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(repo)
+                .arg("show")
+                .arg(format!("HEAD:{name}")),
+            GIT_COMMAND_TIMEOUT,
+        ) {
+            Ok(output) if output.status.success() => {
+                let content = String::from_utf8_lossy(&output.stdout).into_owned();
+                let markdown = name.ends_with(".md");
+                let content = if markdown || name.ends_with(".mu") {
+                    content
+                } else {
+                    m_escape(&content)
+                };
+                return Ok(Some(ReadmeContent { content, markdown }));
+            }
+            Ok(_) => {}
+            Err(err) => {
+                log::warn!("Git command execution failed while reading README: {err}");
+            }
         }
     }
     Ok(None)
@@ -2375,12 +2388,14 @@ fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
             displayable: false,
         });
     }
-    let output = Command::new("git")
-        .arg("--git-dir")
-        .arg(repo)
-        .arg("show")
-        .arg(spec)
-        .output()?;
+    let output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("show")
+            .arg(spec),
+        GIT_COMMAND_TIMEOUT,
+    )?;
     if !output.status.success() {
         return Err(Error::msg(String::from_utf8_lossy(&output.stderr)));
     }
@@ -2497,11 +2512,36 @@ fn commit_info(repo: &Path, hash: &str) -> Result<CommitInfo> {
 }
 
 fn run_git(cmd: &mut Command) -> Result<String> {
-    let output = cmd.output()?;
+    let output = run_git_output(cmd, GIT_COMMAND_TIMEOUT)?;
     if !output.status.success() {
         return Err(Error::msg(String::from_utf8_lossy(&output.stderr)));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn run_git_output(cmd: &mut Command, timeout: Duration) -> Result<Output> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map_err(Error::from);
+        }
+
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            log::warn!("Git command execution timed out");
+            return Err(Error::msg("Git command execution timed out"));
+        }
+
+        let sleep_for = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(10));
+        if !sleep_for.is_zero() {
+            thread::sleep(sleep_for);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2522,6 +2562,17 @@ mod tests {
         let expected =
             Destination::single_in("nomadnetwork", &["node"], IdentityHash(*identity.hash()));
         assert_eq!(destination.hash, expected.hash);
+    }
+
+    #[test]
+    fn git_command_timeout_kills_slow_process() {
+        let start = Instant::now();
+
+        let err =
+            run_git_output(Command::new("sleep").arg("5"), Duration::from_millis(30)).unwrap_err();
+
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(err.to_string().contains("timed out"));
     }
 
     #[test]
