@@ -261,6 +261,12 @@ pub fn handle_fetch(
             b"read denied",
         )));
     }
+    if let Err(err) = git::validate_shas(&have) {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            err.to_string(),
+        )));
+    }
     let path = git::repository_path(&config.repositories_dir, &repo)?;
     match git::create_bundle(&path, &have) {
         Ok(bundle) if bundle.is_empty() => {
@@ -297,6 +303,12 @@ pub fn handle_push(
     let (repo, bundle, updates) = protocol::parse_push_request(data)?;
     let remote_hash = remote.map(|(hash, _)| hash);
     let path = git::repository_path(&config.repositories_dir, &repo)?;
+    if let Err(err) = git::validate_ref_updates(&updates) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            err.to_string(),
+        ));
+    }
     let op = if git::is_bare_repository(&path) {
         Operation::Write
     } else {
@@ -1075,6 +1087,50 @@ mod tests {
     }
 
     #[test]
+    fn push_rejects_invalid_ref_before_creating_missing_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let access = make_access(&config);
+        let req = protocol::push_request(
+            "group/repo",
+            Vec::new(),
+            vec![protocol::RefUpdate {
+                refname: "-refs/heads/main".into(),
+                old: None,
+                new: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                force: true,
+            }],
+        );
+
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+
+        assert_eq!(resp[0], protocol::RES_INVALID_REQ);
+        assert!(!config.repositories_dir.join("group/repo").exists());
+    }
+
+    #[test]
+    fn push_rejects_invalid_sha_before_creating_missing_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let access = make_access(&config);
+        let req = protocol::push_request(
+            "group/repo",
+            Vec::new(),
+            vec![protocol::RefUpdate {
+                refname: "refs/heads/main".into(),
+                old: None,
+                new: Some("--not-a-sha".into()),
+                force: true,
+            }],
+        );
+
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+
+        assert_eq!(resp[0], protocol::RES_INVALID_REQ);
+        assert!(!config.repositories_dir.join("group/repo").exists());
+    }
+
+    #[test]
     fn fetch_existing_repo_can_return_ok_status_or_resource() {
         let tmp = tempfile::tempdir().unwrap();
         let config = cfg(tmp.path());
@@ -1096,6 +1152,23 @@ mod tests {
             RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_OK),
             RequestResponse::Resource { metadata, .. } => assert!(metadata.is_some()),
         }
+    }
+
+    #[test]
+    fn fetch_rejects_invalid_have_sha() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let access = make_access(&config);
+        let repo = config.repositories_dir.join("repo");
+        git::ensure_bare_repository(&repo).unwrap();
+        let req = protocol::fetch_request("repo", &["--upload-pack=/tmp/x".into()]);
+
+        let response = handle_fetch(&config, &access, &req, None).unwrap();
+
+        let RequestResponse::Bytes(bytes) = response else {
+            panic!("invalid fetch request should return status bytes");
+        };
+        assert_eq!(bytes[0], protocol::RES_INVALID_REQ);
     }
 
     #[test]

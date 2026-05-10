@@ -16,6 +16,51 @@ pub fn repository_path(root: &Path, repository: &str) -> Result<PathBuf> {
     Ok(root.join(repository))
 }
 
+pub fn validate_refname(refname: &str) -> Result<()> {
+    if is_valid_refname(refname) {
+        Ok(())
+    } else {
+        Err(Error::msg("invalid ref"))
+    }
+}
+
+pub fn validate_namespaced_ref(refname: &str) -> Result<()> {
+    validate_refname(refname)?;
+    if refname.starts_with("refs/") {
+        Ok(())
+    } else {
+        Err(Error::msg("invalid ref"))
+    }
+}
+
+pub fn validate_sha(sha: &str) -> Result<()> {
+    if is_valid_sha(sha) {
+        Ok(())
+    } else {
+        Err(Error::msg("invalid SHA"))
+    }
+}
+
+pub fn validate_shas<'a>(shas: impl IntoIterator<Item = &'a String>) -> Result<()> {
+    for sha in shas {
+        validate_sha(sha)?;
+    }
+    Ok(())
+}
+
+pub fn validate_ref_updates(updates: &[RefUpdate]) -> Result<()> {
+    for update in updates {
+        validate_namespaced_ref(&update.refname)?;
+        if let Some(old) = update.old.as_deref() {
+            validate_sha(old)?;
+        }
+        if let Some(new) = update.new.as_deref() {
+            validate_sha(new)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn ensure_bare_repository(path: &Path) -> Result<()> {
     if is_bare_repository(path) {
         return Ok(());
@@ -59,6 +104,7 @@ pub fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
 
 pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
     require_repository(path)?;
+    validate_shas(have)?;
     if list_refs(path)?.is_empty() {
         return Ok(Vec::new());
     }
@@ -86,6 +132,7 @@ pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
 }
 
 pub fn apply_push(path: &Path, bundle: &[u8], updates: &[RefUpdate]) -> Result<()> {
+    validate_ref_updates(updates)?;
     ensure_bare_repository(path)?;
     if !bundle.is_empty() {
         let bundle_path = temp_path("rngit-push", "bundle");
@@ -139,6 +186,10 @@ fn create_local_bundle_in(repo: &Path, refs: &[String], exclusions: &[String]) -
     if refs.is_empty() {
         return Ok(Vec::new());
     }
+    for refname in refs {
+        validate_refname(refname)?;
+    }
+    validate_shas(exclusions)?;
     let bundle_path = temp_path("rngit-local-push", "bundle");
     let valid_exclusions = valid_local_objects_in(repo, exclusions);
     let mut cmd = Command::new("git");
@@ -181,6 +232,9 @@ fn object_exists_local_in(repo: &Path, sha: &str) -> bool {
 pub fn fetch_bundle_into_local(bundle: &[u8], wanted: &[String]) -> Result<()> {
     if bundle.is_empty() {
         return Ok(());
+    }
+    for refname in wanted {
+        validate_refname(refname)?;
     }
     let bundle_path = temp_path("rngit-local-fetch", "bundle");
     fs::write(&bundle_path, bundle)?;
@@ -260,6 +314,44 @@ fn object_exists_in_repo(path: &Path, sha: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn is_valid_refname(refname: &str) -> bool {
+    if refname.is_empty()
+        || refname.starts_with('-')
+        || refname.starts_with('/')
+        || refname.ends_with('/')
+        || refname.ends_with('.')
+        || !refname.contains('/')
+        || refname.contains(' ')
+        || refname.contains("..")
+        || refname.contains("/.")
+        || refname.contains("//")
+        || refname.contains('\\')
+        || refname.contains('~')
+        || refname.contains('^')
+        || refname.contains(':')
+        || refname.contains('?')
+        || refname.contains('*')
+        || refname.contains('[')
+        || refname.contains("@{")
+        || refname == "@"
+    {
+        return false;
+    }
+
+    if refname
+        .split('/')
+        .any(|component| component.is_empty() || component.ends_with(".lock"))
+    {
+        return false;
+    }
+
+    refname.chars().all(|c| (c as u32) >= 40 && c != '\u{7f}')
+}
+
+fn is_valid_sha(sha: &str) -> bool {
+    sha.len() >= 40 && sha.len() % 2 == 0 && sha.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn add_exclusions(cmd: &mut Command, exclusions: &[String]) {
     for sha in exclusions {
         cmd.arg(format!("^{sha}"));
@@ -310,6 +402,59 @@ mod tests {
     fn repository_paths_reject_traversal() {
         assert!(repository_path(Path::new("/tmp/repos"), "../x").is_err());
         assert!(repository_path(Path::new("/tmp/repos"), "group/repo").is_ok());
+    }
+
+    #[test]
+    fn ref_validation_rejects_noncanonical_names() {
+        assert!(validate_refname("refs/heads/main").is_ok());
+        assert!(validate_refname("refs/tags/v1").is_ok());
+
+        for name in [
+            "-refs/heads/main",
+            "/refs/heads/main",
+            "refs/heads/main/",
+            "refs/heads/main.",
+            "refs/heads/feature lock",
+            "main",
+            "refs/heads/../main",
+            "refs/heads/.hidden",
+            "refs/heads//main",
+            "refs\\heads\\main",
+            "refs/heads/main.lock",
+            "refs/heads/main~",
+            "refs/heads/main^",
+            "refs/heads/main:evil",
+            "refs/heads/main?",
+            "refs/heads/main*",
+            "refs/heads/main[",
+            "refs/heads/@{upstream}",
+            "@",
+            "refs/heads/\nmain",
+        ] {
+            assert!(
+                validate_refname(name).is_err(),
+                "{name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn sha_validation_rejects_non_hex_or_short_values() {
+        assert!(validate_sha("0123456789abcdef0123456789abcdef01234567").is_ok());
+        assert!(
+            validate_sha("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .is_ok()
+        );
+
+        for sha in [
+            "",
+            "0123456789abcdef0123456789abcdef0123456",
+            "0123456789abcdef0123456789abcdef0123456g",
+            "--upload-pack=/tmp/x",
+            "0123456789abcdef0123456789abcdef012345678",
+        ] {
+            assert!(validate_sha(sha).is_err(), "{sha:?} should be rejected");
+        }
     }
 
     #[test]
