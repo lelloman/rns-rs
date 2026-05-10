@@ -279,6 +279,44 @@ impl AnnounceQueues {
         actions
     }
 
+    /// Return true when recursive path requests should wait for this interface.
+    pub fn blocks_recursive_path_request(&self, interface: InterfaceId, now: f64) -> bool {
+        self.queues
+            .get(&interface)
+            .is_some_and(|queue| !queue.entries.is_empty() || !queue.is_allowed(now))
+    }
+
+    /// Reserve announce-cap airtime after sending a recursive path request.
+    pub fn reserve_recursive_path_request(
+        &mut self,
+        interface: InterfaceId,
+        raw_len: usize,
+        now: f64,
+        bitrate: Option<u64>,
+        airtime_profile: Option<AirtimeProfile>,
+        announce_cap: f64,
+    ) {
+        let bitrate = match bitrate {
+            Some(br) if br > 0 => br,
+            _ if airtime_profile.is_none() => return,
+            _ => 0,
+        };
+
+        if !self.queues.contains_key(&interface) && self.queues.len() >= self.max_interfaces {
+            self.interface_cap_drops = self.interface_cap_drops.saturating_add(1);
+            return;
+        }
+
+        let queue = self.queues.entry(interface).or_default();
+        queue.announce_allowed_at = InterfaceAnnounceQueue::calculate_next_allowed(
+            now,
+            raw_len,
+            bitrate,
+            airtime_profile,
+            announce_cap,
+        );
+    }
+
     /// Remove all announce queue state for an interface.
     pub fn remove_interface(&mut self, interface: InterfaceId) -> bool {
         self.queues.remove(&interface).is_some()

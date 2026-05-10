@@ -141,35 +141,63 @@ impl TransportEngine {
             return Vec::new();
         }
 
-        self.discovery_path_requests.insert(
-            ctx.destination_hash,
-            DiscoveryPathRequest {
-                timestamp: ctx.now,
-                requesting_interface: ctx.interface_id,
-            },
-        );
-
         let egress_candidates: Vec<_> = self
             .interfaces
             .values()
             .filter(|info| info.id != ctx.interface_id && info.out_capable)
-            .map(|info| (info.id, info.ingress_control, info.op_freq, info.op_samples))
-            .collect();
-
-        egress_candidates
-            .into_iter()
-            .filter(|(id, ingress_control, op_freq, op_samples)| {
-                !self.ingress_control.should_egress_limit_pr(
-                    *id,
-                    ingress_control,
-                    *op_freq,
-                    *op_samples,
+            .map(|info| {
+                (
+                    info.id,
+                    info.ingress_control,
+                    info.op_freq,
+                    info.op_samples,
+                    info.bitrate,
+                    info.airtime_profile,
+                    info.announce_cap,
                 )
             })
-            .map(|(id, _, _, _)| TransportAction::SendOnInterface {
+            .collect();
+
+        let mut actions = Vec::new();
+        for (id, ingress_control, op_freq, op_samples, bitrate, airtime_profile, announce_cap) in
+            egress_candidates
+        {
+            if self.ingress_control.should_egress_limit_pr(
+                id,
+                &ingress_control,
+                op_freq,
+                op_samples,
+            ) || self
+                .announce_queues
+                .blocks_recursive_path_request(id, ctx.now)
+            {
+                continue;
+            }
+
+            self.announce_queues.reserve_recursive_path_request(
+                id,
+                ctx.data.len() + constants::HEADER_MINSIZE,
+                ctx.now,
+                bitrate,
+                airtime_profile,
+                announce_cap,
+            );
+            actions.push(TransportAction::SendOnInterface {
                 interface: id,
                 raw: ctx.data.to_vec().into(),
-            })
-            .collect()
+            });
+        }
+
+        if !actions.is_empty() {
+            self.discovery_path_requests.insert(
+                ctx.destination_hash,
+                DiscoveryPathRequest {
+                    timestamp: ctx.now,
+                    requesting_interface: ctx.interface_id,
+                },
+            );
+        }
+
+        actions
     }
 }

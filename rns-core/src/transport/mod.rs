@@ -3755,6 +3755,107 @@ mod tests {
     }
 
     #[test]
+    fn test_recursive_path_request_skips_interface_with_queued_announces() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        let mut blocked = make_interface(2, constants::MODE_FULL);
+        blocked.bitrate = Some(1_000);
+        engine.register_interface(blocked);
+        engine.register_interface(make_interface(3, constants::MODE_FULL));
+
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(2),
+            vec![0xAA; 100].into(),
+            [0xA0; 16],
+            1,
+            900.0,
+            900.0,
+            Some(1_000),
+            None,
+            constants::ANNOUNCE_CAP,
+        );
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(2),
+            vec![0xBB; 100].into(),
+            [0xB0; 16],
+            1,
+            901.0,
+            901.0,
+            Some(1_000),
+            None,
+            constants::ANNOUNCE_CAP,
+        );
+
+        let dest = [0xE3; 16];
+        let tag = [0x13; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 902.0);
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, .. } => {
+                assert_eq!(*interface, InterfaceId(3));
+            }
+            _ => panic!("expected SendOnInterface for the unqueued egress interface"),
+        }
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_recursive_path_request_skips_interface_with_active_announce_cap() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        let mut blocked = make_interface(2, constants::MODE_FULL);
+        blocked.bitrate = Some(1_000);
+        engine.register_interface(blocked);
+
+        let _ = engine.announce_queues.gate_announce(
+            InterfaceId(2),
+            vec![0xAA; 100].into(),
+            [0xA0; 16],
+            1,
+            900.0,
+            900.0,
+            Some(1_000),
+            None,
+            constants::ANNOUNCE_CAP,
+        );
+
+        let dest = [0xE4; 16];
+        let tag = [0x14; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 901.0);
+
+        assert!(actions.is_empty());
+        assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_recursive_path_request_reserves_announce_cap_on_sent_interface() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        let mut egress = make_interface(2, constants::MODE_FULL);
+        egress.bitrate = Some(1_000);
+        engine.register_interface(egress);
+
+        let dest = [0xE5; 16];
+        let tag = [0x15; 16];
+        let data = make_path_request_data(&dest, &tag);
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert_eq!(actions.len(), 1);
+        let queue = engine
+            .announce_queues
+            .queue_for(&InterfaceId(2))
+            .expect("sent recursive PR should create announce-cap state");
+        assert!(
+            queue.announce_allowed_at > 1000.0,
+            "recursive PR should reserve announce-cap airtime"
+        );
+        assert!(queue.entries.is_empty());
+    }
+
+    #[test]
     fn test_discovery_pr_tags_fifo_eviction() {
         let mut config = make_config(true);
         config.max_discovery_pr_tags = 2;
