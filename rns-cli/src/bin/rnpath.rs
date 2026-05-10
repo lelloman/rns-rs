@@ -258,7 +258,7 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
                 .map(|b| {
                     let remaining = b - rns_net::time::now();
                     if remaining > 0.0 {
-                        prettytime(remaining)
+                        pretty_date_elapsed(remaining as u64)
                     } else {
                         "not blocked".into()
                     }
@@ -293,6 +293,35 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
             );
         }
     }
+}
+
+fn pretty_date_elapsed(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    if days == 0 {
+        if seconds < 60 {
+            return format!("{} seconds", seconds);
+        }
+        if seconds < 70 {
+            return "1 minute".into();
+        }
+        if seconds < 7200 {
+            return format!("{} minutes", seconds / 60);
+        }
+        return format!("{} hours", seconds / 3600);
+    }
+    if days == 1 {
+        return "1 day".into();
+    }
+    if days < 7 {
+        return format!("{} days", days);
+    }
+    if days < 31 {
+        return format!("{} weeks", days / 7);
+    }
+    if days < 365 {
+        return format!("{} months", days / 30);
+    }
+    format!("{} years", days / 365)
 }
 
 fn show_blackholed_list(client: &mut RpcClient) {
@@ -590,4 +619,33 @@ fn print_usage() {
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rnpath_pretty_date_matches_upstream_minute_boundaries() {
+        assert_eq!(pretty_date_elapsed(0), "0 seconds");
+        assert_eq!(pretty_date_elapsed(9), "9 seconds");
+        assert_eq!(pretty_date_elapsed(59), "59 seconds");
+        assert_eq!(pretty_date_elapsed(60), "1 minute");
+        assert_eq!(pretty_date_elapsed(69), "1 minute");
+        assert_eq!(pretty_date_elapsed(70), "1 minutes");
+        assert_eq!(pretty_date_elapsed(119), "1 minutes");
+        assert_eq!(pretty_date_elapsed(120), "2 minutes");
+        assert_eq!(pretty_date_elapsed(3600), "60 minutes");
+        assert_eq!(pretty_date_elapsed(7199), "119 minutes");
+        assert_eq!(pretty_date_elapsed(7200), "2 hours");
+    }
+
+    #[test]
+    fn rnpath_pretty_date_matches_upstream_day_ranges() {
+        assert_eq!(pretty_date_elapsed(86_400), "1 day");
+        assert_eq!(pretty_date_elapsed(2 * 86_400), "2 days");
+        assert_eq!(pretty_date_elapsed(7 * 86_400), "1 weeks");
+        assert_eq!(pretty_date_elapsed(31 * 86_400), "1 months");
+        assert_eq!(pretty_date_elapsed(365 * 86_400), "1 years");
+    }
 }
