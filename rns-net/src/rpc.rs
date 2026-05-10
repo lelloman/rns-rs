@@ -1114,6 +1114,12 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Float(s.oa_freq),
         ),
         (
+            PickleValue::String("clients".into()),
+            s.clients
+                .map(|clients| PickleValue::Int(clients as i64))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("announce_rate_grace".into()),
             PickleValue::Int(s.announce_rate_grace as i64),
         ),
@@ -2508,6 +2514,7 @@ mod tests {
                             started: 1000.0,
                             ia_freq: 0.0,
                             oa_freq: 0.0,
+                            clients: Some(2),
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
@@ -2700,6 +2707,7 @@ mod tests {
                 started: 1000.0,
                 ia_freq: 0.0,
                 oa_freq: 0.0,
+                clients: Some(3),
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
@@ -2750,6 +2758,7 @@ mod tests {
                 .unwrap(),
             0.0
         );
+        assert_eq!(ifaces[0].get("clients").unwrap().as_int().unwrap(), 3);
     }
 
     #[test]

@@ -22,6 +22,7 @@ impl Driver {
                 started: entry.stats.started,
                 ia_freq: entry.stats.incoming_announce_freq(),
                 oa_freq: entry.stats.outgoing_announce_freq(),
+                clients: None,
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,
                 announce_rate_penalty: entry.info.announce_rate_penalty,

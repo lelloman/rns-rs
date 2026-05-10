@@ -375,25 +375,20 @@ fn print_status(
                     .get("oa_freq")
                     .and_then(|v| v.as_float())
                     .unwrap_or(0.0);
+                let clients = iface
+                    .get("clients")
+                    .and_then(|v| v.as_int())
+                    .filter(|n| *n > 0)
+                    .map(|n| n as u64);
                 let ar_target = iface.get("announce_rate_target").and_then(|v| v.as_float());
                 let ar_penalty = iface
                     .get("announce_rate_penalty")
                     .and_then(|v| v.as_float());
                 let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
-                println!(
-                    "    Announces : {} in  {} out",
-                    prettyfrequency(ia_freq),
-                    prettyfrequency(oa_freq),
-                );
-                if let Some(target) = ar_target {
-                    let mut parts = vec![format!("target {}", prettytime(target))];
-                    if let Some(penalty) = ar_penalty {
-                        parts.push(format!("penalty {}", prettytime(penalty)));
-                    }
-                    if let Some(grace) = ar_grace {
-                        parts.push(format!("grace {}", grace));
-                    }
-                    println!("                {}", parts.join(", "));
+                for line in announce_status_lines(
+                    ia_freq, oa_freq, clients, ar_target, ar_penalty, ar_grace,
+                ) {
+                    println!("{}", line);
                 }
             }
             println!();
@@ -440,6 +435,40 @@ fn pickle_to_json(value: &PickleValue) -> String {
             format!("{{{}}}", inner.join(", "))
         }
     }
+}
+
+fn announce_status_lines(
+    ia_freq: f64,
+    oa_freq: f64,
+    clients: Option<u64>,
+    ar_target: Option<f64>,
+    ar_penalty: Option<f64>,
+    ar_grace: Option<i64>,
+) -> Vec<String> {
+    let mut line = format!(
+        "    Announces : {} in  {} out",
+        prettyfrequency(ia_freq),
+        prettyfrequency(oa_freq),
+    );
+    if let Some(clients) = clients.filter(|clients| *clients > 0) {
+        line.push_str(&format!(
+            "  {}/c",
+            prettyfrequency(oa_freq / clients as f64)
+        ));
+    }
+
+    let mut lines = vec![line];
+    if let Some(target) = ar_target {
+        let mut parts = vec![format!("target {}", prettytime(target))];
+        if let Some(penalty) = ar_penalty {
+            parts.push(format!("penalty {}", prettytime(penalty)));
+        }
+        if let Some(grace) = ar_grace {
+            parts.push(format!("grace {}", grace));
+        }
+        lines.push(format!("                {}", parts.join(", ")));
+    }
+    lines
 }
 
 fn remote_status(hash_str: &str, config_path: Option<&str>) {
@@ -732,4 +761,23 @@ fn print_usage() {
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn announce_line_includes_per_client_outgoing_frequency_when_clients_present() {
+        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, Some(4), None, None, None);
+
+        assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out  1.0/h/c");
+    }
+
+    #[test]
+    fn announce_line_omits_per_client_frequency_without_clients() {
+        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, None, None, None);
+
+        assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out");
+    }
 }
