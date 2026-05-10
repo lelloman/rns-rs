@@ -383,6 +383,31 @@ pub fn compute_discovery_hash(transport_id: &[u8; 16], name: &str) -> [u8; 32] {
     sha256(&material)
 }
 
+/// Mark a discovered transport interface config entry for gateway mode.
+pub fn apply_transport_autoconnect_mode(
+    iface: &mut DiscoveredInterface,
+    local_transport_enabled: bool,
+) {
+    if !local_transport_enabled || !iface.transport {
+        return;
+    }
+    let Some(config_entry) = iface.config_entry.as_mut() else {
+        return;
+    };
+    if config_entry
+        .lines()
+        .any(|line| line.trim_start().starts_with("interface_mode"))
+    {
+        return;
+    }
+    if let Some(pos) = config_entry.find("  enabled = yes\n") {
+        let insert_at = pos + "  enabled = yes\n".len();
+        config_entry.insert_str(insert_at, "  interface_mode = gateway\n");
+    } else {
+        config_entry.push_str("\n  interface_mode = gateway");
+    }
+}
+
 /// Generate a config entry for auto-connecting to a discovered interface
 fn generate_config_entry(
     interface_type: &str,
@@ -774,6 +799,55 @@ mod tests {
 
         assert_eq!(parsed.ifac_netname.as_deref(), Some("123"));
         assert_eq!(parsed.ifac_netkey.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn transport_autoconnect_mode_marks_transport_discovery_config_as_gateway() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        apply_transport_autoconnect_mode(&mut parsed, true);
+
+        let config_entry = parsed.config_entry.unwrap();
+        assert!(config_entry.contains("  enabled = yes\n  interface_mode = gateway\n"));
+    }
+
+    #[test]
+    fn transport_autoconnect_mode_does_not_modify_non_transport_contexts() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let original = parsed.config_entry.clone();
+
+        apply_transport_autoconnect_mode(&mut parsed, false);
+
+        assert_eq!(parsed.config_entry, original);
+    }
+
+    #[test]
+    fn transport_autoconnect_mode_does_not_modify_non_transport_announces() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.retain(|(key, _)| key.as_uint() != Some(TRANSPORT as u64));
+        entries.push((Value::UInt(TRANSPORT as u64), Value::Bool(false)));
+        let app_data = pack_discovery_entries(entries);
+        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let original = parsed.config_entry.clone();
+
+        apply_transport_autoconnect_mode(&mut parsed, true);
+
+        assert_eq!(parsed.config_entry, original);
+    }
+
+    #[test]
+    fn transport_autoconnect_mode_preserves_existing_interface_mode() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+        let config_entry = parsed.config_entry.as_mut().unwrap();
+        config_entry.push_str("\n  interface_mode = access_point");
+        let original = parsed.config_entry.clone();
+
+        apply_transport_autoconnect_mode(&mut parsed, true);
+
+        assert_eq!(parsed.config_entry, original);
     }
 
     #[test]
