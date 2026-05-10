@@ -244,6 +244,9 @@ impl InterfaceFactory for UdpFactory {
             mtu: 1400,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: crate::time::now(),
         };
 

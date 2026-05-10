@@ -160,6 +160,12 @@ pub struct InterfaceInfo {
     pub ingress_control: IngressControlConfig,
     /// Current incoming announce frequency (announces/sec), synced from driver.
     pub ia_freq: f64,
+    /// Current incoming path request frequency (requests/sec), synced from driver.
+    pub ip_freq: f64,
+    /// Current outgoing path request frequency (requests/sec), synced from driver.
+    pub op_freq: f64,
+    /// Current outgoing path request sample count, synced from driver.
+    pub op_samples: usize,
     /// When this interface was started (epoch seconds).
     pub started: f64,
 }

@@ -288,6 +288,22 @@ impl TransportEngine {
         }
     }
 
+    pub fn update_interface_freqs(
+        &mut self,
+        id: InterfaceId,
+        ia_freq: f64,
+        ip_freq: f64,
+        op_freq: f64,
+        op_samples: usize,
+    ) {
+        if let Some(info) = self.interfaces.get_mut(&id) {
+            info.ia_freq = ia_freq;
+            info.ip_freq = ip_freq;
+            info.op_freq = op_freq;
+            info.op_samples = op_samples;
+        }
+    }
+
     pub fn held_announce_count(&self, interface: &InterfaceId) -> usize {
         self.ingress_control.held_count(interface)
     }

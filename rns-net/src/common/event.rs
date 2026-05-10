@@ -688,6 +688,12 @@ pub struct SingleInterfaceStat {
     pub ia_freq: f64,
     /// Outgoing announce frequency (per second).
     pub oa_freq: f64,
+    /// Incoming path request frequency (per second).
+    pub ip_freq: f64,
+    /// Outgoing path request frequency (per second).
+    pub op_freq: f64,
+    /// Outgoing path request samples currently retained.
+    pub op_samples: usize,
     /// Connected client count for aggregate server interfaces, if reported.
     pub clients: Option<u64>,
     /// Target interval for outgoing announce rate control, in seconds.

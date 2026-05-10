@@ -568,6 +568,9 @@ fn poll_loop(
                                 tunnel_id: None,
                                 mtu: 65535,
                                 ia_freq: 0.0,
+                                ip_freq: 0.0,
+                                op_freq: 0.0,
+                                op_samples: 0,
                                 started: 0.0,
                                 ingress_control,
                             };
@@ -1202,6 +1205,9 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     mtu: 65535,
                     ingress_control: ctx.ingress_control,
                     ia_freq: 0.0,
+                    ip_freq: 0.0,
+                    op_freq: 0.0,
+                    op_samples: 0,
                     started: crate::time::now(),
                 };
                 let writer = start_client(cfg, ctx.tx)?;

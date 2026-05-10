@@ -1123,6 +1123,14 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Float(s.oa_freq),
         ),
         (
+            PickleValue::String("ip_freq".into()),
+            PickleValue::Float(s.ip_freq),
+        ),
+        (
+            PickleValue::String("op_freq".into()),
+            PickleValue::Float(s.op_freq),
+        ),
+        (
             PickleValue::String("clients".into()),
             s.clients
                 .map(|clients| PickleValue::Int(clients as i64))
@@ -2536,6 +2544,9 @@ mod tests {
                             ifac_size: None,
                             started: 1000.0,
                             ia_freq: 0.0,
+                            ip_freq: 0.0,
+                            op_freq: 0.0,
+                            op_samples: 0,
                             oa_freq: 0.0,
                             clients: Some(2),
                             announce_rate_target: Some(3600.0),
@@ -2728,8 +2739,11 @@ mod tests {
                 bitrate: Some(1000000),
                 ifac_size: Some(16),
                 started: 1000.0,
-                ia_freq: 0.0,
-                oa_freq: 0.0,
+                ia_freq: 1.0,
+                ip_freq: 2.0,
+                op_freq: 3.0,
+                op_samples: 0,
+                oa_freq: 4.0,
                 clients: Some(3),
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
@@ -2757,6 +2771,10 @@ mod tests {
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        assert_eq!(ifaces[0].get("ia_freq").unwrap().as_float().unwrap(), 1.0);
+        assert_eq!(ifaces[0].get("ip_freq").unwrap().as_float().unwrap(), 2.0);
+        assert_eq!(ifaces[0].get("op_freq").unwrap().as_float().unwrap(), 3.0);
+        assert_eq!(ifaces[0].get("oa_freq").unwrap().as_float().unwrap(), 4.0);
         assert_eq!(
             ifaces[0]
                 .get("announce_rate_target")

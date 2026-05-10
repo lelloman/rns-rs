@@ -195,6 +195,9 @@ impl TestHarness {
             mtu: rns_core::constants::MTU as u32,
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
         });
     }
@@ -396,6 +399,9 @@ fn test_transport_routing_interop() {
                     mtu: rns_core::constants::MTU as u32,
                     ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
                     ia_freq: 0.0,
+                    ip_freq: 0.0,
+                    op_freq: 0.0,
+                    op_samples: 0,
                     started: 0.0,
                 });
 
@@ -1649,6 +1655,9 @@ fn test_issue4_shared_client_outbound_data_to_1hop_dest() {
         mtu: constants::MTU as u32,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
         started: 0.0,
     });
 
@@ -1725,6 +1734,9 @@ fn test_issue4_shared_client_outbound_linkrequest_to_1hop_dest() {
         mtu: constants::MTU as u32,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
         started: 0.0,
     });
 

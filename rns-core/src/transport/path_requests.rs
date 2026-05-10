@@ -118,12 +118,26 @@ impl TransportEngine {
     }
 
     fn handle_discovery_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> Vec<TransportAction> {
-        let should_discover = self
+        let Some((mode, ingress_control, ip_freq, started)) = self
             .interfaces
             .get(&ctx.interface_id)
-            .map(|info| constants::DISCOVER_PATHS_FOR.contains(&info.mode))
-            .unwrap_or(false);
+            .map(|info| (info.mode, info.ingress_control, info.ip_freq, info.started))
+        else {
+            return Vec::new();
+        };
+
+        let should_discover = constants::DISCOVER_PATHS_FOR.contains(&mode);
         if !should_discover {
+            return Vec::new();
+        }
+
+        if self.ingress_control.should_ingress_limit_pr(
+            ctx.interface_id,
+            &ingress_control,
+            ip_freq,
+            started,
+            ctx.now,
+        ) {
             return Vec::new();
         }
 
@@ -135,11 +149,25 @@ impl TransportEngine {
             },
         );
 
-        self.interfaces
+        let egress_candidates: Vec<_> = self
+            .interfaces
             .values()
-            .filter(|iface_info| iface_info.id != ctx.interface_id && iface_info.out_capable)
-            .map(|iface_info| TransportAction::SendOnInterface {
-                interface: iface_info.id,
+            .filter(|info| info.id != ctx.interface_id && info.out_capable)
+            .map(|info| (info.id, info.ingress_control, info.op_freq, info.op_samples))
+            .collect();
+
+        egress_candidates
+            .into_iter()
+            .filter(|(id, ingress_control, op_freq, op_samples)| {
+                !self.ingress_control.should_egress_limit_pr(
+                    *id,
+                    ingress_control,
+                    *op_freq,
+                    *op_samples,
+                )
+            })
+            .map(|(id, _, _, _)| TransportAction::SendOnInterface {
+                interface: id,
                 raw: ctx.data.to_vec().into(),
             })
             .collect()

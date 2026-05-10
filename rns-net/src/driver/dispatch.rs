@@ -277,6 +277,7 @@ impl Driver {
         }
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
         if is_announce {
             log::debug!(
                 "Announce:dispatching to iface {} (len={}, online={})",
@@ -307,6 +308,17 @@ impl Driver {
                 entry.stats.tx_packets += 1;
                 if is_announce {
                     entry.stats.record_outgoing_announce(time::now());
+                }
+                if is_path_request {
+                    let now = time::now();
+                    entry.stats.record_outgoing_path_request(now);
+                    self.engine.update_interface_freqs(
+                        interface,
+                        entry.stats.incoming_announce_freq(),
+                        entry.stats.incoming_path_request_freq(),
+                        entry.stats.outgoing_path_request_freq(),
+                        entry.stats.outgoing_path_request_samples(),
+                    );
                 }
                 let send_result = if entry.ifac.is_some() {
                     entry.writer.send_frame(&data)
@@ -382,6 +394,7 @@ impl Driver {
         }
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
         for entry in self.interfaces.values_mut() {
             if entry.online && entry.enabled && Some(entry.id) != exclude {
                 if Self::interface_send_deferred(entry, Instant::now()) {
@@ -401,6 +414,17 @@ impl Driver {
                 entry.stats.tx_packets += 1;
                 if is_announce {
                     entry.stats.record_outgoing_announce(time::now());
+                }
+                if is_path_request {
+                    let now = time::now();
+                    entry.stats.record_outgoing_path_request(now);
+                    self.engine.update_interface_freqs(
+                        entry.id,
+                        entry.stats.incoming_announce_freq(),
+                        entry.stats.incoming_path_request_freq(),
+                        entry.stats.outgoing_path_request_freq(),
+                        entry.stats.outgoing_path_request_samples(),
+                    );
                 }
                 let send_result = if entry.ifac.is_some() {
                     entry.writer.send_frame(&data)
@@ -463,9 +487,20 @@ impl Driver {
             self.handle_tunnel_synth_delivery(&raw);
         } else if destination_hash == self.path_request_dest {
             if let Ok(packet) = RawPacket::unpack(&raw) {
+                let now = time::now();
+                if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
+                    entry.stats.record_incoming_path_request(now);
+                    self.engine.update_interface_freqs(
+                        receiving_interface,
+                        entry.stats.incoming_announce_freq(),
+                        entry.stats.incoming_path_request_freq(),
+                        entry.stats.outgoing_path_request_freq(),
+                        entry.stats.outgoing_path_request_samples(),
+                    );
+                }
                 let actions =
                     self.engine
-                        .handle_path_request(&packet.data, receiving_interface, time::now());
+                        .handle_path_request(&packet.data, receiving_interface, now);
                 self.dispatch_all(actions);
             }
         } else if self.link_manager.is_link_destination(&destination_hash) {
@@ -1420,4 +1455,12 @@ impl Driver {
             }
         }
     }
+}
+
+fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {
+    RawPacket::unpack(raw).is_ok_and(|packet| {
+        packet.destination_hash == *path_request_dest
+            && packet.flags.destination_type == rns_core::constants::DESTINATION_PLAIN
+            && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
+    })
 }

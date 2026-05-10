@@ -1721,6 +1721,9 @@ mod tests {
             mtu: constants::MTU as u32,
             ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
         }
     }
@@ -2811,6 +2814,9 @@ mod tests {
             mtu: constants::MTU as u32,
             ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
         }
     }
@@ -3321,6 +3327,9 @@ mod tests {
             mtu: constants::MTU as u32,
             ingress_control: crate::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
         }
     }
@@ -3691,6 +3700,58 @@ mod tests {
             "duplicate discovery request should be dropped"
         );
         assert_eq!(engine.discovery_pr_tags_count(), 1);
+    }
+
+    #[test]
+    fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);
+        ingress.ingress_control.enabled = true;
+        ingress.ip_freq = constants::IC_PR_BURST_FREQ + 1.0;
+        engine.register_interface(ingress);
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xE1; 16];
+        let tag = [0x11; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert!(actions.is_empty());
+        assert!(!engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_path_request_egress_limit_skips_only_limited_interface() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+
+        let mut limited = make_interface(2, constants::MODE_FULL);
+        limited.ingress_control.egress_enabled = true;
+        limited.op_freq = constants::EC_PR_FREQ + 1.0;
+        limited.op_samples = constants::IC_BURST_MIN_SAMPLES;
+        engine.register_interface(limited);
+
+        let mut allowed = make_interface(3, constants::MODE_FULL);
+        allowed.ingress_control.egress_enabled = true;
+        allowed.op_freq = constants::EC_PR_FREQ - 1.0;
+        allowed.op_samples = constants::IC_BURST_MIN_SAMPLES;
+        engine.register_interface(allowed);
+
+        let dest = [0xE2; 16];
+        let tag = [0x12; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, .. } => {
+                assert_eq!(*interface, InterfaceId(3))
+            }
+            _ => panic!("expected SendOnInterface for the unlimited egress interface"),
+        }
+        assert!(engine.discovery_path_requests.contains_key(&dest));
     }
 
     #[test]

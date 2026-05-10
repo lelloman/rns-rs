@@ -97,8 +97,13 @@ impl Driver {
         }
 
         if let Some(entry) = self.interfaces.get(&interface_id) {
-            self.engine
-                .update_interface_freq(interface_id, entry.stats.incoming_announce_freq());
+            self.engine.update_interface_freqs(
+                interface_id,
+                entry.stats.incoming_announce_freq(),
+                entry.stats.incoming_path_request_freq(),
+                entry.stats.outgoing_path_request_freq(),
+                entry.stats.outgoing_path_request_samples(),
+            );
         }
 
         let inbound_frame = InboundFrame {
@@ -212,8 +217,13 @@ impl Driver {
 
         let now = time::now();
         for (id, entry) in &self.interfaces {
-            self.engine
-                .update_interface_freq(*id, entry.stats.incoming_announce_freq());
+            self.engine.update_interface_freqs(
+                *id,
+                entry.stats.incoming_announce_freq(),
+                entry.stats.incoming_path_request_freq(),
+                entry.stats.outgoing_path_request_freq(),
+                entry.stats.outgoing_path_request_samples(),
+            );
         }
         let actions = self.engine.tick(now, &mut self.rng);
         self.dispatch_all(actions);

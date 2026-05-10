@@ -65,6 +65,9 @@ mod tests {
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         };
@@ -87,6 +90,8 @@ mod tests {
                     started: 1000.0,
                     ia_timestamps: vec![],
                     oa_timestamps: vec![],
+                    ip_timestamps: vec![],
+                    op_timestamps: vec![],
                 },
                 interface_type: "TestInterface".to_string(),
                 send_retry_at: None,

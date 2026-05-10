@@ -876,6 +876,9 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         tunnel_id: None,
         mtu: constants::MTU as u32,
         ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
         started: 0.0,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     }

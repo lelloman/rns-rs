@@ -509,6 +509,9 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         tunnel_id: None,
         mtu: 65535,
         ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
         started: 0.0,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     }
@@ -804,6 +807,9 @@ impl InterfaceFactory for LocalClientFactory {
             mtu: 65535,
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: crate::time::now(),
         };
 

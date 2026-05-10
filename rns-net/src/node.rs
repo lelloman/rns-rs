@@ -2681,6 +2681,9 @@ mod tests {
             mtu: rns_core::constants::MTU as u32,
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: 0.0,
         }
     }

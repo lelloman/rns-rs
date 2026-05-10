@@ -460,6 +460,9 @@ impl Driver {
             mtu: 65535,
             ingress_control,
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: time::now(),
         };
         let (writer, async_writer_metrics) = self.wrap_interface_writer(id, &name, writer);

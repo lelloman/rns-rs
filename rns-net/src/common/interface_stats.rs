@@ -1,8 +1,14 @@
 /// Maximum number of announce timestamps to keep per direction.
-pub const ANNOUNCE_SAMPLE_MAX: usize = 12;
+pub const ANNOUNCE_SAMPLE_MAX: usize = 48;
+
+/// Maximum number of path request timestamps to keep per direction.
+pub const PATH_REQUEST_SAMPLE_MAX: usize = 48;
 
 /// Minimum number of incoming announce samples before ingress-control frequency is meaningful.
-pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 8;
+pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
+
+/// Minimum number of incoming path request samples before frequency is meaningful.
+pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 
 /// Traffic statistics for an interface.
 #[derive(Debug, Clone, Default)]
@@ -16,6 +22,10 @@ pub struct InterfaceStats {
     pub ia_timestamps: Vec<f64>,
     /// Recent outgoing announce timestamps (bounded).
     pub oa_timestamps: Vec<f64>,
+    /// Recent incoming path request timestamps (bounded).
+    pub ip_timestamps: Vec<f64>,
+    /// Recent outgoing path request timestamps (bounded).
+    pub op_timestamps: Vec<f64>,
 }
 
 impl InterfaceStats {
@@ -32,6 +42,22 @@ impl InterfaceStats {
         self.oa_timestamps.push(now);
         if self.oa_timestamps.len() > ANNOUNCE_SAMPLE_MAX {
             self.oa_timestamps.remove(0);
+        }
+    }
+
+    /// Record an incoming path request timestamp.
+    pub fn record_incoming_path_request(&mut self, now: f64) {
+        self.ip_timestamps.push(now);
+        if self.ip_timestamps.len() > PATH_REQUEST_SAMPLE_MAX {
+            self.ip_timestamps.remove(0);
+        }
+    }
+
+    /// Record an outgoing path request timestamp.
+    pub fn record_outgoing_path_request(&mut self, now: f64) {
+        self.op_timestamps.push(now);
+        if self.op_timestamps.len() > PATH_REQUEST_SAMPLE_MAX {
+            self.op_timestamps.remove(0);
         }
     }
 
@@ -57,6 +83,21 @@ impl InterfaceStats {
     pub fn outgoing_announce_freq(&self) -> f64 {
         Self::compute_frequency(&self.oa_timestamps, 1)
     }
+
+    /// Incoming path request frequency (per second).
+    pub fn incoming_path_request_freq(&self) -> f64 {
+        Self::compute_frequency(&self.ip_timestamps, INCOMING_PATH_REQUEST_MIN_SAMPLE)
+    }
+
+    /// Outgoing path request frequency (per second).
+    pub fn outgoing_path_request_freq(&self) -> f64 {
+        Self::compute_frequency(&self.op_timestamps, 1)
+    }
+
+    /// Number of outgoing path request samples currently held.
+    pub fn outgoing_path_request_samples(&self) -> usize {
+        self.op_timestamps.len()
+    }
 }
 
 #[cfg(test)]
@@ -67,34 +108,34 @@ mod tests {
     fn incoming_frequency_waits_for_minimum_sample_count() {
         let mut stats = InterfaceStats::default();
 
-        for i in 0..8 {
+        for i in 0..INCOMING_ANNOUNCE_MIN_SAMPLE {
             stats.record_incoming_announce(i as f64);
         }
 
         assert_eq!(
             stats.incoming_announce_freq(),
             0.0,
-            "incoming announce frequency must stay zero until more than 8 samples exist"
+            "incoming announce frequency must stay zero until more than the minimum samples exist"
         );
     }
 
     #[test]
-    fn announce_frequency_keeps_twelve_samples() {
+    fn announce_frequency_keeps_bounded_samples() {
         let mut stats = InterfaceStats::default();
 
-        for i in 0..12 {
+        for i in 0..ANNOUNCE_SAMPLE_MAX {
             stats.record_incoming_announce(i as f64);
             stats.record_outgoing_announce(i as f64);
         }
 
-        assert_eq!(stats.ia_timestamps.len(), 12);
-        assert_eq!(stats.oa_timestamps.len(), 12);
+        assert_eq!(stats.ia_timestamps.len(), ANNOUNCE_SAMPLE_MAX);
+        assert_eq!(stats.oa_timestamps.len(), ANNOUNCE_SAMPLE_MAX);
 
-        stats.record_incoming_announce(12.0);
-        stats.record_outgoing_announce(12.0);
+        stats.record_incoming_announce(ANNOUNCE_SAMPLE_MAX as f64);
+        stats.record_outgoing_announce(ANNOUNCE_SAMPLE_MAX as f64);
 
-        assert_eq!(stats.ia_timestamps.len(), 12);
-        assert_eq!(stats.oa_timestamps.len(), 12);
+        assert_eq!(stats.ia_timestamps.len(), ANNOUNCE_SAMPLE_MAX);
+        assert_eq!(stats.oa_timestamps.len(), ANNOUNCE_SAMPLE_MAX);
         assert_eq!(stats.ia_timestamps[0], 1.0);
         assert_eq!(stats.oa_timestamps[0], 1.0);
     }
@@ -114,5 +155,38 @@ mod tests {
             stats.incoming_announce_freq(),
             expected
         );
+    }
+
+    #[test]
+    fn path_request_frequency_tracks_incoming_and_outgoing_samples() {
+        let mut stats = InterfaceStats::default();
+
+        for i in 0..=INCOMING_PATH_REQUEST_MIN_SAMPLE {
+            stats.record_incoming_path_request(i as f64);
+        }
+        stats.record_outgoing_path_request(10.0);
+        stats.record_outgoing_path_request(12.0);
+
+        assert_eq!(stats.incoming_path_request_freq(), 3.0 / 2.0);
+        assert_eq!(stats.outgoing_path_request_freq(), 2.0 / 2.0);
+        assert_eq!(stats.outgoing_path_request_samples(), 2);
+    }
+
+    #[test]
+    fn path_request_frequency_keeps_bounded_samples() {
+        let mut stats = InterfaceStats::default();
+
+        for i in 0..PATH_REQUEST_SAMPLE_MAX {
+            stats.record_incoming_path_request(i as f64);
+            stats.record_outgoing_path_request(i as f64);
+        }
+
+        stats.record_incoming_path_request(PATH_REQUEST_SAMPLE_MAX as f64);
+        stats.record_outgoing_path_request(PATH_REQUEST_SAMPLE_MAX as f64);
+
+        assert_eq!(stats.ip_timestamps.len(), PATH_REQUEST_SAMPLE_MAX);
+        assert_eq!(stats.op_timestamps.len(), PATH_REQUEST_SAMPLE_MAX);
+        assert_eq!(stats.ip_timestamps[0], 1.0);
+        assert_eq!(stats.op_timestamps[0], 1.0);
     }
 }

@@ -122,6 +122,9 @@ impl RnsNode {
             tunnel_id: None,
             mtu: 65535,
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: time::now(),
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         };
@@ -374,6 +377,9 @@ pub fn bench_shared_client_replay_once(
         tunnel_id: None,
         mtu: 65535,
         ia_freq: 0.0,
+        ip_freq: 0.0,
+        op_freq: 0.0,
+        op_samples: 0,
         started: time::now(),
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
     };
