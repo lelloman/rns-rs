@@ -7,31 +7,34 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Tag: `1.2.4`
-- Commit: `9d076d6a194ee9675a5bf585de1b2c2a634f3946`
-- Commit date: `2026-05-07 20:07:21 +0200`
-- Subject: `Prepare release`
+- Tag: `1.2.5`
+- Commit: `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`
+- Commit date: `2026-05-09 19:17:38 +0200`
+- Subject: `Yes, that was indeed a bit overkill`
 
-The previous recorded baseline was Reticulum `1.2.3`, with release commit
-`8661a3886b76cac27e5b961aa1e098f9b2be9733`. The upstream
-`1.2.3..1.2.4` range was reviewed and the relevant runtime, discovery,
-`rnstatus`, `rnpath`, `rnid`, identity-retention, and `rngit` changes were
-ported or explicitly deferred with the following local commits:
+The previous recorded baseline was Reticulum `1.2.4`, with release commit
+`9d076d6a194ee9675a5bf585de1b2c2a634f3946`. The upstream
+`1.2.4..1.2.5` range was reviewed and the relevant path-request control,
+`rnstatus`, `rnpath`, `rnid`, discovery, transport, and `rngit` changes were
+ported or explicitly audited with the following local commits:
 
-- `cfdc447` Add rngit work document permissions
-- `1d71ca0` Sort rngit work documents by latest activity
-- `e71fdc3` Escape rngit rendered line-start controls
-- `cf4afcf` Scope rngit markdown relative links
-- `5410f01` Render rngit release preview formats
-- `7982a24` Add announce-rate defaults
-- `aa67f7a` Sanitize discovered interfaces
-- `4b16a4f` Clear transient state on shutdown
-- `2b4d6e4` Show per-client announce frequency
-- `ca156fa` Retain known destinations by identity
-- `27b7ad4` Fix markdown inline link ordering
-- `7c3aa75` Port rnid identity signature flow
-- `3cd2e18` Add rnid identity lookup E2E tests
-- `827d4b5` Match rnpath time formatter boundaries
+- `3bb19d7` Add path request control core
+- `12a250d` Gate recursive path requests
+- `a22d307` Add ingress control config defaults
+- `0f5221c` Add rnstatus path request stats
+- `37adc59` Validate rngit refs and SHAs
+- `f9f106f` Harden rngit stats and work limits
+- `8eea4e2` Reject slashed rngit release tags
+- `93b97c2` Fix rngit rendering escapes
+- `bba47af` Hide rngit git failure details from clients
+- `1ca8cd6` Add rnid ASCII RSG output
+- `e3211e5` Ignore initiator-closed remote links
+- `d7cf58d` Show rnstatus per-peer rates
+- `1c44a6f` Handle corrupt discovery persistence
+- `9c01ad9` Sort pending announce retransmits
+- `913aa49` Throttle recursive path requests
+- `2a66180` Add rngit page git timeouts
+- `2877408` Mark discovered transport entries as gateway
 
 When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
