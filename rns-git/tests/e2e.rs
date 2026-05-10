@@ -13,6 +13,8 @@ use rns_git::git;
 use rns_git::pages;
 use rns_git::protocol::{self, RefUpdate};
 use rns_git::server::{register_server_destinations, ServerDestinations};
+use rns_git::util::hex;
+use rns_git::work;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -497,6 +499,304 @@ fn rngit_release_management_and_downloads_work_over_rns_link() {
     );
 }
 
+#[test]
+fn rngit_work_document_lifecycle_works_over_rns_link() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_interact = vec!["all".into()];
+    });
+    let repo_path = harness.server_config.repositories_dir.join("group/repo");
+    git::ensure_bare_repository(&repo_path).unwrap();
+    let link_id = harness.link_to(&harness.destinations.repositories, None);
+
+    let create = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("create".into())),
+                ("title", Value::Str("Initial task".into())),
+                ("content", Value::Str("Do the first thing".into())),
+                ("format", Value::Str("markdown".into())),
+            ],
+        ),
+    );
+    let doc_id = work_response_id(&create.data);
+
+    let comment = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("comment".into())),
+                ("doc_id", Value::UInt(doc_id)),
+                ("scope", Value::Str("active".into())),
+                ("content", Value::Str("Looks good over RNS".into())),
+            ],
+        ),
+    );
+    assert_eq!(work_response_id(&comment.data), 1);
+
+    let edit = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("edit".into())),
+                ("doc_id", Value::UInt(doc_id)),
+                ("scope", Value::Str("active".into())),
+                ("title", Value::Str("Edited task".into())),
+                ("content", Value::Str("Do the edited thing".into())),
+            ],
+        ),
+    );
+    assert_status_response(&edit.data, protocol::RES_OK, b"");
+
+    let active_view = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("view".into())),
+                ("doc_id", Value::UInt(doc_id)),
+                ("scope", Value::Str("active".into())),
+            ],
+        ),
+    );
+    let active_doc = unpack_work_ok(&active_view.data);
+    assert_eq!(
+        active_doc.map_get("content").and_then(Value::as_str),
+        Some("Do the edited thing")
+    );
+    let active_meta = active_doc.map_get("meta").and_then(Value::as_map).unwrap();
+    assert_eq!(
+        map_get_str(active_meta, "title").and_then(Value::as_str),
+        Some("Edited task")
+    );
+    let comments = active_doc
+        .map_get("comments")
+        .and_then(Value::as_array)
+        .expect("work view should include comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(
+        comments[0].map_get("content").and_then(Value::as_str),
+        Some("Looks good over RNS")
+    );
+
+    let complete = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("complete".into())),
+                ("doc_id", Value::UInt(doc_id)),
+            ],
+        ),
+    );
+    let complete_value = unpack_work_ok(&complete.data);
+    assert_eq!(
+        complete_value.map_get("scope").and_then(Value::as_str),
+        Some("completed")
+    );
+
+    let completed_view = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("view".into())),
+                ("doc_id", Value::UInt(doc_id)),
+                ("scope", Value::Str("completed".into())),
+            ],
+        ),
+    );
+    assert_eq!(
+        unpack_work_ok(&completed_view.data)
+            .map_get("scope")
+            .and_then(Value::as_str),
+        Some("completed")
+    );
+
+    let activate = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("activate".into())),
+                ("doc_id", Value::UInt(doc_id)),
+            ],
+        ),
+    );
+    let activate_value = unpack_work_ok(&activate.data);
+    assert_eq!(
+        activate_value.map_get("scope").and_then(Value::as_str),
+        Some("active")
+    );
+
+    let list = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("list".into())),
+                ("scope", Value::Str("all".into())),
+            ],
+        ),
+    );
+    let lists = unpack_work_ok(&list.data);
+    assert_eq!(
+        lists
+            .map_get("active")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        lists
+            .map_get("completed")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn rngit_work_document_local_permissions_work_over_rns_link() {
+    let harness = E2eHarness::start(|config| {
+        config.allow_write = vec!["none".into()];
+        config.allow_interact = vec!["none".into()];
+        config.allow_admin = vec!["none".into()];
+    });
+    let repo_path = harness.server_config.repositories_dir.join("group/repo");
+    git::ensure_bare_repository(&repo_path).unwrap();
+    let work_path = work::work_sidecar_path(&repo_path);
+    let created = work::create_document(
+        &work_path,
+        work::WorkInput {
+            title: "Permission task".into(),
+            content: "Doc-local permission target".into(),
+            format: "markdown".into(),
+            signature: None,
+            author: [0xAB; 16],
+        },
+    )
+    .unwrap();
+    let client_hash = *harness.client_identity.hash();
+    let allowed = format!(
+        "interact = {}\nadmin = {}\n",
+        hex(&client_hash),
+        hex(&client_hash)
+    );
+    work::set_document_permissions(&work_path, created.id, &allowed).unwrap();
+
+    let link_id = harness.link_to(&harness.destinations.repositories, None);
+
+    let get = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("perms".into())),
+                ("step", Value::Str("get".into())),
+                ("doc_id", Value::UInt(created.id)),
+            ],
+        ),
+    );
+    let perms = unpack_work_ok(&get.data);
+    assert_eq!(
+        perms.map_get("content").and_then(Value::as_str),
+        Some(allowed.as_str())
+    );
+
+    let set = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("perms".into())),
+                ("step", Value::Str("set".into())),
+                ("doc_id", Value::UInt(created.id)),
+                ("content", Value::Str(allowed.clone())),
+            ],
+        ),
+    );
+    assert_status_response(&set.data, protocol::RES_OK, b"");
+
+    let comment = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("comment".into())),
+                ("doc_id", Value::UInt(created.id)),
+                ("content", Value::Str("Doc-local interact comment".into())),
+            ],
+        ),
+    );
+    assert_eq!(work_response_id(&comment.data), 1);
+
+    let edit = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("edit".into())),
+                ("doc_id", Value::UInt(created.id)),
+                ("title", Value::Str("Should not edit".into())),
+            ],
+        ),
+    );
+    assert_status_response(&edit.data, protocol::RES_DISALLOWED, b"not allowed");
+
+    let complete = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("complete".into())),
+                ("doc_id", Value::UInt(created.id)),
+            ],
+        ),
+    );
+    assert_status_response(&complete.data, protocol::RES_DISALLOWED, b"not allowed");
+
+    let view = harness.request(
+        link_id,
+        protocol::PATH_WORK,
+        &work_request(
+            "group/repo",
+            &[
+                ("operation", Value::Str("view".into())),
+                ("doc_id", Value::UInt(created.id)),
+            ],
+        ),
+    );
+    let doc = unpack_work_ok(&view.data);
+    let comments = doc
+        .map_get("comments")
+        .and_then(Value::as_array)
+        .expect("work view should include comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(
+        comments[0].map_get("content").and_then(Value::as_str),
+        Some("Doc-local interact comment")
+    );
+}
+
 fn wait_for_announce(
     rx: &mpsc::Receiver<Event>,
     server_node: &RnsNode,
@@ -566,7 +866,7 @@ fn decode_status_response(data: &[u8]) -> Vec<u8> {
 }
 
 fn decode_ok_body(data: &[u8]) -> Vec<u8> {
-    let bytes = protocol::response_bin(data).unwrap();
+    let bytes = status_payload(data);
     let (&code, body) = bytes
         .split_first()
         .expect("status response must not be empty");
@@ -579,12 +879,16 @@ fn decode_page_response(data: &[u8]) -> String {
 }
 
 fn assert_status_response(data: &[u8], expected_code: u8, expected_body: &[u8]) {
-    let bytes = protocol::response_bin(data).unwrap();
+    let bytes = status_payload(data);
     let (&code, body) = bytes
         .split_first()
         .expect("status response must not be empty");
     assert_eq!(code, expected_code, "unexpected status body: {body:?}");
     assert_eq!(body, expected_body);
+}
+
+fn status_payload(data: &[u8]) -> Vec<u8> {
+    protocol::response_bin(data).unwrap_or_else(|_| data.to_vec())
 }
 
 fn page_request(fields: &[(&str, &str)]) -> Vec<u8> {
@@ -603,6 +907,38 @@ fn release_request(fields: &[(&str, Value)]) -> Vec<u8> {
             .map(|(k, v)| (Value::Str((*k).into()), v.clone()))
             .collect(),
     ))
+}
+
+fn work_request(repository: &str, fields: &[(&str, Value)]) -> Vec<u8> {
+    let mut entries = vec![(
+        Value::UInt(protocol::IDX_REPOSITORY),
+        Value::Str(repository.to_string()),
+    )];
+    entries.extend(
+        fields
+            .iter()
+            .map(|(k, v)| (Value::Str((*k).into()), v.clone())),
+    );
+    msgpack::pack(&Value::Map(entries))
+}
+
+fn work_response_id(data: &[u8]) -> u64 {
+    unpack_work_ok(data)
+        .map_get("id")
+        .and_then(Value::as_uint)
+        .expect("work response should contain id")
+}
+
+fn unpack_work_ok(data: &[u8]) -> Value {
+    let body = decode_ok_body(data);
+    msgpack::unpack_exact(&body).expect("work response body should be msgpack")
+}
+
+fn map_get_str<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
+    map.iter().find_map(|(map_key, value)| match map_key {
+        Value::Str(map_key) if map_key == key => Some(value),
+        _ => None,
+    })
 }
 
 fn assert_metadata_ok(metadata: &[u8]) {
