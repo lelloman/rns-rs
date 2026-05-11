@@ -352,7 +352,7 @@ impl Driver {
         settings: BackbonePeerPoolSettings,
         candidates: Vec<BackbonePeerPoolCandidateConfig>,
     ) {
-        if settings.max_connected == 0 || candidates.is_empty() {
+        if settings.max_connected == 0 || (candidates.is_empty() && !self.discover_interfaces) {
             self.backbone_peer_pool = None;
             return;
         }
@@ -371,6 +371,280 @@ impl Driver {
                 .collect(),
         });
         self.maintain_backbone_peer_pool();
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn seed_backbone_peer_pool_from_discovery_cache(&mut self) {
+        if !self.discover_interfaces || self.backbone_peer_pool.is_none() {
+            return;
+        }
+        match self.discovered_interfaces.list() {
+            Ok(mut interfaces) => {
+                interfaces.sort_by(|a, b| {
+                    Self::discovery_candidate_order(a).cmp(&Self::discovery_candidate_order(b))
+                });
+                for iface in interfaces {
+                    self.upsert_discovered_backbone_peer_pool_candidate(iface);
+                }
+                self.maintain_backbone_peer_pool();
+            }
+            Err(err) => log::warn!(
+                "Failed to load discovered Backbone peer-pool candidates: {}",
+                err
+            ),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn upsert_discovered_backbone_peer_pool_candidate(
+        &mut self,
+        iface: crate::discovery::DiscoveredInterface,
+    ) -> bool {
+        if !self.discover_interfaces || self.backbone_peer_pool.is_none() {
+            return false;
+        }
+        let Some((remote, port, transport_identity, discovery)) =
+            Self::discovered_backbone_peer_endpoint(&iface)
+        else {
+            return false;
+        };
+
+        if self.backbone_peer_pool.as_ref().is_some_and(|pool| {
+            pool.candidates.iter().any(|candidate| {
+                candidate.config.source == BackbonePeerPoolCandidateSource::Configured
+                    && Self::pool_candidate_matches_endpoint(
+                        &candidate.config,
+                        &remote,
+                        port,
+                        Some(&transport_identity),
+                    )
+            })
+        }) {
+            return false;
+        }
+
+        let Some(pool) = self.backbone_peer_pool.as_mut() else {
+            return false;
+        };
+        if let Some(candidate) = pool.candidates.iter_mut().find(|candidate| {
+            candidate.config.source == BackbonePeerPoolCandidateSource::Discovered
+                && (candidate
+                    .config
+                    .discovery
+                    .as_ref()
+                    .is_some_and(|old| old.discovery_hash == discovery.discovery_hash)
+                    || Self::pool_candidate_matches_endpoint(
+                        &candidate.config,
+                        &remote,
+                        port,
+                        Some(&transport_identity),
+                    ))
+        }) {
+            candidate.config.client.target_host = remote;
+            candidate.config.client.target_port = port;
+            candidate.config.client.transport_identity = Some(transport_identity);
+            if candidate.active_id.is_none() {
+                candidate.config.client.name = Self::discovered_pool_candidate_name(&iface);
+            }
+            candidate.config.discovery = Some(discovery);
+            candidate.config.ifac_runtime = IfacRuntimeConfig {
+                netname: iface.ifac_netname,
+                netkey: iface.ifac_netkey,
+                size: 16,
+            };
+            candidate.config.ifac_enabled = candidate.config.ifac_runtime.netname.is_some()
+                || candidate.config.ifac_runtime.netkey.is_some();
+            Self::sort_discovered_backbone_peer_pool_candidates(pool);
+            self.maintain_backbone_peer_pool();
+            return true;
+        }
+
+        let id = InterfaceId(
+            self.next_dynamic_interface_id
+                .fetch_add(1, Ordering::Relaxed),
+        );
+        let mut client = BackboneClientConfig {
+            name: Self::discovered_pool_candidate_name(&iface),
+            target_host: remote,
+            target_port: port,
+            interface_id: id,
+            transport_identity: Some(transport_identity),
+            ..BackboneClientConfig::default()
+        };
+        client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
+        let ifac_runtime = IfacRuntimeConfig {
+            netname: iface.ifac_netname,
+            netkey: iface.ifac_netkey,
+            size: 16,
+        };
+        let ifac_enabled = ifac_runtime.netname.is_some() || ifac_runtime.netkey.is_some();
+        let mode = if iface.transport && self.engine.transport_enabled() {
+            rns_core::constants::MODE_GATEWAY
+        } else {
+            rns_core::constants::MODE_FULL
+        };
+        pool.candidates.push(BackbonePeerPoolCandidate {
+            config: BackbonePeerPoolCandidateConfig {
+                client,
+                mode,
+                ingress_control: self.ingress_control_defaults,
+                ifac_runtime,
+                ifac_enabled,
+                interface_type_name: "BackboneInterface".to_string(),
+                source: BackbonePeerPoolCandidateSource::Discovered,
+                discovery: Some(discovery),
+            },
+            active_id: None,
+            failures: Vec::new(),
+            retry_after: None,
+            cooldown_until: None,
+            last_error: None,
+        });
+        Self::sort_discovered_backbone_peer_pool_candidates(pool);
+        self.maintain_backbone_peer_pool();
+        true
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn cull_stale_discovered_backbone_peer_pool_candidates(&mut self) {
+        let Some(pool) = self.backbone_peer_pool.as_mut() else {
+            return;
+        };
+        let now = time::now();
+        pool.candidates.retain(|candidate| {
+            if candidate.config.source == BackbonePeerPoolCandidateSource::Configured {
+                return true;
+            }
+            if candidate.active_id.is_some() {
+                return true;
+            }
+            let Some(discovery) = candidate.config.discovery.as_ref() else {
+                return false;
+            };
+            discovery.status != crate::discovery::DiscoveredStatus::Stale
+                && now - discovery.last_heard <= crate::discovery::THRESHOLD_REMOVE
+        });
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn discovered_backbone_peer_endpoint(
+        iface: &crate::discovery::DiscoveredInterface,
+    ) -> Option<(String, u16, String, BackbonePeerPoolDiscoveryCandidate)> {
+        if !matches!(
+            iface.interface_type.as_str(),
+            "BackboneInterface" | "TCPServerInterface"
+        ) {
+            return None;
+        }
+        let remote = iface.reachable_on.as_ref()?;
+        if !(crate::discovery::is_ip_address(remote) || crate::discovery::is_hostname(remote)) {
+            return None;
+        }
+        let status = iface.compute_status();
+        if status == crate::discovery::DiscoveredStatus::Stale {
+            return None;
+        }
+        Some((
+            remote.clone(),
+            iface.port.unwrap_or(4242),
+            crate::discovery::hex_encode(&iface.transport_id),
+            BackbonePeerPoolDiscoveryCandidate {
+                discovery_hash: iface.discovery_hash,
+                status,
+                hops: iface.hops,
+                stamp_value: iface.stamp_value,
+                last_heard: iface.last_heard,
+            },
+        ))
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn discovered_pool_candidate_name(iface: &crate::discovery::DiscoveredInterface) -> String {
+        let hex = crate::discovery::hex_encode(&iface.discovery_hash);
+        format!("{} ({})", iface.name, &hex[..8])
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn pool_candidate_matches_endpoint(
+        candidate: &BackbonePeerPoolCandidateConfig,
+        remote: &str,
+        port: u16,
+        transport_identity: Option<&str>,
+    ) -> bool {
+        candidate.client.target_host == remote && candidate.client.target_port == port
+            || transport_identity.is_some_and(|identity| {
+                candidate
+                    .client
+                    .transport_identity
+                    .as_ref()
+                    .is_some_and(|candidate_identity| {
+                        candidate_identity.eq_ignore_ascii_case(identity)
+                    })
+            })
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn sort_discovered_backbone_peer_pool_candidates(pool: &mut BackbonePeerPool) {
+        let configured_count = pool
+            .candidates
+            .iter()
+            .take_while(|candidate| {
+                candidate.config.source == BackbonePeerPoolCandidateSource::Configured
+            })
+            .count();
+        pool.candidates[configured_count..].sort_by(|a, b| {
+            Self::candidate_discovery_order(a).cmp(&Self::candidate_discovery_order(b))
+        });
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn discovery_candidate_order(
+        iface: &crate::discovery::DiscoveredInterface,
+    ) -> (
+        u8,
+        u8,
+        std::cmp::Reverse<u32>,
+        std::cmp::Reverse<u64>,
+        [u8; 32],
+    ) {
+        (
+            match iface.compute_status() {
+                crate::discovery::DiscoveredStatus::Available => 0,
+                crate::discovery::DiscoveredStatus::Unknown => 1,
+                crate::discovery::DiscoveredStatus::Stale => 2,
+            },
+            iface.hops,
+            std::cmp::Reverse(iface.stamp_value),
+            std::cmp::Reverse((iface.last_heard * 1000.0).max(0.0) as u64),
+            iface.discovery_hash,
+        )
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn candidate_discovery_order(
+        candidate: &BackbonePeerPoolCandidate,
+    ) -> (
+        u8,
+        u8,
+        std::cmp::Reverse<u32>,
+        std::cmp::Reverse<u64>,
+        [u8; 32],
+    ) {
+        if let Some(discovery) = candidate.config.discovery.as_ref() {
+            (
+                match discovery.status {
+                    crate::discovery::DiscoveredStatus::Available => 0,
+                    crate::discovery::DiscoveredStatus::Unknown => 1,
+                    crate::discovery::DiscoveredStatus::Stale => 2,
+                },
+                discovery.hops,
+                std::cmp::Reverse(discovery.stamp_value),
+                std::cmp::Reverse((discovery.last_heard * 1000.0).max(0.0) as u64),
+                discovery.discovery_hash,
+            )
+        } else {
+            (0, 0, std::cmp::Reverse(0), std::cmp::Reverse(0), [0; 32])
+        }
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -441,6 +715,7 @@ impl Driver {
         let ifac_runtime = candidate.config.ifac_runtime.clone();
         let ifac_enabled = candidate.config.ifac_enabled;
         let interface_type_name = candidate.config.interface_type_name.clone();
+        let is_discovered = candidate.config.source == BackbonePeerPoolCandidateSource::Discovered;
         let writer = start_client(client.clone(), self.event_tx.clone())?;
         let info = rns_core::transport::types::InterfaceInfo {
             id,
@@ -495,7 +770,7 @@ impl Driver {
                 async_writer_metrics: Some(async_writer_metrics),
                 enabled: true,
                 online: false,
-                dynamic: false,
+                dynamic: is_discovered,
                 ifac: ifac_state,
                 stats: InterfaceStats {
                     started: time::now(),
@@ -548,20 +823,26 @@ impl Driver {
 
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn handle_backbone_peer_pool_down(&mut self, id: InterfaceId) {
-        let Some(index) = self.backbone_peer_pool.as_ref().and_then(|pool| {
+        let Some((index, candidate_name)) = self.backbone_peer_pool.as_ref().and_then(|pool| {
             pool.candidates
                 .iter()
-                .position(|candidate| candidate.active_id == Some(id))
+                .enumerate()
+                .find(|(_, candidate)| candidate.active_id == Some(id))
+                .map(|(index, candidate)| (index, candidate.config.client.name.clone()))
         }) else {
             return;
         };
 
-        if let Some(entry) = self.interfaces.remove(&id) {
-            let name = entry.info.name;
-            self.interface_runtime_defaults.remove(&name);
-            self.interface_ifac_runtime.remove(&name);
-            self.interface_ifac_runtime_defaults.remove(&name);
-            self.backbone_client_runtime.remove(&name);
+        let name = if let Some(entry) = self.interfaces.remove(&id) {
+            entry.info.name
+        } else {
+            candidate_name
+        };
+        self.interface_runtime_defaults.remove(&name);
+        self.interface_ifac_runtime.remove(&name);
+        self.interface_ifac_runtime_defaults.remove(&name);
+        self.backbone_client_runtime.remove(&name);
+        if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
         }
         self.record_backbone_peer_pool_failure(index, "interface down".into());
@@ -604,6 +885,7 @@ impl Driver {
                         "{}:{}",
                         candidate.config.client.target_host, candidate.config.client.target_port
                     ),
+                    source: candidate.config.source.as_str().to_string(),
                     state,
                     interface_id: candidate.active_id.map(|id| id.0),
                     failure_count: candidate.failures.len(),

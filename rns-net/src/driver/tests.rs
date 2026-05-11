@@ -409,6 +409,52 @@ fn make_pool_candidate(name: &str, port: u16, id: u64) -> BackbonePeerPoolCandid
         },
         ifac_enabled: false,
         interface_type_name: "BackboneInterface".to_string(),
+        source: BackbonePeerPoolCandidateSource::Configured,
+        discovery: None,
+    }
+}
+
+#[cfg(feature = "iface-backbone")]
+fn make_discovered_backbone(
+    name: &str,
+    host: &str,
+    port: Option<u16>,
+    transport_seed: u8,
+    hops: u8,
+    stamp_value: u32,
+    last_heard: f64,
+) -> crate::discovery::DiscoveredInterface {
+    let mut transport_id = [transport_seed; 16];
+    transport_id[15] = transport_seed;
+    let discovery_hash = crate::discovery::compute_discovery_hash(&transport_id, name);
+    crate::discovery::DiscoveredInterface {
+        interface_type: "BackboneInterface".to_string(),
+        transport: true,
+        name: name.to_string(),
+        discovered: last_heard,
+        last_heard,
+        heard_count: 1,
+        status: crate::discovery::DiscoveredStatus::Available,
+        stamp: vec![0; crate::discovery::STAMP_SIZE],
+        stamp_value,
+        transport_id,
+        network_id: [0x55; 16],
+        hops,
+        latitude: None,
+        longitude: None,
+        height: None,
+        reachable_on: Some(host.to_string()),
+        port,
+        frequency: None,
+        bandwidth: None,
+        spreading_factor: None,
+        coding_rate: None,
+        modulation: None,
+        channel: None,
+        ifac_netname: None,
+        ifac_netkey: None,
+        config_entry: None,
+        discovery_hash,
     }
 }
 
@@ -444,6 +490,287 @@ fn backbone_peer_pool_respects_max_connected_order() {
     assert_eq!(status.members[1].state, "standby");
     drop(listener_a);
     drop(listener_b);
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_discovered_fill_target_after_configured() {
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port_a = listener_a.local_addr().unwrap().port();
+    let port_b = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 2,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![make_pool_candidate("configured", port_a, 7031)],
+    );
+
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "discovered",
+            "127.0.0.1",
+            Some(port_b),
+            0x71,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.max_connected, 2);
+    assert_eq!(status.active_count, 2);
+    assert_eq!(status.members[0].source, "configured");
+    assert_eq!(status.members[1].source, "discovered");
+    assert_eq!(status.members[1].remote, format!("127.0.0.1:{port_b}"));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_prefers_configured_over_discovered() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let configured_port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![make_pool_candidate("configured", configured_port, 7041)],
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "better-discovered",
+            "127.0.0.1",
+            Some(configured_port + 1),
+            0x72,
+            0,
+            32,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].source, "configured");
+    assert!(matches!(
+        status.members[0].state.as_str(),
+        "connecting" | "active"
+    ));
+    assert_eq!(status.members[1].source, "discovered");
+    assert_eq!(status.members[1].state, "standby");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_sorts_discovered_candidates_by_quality() {
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_c = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    let now = time::now();
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 3,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        Vec::new(),
+    );
+
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "high-stamp",
+            "127.0.0.1",
+            Some(listener_b.local_addr().unwrap().port()),
+            0x82,
+            2,
+            40,
+            now,
+        ))
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "few-hops",
+            "127.0.0.1",
+            Some(listener_a.local_addr().unwrap().port()),
+            0x81,
+            1,
+            10,
+            now - 10.0,
+        ))
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "newer",
+            "127.0.0.1",
+            Some(listener_c.local_addr().unwrap().port()),
+            0x83,
+            2,
+            40,
+            now + 1.0,
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    let names: Vec<&str> = status
+        .members
+        .iter()
+        .map(|member| member.name.split(" (").next().unwrap())
+        .collect();
+    assert_eq!(names, vec!["few-hops", "newer", "high-stamp"]);
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_deduplicates_discovered_candidates() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 2,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        Vec::new(),
+    );
+
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "one",
+            "127.0.0.1",
+            Some(port),
+            0x91,
+            1,
+            10,
+            time::now(),
+        ))
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "same-remote",
+            "127.0.0.1",
+            Some(port),
+            0x92,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.members.len(), 1);
+    assert_eq!(status.members[0].source, "discovered");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_failed_discovered_candidate_retries_replacement() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let replacement_port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        Vec::new(),
+    );
+
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "failed",
+            "127.0.0.1",
+            Some(1),
+            0xa1,
+            1,
+            10,
+            time::now(),
+        ))
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "replacement",
+            "127.0.0.1",
+            Some(replacement_port),
+            0xa2,
+            2,
+            10,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].name.split(" (").next().unwrap(), "failed");
+    assert_eq!(status.members[0].failure_count, 1);
+    assert_eq!(
+        status.members[1].name.split(" (").next().unwrap(),
+        "replacement"
+    );
+    assert!(matches!(
+        status.members[1].state.as_str(),
+        "connecting" | "active"
+    ));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_removes_stale_standby_discovered_candidates() {
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        Vec::new(),
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "stale-soon",
+            "127.0.0.1",
+            Some(1),
+            0xb1,
+            1,
+            10,
+            time::now(),
+        ))
+    );
+
+    if let Some(pool) = driver.backbone_peer_pool.as_mut() {
+        let candidate = pool.candidates.first_mut().unwrap();
+        candidate.active_id = None;
+        let discovery = candidate.config.discovery.as_mut().unwrap();
+        discovery.status = crate::discovery::DiscoveredStatus::Stale;
+        discovery.last_heard = time::now() - crate::discovery::THRESHOLD_REMOVE - 1.0;
+    }
+    driver.cull_stale_discovered_backbone_peer_pool_candidates();
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert!(status.members.is_empty());
 }
 
 #[cfg(feature = "iface-backbone")]

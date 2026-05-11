@@ -656,6 +656,8 @@ impl Driver {
                                             discovered.stamp_value,
                                         );
                                     }
+                                    #[cfg(feature = "iface-backbone")]
+                                    self.upsert_discovered_backbone_peer_pool_candidate(discovered);
                                 }
                             }
                         }

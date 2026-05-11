@@ -270,6 +270,35 @@ pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) ifac_runtime: IfacRuntimeConfig,
     pub(crate) ifac_enabled: bool,
     pub(crate) interface_type_name: String,
+    pub(crate) source: BackbonePeerPoolCandidateSource,
+    pub(crate) discovery: Option<BackbonePeerPoolDiscoveryCandidate>,
+}
+
+#[cfg(feature = "iface-backbone")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackbonePeerPoolCandidateSource {
+    Configured,
+    Discovered,
+}
+
+#[cfg(feature = "iface-backbone")]
+impl BackbonePeerPoolCandidateSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Discovered => "discovered",
+        }
+    }
+}
+
+#[cfg(feature = "iface-backbone")]
+#[derive(Debug, Clone)]
+pub(crate) struct BackbonePeerPoolDiscoveryCandidate {
+    pub(crate) discovery_hash: [u8; 32],
+    pub(crate) status: crate::discovery::DiscoveredStatus,
+    pub(crate) hops: u8,
+    pub(crate) stamp_value: u32,
+    pub(crate) last_heard: f64,
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -626,6 +655,9 @@ pub struct Driver {
     /// Ordered outbound Backbone peer pool, if enabled.
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
+    /// Shared allocator for listener-created and discovery-created dynamic interfaces.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) next_dynamic_interface_id: Arc<AtomicU64>,
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
@@ -805,6 +837,8 @@ impl Driver {
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
+            #[cfg(feature = "iface-backbone")]
+            next_dynamic_interface_id: Arc::new(AtomicU64::new(10000)),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]

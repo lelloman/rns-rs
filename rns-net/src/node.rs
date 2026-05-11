@@ -1174,6 +1174,10 @@ impl RnsNode {
 
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
+        #[cfg(feature = "iface-backbone")]
+        {
+            driver.next_dynamic_interface_id = Arc::clone(&next_dynamic_id);
+        }
 
         // Collect discoverable interface configs for the announcer
         let mut discoverable_interfaces = Vec::new();
@@ -1325,6 +1329,8 @@ impl RnsNode {
                             ifac_runtime: ifac_runtime.clone(),
                             ifac_enabled: ifac_state.is_some(),
                             interface_type_name: iface_config.type_name.clone(),
+                            source: crate::driver::BackbonePeerPoolCandidateSource::Configured,
+                            discovery: None,
                         });
                         if let Some(ref disc) = iface_config.discovery {
                             discoverable_interfaces.push(discoverable_interface_from_config(
@@ -1423,11 +1429,6 @@ impl RnsNode {
             }
         }
 
-        #[cfg(feature = "iface-backbone")]
-        if let Some(settings) = config.backbone_peer_pool.clone() {
-            driver.configure_backbone_peer_pool(settings, backbone_peer_pool_candidates);
-        }
-
         // Set up interface announcer if we have discoverable interfaces
         if !discoverable_interfaces.is_empty() {
             let transport_id = *identity.hash();
@@ -1448,6 +1449,12 @@ impl RnsNode {
             let _ = std::fs::create_dir_all(&disc_path);
             driver.discovered_interfaces =
                 crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
+        }
+
+        #[cfg(feature = "iface-backbone")]
+        if let Some(settings) = config.backbone_peer_pool.clone() {
+            driver.configure_backbone_peer_pool(settings, backbone_peer_pool_candidates);
+            driver.seed_backbone_peer_pool_from_discovery_cache();
         }
 
         // Set up management destinations if enabled

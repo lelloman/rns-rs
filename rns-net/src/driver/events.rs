@@ -259,6 +259,8 @@ impl Driver {
                     if removed > 0 {
                         log::info!("Discovery cleanup: removed {} stale entries", removed);
                     }
+                    #[cfg(feature = "iface-backbone")]
+                    self.cull_stale_discovered_backbone_peer_pool_candidates();
                 }
             }
         }

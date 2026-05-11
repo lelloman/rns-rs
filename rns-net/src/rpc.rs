@@ -1008,6 +1008,10 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
                         PickleValue::String(member.remote.clone()),
                     ),
                     (
+                        PickleValue::String("source".into()),
+                        PickleValue::String(member.source.clone()),
+                    ),
+                    (
                         PickleValue::String("state".into()),
                         PickleValue::String(member.state.clone()),
                     ),
