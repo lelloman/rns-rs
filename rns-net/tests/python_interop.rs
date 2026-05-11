@@ -1,32 +1,61 @@
-//! Integration test: Rust node connects to Python RNS TCP server.
+//! Live compatibility tests between rns-rs and the Python Reticulum implementation.
 //!
-//! Starts a Python RNS instance with TCPServerInterface, creates a
-//! destination, announces it, and verifies the Rust node receives the announce.
-//!
-//! Requires Python 3 with RNS installed (run from repo root).
-//! Skipped if Python or RNS is not available.
+//! These tests spawn a real Python RNS instance with a TCPServerInterface and
+//! connect a Rust RnsNode to it over a real TCP interface. They are skipped only
+//! when Python RNS is not importable in the current environment.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rns_net::{AnnouncedIdentity, DestHash, PacketHash};
-use rns_net::{Callbacks, InterfaceConfig, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
+use rns_core::packet::RawPacket;
+use rns_core::types::{DestHash, IdentityHash, PacketHash};
+use rns_crypto::identity::Identity;
+use rns_crypto::OsRng;
+use rns_net::{
+    AnnouncedIdentity, Callbacks, Destination, InterfaceConfig, NodeConfig, RnsNode,
+    TcpClientConfig, MODE_FULL,
+};
 
 const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 
+const APP_NAME: &str = "interop";
+const PYTHON_ASPECT: &str = "python";
+const RUST_ASPECT: &str = "rust";
+const PYTHON_APP_DATA: &[u8] = b"python-appdata";
+const RUST_APP_DATA: &[u8] = b"rust-appdata";
+const RUST_TO_PYTHON_PAYLOAD: &[u8] = b"rust-to-python via python announce";
+const PYTHON_TO_RUST_PAYLOAD: &[u8] = b"python-to-rust via rust announce";
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone)]
+enum RustEvent {
+    Announce(AnnouncedIdentity),
+    Delivery {
+        dest_hash: DestHash,
+        raw: Vec<u8>,
+        packet_hash: PacketHash,
+    },
+}
+
 struct TestCallbacks {
-    announce_tx: Sender<(DestHash, u8)>,
+    tx: Sender<RustEvent>,
 }
 
 impl Callbacks for TestCallbacks {
     fn on_announce(&mut self, announced: AnnouncedIdentity) {
-        let _ = self.announce_tx.send((announced.dest_hash, announced.hops));
+        let _ = self.tx.send(RustEvent::Announce(announced));
     }
 
     fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
+    fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash) {
+        let _ = self.tx.send(RustEvent::Delivery {
+            dest_hash,
+            raw,
+            packet_hash,
+        });
+    }
 }
 
 /// Check if Python with RNS is available.
@@ -40,96 +69,206 @@ fn rns_available() -> bool {
         .unwrap_or(false)
 }
 
-#[test]
-fn python_announce_received() {
-    if !rns_available() {
-        eprintln!("Skipping: Python RNS not available");
-        return;
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn parse_hex_16(s: &str) -> [u8; 16] {
+    assert_eq!(s.len(), 32, "expected 16-byte hex string");
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    out
+}
+
+fn assert_nonzero_hex_hash(s: &str, bytes: usize) {
+    assert_eq!(s.len(), bytes * 2, "unexpected hash hex length");
+    assert!(
+        decode_hex(s).iter().any(|b| *b != 0),
+        "hash should not be all zeroes"
+    );
+}
+
+fn decode_hex(s: &str) -> Vec<u8> {
+    assert_eq!(s.len() % 2, 0, "hex string must have even length");
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Vec<u8> {
+    let packet = RawPacket::unpack(raw).expect("Rust delivery should be a valid packet");
+    identity
+        .decrypt(&packet.data)
+        .expect("Rust should decrypt Python packet")
+}
+
+fn request_python_announce(
+    python: &mut PythonRns,
+    rust_rx: &Receiver<RustEvent>,
+    expected_hash: DestHash,
+    timeout: Duration,
+) -> AnnouncedIdentity {
+    let expected_hash_hex = hex(&expected_hash.0);
+    let deadline = Instant::now() + timeout;
+    loop {
+        python.command("announce_py");
+        python
+            .try_wait_for_event(Duration::from_secs(2), |event| {
+                event["event"] == "python_announced" && event["dest_hash"] == expected_hash_hex
+            })
+            .expect("Python should acknowledge announce command");
+
+        if let Some(announce) =
+            wait_for_rust_event(rust_rx, Duration::from_secs(2), |event| match event {
+                RustEvent::Announce(a) if a.dest_hash == expected_hash => Some(a.clone()),
+                _ => None,
+            })
+        {
+            return announce;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for Rust to receive Python announce");
+        }
+    }
+}
+
+fn wait_for_rust_delivery(
+    rx: &Receiver<RustEvent>,
+    expected_hash: DestHash,
+    timeout: Duration,
+) -> (Vec<u8>, PacketHash) {
+    wait_for_rust_event(rx, timeout, |event| match event {
+        RustEvent::Delivery {
+            dest_hash,
+            raw,
+            packet_hash,
+        } if *dest_hash == expected_hash => Some((raw.clone(), *packet_hash)),
+        _ => None,
+    })
+    .expect("timed out waiting for Rust local delivery callback")
+}
+
+fn wait_for_rust_event<F, T>(
+    rx: &Receiver<RustEvent>,
+    timeout: Duration,
+    mut predicate: F,
+) -> Option<T>
+where
+    F: FnMut(&RustEvent) -> Option<T>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        match rx.recv_timeout(remaining) {
+            Ok(event) => {
+                if let Some(result) = predicate(&event) {
+                    return Some(result);
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+struct PythonRns {
+    child: Child,
+    events: Receiver<serde_json::Value>,
+}
+
+impl PythonRns {
+    fn spawn() -> Self {
+        let mut child = Command::new("python3")
+            .args(["-c", PYTHON_INTEROP_SCRIPT])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to start Python RNS process");
+
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (events_tx, events_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(value) => {
+                        let _ = events_tx.send(value);
+                    }
+                    Err(_) => eprintln!("python stdout: {}", line),
+                }
+            }
+        });
+
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("python stderr: {}", line);
+            }
+        });
+
+        Self {
+            child,
+            events: events_rx,
+        }
     }
 
-    // Python script that:
-    // 1. Starts RNS with TCPServerInterface on a random port
-    // 2. Prints the port and destination hash
-    // 3. Announces the destination
-    // 4. Waits for SIGTERM
-    let python_script = r#"
-import sys, os, time, signal, json, tempfile, socket
+    fn command(&mut self, command: &str) {
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
+            .expect("Python process stdin should be available");
+        writeln!(stdin, "{command}").expect("failed to write command to Python process");
+        stdin.flush().expect("failed to flush Python process stdin");
+    }
 
-# Find a free port
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.bind(('127.0.0.1', 0))
-port = sock.getsockname()[1]
-sock.close()
+    fn wait_for_event<F>(&self, timeout: Duration, mut predicate: F) -> serde_json::Value
+    where
+        F: FnMut(&serde_json::Value) -> bool,
+    {
+        self.try_wait_for_event(timeout, |event| predicate(event))
+            .expect("timed out waiting for Python event")
+    }
 
-# Write config
-config_dir = tempfile.mkdtemp()
-config_path = os.path.join(config_dir, "config")
-with open(config_path, "w") as f:
-    f.write(f"""[reticulum]
-  enable_transport = false
-  share_instance = yes
+    fn try_wait_for_event<F>(
+        &self,
+        timeout: Duration,
+        mut predicate: F,
+    ) -> Option<serde_json::Value>
+    where
+        F: FnMut(&serde_json::Value) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            let event = self.events.recv_timeout(remaining).ok()?;
+            if predicate(&event) {
+                return Some(event);
+            }
+        }
+    }
+}
 
-[interfaces]
-  [[TCP Server Interface]]
-    type = TCPServerInterface
-    interface_enabled = true
-    listen_ip = 127.0.0.1
-    listen_port = {port}
-""")
+impl Drop for PythonRns {
+    fn drop(&mut self) {
+        if let Some(stdin) = self.child.stdin.as_mut() {
+            let _ = writeln!(stdin, "stop");
+            let _ = stdin.flush();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
 
-import RNS
-reticulum = RNS.Reticulum(configdir=config_dir)
-identity = RNS.Identity()
-destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "test")
-
-dest_hash = destination.hash.hex()
-print(json.dumps({"port": port, "dest_hash": dest_hash}), flush=True)
-
-# Wait for Rust node to connect before announcing
-sys.stdin.readline()
-time.sleep(0.5)
-destination.announce()
-
-# Wait for signal
-signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
-try:
-    while True:
-        time.sleep(1)
-except (KeyboardInterrupt, SystemExit):
-    pass
-"#;
-
-    // Start Python process
-    let mut child = Command::new("python3")
-        .args(["-c", python_script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to start Python");
-
-    let stdout = child.stdout.take().unwrap();
-    let mut reader = BufReader::new(stdout);
-
-    // Read the port and dest_hash from Python
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .expect("Failed to read from Python");
-    let info: serde_json::Value = serde_json::from_str(line.trim()).expect("Failed to parse JSON");
-    let port = info["port"].as_u64().unwrap() as u16;
-    let expected_dest_hash_hex = info["dest_hash"].as_str().unwrap().to_string();
-
-    eprintln!(
-        "Python server on port {}, dest_hash={}",
-        port, expected_dest_hash_hex
-    );
-
-    // Start Rust node (before triggering announce)
-    let (announce_tx, announce_rx): (Sender<(DestHash, u8)>, Receiver<(DestHash, u8)>) =
-        mpsc::channel();
-
-    let node = RnsNode::start(
+fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
+    RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
             transport_enabled: false,
@@ -195,33 +334,179 @@ except (KeyboardInterrupt, SystemExit):
             #[cfg(feature = "hooks")]
             provider_bridge: None,
         },
-        Box::new(TestCallbacks { announce_tx }),
+        Box::new(TestCallbacks { tx }),
     )
-    .expect("Failed to start Rust node");
+    .expect("failed to start Rust node")
+}
 
-    // Give Rust node time to connect, then signal Python to announce
-    std::thread::sleep(Duration::from_secs(2));
-    if let Some(ref mut stdin) = child.stdin {
-        let _ = writeln!(stdin, "go");
+const PYTHON_INTEROP_SCRIPT: &str = r#"
+import json
+import os
+import signal
+import socket
+import sys
+import tempfile
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(('127.0.0.1', 0))
+port = sock.getsockname()[1]
+sock.close()
+
+config_dir = tempfile.mkdtemp()
+config_path = os.path.join(config_dir, "config")
+with open(config_path, "w") as f:
+    f.write(f"""[reticulum]
+  enable_transport = false
+  share_instance = yes
+
+[interfaces]
+  [[TCP Server Interface]]
+    type = TCPServerInterface
+    interface_enabled = true
+    listen_ip = 127.0.0.1
+    listen_port = {port}
+""")
+
+import RNS
+
+def emit(event, **fields):
+    fields["event"] = event
+    print(json.dumps(fields), flush=True)
+
+reticulum = RNS.Reticulum(configdir=config_dir)
+identity = RNS.Identity()
+destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "interop", "python")
+destination.set_default_app_data(b"python-appdata")
+
+def packet_callback(data, packet):
+    emit("python_packet", data_hex=data.hex(), packet_hash=packet.packet_hash.hex())
+
+destination.set_packet_callback(packet_callback)
+
+class RustAnnounceHandler:
+    aspect_filter = "interop.rust"
+    receive_path_responses = True
+
+    def received_announce(self, destination_hash, announced_identity, app_data, announce_packet_hash, is_path_response):
+        emit(
+            "rust_announce",
+            dest_hash=destination_hash.hex(),
+            app_data_hex=app_data.hex() if app_data is not None else None,
+            announce_packet_hash=announce_packet_hash.hex(),
+            is_path_response=bool(is_path_response),
+        )
+        if not is_path_response:
+            out = RNS.Destination(announced_identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "interop", "rust")
+            RNS.Packet(out, b"python-to-rust via rust announce").send()
+            emit("python_sent_packet_to_rust", dest_hash=destination_hash.hex())
+
+RNS.Transport.register_announce_handler(RustAnnounceHandler())
+
+emit("ready", port=port, python_dest_hash=destination.hash.hex())
+
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+try:
+    for line in sys.stdin:
+        command = line.strip()
+        if command == "announce_py":
+            destination.announce()
+            emit("python_announced", dest_hash=destination.hash.hex())
+        elif command == "stop":
+            break
+        elif command:
+            emit("unknown_command", command=command)
+except (KeyboardInterrupt, SystemExit):
+    pass
+"#;
+
+#[test]
+fn python_rns_bidirectional_tcp_interop() {
+    if !rns_available() {
+        eprintln!("Skipping: Python RNS not available");
+        return;
     }
 
-    // Wait for announce
-    let result = announce_rx.recv_timeout(Duration::from_secs(10));
+    let mut python = PythonRns::spawn();
+    let ready = python.wait_for_event(TIMEOUT, |event| event["event"] == "ready");
+    let port = ready["port"].as_u64().unwrap() as u16;
+    let python_dest_hash_hex = ready["python_dest_hash"].as_str().unwrap();
+    let python_dest_hash = DestHash(parse_hex_16(python_dest_hash_hex));
 
-    // Cleanup
+    eprintln!(
+        "Python RNS server on port {}, destination {}",
+        port, python_dest_hash_hex
+    );
+
+    let (rust_tx, rust_rx) = mpsc::channel();
+    let node = start_rust_node(port, rust_tx);
+
+    let rust_identity = Identity::new(&mut OsRng);
+    let rust_dest = Destination::single_in(
+        APP_NAME,
+        &[RUST_ASPECT],
+        IdentityHash(*rust_identity.hash()),
+    );
+    node.register_destination(rust_dest.hash.0, rust_dest.dest_type.to_wire_constant())
+        .expect("Rust destination registration should succeed");
+
+    let python_live_announce =
+        request_python_announce(&mut python, &rust_rx, python_dest_hash, TIMEOUT);
+    assert_eq!(python_live_announce.hops, 1);
+    assert!(python_live_announce.public_key.iter().any(|b| *b != 0));
+    assert_eq!(
+        python_live_announce.app_data.as_deref(),
+        Some(PYTHON_APP_DATA)
+    );
+
+    let python_out = Destination::single_out(APP_NAME, &[PYTHON_ASPECT], &python_live_announce);
+    node.send_packet(&python_out, RUST_TO_PYTHON_PAYLOAD)
+        .expect("Rust should send encrypted data to Python destination");
+    let python_packet = python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_packet" && event["data_hex"] == hex(RUST_TO_PYTHON_PAYLOAD)
+    });
+    assert_eq!(
+        decode_hex(python_packet["data_hex"].as_str().unwrap()),
+        RUST_TO_PYTHON_PAYLOAD
+    );
+    assert_nonzero_hex_hash(python_packet["packet_hash"].as_str().unwrap(), 32);
+
+    let python_reannounce =
+        request_python_announce(&mut python, &rust_rx, python_dest_hash, TIMEOUT);
+    assert_eq!(python_reannounce.hops, 1);
+    assert_eq!(
+        python_reannounce.identity_hash,
+        python_live_announce.identity_hash
+    );
+    assert_eq!(
+        python_reannounce.public_key,
+        python_live_announce.public_key
+    );
+    assert_eq!(python_reannounce.app_data.as_deref(), Some(PYTHON_APP_DATA));
+
+    node.announce(&rust_dest, &rust_identity, Some(RUST_APP_DATA))
+        .expect("Rust announce should send to Python");
+    let rust_announce = python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "rust_announce"
+            && event["dest_hash"] == hex(&rust_dest.hash.0)
+            && event["app_data_hex"] == hex(RUST_APP_DATA)
+            && event["is_path_response"] == false
+    });
+    assert_eq!(rust_announce["dest_hash"], hex(&rust_dest.hash.0));
+    assert_eq!(
+        decode_hex(rust_announce["app_data_hex"].as_str().unwrap()),
+        RUST_APP_DATA
+    );
+    assert_nonzero_hex_hash(rust_announce["announce_packet_hash"].as_str().unwrap(), 32);
+
+    python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_sent_packet_to_rust"
+            && event["dest_hash"] == hex(&rust_dest.hash.0)
+    });
+
+    let (raw, packet_hash) = wait_for_rust_delivery(&rust_rx, rust_dest.hash, TIMEOUT);
+    assert_ne!(packet_hash.0, [0u8; 32]);
+    let plaintext = decrypt_delivery(&raw, &rust_identity);
+    assert_eq!(plaintext, PYTHON_TO_RUST_PAYLOAD);
+
     node.shutdown();
-    let _ = child.kill();
-    let _ = child.wait();
-
-    match result {
-        Ok((dest_hash, hops)) => {
-            let received_hex: String = dest_hash.0.iter().map(|b| format!("{:02x}", b)).collect();
-            eprintln!("Received announce: dest={} hops={}", received_hex, hops);
-            assert_eq!(received_hex, expected_dest_hash_hex);
-        }
-        Err(_) => {
-            // Read stderr for debugging
-            panic!("Timed out waiting for announce from Python");
-        }
-    }
 }
