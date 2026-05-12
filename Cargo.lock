@@ -2161,6 +2161,7 @@ dependencies = [
 name = "rns-sentinel-hook"
 version = "0.1.2"
 dependencies = [
+ "rns-hooks",
  "rns-hooks-abi",
  "rns-hooks-sdk",
 ]
@@ -2183,6 +2184,7 @@ dependencies = [
 name = "rns-stats-hook"
 version = "0.1.2"
 dependencies = [
+ "rns-hooks",
  "rns-hooks-abi",
  "rns-hooks-sdk",
  "sha2",

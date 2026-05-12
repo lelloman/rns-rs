@@ -47,7 +47,7 @@ cargo build --features rns-hooks-builtin   # Enable static built-in hooks
 cargo build --features tls          # Enable TLS in rns-ctl
 ```
 
-To build WASM hooks or the WASM sidecar bundle, add the WASM target:
+To build the WASM hook backend, add the WASM target:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -105,7 +105,7 @@ cd tests/docker && ./run.sh chain 01_health
 
 ## rns-server
 
-`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. At runtime it self-spawns its internal `rnsd` role from the same executable. WASM sidecar builds also self-spawn `rns-sentineld` and `rns-statsd`.
+`rns-server` is the default program to run for a single node. In the normal deployment model, it is the only binary you need to build or ship. Hook-enabled builds self-spawn `rnsd`, `rns-sentineld`, and `rns-statsd` from the same executable.
 
 If you just want to run a node, start here.
 

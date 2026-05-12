@@ -42,9 +42,17 @@ fn run_internal_role(role: &str) -> ! {
     let child_args = CliArgs::parse_from(sanitized_internal_argv());
     match role {
         "rnsd" => rns_cli::rnsd::main_entry_from(child_args),
-        #[cfg(feature = "rns-hooks-wasm")]
+        #[cfg(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        ))]
         "rns-sentineld" => rns_cli::sentineld::main_entry_from(child_args),
-        #[cfg(feature = "rns-hooks-wasm")]
+        #[cfg(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        ))]
         "rns-statsd" => rns_cli::statsd::main_entry_from(child_args),
         other => {
             eprintln!("rns-server: unknown internal role '{}'", other);
@@ -165,10 +173,10 @@ USAGE:
 
 OPTIONS:
     -c, --config PATH        Path to config directory
-        --stats-db PATH      Path to stats SQLite database (WASM sidecar builds)
+        --stats-db PATH      Path to stats SQLite database
         --rnsd-bin PATH      Advanced override for rnsd executable
-        --sentineld-bin PATH Advanced override for rns-sentineld executable (WASM sidecar builds)
-        --statsd-bin PATH    Advanced override for rns-statsd executable (WASM sidecar builds)
+        --sentineld-bin PATH Advanced override for rns-sentineld executable
+        --statsd-bin PATH    Advanced override for rns-statsd executable
         --http-host HOST     Host for embedded control HTTP server
         --http-port PORT     Port for embedded control HTTP server
         --http-token TOKEN   Auth token for embedded control HTTP server

@@ -1,16 +1,21 @@
 [package]
 name = "rns-stats-hook"
-description = "WASM stats hook used by rns-statsd"
+description = "Stats hook used by rns-statsd"
 version = "0.1.2"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+builtin = ["dep:rns-hooks"]
+
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+rns-hooks = { version = "0.1.6", path = "../rns-hooks", default-features = false, optional = true }
 rns-hooks-sdk = { version = "0.1.3", path = "../rns-hooks/sdk/rns-hooks-sdk" }
 rns-hooks-abi = { version = "0.1.3", path = "../rns-hooks/sdk/rns-hooks-abi" }
 sha2 = { version = "0.10", default-features = false }

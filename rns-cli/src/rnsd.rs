@@ -117,6 +117,10 @@ pub fn main_entry_from(args: Args) {
     }
 
     log::info!("Starting rnsd {}", VERSION);
+    if let Err(err) = register_native_sidecar_hooks() {
+        log::error!("Failed to register built-in sidecar hooks: {}", err);
+        std::process::exit(1);
+    }
 
     let node = RnsNode::from_config(
         config_path.as_ref().map(|s| Path::new(s.as_str())),
@@ -158,6 +162,20 @@ pub fn main_entry_from(args: Args) {
     log::info!("Shutting down...");
     node.shutdown();
     log::info!("rnsd stopped");
+}
+
+#[cfg(any(feature = "rns-hooks-native", feature = "rns-hooks-builtin"))]
+fn register_native_sidecar_hooks() -> Result<(), String> {
+    rns_stats_hook::register_builtin_hooks()
+        .map_err(|err| format!("stats hook registration failed: {}", err))?;
+    rns_sentinel_hook::register_builtin_hooks()
+        .map_err(|err| format!("sentinel hook registration failed: {}", err))?;
+    Ok(())
+}
+
+#[cfg(not(any(feature = "rns-hooks-native", feature = "rns-hooks-builtin")))]
+fn register_native_sidecar_hooks() -> Result<(), String> {
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {

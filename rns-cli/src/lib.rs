@@ -6,7 +6,7 @@ pub mod readiness;
 pub mod remote;
 pub mod rnsd;
 pub mod rnsh;
-#[cfg(feature = "rns-hooks-wasm")]
+#[cfg(feature = "sidecars")]
 pub mod sentineld;
-#[cfg(feature = "rns-hooks-wasm")]
+#[cfg(feature = "sidecars")]
 pub mod statsd;

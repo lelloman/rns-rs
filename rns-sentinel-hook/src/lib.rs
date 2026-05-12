@@ -2,7 +2,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::context::{self, BackbonePeerContext, CTX_TYPE_BACKBONE_PEER};
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::sentinel::{
     BackbonePeerPayload, BACKBONE_PEER_INTERFACE_NAME_MAX, BACKBONE_PEER_PAYLOAD_TYPE,
 };
@@ -10,6 +10,14 @@ use rns_hooks_abi::sentinel::{
 use rns_hooks_sdk::host;
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_sdk::result::HookResult;
+
+#[cfg(feature = "builtin")]
+use rns_hooks::{
+    register_builtin_hook, BuiltinHookCall, BuiltinHookHost, HookContext, HookError, HookResult,
+};
+
+#[cfg(feature = "builtin")]
+pub const BUILTIN_ID: &str = "rns.sentineld";
 
 #[cfg(target_arch = "wasm32")]
 static mut RESULT: HookResult = HookResult {
@@ -82,6 +90,75 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
+}
+
+#[cfg(feature = "builtin")]
+pub fn register_builtin_hooks() -> Result<(), HookError> {
+    register_builtin_hook(BUILTIN_ID, builtin_sentinel_hook)
+}
+
+#[cfg(feature = "builtin")]
+fn builtin_sentinel_hook(
+    call: BuiltinHookCall<'_>,
+    host: &mut BuiltinHookHost,
+) -> Result<HookResult, HookError> {
+    let HookContext::BackbonePeer {
+        server_interface_id,
+        peer_interface_id,
+        peer_ip,
+        peer_port,
+        connected_for,
+        had_received_data,
+        penalty_level,
+        blacklist_for,
+    } = call.ctx
+    else {
+        return Ok(HookResult::continue_result());
+    };
+
+    let mut server_interface_name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
+    let server_interface_name_len = call
+        .engine_access
+        .interface_name(*server_interface_id)
+        .map(|name| {
+            let bytes = name.as_bytes();
+            let len = bytes.len().min(BACKBONE_PEER_INTERFACE_NAME_MAX);
+            server_interface_name[..len].copy_from_slice(&bytes[..len]);
+            len as u8
+        })
+        .unwrap_or(0);
+
+    let (peer_ip_family, peer_ip_bytes) = match peer_ip {
+        std::net::IpAddr::V4(addr) => {
+            let mut bytes = [0u8; 16];
+            bytes[10] = 0xff;
+            bytes[11] = 0xff;
+            bytes[12..16].copy_from_slice(&addr.octets());
+            (4, bytes)
+        }
+        std::net::IpAddr::V6(addr) => (6, addr.octets()),
+    };
+
+    let payload = BackbonePeerPayload {
+        peer_ip_family,
+        peer_ip: peer_ip_bytes,
+        peer_port: *peer_port,
+        server_interface_id: *server_interface_id,
+        peer_interface_id: peer_interface_id.unwrap_or(0),
+        connected_for_secs: connected_for.as_secs(),
+        had_received_data: *had_received_data,
+        penalty_level: *penalty_level,
+        blacklist_for_secs: blacklist_for.as_secs(),
+        // The provider bridge envelope carries the attach point used by
+        // rns-sentineld to classify the event.
+        event_kind: 0,
+        server_interface_name_len,
+        server_interface_name,
+    }
+    .encode();
+    host.emit_event(&call, BACKBONE_PEER_PAYLOAD_TYPE, payload)?;
+
+    Ok(HookResult::continue_result())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

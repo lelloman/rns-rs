@@ -9,10 +9,18 @@ use rns_ctl::state::{
 use crate::args::Args;
 use crate::config::ServerConfig;
 
-#[cfg(feature = "rns-hooks-wasm")]
+#[cfg(any(
+    feature = "rns-hooks-native",
+    feature = "rns-hooks-wasm",
+    feature = "rns-hooks-builtin"
+))]
 const MANAGED_PROCESSES: [&str; 3] = ["rnsd", "rns-sentineld", "rns-statsd"];
 
-#[cfg(not(feature = "rns-hooks-wasm"))]
+#[cfg(not(any(
+    feature = "rns-hooks-native",
+    feature = "rns-hooks-wasm",
+    feature = "rns-hooks-builtin"
+)))]
 const MANAGED_PROCESSES: [&str; 1] = ["rnsd"];
 
 fn read_shared_state<'a>(

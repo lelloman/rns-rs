@@ -188,7 +188,11 @@ impl ServerConfig {
     }
 
     pub fn process_specs(&self) -> Vec<ProcessSpec> {
-        #[cfg(not(feature = "rns-hooks-wasm"))]
+        #[cfg(not(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        )))]
         {
             return vec![ProcessSpec {
                 role: Role::Rnsd,
@@ -197,7 +201,11 @@ impl ServerConfig {
             }];
         }
 
-        #[cfg(feature = "rns-hooks-wasm")]
+        #[cfg(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        ))]
         {
             let mut specs = vec![ProcessSpec {
                 role: Role::Rnsd,
@@ -205,19 +213,16 @@ impl ServerConfig {
                 args: self.rnsd_args(),
             }];
 
-            #[cfg(feature = "rns-hooks-wasm")]
-            {
-                specs.push(ProcessSpec {
-                    role: Role::Sentineld,
-                    command: self.command_for_override(&self.sentineld_bin),
-                    args: self.sentineld_args(),
-                });
-                specs.push(ProcessSpec {
-                    role: Role::Statsd,
-                    command: self.command_for_override(&self.statsd_bin),
-                    args: self.statsd_args(),
-                });
-            }
+            specs.push(ProcessSpec {
+                role: Role::Sentineld,
+                command: self.command_for_override(&self.sentineld_bin),
+                args: self.sentineld_args(),
+            });
+            specs.push(ProcessSpec {
+                role: Role::Statsd,
+                command: self.command_for_override(&self.statsd_bin),
+                args: self.statsd_args(),
+            });
 
             specs
         }
@@ -272,7 +277,7 @@ impl ServerConfig {
                     self.server_config_file_path.display()
                 ),
                 "Only fields present in rns-server.json are persisted; CLI flags still override them at startup.".into(),
-                "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Native hook builds manage rnsd; WASM sidecar builds also manage rns-sentineld and rns-statsd. Explicit child binary paths remain available as advanced overrides.".into(),
+                "By default, child roles self-spawn from the running rns-server binary via /proc/self/exe with current_exe() fallback. Hook-enabled builds manage rnsd, rns-sentineld, and rns-statsd. Explicit child binary paths remain available as advanced overrides.".into(),
                 "Changing process launch settings restarts only the affected child processes. Embedded HTTP auth settings reload in place; bind host, port, and enablement changes still require restarting rns-server.".into(),
             ],
             fields: vec![
@@ -281,9 +286,8 @@ impl ServerConfig {
                     field_type: "string".into(),
                     required: false,
                     default_value: self.resolved_config_dir.join("stats.db").display().to_string(),
-                    description: "SQLite database path used by rns-statsd in WASM sidecar builds."
-                        .into(),
-                    effect: "Restarts rns-statsd when changed in WASM sidecar builds.".into(),
+                    description: "SQLite database path used by rns-statsd.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "rnsd_bin".into(),
@@ -298,16 +302,16 @@ impl ServerConfig {
                     field_type: "string".into(),
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
-                    description: "Advanced override for the sentinel sidecar executable in WASM sidecar builds; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-sentineld when changed in WASM sidecar builds.".into(),
+                    description: "Advanced override for the sentinel sidecar executable; unset uses self-spawn from rns-server.".into(),
+                    effect: "Restarts rns-sentineld when changed.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "statsd_bin".into(),
                     field_type: "string".into(),
                     required: false,
                     default_value: "(self-spawn via /proc/self/exe)".into(),
-                    description: "Advanced override for the stats sidecar executable in WASM sidecar builds; unset uses self-spawn from rns-server.".into(),
-                    effect: "Restarts rns-statsd when changed in WASM sidecar builds.".into(),
+                    description: "Advanced override for the stats sidecar executable; unset uses self-spawn from rns-server.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "http.enabled".into(),
@@ -417,7 +421,11 @@ impl ServerConfig {
     }
 
     fn readiness_checks(&self) -> Vec<ProcessReadiness> {
-        #[cfg(not(feature = "rns-hooks-wasm"))]
+        #[cfg(not(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        )))]
         {
             return vec![ProcessReadiness {
                 role: Role::Rnsd,
@@ -425,24 +433,25 @@ impl ServerConfig {
             }];
         }
 
-        #[cfg(feature = "rns-hooks-wasm")]
+        #[cfg(any(
+            feature = "rns-hooks-native",
+            feature = "rns-hooks-wasm",
+            feature = "rns-hooks-builtin"
+        ))]
         {
             let mut readiness = vec![ProcessReadiness {
                 role: Role::Rnsd,
                 target: ReadinessTarget::Tcp(self.rnsd_rpc_addr),
             }];
 
-            #[cfg(feature = "rns-hooks-wasm")]
-            {
-                readiness.push(ProcessReadiness {
-                    role: Role::Sentineld,
-                    target: ReadinessTarget::ReadyFile(self.sentineld_ready_file_path()),
-                });
-                readiness.push(ProcessReadiness {
-                    role: Role::Statsd,
-                    target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
-                });
-            }
+            readiness.push(ProcessReadiness {
+                role: Role::Sentineld,
+                target: ReadinessTarget::ReadyFile(self.sentineld_ready_file_path()),
+            });
+            readiness.push(ProcessReadiness {
+                role: Role::Statsd,
+                target: ReadinessTarget::ReadyFile(self.statsd_ready_file_path()),
+            });
 
             readiness
         }
@@ -472,7 +481,11 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     fn sentineld_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--ready-file".into());
@@ -480,7 +493,11 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     fn statsd_args(&self) -> Vec<String> {
         let mut args = self.rnsd_args();
         args.push("--db".into());
@@ -490,12 +507,20 @@ impl ServerConfig {
         args
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     fn sentineld_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-sentineld.ready")
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     fn statsd_ready_file_path(&self) -> PathBuf {
         self.resolved_config_dir.join("rns-statsd.ready")
     }
@@ -910,7 +935,11 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     #[test]
     fn apply_plan_restarts_statsd_when_db_changes() {
         let current = test_config();
@@ -932,7 +961,11 @@ mod tests {
             .any(|change| change.field == "stats_db_path"));
     }
 
-    #[cfg(not(feature = "rns-hooks-wasm"))]
+    #[cfg(not(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    )))]
     #[test]
     fn apply_plan_ignores_stats_db_when_hooks_are_disabled() {
         let current = test_config();
@@ -1041,7 +1074,11 @@ mod tests {
         assert!(warnings[0].contains("http.enabled=false"));
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     #[test]
     fn process_specs_include_sidecar_ready_file_args() {
         let config = test_config();
@@ -1063,7 +1100,11 @@ mod tests {
             .any(|pair| { pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-statsd.ready" }));
     }
 
-    #[cfg(not(feature = "rns-hooks-wasm"))]
+    #[cfg(not(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    )))]
     #[test]
     fn process_specs_include_only_rnsd_without_hooks() {
         let config = test_config();
@@ -1074,7 +1115,11 @@ mod tests {
         assert!(matches!(specs[0].command, ProcessCommand::SelfInvoke));
     }
 
-    #[cfg(feature = "rns-hooks-wasm")]
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
     #[test]
     fn readiness_checks_use_ready_files_for_sidecars() {
         let config = test_config();
@@ -1103,7 +1148,11 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "rns-hooks-wasm"))]
+    #[cfg(not(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    )))]
     #[test]
     fn readiness_checks_include_only_rnsd_without_hooks() {
         let config = test_config();

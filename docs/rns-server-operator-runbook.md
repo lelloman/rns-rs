@@ -6,12 +6,12 @@
 node. It owns:
 
 - process lifecycle for `rnsd`
-- optional WASM-sidecar lifecycle for `rns-sentineld` and `rns-statsd`
+- hook sidecar lifecycle for `rns-sentineld` and `rns-statsd`
 - persisted `rns-server.json` config
 - the embedded `rns-ctl` HTTP API and built-in UI
 - process readiness, recent lifecycle events, and durable process logs
 
-Deployment uses one binary. At runtime, `rns-server` self-spawns its child roles from the same executable via `/proc/self/exe`, with `current_exe()` fallback. The default hook build uses native dynamic-library hooks; the WASM build keeps the stats and sentinel sidecars.
+Deployment uses one binary. At runtime, hook-enabled `rns-server` builds self-spawn `rnsd`, `rns-sentineld`, and `rns-statsd` from the same executable via `/proc/self/exe`, with `current_exe()` fallback. The packaged build uses native hooks and native sidecars.
 
 ## Build And Package
 
@@ -41,7 +41,7 @@ cargo build --release --bin rns-server --features rns-hooks-native
 cargo build --release --bin rns-server --features rns-hooks
 ```
 
-If you need the legacy WASM sidecars:
+If you need the WASM hook backend:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -53,15 +53,15 @@ cargo build --release --bin rns-server --features rns-hooks-wasm
 At runtime, `rns-server` resolves a config directory and uses it for:
 
 - `config`
-  The Reticulum runtime config consumed by `rnsd` and, in WASM builds, the sidecars.
+  The Reticulum runtime config consumed by `rnsd` and the sidecars.
 - `rns-server.json`
   Product config managed through the API/UI.
 - `logs/*.log`
   Durable stdout/stderr tails for supervised processes.
 - `*.ready`
-  Explicit readiness files written by WASM sidecars.
+  Explicit readiness files written by sidecars.
 - `stats.db`
-  Default SQLite path for `rns-statsd` in WASM sidecar builds unless overridden.
+  Default SQLite path for `rns-statsd` unless overridden.
 
 ## Startup
 
@@ -224,12 +224,9 @@ The built-in UI is served from `/`.
 
 ## Self-Spawn Runtime
 
-By default, child processes are started by re-executing the running `rns-server` binary with hidden internal role flags. The native hook build only manages:
+By default, child processes are started by re-executing the running `rns-server` binary with hidden internal role flags. Hook-enabled builds manage:
 
 - `rnsd`
-
-The WASM sidecar build additionally manages:
-
 - `rns-sentineld`
 - `rns-statsd`
 
@@ -268,8 +265,8 @@ Use the UI or API first. Shell access should not be required for routine diagnos
 Durable log files live under the resolved config dir:
 
 - `logs/rnsd.log`
-- `logs/rns-sentineld.log` in WASM sidecar builds
-- `logs/rns-statsd.log` in WASM sidecar builds
+- `logs/rns-sentineld.log`
+- `logs/rns-statsd.log`
 
 ## Troubleshooting
 
@@ -283,7 +280,7 @@ If the node is up but not converged:
 Common cases:
 
 - Sidecar stuck in `waiting`
-  In WASM sidecar builds, check the corresponding `*.ready` file expectation and the process log for RPC/provider bridge wait messages.
+  Check the corresponding `*.ready` file expectation and the process log for RPC/provider bridge wait messages.
 - `control_plane_reload_required`
   Apply the saved config.
 - `control_plane_restart_required`

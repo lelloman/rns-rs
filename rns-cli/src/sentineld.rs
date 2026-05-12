@@ -20,6 +20,7 @@ use crate::args::Args;
 use crate::readiness::ReadyFile;
 
 const VERSION: &str = env!("FULL_VERSION");
+#[cfg(feature = "rns-hooks-wasm")]
 const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_SENTINEL_HOOK_WASM"));
 const HOOK_SPECS: [(&str, &str); 5] = [
     ("rns_sentinel_peer_connected", "BackbonePeerConnected"),
@@ -319,9 +320,30 @@ impl RpcControl {
     }
 
     fn load_hook(&self, name: &str, attach_point: &str, priority: i32) -> Result<(), String> {
-        self.with_client(|client| {
-            client.load_hook(name, attach_point, priority, EMBEDDED_HOOK_WASM)
-        })?
+        #[cfg(feature = "rns-hooks-wasm")]
+        {
+            return self.with_client(|client| {
+                client.load_hook(name, attach_point, priority, EMBEDDED_HOOK_WASM)
+            })?;
+        }
+
+        #[cfg(not(feature = "rns-hooks-wasm"))]
+        {
+            return self.with_client(|client| {
+                client.load_builtin_hook(
+                    name,
+                    attach_point,
+                    priority,
+                    rns_sentinel_hook::BUILTIN_ID,
+                )
+            })?;
+        }
+
+        #[allow(unreachable_code)]
+        {
+            let _ = (name, attach_point, priority);
+            Err("no sentinel hook backend enabled".into())
+        }
     }
 
     fn unload_hook(&self, name: &str, attach_point: &str) -> Result<(), String> {

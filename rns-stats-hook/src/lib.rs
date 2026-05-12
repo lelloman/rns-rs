@@ -1,6 +1,6 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::stats::{
     AnnounceStatsPayload, LinkStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
     LINK_STATS_PAYLOAD_TYPE, PACKET_STATS_PAYLOAD_TYPE,
@@ -11,8 +11,16 @@ use rns_hooks_sdk::context::{self, LinkContext, PacketContext};
 use rns_hooks_sdk::host;
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_sdk::result::HookResult;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use sha2::{Digest, Sha256};
+
+#[cfg(feature = "builtin")]
+use rns_hooks::{
+    register_builtin_hook, BuiltinHookCall, BuiltinHookHost, HookContext, HookError, HookResult,
+};
+
+#[cfg(feature = "builtin")]
+pub const BUILTIN_ID: &str = "rns.statsd";
 
 #[cfg(target_arch = "wasm32")]
 static mut RESULT: HookResult = HookResult {
@@ -25,13 +33,13 @@ static mut RESULT: HookResult = HookResult {
     log_len: 0,
 };
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 const MIN_ANNOUNCE_DATA_LEN: usize = 148;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 const HEADER_1_DATA_OFFSET: usize = 19;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 const HEADER_2_DATA_OFFSET: usize = 35;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 const PACKET_TYPE_ANNOUNCE: u8 = 0x01;
 
 #[cfg(target_arch = "wasm32")]
@@ -112,6 +120,91 @@ fn emit_announce_stats(ctx: &PacketContext) {
     }
     .encode();
     let _ = host::emit_event(ANNOUNCE_STATS_PAYLOAD_TYPE, &payload);
+}
+
+#[cfg(feature = "builtin")]
+pub fn register_builtin_hooks() -> Result<(), HookError> {
+    register_builtin_hook(BUILTIN_ID, builtin_stats_hook)
+}
+
+#[cfg(feature = "builtin")]
+fn builtin_stats_hook(
+    call: BuiltinHookCall<'_>,
+    host: &mut BuiltinHookHost,
+) -> Result<HookResult, HookError> {
+    match call.ctx {
+        HookContext::Packet { ctx, raw } => {
+            let payload = PacketStatsPayload {
+                flags: ctx.flags,
+                packet_len: ctx.data_len,
+                interface_id: ctx.interface_id,
+            }
+            .encode();
+            host.emit_event(&call, PACKET_STATS_PAYLOAD_TYPE, payload)?;
+
+            if (ctx.flags & 0x03) == PACKET_TYPE_ANNOUNCE {
+                emit_builtin_announce_stats(&call, host, ctx, raw)?;
+            }
+        }
+        HookContext::Link {
+            link_id,
+            interface_id,
+        } => {
+            let payload = LinkStatsPayload {
+                link_id: *link_id,
+                interface_id: *interface_id,
+            }
+            .encode();
+            host.emit_event(&call, LINK_STATS_PAYLOAD_TYPE, payload)?;
+        }
+        _ => {}
+    }
+
+    Ok(HookResult::continue_result())
+}
+
+#[cfg(feature = "builtin")]
+fn emit_builtin_announce_stats(
+    call: &BuiltinHookCall<'_>,
+    host: &mut BuiltinHookHost,
+    ctx: &rns_hooks::PacketContext,
+    raw: &[u8],
+) -> Result<(), HookError> {
+    let header_type = (ctx.flags >> 6) & 0x01;
+    let data_offset = if header_type == 0 {
+        HEADER_1_DATA_OFFSET
+    } else {
+        HEADER_2_DATA_OFFSET
+    };
+
+    if raw.len() < data_offset + MIN_ANNOUNCE_DATA_LEN {
+        return Ok(());
+    }
+
+    let announce_data = &raw[data_offset..];
+    let public_key = &announce_data[..64];
+    let name_hash = &announce_data[64..74];
+    let random_hash = &announce_data[74..84];
+
+    let full_hash = Sha256::digest(public_key);
+    let mut identity_hash = [0u8; 16];
+    identity_hash.copy_from_slice(&full_hash[..16]);
+
+    let mut nh = [0u8; 10];
+    nh.copy_from_slice(name_hash);
+    let mut rh = [0u8; 10];
+    rh.copy_from_slice(random_hash);
+
+    let payload = AnnounceStatsPayload {
+        identity_hash,
+        destination_hash: ctx.destination_hash,
+        name_hash: nh,
+        random_hash: rh,
+        hops: ctx.hops,
+        interface_id: ctx.interface_id,
+    }
+    .encode();
+    host.emit_event(call, ANNOUNCE_STATS_PAYLOAD_TYPE, payload)
 }
 
 #[cfg(target_arch = "wasm32")]
