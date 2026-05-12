@@ -10,6 +10,7 @@ authors.workspace = true
 [features]
 default = []
 builtin = ["dep:rns-hooks"]
+rns-hooks = ["builtin"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

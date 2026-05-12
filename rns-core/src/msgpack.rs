@@ -576,9 +576,10 @@ fn unpack_map_entries(
     count: usize,
     depth: usize,
 ) -> Result<(Value, usize), Error> {
-    if count.checked_mul(2).map_or(true, |minimum_items| {
-        minimum_items > data.len().saturating_sub(start)
-    }) {
+    if count
+        .checked_mul(2)
+        .is_none_or(|minimum_items| minimum_items > data.len().saturating_sub(start))
+    {
         return Err(Error::UnexpectedEof);
     }
     let mut offset = start;
