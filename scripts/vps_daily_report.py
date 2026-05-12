@@ -437,11 +437,13 @@ def parse_interface_snapshots(
 
 
 def classify(snapshot: dict[str, object]) -> str:
+    statsd_expected = bool(snapshot.get("child_rns_statsd_present"))
+    sentineld_expected = bool(snapshot.get("child_rns_sentineld_present"))
     services_ok = (
         snapshot["rns_server_active"]
         and snapshot["child_rnsd_ready"]
-        and snapshot["child_rns_statsd_ready"]
-        and snapshot["child_rns_sentineld_ready"]
+        and (not statsd_expected or snapshot["child_rns_statsd_ready"])
+        and (not sentineld_expected or snapshot["child_rns_sentineld_ready"])
     )
     listeners_ok = (
         snapshot["public_listener_present"]
@@ -527,6 +529,7 @@ echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /
         for row in process_payload.get("processes", [])
         if isinstance(row, dict) and "name" in row
     }
+    process_names = set(processes)
 
     journal_counts = parse_kv(
         run_ssh(
@@ -633,6 +636,9 @@ ORDER BY packet_type, direction;
         "public_listener_present": int(basic["LISTENER_PUBLIC"] == "1"),
         "rpc_listener_present": int(basic["LISTENER_RPC"] == "1"),
         "control_listener_present": int(basic["LISTENER_CONTROL"] == "1"),
+        "child_rnsd_present": int("rnsd" in process_names),
+        "child_rns_statsd_present": int("rns-statsd" in process_names),
+        "child_rns_sentineld_present": int("rns-sentineld" in process_names),
         "child_rnsd_ready": int(bool(processes.get("rnsd", {}).get("ready"))),
         "child_rns_statsd_ready": int(bool(processes.get("rns-statsd", {}).get("ready"))),
         "child_rns_sentineld_ready": int(bool(processes.get("rns-sentineld", {}).get("ready"))),
