@@ -279,7 +279,7 @@ mod tests {
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
+        UdpSocket::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
