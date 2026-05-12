@@ -263,6 +263,11 @@ pub struct BackbonePeerPoolSettings {
 }
 
 #[cfg(feature = "iface-backbone")]
+pub(crate) const BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY: u8 = 60;
+#[cfg(feature = "iface-backbone")]
+pub(crate) const BACKBONE_PEER_POOL_DISCOVERED_PRIORITY: u8 = 40;
+
+#[cfg(feature = "iface-backbone")]
 pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) client: BackboneClientConfig,
     pub(crate) mode: u8,
@@ -271,6 +276,7 @@ pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) ifac_enabled: bool,
     pub(crate) interface_type_name: String,
     pub(crate) source: BackbonePeerPoolCandidateSource,
+    pub(crate) priority: u8,
     pub(crate) discovery: Option<BackbonePeerPoolDiscoveryCandidate>,
 }
 

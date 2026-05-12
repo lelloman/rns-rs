@@ -386,6 +386,21 @@ fn active_link_manager_with_route(
 
 #[cfg(feature = "iface-backbone")]
 fn make_pool_candidate(name: &str, port: u16, id: u64) -> BackbonePeerPoolCandidateConfig {
+    make_pool_candidate_with_priority(
+        name,
+        port,
+        id,
+        crate::driver::BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY,
+    )
+}
+
+#[cfg(feature = "iface-backbone")]
+fn make_pool_candidate_with_priority(
+    name: &str,
+    port: u16,
+    id: u64,
+    priority: u8,
+) -> BackbonePeerPoolCandidateConfig {
     let mut client = BackboneClientConfig {
         name: name.to_string(),
         target_host: "127.0.0.1".to_string(),
@@ -410,6 +425,7 @@ fn make_pool_candidate(name: &str, port: u16, id: u64) -> BackbonePeerPoolCandid
         ifac_enabled: false,
         interface_type_name: "BackboneInterface".to_string(),
         source: BackbonePeerPoolCandidateSource::Configured,
+        priority,
         discovery: None,
     }
 }
@@ -564,11 +580,152 @@ fn backbone_peer_pool_prefers_configured_over_discovered() {
     let status = driver.backbone_peer_pool_status().unwrap();
     assert_eq!(status.active_count, 1);
     assert_eq!(status.members[0].source, "configured");
+    assert_eq!(status.members[0].priority, 60);
     assert!(matches!(
         status.members[0].state.as_str(),
         "connecting" | "active"
     ));
     assert_eq!(status.members[1].source, "discovered");
+    assert_eq!(status.members[1].priority, 40);
+    assert_eq!(status.members[1].state, "standby");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_priority_can_prefer_discovered_over_configured() {
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let configured_port = listener_a.local_addr().unwrap().port();
+    let discovered_port = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![make_pool_candidate_with_priority(
+            "low-configured",
+            configured_port,
+            7051,
+            20,
+        )],
+    );
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "default-discovered",
+            "127.0.0.1",
+            Some(discovered_port),
+            0x73,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].source, "discovered");
+    assert_eq!(status.members[0].priority, 40);
+    assert_eq!(
+        status.members[0].remote,
+        format!("127.0.0.1:{discovered_port}")
+    );
+    assert_eq!(status.members[1].source, "configured");
+    assert_eq!(status.members[1].priority, 20);
+    assert_eq!(status.members[1].state, "standby");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_priority_does_not_preempt_active_peer() {
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let configured_port = listener_a.local_addr().unwrap().port();
+    let discovered_port = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![make_pool_candidate_with_priority(
+            "low-configured",
+            configured_port,
+            7061,
+            20,
+        )],
+    );
+    let before = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(before.active_count, 1);
+    assert_eq!(before.members[0].source, "configured");
+    assert_eq!(before.members[0].interface_id, Some(7061));
+
+    driver.discover_interfaces = true;
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "default-discovered",
+            "127.0.0.1",
+            Some(discovered_port),
+            0x74,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    let active = status
+        .members
+        .iter()
+        .find(|member| member.state == "active" || member.state == "connecting")
+        .unwrap();
+    assert_eq!(active.source, "configured");
+    assert_eq!(active.interface_id, Some(7061));
+    let discovered = status
+        .members
+        .iter()
+        .find(|member| member.source == "discovered")
+        .unwrap();
+    assert_eq!(discovered.state, "standby");
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_sorts_configured_candidates_by_priority() {
+    let listener_a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port_a = listener_a.local_addr().unwrap().port();
+    let port_b = listener_b.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![
+            make_pool_candidate_with_priority("low", port_a, 7071, 10),
+            make_pool_candidate_with_priority("high", port_b, 7072, 90),
+        ],
+    );
+
+    let status = driver.backbone_peer_pool_status().unwrap();
+    assert_eq!(status.active_count, 1);
+    assert_eq!(status.members[0].name, "high");
+    assert_eq!(status.members[0].priority, 90);
+    assert_eq!(status.members[0].interface_id, Some(7072));
+    assert_eq!(status.members[1].name, "low");
+    assert_eq!(status.members[1].priority, 10);
     assert_eq!(status.members[1].state, "standby");
 }
 

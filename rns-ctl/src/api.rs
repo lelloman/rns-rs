@@ -462,6 +462,7 @@ fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
                             "name": member.name,
                             "remote": member.remote,
                             "source": member.source,
+                            "priority": member.priority,
                             "state": member.state,
                             "interface_id": member.interface_id,
                             "failure_count": member.failure_count,

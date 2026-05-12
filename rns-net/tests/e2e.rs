@@ -550,6 +550,23 @@ fn wait_for_backbone_pool_member(
     expected_remote: &str,
     timeout: Duration,
 ) -> Option<rns_net::BackbonePeerPoolMemberStatus> {
+    wait_for_backbone_pool_member_state(
+        node,
+        expected_source,
+        expected_remote,
+        &["active", "connecting"],
+        timeout,
+    )
+}
+
+#[cfg(feature = "iface-backbone")]
+fn wait_for_backbone_pool_member_state(
+    node: &RnsNode,
+    expected_source: &str,
+    expected_remote: &str,
+    expected_states: &[&str],
+    timeout: Duration,
+) -> Option<rns_net::BackbonePeerPoolMemberStatus> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Ok(QueryResponse::InterfaceStats(stats)) = node.query(QueryRequest::InterfaceStats) {
@@ -557,7 +574,7 @@ fn wait_for_backbone_pool_member(
                 if let Some(member) = pool.members.into_iter().find(|member| {
                     member.source == expected_source
                         && member.remote == expected_remote
-                        && matches!(member.state.as_str(), "active" | "connecting")
+                        && expected_states.contains(&member.state.as_str())
                 }) {
                     return Some(member);
                 }
@@ -3985,6 +4002,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
         wait_for_backbone_pool_member(&client, "discovered", &remote, Duration::from_secs(30))
             .expect("live discovered peer should enter the Backbone peer pool");
     assert!(member.interface_id.unwrap_or_default() >= 10000);
+    assert_eq!(member.priority, 40);
     assert_eq!(member.failure_count, 0);
 
     client.shutdown();
@@ -4106,9 +4124,256 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
         "unexpected cached member name: {}",
         member.name
     );
+    assert_eq!(member.priority, 40);
 
     client.shutdown();
     transport.shutdown();
+}
+
+/// Test that cached discovered peers participate in initial priority selection
+/// before the pool fills configured slots.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let configured_port = find_free_port();
+    let discovered_port = find_free_port();
+    let configured_transport = start_transport_node(configured_port);
+    let discovered_transport = start_transport_node(discovered_port);
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let storage_dir = tmp_dir.path().join("storage/discovery/interfaces");
+    std::fs::create_dir_all(&storage_dir).unwrap();
+
+    let transport_id = [0x51; 16];
+    let discovery_hash =
+        rns_net::discovery::compute_discovery_hash(&transport_id, "CachedPriorityTarget");
+    let now = rns_net::time::now();
+    let cached = rns_net::discovery::DiscoveredInterface {
+        interface_type: "TCPServerInterface".into(),
+        transport: true,
+        name: "CachedPriorityTarget".into(),
+        discovered: now,
+        last_heard: now,
+        heard_count: 1,
+        status: rns_net::discovery::DiscoveredStatus::Available,
+        stamp: vec![0; rns_net::discovery::STAMP_SIZE],
+        stamp_value: 8,
+        transport_id,
+        network_id: [0x25; 16],
+        hops: 1,
+        latitude: None,
+        longitude: None,
+        height: None,
+        reachable_on: Some("127.0.0.1".into()),
+        port: Some(discovered_port),
+        frequency: None,
+        bandwidth: None,
+        spreading_factor: None,
+        coding_rate: None,
+        modulation: None,
+        channel: None,
+        ifac_netname: None,
+        ifac_netkey: None,
+        config_entry: None,
+        discovery_hash,
+    };
+    rns_net::discovery::DiscoveredInterfaceStorage::new(storage_dir)
+        .store(&cached)
+        .unwrap();
+
+    fs::write(
+        tmp_dir.path().join("config"),
+        format!(
+            r#"
+[reticulum]
+enable_transport = False
+discover_interfaces = Yes
+required_discovery_value = 8
+backbone_peer_pool_max_connected = 1
+
+[interfaces]
+  [[Low Configured Backbone]]
+    type = BackboneInterface
+    enabled = yes
+    remote = 127.0.0.1
+    target_port = {configured_port}
+    priority = 20
+"#
+        ),
+    )
+    .unwrap();
+
+    let client = RnsNode::from_config(Some(tmp_dir.path()), Box::new(TransportCallbacks))
+        .expect("Failed to start priority pool client from config");
+
+    let discovered_remote = format!("127.0.0.1:{discovered_port}");
+    let member = wait_for_backbone_pool_member(&client, "discovered", &discovered_remote, TIMEOUT)
+        .expect("higher-priority cached discovered peer should fill the only pool slot");
+    assert_eq!(member.priority, 40);
+
+    let configured_remote = format!("127.0.0.1:{configured_port}");
+    let configured = wait_for_backbone_pool_member_state(
+        &client,
+        "configured",
+        &configured_remote,
+        &["standby"],
+        TIMEOUT,
+    )
+    .expect("lower-priority configured peer should remain standby");
+    assert_eq!(configured.priority, 20);
+
+    client.shutdown();
+    configured_transport.shutdown();
+    discovered_transport.shutdown();
+}
+
+/// Test that a later discovered peer with higher priority does not displace an
+/// already active lower-priority configured peer while the target is full.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configured_peer() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let configured_port = find_free_port();
+    let discovered_port = find_free_port();
+    let configured_transport = start_transport_node(configured_port);
+    let transport_identity = Identity::new(&mut OsRng);
+
+    let discovered_transport = RnsNode::start(
+        NodeConfig {
+            panic_on_interface_error: false,
+            transport_enabled: true,
+            identity: Some(Identity::from_private_key(
+                &transport_identity.get_private_key().unwrap(),
+            )),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
+                    name: "Discoverable Priority Target".into(),
+                    listen_ip: "127.0.0.1".into(),
+                    listen_port: discovered_port,
+                    interface_id: InterfaceId(1),
+                    max_connections: None,
+                    ..TcpServerConfig::default()
+                }),
+                mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+                ifac: None,
+                discovery: Some(rns_net::discovery::DiscoveryConfig {
+                    discovery_name: "PriorityNoPreempt".into(),
+                    announce_interval: 300,
+                    stamp_value: 8,
+                    reachable_on: Some("127.0.0.1".into()),
+                    interface_type: "TCPServerInterface".into(),
+                    listen_port: Some(discovered_port),
+                    latitude: None,
+                    longitude: None,
+                    height: None,
+                }),
+            }],
+            share_instance: false,
+            instance_name: "default".into(),
+            shared_instance_port: 37428,
+            rpc_port: 0,
+            cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            management: Default::default(),
+            probe_port: None,
+            probe_addrs: vec![],
+            probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: false,
+            discovery_required_value: Some(8),
+            respond_to_probes: false,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            known_destinations_max_entries: 8192,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity:
+                rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
+            backbone_peer_pool: None,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
+            registry: None,
+            #[cfg(feature = "hooks")]
+            provider_bridge: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start discoverable priority transport");
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp_dir.path().join("config"),
+        format!(
+            r#"
+[reticulum]
+enable_transport = False
+discover_interfaces = Yes
+required_discovery_value = 8
+backbone_peer_pool_max_connected = 1
+
+[interfaces]
+  [[Low Configured Backbone]]
+    type = BackboneInterface
+    enabled = yes
+    remote = 127.0.0.1
+    target_port = {configured_port}
+    priority = 20
+
+  [[Discovery Listener]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = {discovered_port}
+"#
+        ),
+    )
+    .unwrap();
+
+    let client = RnsNode::from_config(Some(tmp_dir.path()), Box::new(TransportCallbacks))
+        .expect("Failed to start no-preempt pool client from config");
+
+    let configured_remote = format!("127.0.0.1:{configured_port}");
+    let configured =
+        wait_for_backbone_pool_member(&client, "configured", &configured_remote, TIMEOUT)
+            .expect("configured peer should fill the only pool slot before live discovery");
+    assert_eq!(configured.priority, 20);
+
+    let discovered_remote = format!("127.0.0.1:{discovered_port}");
+    let discovered = wait_for_backbone_pool_member_state(
+        &client,
+        "discovered",
+        &discovered_remote,
+        &["standby"],
+        Duration::from_secs(30),
+    )
+    .expect("higher-priority live discovered peer should be added as standby");
+    assert_eq!(discovered.priority, 40);
+
+    let configured_after =
+        wait_for_backbone_pool_member(&client, "configured", &configured_remote, TIMEOUT)
+            .expect("configured peer should remain active after discovered candidate arrives");
+    assert_eq!(configured_after.priority, 20);
+
+    client.shutdown();
+    configured_transport.shutdown();
+    discovered_transport.shutdown();
 }
 
 /// Test that a discovery announce propagates through a relay transport node.

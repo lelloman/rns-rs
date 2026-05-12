@@ -1083,7 +1083,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
 #[derive(Clone)]
 pub(crate) enum BackboneMode {
     Server(BackboneConfig),
-    Client(BackboneClientConfig),
+    Client(BackboneClientConfig, u8),
 }
 
 /// Factory for `BackboneInterface`.
@@ -1121,14 +1121,32 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
             let transport_identity = params.get("transport_identity").cloned();
-            Ok(Box::new(BackboneMode::Client(BackboneClientConfig {
-                name: name.to_string(),
-                target_host,
-                target_port,
-                interface_id: id,
-                transport_identity,
-                ..BackboneClientConfig::default()
-            })))
+            let priority = match params.get("priority") {
+                Some(value) => value.parse::<u8>().map_err(|_| {
+                    format!(
+                        "invalid Backbone peer priority '{}' (expected 0..100)",
+                        value
+                    )
+                })?,
+                None => crate::driver::BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY,
+            };
+            if priority > 100 {
+                return Err(format!(
+                    "invalid Backbone peer priority '{}' (expected 0..100)",
+                    priority
+                ));
+            }
+            Ok(Box::new(BackboneMode::Client(
+                BackboneClientConfig {
+                    name: name.to_string(),
+                    target_host,
+                    target_port,
+                    interface_id: id,
+                    transport_identity,
+                    ..BackboneClientConfig::default()
+                },
+                priority,
+            )))
         } else {
             // Server mode
             let listen_ip = params
@@ -1184,7 +1202,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
         })?;
 
         match mode {
-            BackboneMode::Client(cfg) => {
+            BackboneMode::Client(cfg, _) => {
                 let id = cfg.interface_id;
                 let name = cfg.name.clone();
                 let info = InterfaceInfo {
@@ -1234,7 +1252,7 @@ pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRu
             runtime: Arc::clone(&config.runtime),
             startup: BackboneServerRuntime::from_config(config),
         }),
-        BackboneMode::Client(_) => None,
+        BackboneMode::Client(_, _) => None,
     }
 }
 
@@ -1245,7 +1263,7 @@ pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<Backbon
             interface_name: config.name.clone(),
             peer_state: Arc::clone(&config.peer_state),
         }),
-        BackboneMode::Client(_) => None,
+        BackboneMode::Client(_, _) => None,
     }
 }
 
@@ -1253,7 +1271,7 @@ pub(crate) fn client_runtime_handle_from_mode(
     mode: &BackboneMode,
 ) -> Option<BackboneClientRuntimeConfigHandle> {
     match mode {
-        BackboneMode::Client(config) => Some(BackboneClientRuntimeConfigHandle {
+        BackboneMode::Client(config, _) => Some(BackboneClientRuntimeConfigHandle {
             interface_name: config.name.clone(),
             runtime: Arc::clone(&config.runtime),
             startup: BackboneClientRuntime::from_config(config),
@@ -1264,7 +1282,14 @@ pub(crate) fn client_runtime_handle_from_mode(
 
 pub(crate) fn client_config_from_mode(mode: &BackboneMode) -> Option<BackboneClientConfig> {
     match mode {
-        BackboneMode::Client(config) => Some(config.clone()),
+        BackboneMode::Client(config, _) => Some(config.clone()),
+        BackboneMode::Server(_) => None,
+    }
+}
+
+pub(crate) fn client_priority_from_mode(mode: &BackboneMode) -> Option<u8> {
+    match mode {
+        BackboneMode::Client(_, priority) => Some(*priority),
         BackboneMode::Server(_) => None,
     }
 }
@@ -2091,7 +2116,62 @@ mod tests {
                     Some(Duration::from_secs(3600))
                 );
             }
-            BackboneMode::Client(_) => panic!("expected server config"),
+            BackboneMode::Client(_, _) => panic!("expected server config"),
+        }
+    }
+
+    #[test]
+    fn backbone_parse_config_reads_client_priority() {
+        let factory = BackboneInterfaceFactory;
+        let mut params = HashMap::new();
+        params.insert("remote".into(), "example.com".into());
+        params.insert("target_port".into(), "4242".into());
+        params.insert("priority".into(), "87".into());
+
+        let config = factory
+            .parse_config("test-backbone-client", InterfaceId(96), &params)
+            .unwrap();
+        let mode = *config.into_any().downcast::<BackboneMode>().unwrap();
+
+        match mode {
+            BackboneMode::Client(_, priority) => assert_eq!(priority, 87),
+            BackboneMode::Server(_) => panic!("expected client config"),
+        }
+    }
+
+    #[test]
+    fn backbone_parse_config_defaults_client_priority() {
+        let factory = BackboneInterfaceFactory;
+        let mut params = HashMap::new();
+        params.insert("remote".into(), "example.com".into());
+
+        let config = factory
+            .parse_config("test-backbone-client", InterfaceId(95), &params)
+            .unwrap();
+        let mode = *config.into_any().downcast::<BackboneMode>().unwrap();
+
+        match mode {
+            BackboneMode::Client(_, priority) => assert_eq!(priority, 60),
+            BackboneMode::Server(_) => panic!("expected client config"),
+        }
+    }
+
+    #[test]
+    fn backbone_parse_config_rejects_invalid_client_priority() {
+        let factory = BackboneInterfaceFactory;
+        for value in ["-1", "101", "fast"] {
+            let mut params = HashMap::new();
+            params.insert("remote".into(), "example.com".into());
+            params.insert("priority".into(), value.into());
+
+            let err = match factory.parse_config("test-backbone-client", InterfaceId(94), &params) {
+                Ok(_) => panic!("priority {value} should be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                err.contains("priority"),
+                "unexpected error for {value}: {err}"
+            );
         }
     }
 }

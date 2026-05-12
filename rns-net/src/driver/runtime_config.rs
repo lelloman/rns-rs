@@ -370,7 +370,12 @@ impl Driver {
                 })
                 .collect(),
         });
-        self.maintain_backbone_peer_pool();
+        if let Some(pool) = self.backbone_peer_pool.as_mut() {
+            Self::sort_backbone_peer_pool_candidates(pool);
+        }
+        if !self.discover_interfaces {
+            self.maintain_backbone_peer_pool();
+        }
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -386,13 +391,13 @@ impl Driver {
                 for iface in interfaces {
                     self.upsert_discovered_backbone_peer_pool_candidate(iface);
                 }
-                self.maintain_backbone_peer_pool();
             }
             Err(err) => log::warn!(
                 "Failed to load discovered Backbone peer-pool candidates: {}",
                 err
             ),
         }
+        self.maintain_backbone_peer_pool();
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -454,7 +459,7 @@ impl Driver {
             };
             candidate.config.ifac_enabled = candidate.config.ifac_runtime.netname.is_some()
                 || candidate.config.ifac_runtime.netkey.is_some();
-            Self::sort_discovered_backbone_peer_pool_candidates(pool);
+            Self::sort_backbone_peer_pool_candidates(pool);
             self.maintain_backbone_peer_pool();
             return true;
         }
@@ -492,6 +497,7 @@ impl Driver {
                 ifac_enabled,
                 interface_type_name: "BackboneInterface".to_string(),
                 source: BackbonePeerPoolCandidateSource::Discovered,
+                priority: crate::driver::BACKBONE_PEER_POOL_DISCOVERED_PRIORITY,
                 discovery: Some(discovery),
             },
             active_id: None,
@@ -500,7 +506,7 @@ impl Driver {
             cooldown_until: None,
             last_error: None,
         });
-        Self::sort_discovered_backbone_peer_pool_candidates(pool);
+        Self::sort_backbone_peer_pool_candidates(pool);
         self.maintain_backbone_peer_pool();
         true
     }
@@ -584,17 +590,9 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    fn sort_discovered_backbone_peer_pool_candidates(pool: &mut BackbonePeerPool) {
-        let configured_count = pool
-            .candidates
-            .iter()
-            .take_while(|candidate| {
-                candidate.config.source == BackbonePeerPoolCandidateSource::Configured
-            })
-            .count();
-        pool.candidates[configured_count..].sort_by(|a, b| {
-            Self::candidate_discovery_order(a).cmp(&Self::candidate_discovery_order(b))
-        });
+    fn sort_backbone_peer_pool_candidates(pool: &mut BackbonePeerPool) {
+        pool.candidates
+            .sort_by(|a, b| Self::candidate_pool_order(a).cmp(&Self::candidate_pool_order(b)));
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -645,6 +643,35 @@ impl Driver {
         } else {
             (0, 0, std::cmp::Reverse(0), std::cmp::Reverse(0), [0; 32])
         }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn candidate_pool_order(
+        candidate: &BackbonePeerPoolCandidate,
+    ) -> (
+        std::cmp::Reverse<u8>,
+        u8,
+        u8,
+        u8,
+        std::cmp::Reverse<u32>,
+        std::cmp::Reverse<u64>,
+        [u8; 32],
+    ) {
+        let source_order = match candidate.config.source {
+            BackbonePeerPoolCandidateSource::Configured => 0,
+            BackbonePeerPoolCandidateSource::Discovered => 1,
+        };
+        let (status_order, hops, stamp, last_heard, discovery_hash) =
+            Self::candidate_discovery_order(candidate);
+        (
+            std::cmp::Reverse(candidate.config.priority),
+            source_order,
+            status_order,
+            hops,
+            stamp,
+            last_heard,
+            discovery_hash,
+        )
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -886,6 +913,7 @@ impl Driver {
                         candidate.config.client.target_host, candidate.config.client.target_port
                     ),
                     source: candidate.config.source.as_str().to_string(),
+                    priority: candidate.config.priority,
                     state,
                     interface_id: candidate.active_id.map(|id| id.0),
                     failure_count: candidate.failures.len(),

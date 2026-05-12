@@ -1012,6 +1012,10 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
                         PickleValue::String(member.source.clone()),
                     ),
                     (
+                        PickleValue::String("priority".into()),
+                        PickleValue::Int(member.priority as i64),
+                    ),
+                    (
                         PickleValue::String("state".into()),
                         PickleValue::String(member.state.clone()),
                     ),
@@ -2852,6 +2856,43 @@ mod tests {
             0.0
         );
         assert_eq!(ifaces[0].get("clients").unwrap().as_int().unwrap(), 3);
+    }
+
+    #[test]
+    fn interface_stats_pickle_includes_backbone_peer_pool_priority() {
+        let stats = InterfaceStatsResponse {
+            interfaces: vec![],
+            transport_id: None,
+            transport_enabled: true,
+            transport_uptime: 1.0,
+            total_rxb: 0,
+            total_txb: 0,
+            probe_responder: None,
+            backbone_peer_pool: Some(crate::event::BackbonePeerPoolStatus {
+                max_connected: 1,
+                active_count: 1,
+                standby_count: 0,
+                cooldown_count: 0,
+                members: vec![crate::event::BackbonePeerPoolMemberStatus {
+                    name: "peer".into(),
+                    remote: "127.0.0.1:4242".into(),
+                    source: "configured".into(),
+                    priority: 77,
+                    state: "active".into(),
+                    interface_id: Some(42),
+                    failure_count: 0,
+                    last_error: None,
+                    cooldown_remaining_seconds: None,
+                }],
+            }),
+        };
+
+        let pickle = interface_stats_to_pickle(&stats);
+        let encoded = pickle::encode(&pickle);
+        let decoded = pickle::decode(&encoded).unwrap();
+        let pool = decoded.get("backbone_peer_pool").unwrap();
+        let members = pool.get("members").unwrap().as_list().unwrap();
+        assert_eq!(members[0].get("priority").unwrap().as_int().unwrap(), 77);
     }
 
     #[test]

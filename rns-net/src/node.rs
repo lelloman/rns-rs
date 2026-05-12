@@ -25,8 +25,8 @@ use crate::ifac;
 use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    client_config_from_mode, client_runtime_handle_from_mode, peer_state_handle_from_mode,
-    runtime_handle_from_mode, BackboneMode,
+    client_config_from_mode, client_priority_from_mode, client_runtime_handle_from_mode,
+    peer_state_handle_from_mode, runtime_handle_from_mode, BackboneMode,
 };
 #[cfg(feature = "iface-i2p")]
 use crate::interface::i2p::{i2p_runtime_handle_from_config, I2pConfig};
@@ -275,7 +275,7 @@ fn backbone_discovery_runtime_from_interface(
 ) -> Option<crate::driver::BackboneDiscoveryRuntimeHandle> {
     let config = match mode {
         BackboneMode::Server(config) => config,
-        BackboneMode::Client(_) => return None,
+        BackboneMode::Client(_, _) => return None,
     };
 
     let startup_config = discovery.cloned().unwrap_or_else(|| {
@@ -1322,6 +1322,9 @@ impl RnsNode {
                     .downcast_ref::<BackboneMode>()
                 {
                     if let Some(client) = client_config_from_mode(mode) {
+                        let priority = client_priority_from_mode(mode).unwrap_or(
+                            crate::driver::BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY,
+                        );
                         backbone_peer_pool_candidates.push(BackbonePeerPoolCandidateConfig {
                             client,
                             mode: iface_config.mode,
@@ -1330,6 +1333,7 @@ impl RnsNode {
                             ifac_enabled: ifac_state.is_some(),
                             interface_type_name: iface_config.type_name.clone(),
                             source: crate::driver::BackbonePeerPoolCandidateSource::Configured,
+                            priority,
                             discovery: None,
                         });
                         if let Some(ref disc) = iface_config.discovery {

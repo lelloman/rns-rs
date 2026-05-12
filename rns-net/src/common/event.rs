@@ -664,6 +664,7 @@ pub struct BackbonePeerPoolMemberStatus {
     pub name: String,
     pub remote: String,
     pub source: String,
+    pub priority: u8,
     pub state: String,
     pub interface_id: Option<u64>,
     pub failure_count: usize,
