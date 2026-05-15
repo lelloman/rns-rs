@@ -1,7 +1,7 @@
 [package]
 name = "rns-net"
 description = "Network interfaces and node driver for the Reticulum Network Stack"
-version = "0.5.8"
+version = "0.5.9"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
@@ -27,7 +27,7 @@ iface-i2p = []
 
 [dependencies]
 rns-core.workspace = true
-rns-hooks-crate = { package = "rns-hooks", version = "0.1.6", path = "../rns-hooks", optional = true, default-features = false }
+rns-hooks-crate = { package = "rns-hooks", version = "0.1.7", path = "../rns-hooks", optional = true, default-features = false }
 rns-crypto.workspace = true
 log = "0.4"
 rayon = "1"

@@ -1,7 +1,7 @@
 [package]
 name = "rns-sentinel-hook"
 description = "Sentinel hook used by rns-sentineld"
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
@@ -16,6 +16,6 @@ rns-hooks = ["builtin"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rns-hooks = { version = "0.1.6", path = "../rns-hooks", default-features = false, optional = true }
-rns-hooks-sdk = { version = "0.1.3", path = "../rns-hooks/sdk/rns-hooks-sdk" }
-rns-hooks-abi = { version = "0.1.3", path = "../rns-hooks/sdk/rns-hooks-abi" }
+rns-hooks = { version = "0.1.7", path = "../rns-hooks", default-features = false, optional = true }
+rns-hooks-sdk = { version = "0.1.4", path = "../rns-hooks/sdk/rns-hooks-sdk" }
+rns-hooks-abi = { version = "0.1.4", path = "../rns-hooks/sdk/rns-hooks-abi" }
