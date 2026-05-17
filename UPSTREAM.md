@@ -89,5 +89,11 @@ analysis for this range is in
     `all`, resolving an active document first and then a completed document.
   - Added page regression coverage for viewing a completed work document without
     an explicit scope.
-- [ ] `93ead774` Added workdoc downloads
-  - Next item to inspect for Rust applicability.
+- [x] `93ead774` Added workdoc downloads
+  - Added the Nomad Network `/file/workdoc` resource endpoint and linked work
+    document pages to it.
+  - Reused the active/completed scope fallback logic for page rendering and
+    downloads, including completed-document lookup when no scope is supplied.
+  - Added focused page coverage for download links and work document resource
+    responses. Rust resource metadata currently carries status only, so the
+    upstream Python filename hint is not represented yet.

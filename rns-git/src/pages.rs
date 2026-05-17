@@ -34,6 +34,7 @@ pub const PATH_RELEASE: &str = "/page/release.mu";
 pub const PATH_WORK: &str = "/page/work.mu";
 pub const PATH_WORK_DOC: &str = "/page/work_doc.mu";
 pub const PATH_DOWNLOAD: &str = "/file/download";
+pub const PATH_WORK_DOC_DOWNLOAD: &str = "/file/workdoc";
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -125,6 +126,25 @@ fn register_page_handlers(node: &RnsNode, config: ServerConfig, access: Access) 
         },
     )
     .map_err(|_| Error::msg("failed to register file download handler"))?;
+    let workdoc_download_config = config.clone();
+    let workdoc_download_access = access.clone();
+    node.register_request_handler_response(
+        PATH_WORK_DOC_DOWNLOAD,
+        None,
+        move |_link, _path, data, remote| {
+            let remote_hash = remote.map(|(hash, _)| hash);
+            Some(
+                download_work_document(
+                    &workdoc_download_config,
+                    &workdoc_download_access,
+                    data,
+                    remote_hash,
+                )
+                .unwrap_or_else(|err| RequestResponse::Bytes(error_response_bytes(&err))),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register work document download handler"))?;
     Ok(())
 }
 
@@ -1236,35 +1256,12 @@ fn render_work_doc_page(
     vars: &BTreeMap<String, String>,
 ) -> Result<String> {
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
-    let requested_scope = var(vars, "scope").unwrap_or("all");
-    let requested_scope = if matches!(requested_scope, "active" | "completed" | "all") {
-        requested_scope
-    } else {
-        "active"
-    };
     let id = required_var(vars, "id")?
         .parse::<u64>()
         .map_err(|_| Error::msg("invalid work document ID"))?;
     let work_path = crate::work::work_sidecar_path(&repository);
-    let (scope, document) = match requested_scope {
-        "active" | "completed" => {
-            let scope = crate::work::WorkScope::parse(requested_scope).unwrap();
-            (scope, crate::work::view_document(&work_path, scope, id)?)
-        }
-        "all" => {
-            if let Some(document) =
-                crate::work::view_document(&work_path, crate::work::WorkScope::Active, id)?
-            {
-                (crate::work::WorkScope::Active, Some(document))
-            } else {
-                (
-                    crate::work::WorkScope::Completed,
-                    crate::work::view_document(&work_path, crate::work::WorkScope::Completed, id)?,
-                )
-            }
-        }
-        _ => unreachable!(),
-    };
+    let (scope, document) =
+        resolve_work_document(&work_path, var(vars, "scope").unwrap_or("all"), id)?;
     let Some(document) = document else {
         return Ok(
             ">Work Document Not Found\n\nThe requested work document was not found.\n".into(),
@@ -1290,6 +1287,20 @@ fn render_work_doc_page(
         format_unix_time(document.created as i64),
         format_unix_time(document.edited as i64)
     ));
+    let doc_id = document.id.to_string();
+    out.push_str(&format!(
+        "{}\n\n",
+        m_link(
+            "Download",
+            PATH_WORK_DOC_DOWNLOAD,
+            &[
+                ("g", &group),
+                ("r", &repo),
+                ("scope", scope.as_str()),
+                ("id", &doc_id)
+            ]
+        )
+    ));
     append_formatted_content(&mut out, &document.format, &document.content);
     out.push_str(&format!("\n>Updates ({})\n\n", document.comments.len()));
     if document.comments.is_empty() {
@@ -1309,6 +1320,37 @@ fn render_work_doc_page(
     Ok(out)
 }
 
+fn resolve_work_document(
+    work_path: &Path,
+    requested_scope: &str,
+    id: u64,
+) -> Result<(crate::work::WorkScope, Option<crate::work::WorkDocument>)> {
+    let requested_scope = if matches!(requested_scope, "active" | "completed" | "all") {
+        requested_scope
+    } else {
+        "active"
+    };
+    match requested_scope {
+        "active" | "completed" => {
+            let scope = crate::work::WorkScope::parse(requested_scope).unwrap();
+            Ok((scope, crate::work::view_document(work_path, scope, id)?))
+        }
+        "all" => {
+            if let Some(document) =
+                crate::work::view_document(work_path, crate::work::WorkScope::Active, id)?
+            {
+                Ok((crate::work::WorkScope::Active, Some(document)))
+            } else {
+                Ok((
+                    crate::work::WorkScope::Completed,
+                    crate::work::view_document(work_path, crate::work::WorkScope::Completed, id)?,
+                ))
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
 fn append_formatted_content(out: &mut String, format: &str, content: &str) {
     match format {
         "micron" => out.push_str(content),
@@ -1318,6 +1360,41 @@ fn append_formatted_content(out: &mut String, format: &str, content: &str) {
     if !out.ends_with('\n') {
         out.push('\n');
     }
+}
+
+pub fn download_work_document(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&[u8; 16]>,
+) -> Result<RequestResponse> {
+    let vars = parse_page_vars(data)?;
+    let (_group, _repo, repository) = match accessible_repository(config, access, remote, &vars) {
+        Ok(repo) => repo,
+        Err(_) => {
+            return Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_NOT_FOUND,
+                b"repository not found",
+            )));
+        }
+    };
+    let id = required_var(&vars, "id")?
+        .parse::<u64>()
+        .map_err(|_| Error::msg("invalid work document ID"))?;
+    let work_path = crate::work::work_sidecar_path(&repository);
+    let Some(document) =
+        resolve_work_document(&work_path, var(&vars, "scope").unwrap_or("all"), id)?.1
+    else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"work document not found",
+        )));
+    };
+    Ok(RequestResponse::Resource {
+        data: document.content.into_bytes(),
+        metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+        auto_compress: true,
+    })
 }
 
 pub fn download_file(
@@ -3712,6 +3789,7 @@ Unmatched * marker\n\
         assert!(doc.contains(">Active Body"));
         assert!(doc.contains(">Updates (1)"));
         assert!(doc.contains("Progress update"));
+        assert!(doc.contains("`[Download`:/file/workdoc`g=public|r=worked|scope=active|id=1]"));
 
         let completed_doc = render_page(
             PATH_WORK_DOC,
@@ -3728,6 +3806,37 @@ Unmatched * marker\n\
         assert!(completed_doc.contains(">Completed task"));
         assert!(completed_doc.contains("Status: completed"));
         assert!(completed_doc.contains("`[work`:/page/work.mu`g=public|r=worked|scope=completed]"));
+        assert!(completed_doc.contains(&format!(
+            "`[Download`:/file/workdoc`g=public|r=worked|scope=completed|id={}]",
+            completed.id
+        )));
+
+        let active_download = download_work_document(
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "worked"),
+                ("var_scope", "active"),
+                ("var_id", "1"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_resource_response(active_download, b"# Active Body");
+
+        let completed_download = download_work_document(
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "worked"),
+                ("var_id", &completed.id.to_string()),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_resource_response(completed_download, b"Done");
     }
 
     #[test]
@@ -3798,6 +3907,19 @@ Unmatched * marker\n\
                 .map(|(k, v)| (Value::Str((*k).into()), Value::Str((*v).into())))
                 .collect(),
         ))
+    }
+
+    fn assert_resource_response(response: RequestResponse, expected: &[u8]) {
+        match response {
+            RequestResponse::Resource { data, metadata, .. } => {
+                assert_eq!(data, expected);
+                assert_eq!(
+                    metadata.as_deref(),
+                    Some(&protocol::metadata_status(protocol::RES_OK)[..])
+                );
+            }
+            RequestResponse::Bytes(bytes) => panic!("expected resource response, got {bytes:?}"),
+        }
     }
 
     fn create_repo(path: std::path::PathBuf, file: &str, content: &str) -> std::path::PathBuf {
