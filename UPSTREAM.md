@@ -172,3 +172,7 @@ analysis for this range is in
 - [x] `3dd4145e` Updated changelog
   - Audited as documentation-only. The upstream changelog refinement is covered
     by the explicit workdoc signing tracker entry above.
+- [x] `95502e2c` Prepare release
+  - Audited as generated upstream manual and release artifact updates for RNS
+    1.2.6. No Rust runtime, protocol, CLI, or crate documentation source files
+    map directly to this generated artifact commit.
