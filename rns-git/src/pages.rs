@@ -597,10 +597,11 @@ fn render_repo_page(
                 &readme.content,
                 Some(&markdown_blob_url_scope(&group, &repo, "HEAD", "README.md")),
             ));
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
         } else {
-            out.push_str(&readme.content);
-        }
-        if !out.ends_with('\n') {
+            out.push_str(readme.content.trim_end());
             out.push('\n');
         }
     } else {
@@ -3825,6 +3826,11 @@ Unmatched * marker\n\
             "README.mu",
             ">Micron without trailing newline",
         );
+        create_repo(
+            config.repositories_dir.join("public/micronblank"),
+            "README.mu",
+            ">Micron with trailing blanks\n\n\n",
+        );
         let access = access(&config);
 
         let markdown = render_page(
@@ -3862,6 +3868,17 @@ Unmatched * marker\n\
         .unwrap();
         assert!(micron.contains(">Micron without trailing newline\n"));
         assert!(!micron.contains(">Micron without trailing newline<"));
+
+        let micron = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "micronblank")]),
+            None,
+        )
+        .unwrap();
+        assert!(micron.contains(">Micron with trailing blanks\n"));
+        assert!(!micron.contains(">Micron with trailing blanks\n\n\n"));
     }
 
     #[test]

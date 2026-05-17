@@ -228,3 +228,8 @@ queue.
   - Audited as upstream hosted `README.mu` whitespace and content shaping only.
     rns-rs does not vendor that README content, so no local code or
     documentation change is required.
+- [x] `256a4d0b` Cleanup
+  - Ported the non-Markdown README rendering cleanup: repository README content
+    is now trimmed at the end before appending the renderer newline.
+  - Added regression coverage for README.mu content without a trailing newline
+    and with excessive trailing blank lines.
