@@ -45,9 +45,7 @@ tests, then update this file to the new baseline commit.
 ## Completed 1.2.5..1.2.7 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced to upstream
-`b1f522277c99b076ea4b43e9048aec8962e0e4a2` on 2026-05-17. The detailed
-analysis for this range is in
-`docs/reticulum-upstream-commit-analysis-2026-05-17.md`.
+`b1f522277c99b076ea4b43e9048aec8962e0e4a2` on 2026-05-17.
 
 The RNS 1.2.6 boundary is integrated through upstream `95502e2c` (`Prepare
 release`). The 1.2.7 queue is integrated through upstream `b1f52227`
