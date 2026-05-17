@@ -3820,6 +3820,11 @@ Unmatched * marker\n\
             "README.mu",
             ">Micron\n\n`!Already formatted`!\n",
         );
+        create_repo(
+            config.repositories_dir.join("public/microntight"),
+            "README.mu",
+            ">Micron without trailing newline",
+        );
         let access = access(&config);
 
         let markdown = render_page(
@@ -3846,6 +3851,17 @@ Unmatched * marker\n\
         .unwrap();
         assert!(micron.contains(">Micron"));
         assert!(micron.contains("`!Already formatted`!"));
+
+        let micron = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "microntight")]),
+            None,
+        )
+        .unwrap();
+        assert!(micron.contains(">Micron without trailing newline\n"));
+        assert!(!micron.contains(">Micron without trailing newline<"));
     }
 
     #[test]

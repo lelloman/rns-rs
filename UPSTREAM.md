@@ -219,3 +219,8 @@ queue.
   - Updated Markdown, table-width, blob, and repository README rendering tests
     for the new link output and added direct coverage for the configurable link
     style.
+- [x] `6ecc8933` Updated readme
+  - Audited upstream hosted `README.mu` content changes as not locally vendored.
+  - Confirmed the renderer-side newline change for non-Markdown README content
+    is already covered by Rust's README output normalization, and added a
+    regression for a `README.mu` without a trailing newline.
