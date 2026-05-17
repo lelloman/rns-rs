@@ -267,10 +267,20 @@ impl TransportEngine {
     }
 
     pub fn active_packet_hashes(&self) -> Vec<[u8; 32]> {
-        self.path_table
+        let mut hashes: Vec<[u8; 32]> = self
+            .path_table
             .values()
             .flat_map(|ps| ps.iter().map(|p| p.packet_hash))
-            .collect()
+            .collect();
+
+        hashes.extend(
+            self.tunnel_table
+                .iter()
+                .flat_map(|(_, tunnel)| tunnel.paths.values().map(|p| p.packet_hash)),
+        );
+        hashes.sort_unstable();
+        hashes.dedup();
+        hashes
     }
 
     pub fn cull_rate_limiter(

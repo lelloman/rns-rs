@@ -3469,6 +3469,37 @@ mod tests {
     }
 
     #[test]
+    fn test_active_packet_hashes_include_detached_tunnel_paths() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_tunnel_interface(1));
+
+        let tunnel_id = [0xCA; 32];
+        let destination_hash = [0xDB; 16];
+        let packet_hash = [0xEC; 32];
+        engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
+        engine.tunnel_table.store_tunnel_path(
+            &tunnel_id,
+            destination_hash,
+            tunnel::TunnelPath {
+                timestamp: 1000.0,
+                received_from: [0xFE; 16],
+                hops: 2,
+                expires: 1000.0 + constants::DESTINATION_TIMEOUT,
+                random_blobs: Vec::new(),
+                packet_hash,
+            },
+            1000.0,
+            constants::DESTINATION_TIMEOUT,
+            usize::MAX,
+        );
+        engine.void_tunnel_interface(&tunnel_id);
+        engine.path_table.remove(&destination_hash);
+
+        let active_hashes = engine.active_packet_hashes();
+        assert_eq!(active_hashes, vec![packet_hash]);
+    }
+
+    #[test]
     fn test_tunnel_reattach_does_not_overwrite_newer_path() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_tunnel_interface(1));

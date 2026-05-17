@@ -293,3 +293,13 @@ queue.
 - [x] `d5b64a4a` Cleaned up log/print consistency for listener/initiator modes in rncp
   - Audited as upstream `rncp.py` logging consistency cleanup. No local port is
     available because rns-rs does not currently implement rncp.
+- [x] `e7a317f0` Use canonical Transport interface list add/removes. Improved announce cache cleaning. Adjusted logging.
+  - Ported the announce cache cleanup fix by treating packet hashes retained in
+    tunnel paths as active cache entries, even when the live path table no
+    longer contains the destination.
+  - Added a transport regression for a detached tunnel path whose cached
+    announce packet hash must survive active-cache cleanup.
+  - Audited the interface add/remove locking portion as already covered by
+    Rust's driver-owned interface registry and event-based registration path;
+    there is no global Python-style `Transport.interfaces` list to mutate
+    directly.
