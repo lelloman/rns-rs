@@ -240,3 +240,6 @@ queue.
 - [x] `e8b236c7` Updated readme
   - Audited as a follow-up upstream hosted `README.mu` wrapping adjustment for
     application examples. No local port is required.
+- [x] `102eccb7` Updated readme
+  - Audited as a single upstream hosted `README.mu` line-wrap correction. No
+    local code or documentation source is affected.
