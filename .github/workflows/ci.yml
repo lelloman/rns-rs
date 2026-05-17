@@ -11,6 +11,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  upstream-badge:
+    name: Upstream Badge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check upstream badge matches UPSTREAM.md
+        run: |
+          upstream="$(sed -nE 's/^- Tag: `([^`]+)`.*/\1/p' UPSTREAM.md | head -n1)"
+          badge="$(sed -nE 's#.*img\.shields\.io/badge/upstream%20Reticulum-([^-)]*)-blue.*#\1#p' README.md | head -n1)"
+
+          if [ -z "$upstream" ] || [ -z "$badge" ]; then
+            echo "Could not find upstream tag or README badge version"
+            echo "UPSTREAM.md tag: ${upstream:-missing}"
+            echo "README.md badge: ${badge:-missing}"
+            exit 1
+          fi
+
+          if [ "$upstream" != "$badge" ]; then
+            echo "README upstream badge is out of sync"
+            echo "UPSTREAM.md: $upstream"
+            echo "README.md:   $badge"
+            exit 1
+          fi
+
   cargo-test:
     name: Cargo Test
     runs-on: ubuntu-latest
