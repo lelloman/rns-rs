@@ -998,7 +998,7 @@ fn render_stats_page(
         ));
     } else {
         out.push_str(
-            "`*\nNo activity recorded for this repository in the selected time period.\n\n`*",
+            "`*\nNo development activity recorded for this repository in the selected time period.\n\n`*",
         );
     }
     Ok(out)

@@ -142,3 +142,8 @@ analysis for this range is in
   - Audited as not applicable. The upstream typo was in Python thanks-counter
     error logging that referenced undefined group/repo variables; Rust thanks
     handling does not have that logging path.
+- [x] `4c93f6c7` Added local URL resolution to repo frontpage markdown readme renderer
+  - Audited README local link resolution as already implemented and covered by
+    the Rust repository page test.
+  - Ported the same commit's empty stats wording change to "No development
+    activity..." and updated the focused stats assertion.
