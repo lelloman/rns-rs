@@ -53,5 +53,12 @@ analysis for this range is in
     artifact lists now use Micron emphasis.
   - Confirmed artifact ordering was already covered by `release::artifacts()`
     sorting by filename; added a page regression test to lock that behavior.
-- [ ] `e004e759` Added lock to interface discovery
+- [x] `e004e759` Added lock to interface discovery
+  - Ported to `DiscoveredInterfaceStorage` with a process-wide storage mutex
+    around discovery cache file reads, writes, removes, cleanup, and
+    `store_received()` load-modify-store updates.
+  - Added a concurrent `store_received()` regression to verify `heard_count`
+    increments are not lost under simultaneous receives for the same discovery
+    hash.
+- [ ] `32389002` Better remote monitor loop
   - Next item to inspect for Rust applicability.

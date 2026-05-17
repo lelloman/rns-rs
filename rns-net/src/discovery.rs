@@ -14,6 +14,7 @@ pub use crate::common::discovery::*;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_workblock};
@@ -24,6 +25,8 @@ use crate::time;
 // ============================================================================
 // Storage
 // ============================================================================
+
+static DISCOVERY_STORAGE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Persistent storage for discovered interfaces
 pub struct DiscoveredInterfaceStorage {
@@ -38,6 +41,11 @@ impl DiscoveredInterfaceStorage {
 
     /// Store a discovered interface
     pub fn store(&self, iface: &DiscoveredInterface) -> io::Result<()> {
+        let _guard = discovery_storage_guard();
+        self.store_unlocked(iface)
+    }
+
+    fn store_unlocked(&self, iface: &DiscoveredInterface) -> io::Result<()> {
         let filename = hex_encode(&iface.discovery_hash);
         let filepath = self.base_path.join(filename);
 
@@ -47,7 +55,8 @@ impl DiscoveredInterfaceStorage {
 
     /// Store a newly received interface announce, preserving persistent counters.
     pub fn store_received(&self, iface: &mut DiscoveredInterface) -> io::Result<()> {
-        match self.load(&iface.discovery_hash) {
+        let _guard = discovery_storage_guard();
+        match self.load_unlocked(&iface.discovery_hash) {
             Ok(Some(existing)) => {
                 iface.discovered = existing.discovered;
                 iface.heard_count = existing.heard_count.saturating_add(1);
@@ -66,11 +75,16 @@ impl DiscoveredInterfaceStorage {
             }
         }
 
-        self.store(iface)
+        self.store_unlocked(iface)
     }
 
     /// Load a discovered interface by its discovery hash
     pub fn load(&self, discovery_hash: &[u8; 32]) -> io::Result<Option<DiscoveredInterface>> {
+        let _guard = discovery_storage_guard();
+        self.load_unlocked(discovery_hash)
+    }
+
+    fn load_unlocked(&self, discovery_hash: &[u8; 32]) -> io::Result<Option<DiscoveredInterface>> {
         let filename = hex_encode(discovery_hash);
         let filepath = self.base_path.join(filename);
 
@@ -84,6 +98,11 @@ impl DiscoveredInterfaceStorage {
 
     /// List all discovered interfaces
     pub fn list(&self) -> io::Result<Vec<DiscoveredInterface>> {
+        let _guard = discovery_storage_guard();
+        self.list_unlocked()
+    }
+
+    fn list_unlocked(&self) -> io::Result<Vec<DiscoveredInterface>> {
         let mut interfaces = Vec::new();
 
         let entries = match fs::read_dir(&self.base_path) {
@@ -115,6 +134,11 @@ impl DiscoveredInterfaceStorage {
 
     /// Remove a discovered interface by its discovery hash
     pub fn remove(&self, discovery_hash: &[u8; 32]) -> io::Result<()> {
+        let _guard = discovery_storage_guard();
+        self.remove_unlocked(discovery_hash)
+    }
+
+    fn remove_unlocked(&self, discovery_hash: &[u8; 32]) -> io::Result<()> {
         let filename = hex_encode(discovery_hash);
         let filepath = self.base_path.join(filename);
 
@@ -127,10 +151,11 @@ impl DiscoveredInterfaceStorage {
     /// Clean up stale entries (older than THRESHOLD_REMOVE)
     /// Returns the number of entries removed
     pub fn cleanup(&self) -> io::Result<usize> {
+        let _guard = discovery_storage_guard();
         let mut removed = 0;
         let now = time::now();
 
-        let interfaces = self.list()?;
+        let interfaces = self.list_unlocked()?;
         for iface in interfaces {
             let invalid_reachable_on = iface
                 .reachable_on
@@ -142,7 +167,7 @@ impl DiscoveredInterfaceStorage {
                 || invalid_reachable_on
                 || now - iface.last_heard > THRESHOLD_REMOVE
             {
-                self.remove(&iface.discovery_hash)?;
+                self.remove_unlocked(&iface.discovery_hash)?;
                 removed += 1;
             }
         }
@@ -363,6 +388,16 @@ impl DiscoveredInterfaceStorage {
             config_entry: get_opt_str(&value, "config_entry"),
             discovery_hash,
         })
+    }
+}
+
+fn discovery_storage_guard() -> MutexGuard<'static, ()> {
+    match DISCOVERY_STORAGE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("recovering from poisoned discovery storage lock");
+            poisoned.into_inner()
+        }
     }
 }
 
@@ -916,6 +951,54 @@ mod tests {
         assert_eq!(loaded.discovered, 1000.0);
         assert_eq!(loaded.last_heard, 3000.0);
         assert_eq!(loaded.heard_count, 8);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_received_serializes_concurrent_counter_updates() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let dir = std::env::temp_dir().join(format!(
+            "rns-discovery-concurrent-received-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let storage = Arc::new(DiscoveredInterfaceStorage::new(dir.clone()));
+
+        let mut existing = test_discovered_interface("ConcurrentDiscovery");
+        existing.discovered = 1000.0;
+        existing.last_heard = 1000.0;
+        existing.heard_count = 0;
+        storage.store(&existing).unwrap();
+
+        let threads = 16;
+        let updates_per_thread = 25;
+        let barrier = Arc::new(Barrier::new(threads));
+        let mut handles = Vec::new();
+        for thread_id in 0..threads {
+            let storage = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            let template = existing.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for update in 0..updates_per_thread {
+                    let mut received = template.clone();
+                    received.last_heard = 2000.0 + (thread_id * updates_per_thread + update) as f64;
+                    storage.store_received(&mut received).unwrap();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let loaded = storage.load(&existing.discovery_hash).unwrap().unwrap();
+        assert_eq!(loaded.discovered, 1000.0);
+        assert_eq!(loaded.heard_count as usize, threads * updates_per_thread);
 
         let _ = fs::remove_dir_all(&dir);
     }
