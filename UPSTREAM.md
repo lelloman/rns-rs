@@ -202,3 +202,6 @@ queue.
   - Audited as upstream hosted `README.mu` formatting, dependency wording, and
     internal link updates. No local port is required because rns-rs does not
     ship Reticulum's repository README.mu content.
+- [x] `ea27a8b8` Updated readme
+  - Audited as a single upstream hosted `README.mu` link correction for
+    `HKDF.py`. No local Rust or documentation source is affected.
