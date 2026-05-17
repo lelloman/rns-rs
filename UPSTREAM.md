@@ -205,3 +205,7 @@ queue.
 - [x] `ea27a8b8` Updated readme
   - Audited as a single upstream hosted `README.mu` link correction for
     `HKDF.py`. No local Rust or documentation source is affected.
+- [x] `6333fb39` Updated readme
+  - Audited as upstream hosted `README.mu` source/thanks link polish. This does
+    not map to rns-rs because the changed page content is repository data, not
+    local renderer behavior.
