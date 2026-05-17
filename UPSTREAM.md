@@ -224,3 +224,7 @@ queue.
   - Confirmed the renderer-side newline change for non-Markdown README content
     is already covered by Rust's README output normalization, and added a
     regression for a `README.mu` without a trailing newline.
+- [x] `c5add012` Updated readme
+  - Audited as upstream hosted `README.mu` whitespace and content shaping only.
+    rns-rs does not vendor that README content, so no local code or
+    documentation change is required.
