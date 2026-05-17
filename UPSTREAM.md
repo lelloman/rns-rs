@@ -40,3 +40,18 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Active 1.2.5..1.2.7 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was advanced to upstream
+`b1f522277c99b076ea4b43e9048aec8962e0e4a2` on 2026-05-17. The detailed
+analysis for this range is in
+`docs/reticulum-upstream-commit-analysis-2026-05-17.md`.
+
+- [x] `0ebec014` Improved release page
+  - Ported the remaining Rust-applicable rendering change: empty release
+    artifact lists now use Micron emphasis.
+  - Confirmed artifact ordering was already covered by `release::artifacts()`
+    sorting by filename; added a page regression test to lock that behavior.
+- [ ] `e004e759` Added lock to interface discovery
+  - Next item to inspect for Rust applicability.

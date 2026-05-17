@@ -360,6 +360,101 @@ fn release_pages_render_published_releases_latest_artifacts_and_thanks() {
 }
 
 #[test]
+fn release_page_formats_empty_artifacts_and_sorts_artifact_links() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    tag_repo(&repo_path, "v1");
+    tag_repo(&repo_path, "v2");
+    let access_rules = access(&config);
+
+    assert_eq!(
+        create_release(&config, &access_rules, "public/alpha", "v1", "# Empty\n")[0],
+        protocol::RES_OK
+    );
+    assert_eq!(
+        server::handle_release(
+            &config,
+            &access_rules,
+            &release_request(&[
+                ("repository", strv("public/alpha")),
+                ("operation", strv("create")),
+                ("step", strv("finalize")),
+                ("tag", strv("v1")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap()[0],
+        protocol::RES_OK
+    );
+
+    let empty = pages::render_page(
+        pages::PATH_RELEASE,
+        &config,
+        &access_rules,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha"), ("var_tag", "v1")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(empty.contains("`*No artifacts for this release`*"));
+
+    assert_eq!(
+        create_release(&config, &access_rules, "public/alpha", "v2", "# Files\n")[0],
+        protocol::RES_OK
+    );
+    for artifact in ["z-last.tar", "a-first.tar"] {
+        assert_eq!(
+            server::handle_release(
+                &config,
+                &access_rules,
+                &release_request(&[
+                    ("repository", strv("public/alpha")),
+                    ("operation", strv("create")),
+                    ("step", strv("artifact")),
+                    ("tag", strv("v2")),
+                    ("artifact_name", strv(artifact)),
+                    ("artifact_data", binv(b"artifact bytes")),
+                ]),
+                Some(&(REMOTE, REMOTE_SIG)),
+            )
+            .unwrap()[0],
+            protocol::RES_OK
+        );
+    }
+    assert_eq!(
+        server::handle_release(
+            &config,
+            &access_rules,
+            &release_request(&[
+                ("repository", strv("public/alpha")),
+                ("operation", strv("create")),
+                ("step", strv("finalize")),
+                ("tag", strv("v2")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap()[0],
+        protocol::RES_OK
+    );
+
+    let with_artifacts = pages::render_page(
+        pages::PATH_RELEASE,
+        &config,
+        &access_rules,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha"), ("var_tag", "v2")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    let first = with_artifacts.find("a-first.tar").unwrap();
+    let last = with_artifacts.find("z-last.tar").unwrap();
+    assert!(first < last);
+}
+
+#[test]
 fn release_pages_render_preview_formats() {
     let tmp = tempfile::tempdir().unwrap();
     let config = cfg(tmp.path());

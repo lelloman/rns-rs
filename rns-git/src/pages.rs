@@ -1101,7 +1101,7 @@ fn render_release_page(
     }
     out.push_str(">Artifacts\n\n");
     if release.artifacts.is_empty() {
-        out.push_str("No artifacts for this release.\n");
+        out.push_str("`*No artifacts for this release`*\n");
     } else {
         for artifact in release.artifacts {
             out.push_str(&format!(
