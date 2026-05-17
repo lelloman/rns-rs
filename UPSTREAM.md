@@ -272,3 +272,7 @@ queue.
     retention RPC handling. rns-rs does not expose the same retention RPC
     methods, and its existing CLI RPC callers already handle `RpcClient::call`
     failures at command boundaries.
+- [x] `f744e4d9` Updated logging
+  - Audited as Python transport log-level cleanup for transported link request
+    proof handling. No equivalent Rust log site exists in the current transport
+    implementation, so no code change is required.
