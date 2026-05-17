@@ -287,3 +287,6 @@ queue.
     explicit `latest` management requests still report failures.
   - Added tests that finalized releases write/update the latest marker and that
     explicit latest management can override the automatically selected tag.
+- [x] `5667a0bb` Better transfer completed feedback in rncp, thanks to neutral
+  - Audited as upstream `rncp.py` user-facing receive/fetch feedback. rns-rs
+    does not currently include an `rncp` utility, so no local port is available.
