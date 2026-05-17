@@ -461,7 +461,14 @@ fn rngit_release_management_and_downloads_work_over_rns_link() {
     );
     let list_body = decode_ok_body(&list.data);
     let releases = msgpack::unpack_exact(&list_body).unwrap();
-    assert_eq!(releases.as_array().unwrap().len(), 1);
+    assert_eq!(
+        releases
+            .map_get("releases")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        1
+    );
 
     let page_destination = harness
         .destinations

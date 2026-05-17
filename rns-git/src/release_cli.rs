@@ -76,6 +76,10 @@ enum ReleaseCommand {
         tag: String,
         yes: bool,
     },
+    Latest {
+        tag: String,
+        yes: bool,
+    },
 }
 
 impl ReleaseOptions {
@@ -138,6 +142,13 @@ impl ReleaseOptions {
                     .get(2)
                     .cloned()
                     .ok_or_else(|| Error::msg("release delete requires a tag"))?,
+                yes,
+            },
+            "latest" => ReleaseCommand::Latest {
+                tag: positional
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| Error::msg("release latest requires a tag"))?,
                 yes,
             },
             other => return Err(Error::msg(format!("unknown release operation {other}"))),
@@ -208,6 +219,14 @@ fn run_release_command(
             }
             transport.request(request("delete", &[("tag", Value::Str(tag.clone()))]))?;
             writeln!(output, "Deleted release {tag}")?;
+            Ok(())
+        }
+        ReleaseCommand::Latest { tag, yes } => {
+            if !yes {
+                return Err(Error::msg("release latest requires --yes"));
+            }
+            transport.request(request("latest", &[("tag", Value::Str(tag.clone()))]))?;
+            writeln!(output, "Release {tag} set as latest")?;
             Ok(())
         }
     }
@@ -309,7 +328,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-y|--yes] <rns://destination/repo> <list|view|create|delete> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -371,9 +390,18 @@ fn artifact_files(dir: &Path) -> Result<Vec<ArtifactFile>> {
 }
 
 fn print_release_list(value: &Value, mut output: impl Write) -> Result<()> {
-    let releases = value
-        .as_array()
-        .ok_or_else(|| Error::msg("release list response is not an array"))?;
+    let (releases, latest) = match value {
+        Value::Array(releases) => (releases.as_slice(), None),
+        Value::Map(_) => {
+            let releases = value
+                .map_get("releases")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::msg("release list response is missing releases"))?;
+            let latest = value.map_get("latest").and_then(Value::as_str);
+            (releases, latest)
+        }
+        _ => return Err(Error::msg("release list response is not an array or map")),
+    };
     if releases.is_empty() {
         writeln!(output, "No releases")?;
         return Ok(());
@@ -396,6 +424,9 @@ fn print_release_list(value: &Value, mut output: impl Write) -> Result<()> {
             output,
             "{tag:<16} {status:<10} {artifacts:>3} artifact(s) {preview}"
         )?;
+    }
+    if let Some(latest) = latest.filter(|latest| !latest.is_empty()) {
+        writeln!(output, "\nThe latest release is: {latest}")?;
     }
     Ok(())
 }
@@ -492,6 +523,21 @@ mod tests {
                 yes: true
             }
         );
+
+        let latest = ReleaseOptions::parse([
+            "--yes".into(),
+            "rns://00112233445566778899aabbccddeeff/group/repo".into(),
+            "latest".into(),
+            "v1".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            latest.command,
+            ReleaseCommand::Latest {
+                tag: "v1".into(),
+                yes: true
+            }
+        );
     }
 
     #[test]
@@ -549,18 +595,31 @@ mod tests {
 
     #[test]
     fn list_and_view_format_msgpack_responses() {
-        let list_body = Value::Array(vec![Value::Map(vec![
+        let release = Value::Map(vec![
             (Value::Str("tag".into()), Value::Str("v1".into())),
             (Value::Str("status".into()), Value::Str("published".into())),
             (Value::Str("artifacts".into()), Value::UInt(2)),
             (Value::Str("preview".into()), Value::Str("First".into())),
-        ])]);
+        ]);
+        let list_body = Value::Map(vec![
+            (
+                Value::Str("releases".into()),
+                Value::Array(vec![release.clone()]),
+            ),
+            (Value::Str("latest".into()), Value::Str("v1".into())),
+        ]);
         let mut out = Vec::new();
         print_release_list(&list_body, &mut out).unwrap();
         let list = String::from_utf8(out).unwrap();
         assert!(list.contains("v1"));
         assert!(list.contains("published"));
         assert!(list.contains("First"));
+        assert!(list.contains("The latest release is: v1"));
+
+        let mut out = Vec::new();
+        print_release_list(&Value::Array(vec![release]), &mut out).unwrap();
+        let legacy_list = String::from_utf8(out).unwrap();
+        assert!(legacy_list.contains("v1"));
 
         let view_body = Value::Map(vec![
             (Value::Str("tag".into()), Value::Str("v1".into())),
@@ -628,5 +687,52 @@ mod tests {
             Some("v1")
         );
         assert_eq!(String::from_utf8(out).unwrap(), "Deleted release v1\n");
+    }
+
+    #[test]
+    fn latest_requires_yes_and_sends_latest_request() {
+        let mut fake = FakeTransport::default();
+        let err = run_release_command(
+            &mut fake,
+            &ReleaseCommand::Latest {
+                tag: "v1".into(),
+                yes: false,
+            },
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--yes"));
+        assert!(fake.requests.is_empty());
+
+        let mut fake = FakeTransport {
+            responses: vec![Vec::new()],
+            requests: Vec::new(),
+        };
+        let mut out = Vec::new();
+        run_release_command(
+            &mut fake,
+            &ReleaseCommand::Latest {
+                tag: "v1".into(),
+                yes: true,
+            },
+            &mut out,
+        )
+        .unwrap();
+
+        assert_eq!(fake.requests.len(), 1);
+        assert_eq!(
+            fake.requests[0]
+                .map_get("operation")
+                .and_then(Value::as_str),
+            Some("latest")
+        );
+        assert_eq!(
+            fake.requests[0].map_get("tag").and_then(Value::as_str),
+            Some("v1")
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Release v1 set as latest\n"
+        );
     }
 }

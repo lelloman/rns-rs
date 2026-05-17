@@ -254,3 +254,16 @@ queue.
   - Audited as upstream hosted `README.mu` emphasis and wording formatting
     only. No local port is required because the formatted page content is not
     vendored in rns-rs.
+- [x] `d881c111` Added latest release management to rngit
+  - Added persisted latest-release marker support under the release sidecar and
+    made `latest` resolution prefer the configured marker before falling back
+    to the newest published release.
+  - Added the release management `latest` operation on the server and CLI
+    (`rngit release --yes <remote> latest <tag>`), with release-permission
+    enforcement and safe tag validation.
+  - Updated release list responses to the upstream map shape containing
+    `releases` and `latest`, while keeping the CLI compatible with legacy array
+    responses.
+  - Marked configured latest releases on Nomad Network release listings and
+    covered explicit latest selection for pages, downloads, protocol listing,
+    invalid tags, CLI parsing, and CLI request generation.

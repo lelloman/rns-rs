@@ -147,11 +147,32 @@ pub fn release_data(releases_path: &Path, tag: &str) -> Result<Option<ReleaseDat
 }
 
 pub fn latest_published_tag(releases_path: &Path) -> Result<Option<String>> {
+    if let Some(tag) = configured_latest_tag(releases_path)? {
+        return Ok(Some(tag));
+    }
     Ok(list_releases(releases_path)?
         .into_iter()
         .filter(|release| release.status == "published")
         .next()
         .map(|release| release.tag))
+}
+
+pub fn configured_latest_tag(releases_path: &Path) -> Result<Option<String>> {
+    let latest_path = releases_path.join("latest");
+    if !latest_path.is_file() {
+        return Ok(None);
+    }
+    let tag = fs::read_to_string(latest_path)?.trim().to_string();
+    if tag.is_empty() {
+        return Ok(None);
+    }
+    let Some(tag) = clean_tag(&tag) else {
+        return Ok(None);
+    };
+    let Some(release) = release_data(releases_path, &tag)? else {
+        return Ok(None);
+    };
+    Ok((release.status == "published").then_some(release.tag))
 }
 
 pub fn create_init(
@@ -287,19 +308,61 @@ pub fn delete_release(releases_path: &Path, request: &ReleaseRequest) -> Result<
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
+pub fn set_latest_release(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
+    let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        ));
+    };
+    let release_dir = releases_path.join(&tag);
+    if !release_dir.is_dir() {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"release not found",
+        ));
+    }
+    fs::create_dir_all(releases_path)?;
+    let latest_path = releases_path.join("latest");
+    let tmp_path = releases_path.join("latest.tmp");
+    fs::write(&tmp_path, &tag)?;
+    fs::rename(tmp_path, latest_path)?;
+    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+}
+
 pub fn list_response(releases_path: &Path) -> Result<Vec<u8>> {
+    let releases = Value::Array(
+        list_releases(releases_path)?
+            .into_iter()
+            .map(summary_value)
+            .collect(),
+    );
+    let latest = configured_latest_tag(releases_path)?
+        .map(Value::Str)
+        .unwrap_or(Value::Nil);
     Ok(protocol::status_bytes(
         protocol::RES_OK,
-        msgpack::pack(&Value::Array(
-            list_releases(releases_path)?
-                .into_iter()
-                .map(summary_value)
-                .collect(),
-        )),
+        msgpack::pack(&Value::Map(vec![
+            (Value::Str("releases".into()), releases),
+            (Value::Str("latest".into()), latest),
+        ])),
     ))
 }
 
 pub fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
+    let resolved_tag;
+    let tag = if tag == "latest" {
+        let Some(tag) = latest_published_tag(releases_path)? else {
+            return Ok(protocol::status_bytes(
+                protocol::RES_NOT_FOUND,
+                b"no latest release found",
+            ));
+        };
+        resolved_tag = tag;
+        resolved_tag.as_str()
+    } else {
+        tag
+    };
     let release = match release_data(releases_path, tag) {
         Ok(release) => release,
         Err(err) if err.to_string() == "invalid tag name" => {

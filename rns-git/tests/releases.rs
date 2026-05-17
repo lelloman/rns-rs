@@ -278,6 +278,11 @@ fn release_operations_reject_slash_containing_tags() {
             ("operation", strv("delete")),
             ("tag", strv("nested/v1")),
         ],
+        vec![
+            ("repository", strv("public/alpha")),
+            ("operation", strv("latest")),
+            ("tag", strv("nested/v1")),
+        ],
     ] {
         let response = server::handle_release(
             &config,
@@ -357,6 +362,93 @@ fn release_pages_render_published_releases_latest_artifacts_and_thanks() {
     )
     .unwrap();
     assert!(thanked.contains("Thanks (1)"));
+}
+
+#[test]
+fn release_latest_operation_sets_explicit_latest_for_pages_and_downloads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    tag_repo(&repo_path, "v1");
+    tag_repo(&repo_path, "v2");
+    let access_rules = access(&config);
+    create_published_release(&config, &access_rules, "public/alpha", "v1", "# First\n");
+    create_published_release(&config, &access_rules, "public/alpha", "v2", "# Second\n");
+
+    let latest = server::handle_release(
+        &config,
+        &access_rules,
+        &release_request(&[
+            ("repository", strv("public/alpha")),
+            ("operation", strv("latest")),
+            ("tag", strv("v1")),
+        ]),
+        Some(&(REMOTE, REMOTE_SIG)),
+    )
+    .unwrap();
+    assert_eq!(latest[0], protocol::RES_OK);
+    assert_eq!(
+        fs::read_to_string(config.repositories_dir.join("public/alpha.releases/latest")).unwrap(),
+        "v1"
+    );
+
+    let listed = server::handle_release(
+        &config,
+        &access_rules,
+        &release_request(&[
+            ("repository", strv("public/alpha")),
+            ("operation", strv("list")),
+        ]),
+        Some(&(REMOTE, REMOTE_SIG)),
+    )
+    .unwrap();
+    assert_eq!(listed_latest(&listed), Some("v1".to_string()));
+    assert_eq!(listed_array(&listed).len(), 2);
+
+    let releases = pages::render_page(
+        pages::PATH_RELEASES,
+        &config,
+        &access_rules,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(releases.contains("v1"));
+    assert!(releases.contains("Latest"));
+
+    let release = pages::render_page(
+        pages::PATH_RELEASE,
+        &config,
+        &access_rules,
+        &page_request(&[
+            ("var_g", "public"),
+            ("var_r", "alpha"),
+            ("var_tag", "latest"),
+        ]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(release.contains(">Release v1"));
+    assert!(release.contains("First"));
+    assert!(!release.contains("Second"));
+
+    let artifact = pages::download_file(
+        &config,
+        &access_rules,
+        &page_request(&[
+            ("var_g", "public"),
+            ("var_r", "alpha"),
+            ("var_tag", "latest"),
+            ("var_artifact", "dist.tar"),
+        ]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert_response_bytes(artifact, b"artifact bytes");
 }
 
 #[test]
@@ -772,7 +864,33 @@ fn create_sidecar_release(
 }
 
 fn listed_array(response: &[u8]) -> Vec<Value> {
-    body_value(response).as_array().unwrap().to_vec()
+    let body = body_value(response);
+    match body {
+        Value::Array(values) => values,
+        Value::Map(entries) => entries
+            .iter()
+            .find_map(|(key, value)| match (key, value) {
+                (Value::Str(key), Value::Array(values)) if key == "releases" => {
+                    Some(values.clone())
+                }
+                _ => None,
+            })
+            .unwrap(),
+        _ => panic!("unexpected release list response: {body:?}"),
+    }
+}
+
+fn listed_latest(response: &[u8]) -> Option<String> {
+    let body = body_value(response);
+    match body {
+        Value::Map(entries) => entries
+            .into_iter()
+            .find_map(|(key, value)| match (key, value) {
+                (Value::Str(key), Value::Str(value)) if key == "latest" => Some(value),
+                _ => None,
+            }),
+        _ => None,
+    }
 }
 
 fn body_value(response: &[u8]) -> Value {

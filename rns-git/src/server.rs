@@ -381,7 +381,7 @@ pub fn handle_release(
     let release_access = access.allows(Operation::Release, repo, Some(remote_hash))?;
     let permitted = match request.operation.as_str() {
         "list" | "view" => true,
-        "create" | "delete" => release_access,
+        "create" | "delete" | "latest" => release_access,
         _ => false,
     };
     if !permitted {
@@ -422,6 +422,7 @@ pub fn handle_release(
             )),
         },
         "delete" => crate::release::delete_release(&releases_path, &request),
+        "latest" => crate::release::set_latest_release(&releases_path, &request),
         _ => Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
             b"invalid request",

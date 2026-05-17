@@ -1020,6 +1020,7 @@ fn render_releases_page(
         .into_iter()
         .filter(|release| release.status == "published")
         .collect();
+    let latest_release = crate::release::configured_latest_tag(&releases_path)?;
     let mut out = format!(
         ">>\n{} / {} / {} / releases\n\n>Releases ({})\n\n",
         m_link("Node", PATH_INDEX, &[]),
@@ -1032,14 +1033,20 @@ fn render_releases_page(
         return Ok(out);
     }
     for release in releases {
+        let latest = if latest_release.as_deref() == Some(release.tag.as_str()) {
+            format!(" {} `FT537855`*Latest`*`f", icon_sep(config))
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "{} `F666{} artifacts`f\n",
+            "{} `F666{} artifacts{}`f\n",
             m_link(
                 &release.tag,
                 PATH_RELEASE,
                 &[("g", &group), ("r", &repo), ("tag", &release.tag)]
             ),
-            release.artifacts
+            release.artifacts,
+            latest
         ));
         if !release.preview.is_empty() {
             append_release_preview(&mut out, &release.preview_format, &release.preview);
