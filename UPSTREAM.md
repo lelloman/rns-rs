@@ -151,3 +151,7 @@ analysis for this range is in
   - Audited as documentation-only. The upstream Reticulum changelog entry is
     represented here by this porting queue and the detailed analysis document,
     not mirrored into a Rust crate changelog.
+- [x] `c186a1f6` Updated version
+  - Audited as release metadata only. Rust crate versions are maintained
+    independently from Python `RNS/_version.py`; no Cargo version bump was
+    applied for this upstream release marker.
