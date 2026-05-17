@@ -425,3 +425,7 @@ queue.
     permission keys, proposal work-document scope, and fork/mirror provenance.
   - Did not import upstream generated manual artifacts; rns-rs keeps concise
     Markdown documentation instead of generated Sphinx output.
+- [x] `9307db16` Allow disabling mirroring interval
+  - Audited as upstream periodic mirror scheduler configuration.
+  - No local code change is required because rns-rs currently implements manual
+    `rngit sync` only and has no background mirror interval loop to disable.
