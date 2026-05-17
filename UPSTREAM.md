@@ -130,3 +130,6 @@ analysis for this range is in
   - Added CLI coverage for creating, validating, and displaying an embedded
     signed message. Editor-backed message entry is supported through `$EDITOR`
     for `-S` without an inline message.
+- [x] `64ebdd0e` Cleanup
+  - Audited as not applicable. The upstream change only removes a stale Python
+    progress-reporting comment in the `rngit` remote helper.
