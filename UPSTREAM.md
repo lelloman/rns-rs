@@ -303,3 +303,6 @@ queue.
     Rust's driver-owned interface registry and event-based registration path;
     there is no global Python-style `Transport.interfaces` list to mutate
     directly.
+- [x] `f3f4d9bc` Cleanup
+  - Audited as a follow-up `rncp.py` saved-file feedback/logging cleanup. No
+    local port is available because rns-rs does not currently implement rncp.
