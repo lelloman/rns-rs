@@ -106,3 +106,8 @@ analysis for this range is in
     trailing positional paths, matching shell-expanded multi-file usage.
   - Added a CLI regression covering successful validation of two `.rsg` files
     in one invocation.
+- [x] `5c5668a4` Added signature creation for multiple file path inputs
+  - Ported `rnid -s/--sign` to sign the first flag value plus any trailing
+    positional paths in one invocation.
+  - Added a CLI regression covering two generated `.rsg` files and validating
+    them in one batch.

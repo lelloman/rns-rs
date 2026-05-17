@@ -252,6 +252,29 @@ fn rsg_validate_accepts_multiple_paths() {
 }
 
 #[test]
+fn rsg_sign_accepts_multiple_paths() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let msg1 = dir.path().join("batch-one.txt");
+    let msg2 = dir.path().join("batch-two.txt");
+    let rid_s = path_str(&rid);
+    let msg1_s = path_str(&msg1);
+    let msg2_s = path_str(&msg2);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&msg1, b"first batch message").unwrap();
+    fs::write(&msg2, b"second batch message").unwrap();
+
+    let output = assert_success(rnid(&["-i", &rid_s, "-s", &msg1_s, &msg2_s]));
+    assert_eq!(output.matches("Signed file").count(), 2);
+
+    let sig1_s = path_str(&msg1.with_extension("txt.rsg"));
+    let sig2_s = path_str(&msg2.with_extension("txt.rsg"));
+    assert!(Path::new(&sig1_s).exists());
+    assert!(Path::new(&sig2_s).exists());
+    assert_success(rnid(&["-V", &sig1_s, &sig2_s]));
+}
+
+#[test]
 fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");

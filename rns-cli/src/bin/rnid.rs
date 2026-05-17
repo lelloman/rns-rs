@@ -105,9 +105,10 @@ fn main() {
         operated = true;
     }
 
-    if let Some(path) = args.get("s").or_else(|| args.get("sign")) {
+    if args.has("s") || args.has("sign") {
         let identity = require_identity(identity_ref.as_ref());
-        sign_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        let paths = operation_paths(&args, "s", "sign").unwrap_or_else(|e| die(&e, 1));
+        sign_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
         operated = true;
     }
 
@@ -551,6 +552,13 @@ fn sign_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String>
             path,
             prettyhexrep(identity.hash())
         );
+    }
+    Ok(())
+}
+
+fn sign_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
+    for path in paths {
+        sign_file(path, identity, args)?;
     }
     Ok(())
 }
@@ -1079,7 +1087,7 @@ fn print_usage() {
     println!("  -H APP.ASPECT      Compute destination hash");
     println!("  -e FILE            Encrypt file to .rfe");
     println!("  -d FILE.rfe        Decrypt file");
-    println!("  -s FILE            Sign file to .rsg");
+    println!("  -s FILE...         Sign one or more files to .rsg");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
     println!("  -R                 Request unknown identity from the local daemon");
