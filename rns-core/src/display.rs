@@ -22,14 +22,34 @@ pub fn b256_rep(byte: u8) -> &'static str {
     B256[byte as usize]
 }
 
-/// Format bytes using upstream `prettyb256rep()` display form.
-pub fn prettyb256rep(data: &[u8]) -> String {
-    let mut out = String::from("<");
+/// Encode bytes with the upstream experimental base256 glyph table.
+pub fn b256rep(data: &[u8]) -> String {
+    let mut out = String::new();
     for byte in data {
         out.push_str(b256_rep(*byte));
     }
+    out
+}
+
+/// Format bytes using upstream `prettyb256rep()` display form.
+pub fn prettyb256rep(data: &[u8]) -> String {
+    let mut out = String::from("<");
+    out.push_str(&b256rep(data));
     out.push('>');
     out
+}
+
+/// Decode an upstream experimental base256 glyph string back to bytes.
+pub fn b256_to_bytes(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for ch in input.chars() {
+        let index = B256.iter().position(|point| {
+            let mut chars = point.chars();
+            chars.next() == Some(ch) && chars.next().is_none()
+        })?;
+        out.push(index as u8);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -47,5 +67,13 @@ mod tests {
         for byte in 0u8..=255 {
             assert!(!b256_rep(byte).is_empty());
         }
+    }
+
+    #[test]
+    fn b256rep_roundtrips_all_bytes() {
+        let data = (0u8..=255).collect::<Vec<_>>();
+        let encoded = b256rep(&data);
+        assert_eq!(b256_to_bytes(&encoded).unwrap(), data);
+        assert_eq!(b256_to_bytes("not/base256"), None);
     }
 }

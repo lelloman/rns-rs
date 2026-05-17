@@ -254,12 +254,16 @@ fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
     let base64_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "-b"]));
     fs::write(&sig, rsg_ascii_block(&base64_stdout)).unwrap();
     assert_success(rnid(&["-V", &sig_s]));
+
+    let base256_stdout = assert_success(rnid(&["-i", &rid_s, "-s", &msg_s, "--base256"]));
+    fs::write(&sig, rsg_ascii_block(&base256_stdout)).unwrap();
+    assert_success(rnid(&["-V", &sig_s]));
 }
 
 #[test]
-fn hex_base32_and_base64_rsg_flags_are_mutually_exclusive() {
+fn hex_base32_base64_and_base256_rsg_flags_are_mutually_exclusive() {
     let failure = assert_failure(rnid(&["--hex", "-b"]));
-    assert!(failure.contains("-b, -B and --hex"));
+    assert!(failure.contains("-b, -B, --base256 and --hex"));
 }
 
 #[test]

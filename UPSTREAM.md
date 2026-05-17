@@ -69,5 +69,11 @@ analysis for this range is in
     upstream 200 ms minimum sleep.
   - Added focused monitor sleep duration tests for both `rnstatus` and
     `rns-ctl status`.
-- [ ] `855ef7bf` Base256 encoding
+- [x] `855ef7bf` Base256 encoding
+  - Extended Rust base256 support from display-only helpers to byte
+    encode/decode helpers in `rns-core`.
+  - Ported `rnid` base256 RSG output/validation support, including
+    character-aware ASCII wrapping so multi-byte base256 glyphs are not split.
+  - Added focused base256 display, RSG unit, and CLI output-format tests.
+- [ ] `7d5fb6a1` Cleanup
   - Next item to inspect for Rust applicability.

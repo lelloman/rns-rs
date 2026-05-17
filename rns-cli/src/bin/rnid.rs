@@ -8,7 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rns_cli::args::Args;
-use rns_cli::format::{base32_decode, base32_encode, prettyb256rep, prettyhexrep};
+use rns_cli::format::{
+    b256_to_bytes, b256rep, base32_decode, base32_encode, prettyb256rep, prettyhexrep,
+};
 use rns_core::destination::destination_hash;
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
@@ -39,6 +41,7 @@ enum RsgOutputFormat {
     Binary,
     Hex,
     Base32,
+    Base256,
     Base64,
 }
 
@@ -166,13 +169,14 @@ fn validate_args(args: &Args) -> Result<(), String> {
     let output_formats = [
         args.has("b") || args.has("base64"),
         args.has("B") || args.has("base32"),
+        args.has("Z") || args.has("base256"),
         args.has("hex"),
     ]
     .into_iter()
     .filter(|v| *v)
     .count();
     if output_formats > 1 {
-        return Err("The -b, -B and --hex options are mutually exclusive".into());
+        return Err("The -b, -B, --base256 and --hex options are mutually exclusive".into());
     }
 
     Ok(())
@@ -646,6 +650,8 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
 fn rsg_output_format(args: &Args) -> RsgOutputFormat {
     if args.has("hex") {
         RsgOutputFormat::Hex
+    } else if args.has("Z") || args.has("base256") {
+        RsgOutputFormat::Base256
     } else if args.has("B") || args.has("base32") {
         RsgOutputFormat::Base32
     } else if args.has("b") || args.has("base64") {
@@ -660,6 +666,7 @@ fn encode_rsg(rsg: &[u8], format: RsgOutputFormat) -> String {
         RsgOutputFormat::Binary => String::from_utf8_lossy(rsg).into_owned(),
         RsgOutputFormat::Hex => prettyhexrep(rsg),
         RsgOutputFormat::Base32 => base32_encode(rsg),
+        RsgOutputFormat::Base256 => b256rep(rsg),
         RsgOutputFormat::Base64 => base64_encode(rsg),
     }
 }
@@ -678,10 +685,21 @@ fn wrap_rsg_ascii(encoded: &str) -> String {
     let mut out = String::new();
     out.push_str(&header);
     out.push('\n');
-    for chunk in encoded.as_bytes().chunks(RSG_ASCII_ROW_WIDTH) {
-        let mut line = String::from_utf8_lossy(chunk).into_owned();
-        if line.len() < RSG_ASCII_ROW_WIDTH {
-            line.push_str(&"=".repeat(RSG_ASCII_ROW_WIDTH - line.len()));
+    let mut line = String::new();
+    let mut line_chars = 0usize;
+    for ch in encoded.chars() {
+        line.push(ch);
+        line_chars += 1;
+        if line_chars == RSG_ASCII_ROW_WIDTH {
+            out.push_str(&line);
+            out.push('\n');
+            line.clear();
+            line_chars = 0;
+        }
+    }
+    if line_chars > 0 {
+        if line_chars < RSG_ASCII_ROW_WIDTH {
+            line.push_str(&"=".repeat(RSG_ASCII_ROW_WIDTH - line_chars));
         }
         out.push_str(&line);
         out.push('\n');
@@ -720,6 +738,10 @@ fn decode_rsg_data(input: &[u8]) -> Option<Vec<u8>> {
     });
     if encoded.is_empty() {
         return None;
+    }
+    if encoded.chars().any(|ch| !ch.is_ascii()) {
+        return b256_to_bytes(&encoded)
+            .or_else(|| if wrapped { None } else { Some(input.to_vec()) });
     }
     if !wrapped
         && !encoded
@@ -1044,7 +1066,7 @@ fn print_usage() {
     println!("  -b                 Use base64 for identity import/export");
     println!("  -B                 Use base32 for identity import/export");
     println!("  --hex              Use hex for RSG signature output");
-    println!("  -Z, --base256      Also print compact base256 hash display");
+    println!("  -Z, --base256      Use base256 for RSG output and hash display");
     println!("  -f, --force        Force overwrite existing files");
     println!("  --stdin            Read operation input from stdin");
     println!("  --stdout           Write operation output to stdout");
@@ -1115,6 +1137,7 @@ mod tests {
         for format in [
             RsgOutputFormat::Hex,
             RsgOutputFormat::Base32,
+            RsgOutputFormat::Base256,
             RsgOutputFormat::Base64,
         ] {
             let encoded = encode_rsg(&rsg, format);
@@ -1125,6 +1148,18 @@ mod tests {
                 RsgValidation::Valid { .. }
             ));
         }
+    }
+
+    #[test]
+    fn rsg_ascii_wrapping_preserves_multibyte_base256_glyphs() {
+        let raw = (0u8..=96).collect::<Vec<_>>();
+        let encoded = b256rep(&raw);
+        let wrapped = wrap_rsg_ascii(&encoded);
+        let lines: Vec<&str> = wrapped.lines().collect();
+
+        assert_eq!(lines[1].chars().count(), RSG_ASCII_ROW_WIDTH);
+        assert_eq!(lines[2].chars().count(), RSG_ASCII_ROW_WIDTH);
+        assert_eq!(decode_rsg_data(wrapped.as_bytes()).unwrap(), raw);
     }
 
     #[test]

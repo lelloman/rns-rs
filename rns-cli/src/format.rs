@@ -1,6 +1,6 @@
 //! Formatting utilities matching Python RNS output style.
 
-pub use rns_core::display::{b256_rep, prettyb256rep};
+pub use rns_core::display::{b256_rep, b256_to_bytes, b256rep, prettyb256rep};
 
 /// Format a byte count as a human-readable string.
 /// Matches Python's `RNS.prettysize()`.
