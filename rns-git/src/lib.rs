@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod client;
 pub mod config;
+pub mod create_cli;
 pub mod git;
 mod highlight;
 pub mod logging;

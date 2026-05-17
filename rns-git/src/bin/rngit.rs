@@ -6,6 +6,9 @@ fn main() {
     } else if args.first().is_some_and(|arg| arg == "work") {
         args.remove(0);
         rns_git::work_cli::main(args)
+    } else if args.first().is_some_and(|arg| arg == "create") {
+        args.remove(0);
+        rns_git::create_cli::main(args)
     } else {
         rns_git::server::main(args)
     };

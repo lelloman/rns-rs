@@ -360,3 +360,14 @@ queue.
   - Audited the new create/fork/mirror command scaffolding: the explicit
     `/git/create` path remains for `df0b4a51`, where upstream implements the
     stubbed create behavior; fork/mirror remain preparatory only in this commit.
+- [x] `df0b4a51` Implemented rngit remote repo create
+  - Added the upstream `/git/create` request path and registered it on the
+    repository destination.
+  - Implemented explicit remote repository creation for identified peers with
+    create permission, requiring an existing group directory, initializing a
+    bare Git repository, and writing a sidecar admin permission for the creator.
+  - Added `rngit create <rns://destination/group/repo>` client command support
+    with `--config`, `--rnsconfig`, and identity override parsing.
+  - Covered successful creation, creator admin grant, anonymous rejection,
+    missing-group rejection, duplicate rejection, invalid nested repository
+    rejection, and create CLI parsing.

@@ -180,6 +180,20 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
     )
     .map_err(|_| Error::msg("failed to register push handler"))?;
 
+    let create_config = config.clone();
+    let create_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_CREATE,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_create(&create_config, &create_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register create handler"))?;
+
     let release_config = config.clone();
     let release_access = access.clone();
     node.register_request_handler(
@@ -331,6 +345,79 @@ pub fn handle_push(
         }
         Err(err) => Ok(remote_error_response("push", &repo, err)),
     }
+}
+
+pub fn handle_create(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let repo = protocol::repository_from_request(data)?;
+    let Some((group, name)) = repo.split_once('/') else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        ));
+    };
+    if group.is_empty() || name.is_empty() || name.contains('/') {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        ));
+    }
+
+    let group_path = config.repositories_dir.join(group);
+    if !group_path.is_dir() {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+
+    let read_access = access.allows(Operation::Read, &repo, Some(remote_hash))?;
+    let create_access = access.allows(Operation::Create, &repo, Some(remote_hash))?;
+    if !create_access {
+        let (code, message) = if read_access {
+            (protocol::RES_DISALLOWED, b"not allowed".as_slice())
+        } else {
+            (protocol::RES_NOT_FOUND, b"not found".as_slice())
+        };
+        return Ok(protocol::status_bytes(code, message));
+    }
+
+    let repository_path = git::repository_path(&config.repositories_dir, &repo)?;
+    if repository_path.exists() {
+        let (code, message) = if read_access {
+            (
+                protocol::RES_DISALLOWED,
+                b"repository already exists".as_slice(),
+            )
+        } else {
+            (protocol::RES_NOT_FOUND, b"not found".as_slice())
+        };
+        return Ok(protocol::status_bytes(code, message));
+    }
+
+    if let Err(err) = git::ensure_bare_repository(&repository_path) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response("create", &repo, err));
+    }
+
+    let allowed_path = config.repositories_dir.join(format!("{repo}.allowed"));
+    let permissions = format!("adm:{}\n", hex(remote_hash));
+    if let Err(err) = std::fs::write(&allowed_path, permissions) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response("create", &repo, err));
+    }
+
+    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
 pub fn handle_delete(
@@ -1215,6 +1302,78 @@ mod tests {
         assert!(git::is_bare_repository(
             &config.repositories_dir.join("group/repo")
         ));
+    }
+
+    #[test]
+    fn create_handler_initializes_bare_repo_and_grants_creator_admin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        let group = config.repositories_dir.join("group");
+        std::fs::create_dir_all(&group).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x11; 16], [0u8; 64]);
+        let req = protocol::repository_request("group/created");
+
+        let resp = handle_create(&config, &access, &req, Some(&remote)).unwrap();
+
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(
+            &config.repositories_dir.join("group/created")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(config.repositories_dir.join("group/created.allowed")).unwrap(),
+            "adm:11111111111111111111111111111111\n"
+        );
+        assert!(access
+            .allows(Operation::Write, "group/created", Some(&remote.0))
+            .unwrap());
+    }
+
+    #[test]
+    fn create_handler_requires_identified_peer_and_existing_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        let access = make_access(&config);
+        let req = protocol::repository_request("group/created");
+
+        let anonymous = handle_create(&config, &access, &req, None).unwrap();
+        assert_eq!(anonymous[0], protocol::RES_DISALLOWED);
+
+        let remote = ([0x11; 16], [0u8; 64]);
+        let missing_group = handle_create(&config, &access, &req, Some(&remote)).unwrap();
+        assert_eq!(missing_group[0], protocol::RES_NOT_FOUND);
+    }
+
+    #[test]
+    fn create_handler_rejects_existing_or_invalid_repositories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        git::ensure_bare_repository(&config.repositories_dir.join("group/existing")).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x11; 16], [0u8; 64]);
+
+        let existing = handle_create(
+            &config,
+            &access,
+            &protocol::repository_request("group/existing"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(existing[0], protocol::RES_DISALLOWED);
+        assert_eq!(&existing[1..], b"repository already exists");
+
+        let nested = handle_create(
+            &config,
+            &access,
+            &protocol::repository_request("group/nested/repo"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(nested[0], protocol::RES_INVALID_REQ);
     }
 
     #[test]
