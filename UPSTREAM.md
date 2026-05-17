@@ -121,3 +121,12 @@ analysis for this range is in
     trailing positional paths in one invocation.
   - Added a CLI regression covering batch decryption back to the default output
     filenames after the plaintext originals are removed.
+- [x] `9179b914` Added embedded message signing, validation and viewing to rnid
+  - Added `rnid -S/--sign-message` for embedded signed `.rsm` messages, with
+    binary output via `-w` and ASCII armored output through the existing RSG
+    format flags.
+  - Extended validation so `rnid -V` detects `.rsm` files, verifies the
+    embedded message against the signed envelope, and prints the signed text.
+  - Added CLI coverage for creating, validating, and displaying an embedded
+    signed message. Editor-backed message entry is supported through `$EDITOR`
+    for `-S` without an inline message.

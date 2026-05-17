@@ -3,9 +3,9 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::process;
+use std::process::{self, Command};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rns_cli::args::Args;
 use rns_cli::format::{
@@ -25,6 +25,7 @@ const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024;
 const DEFAULT_ASPECTS: &str = "rns.id";
 const PUB_EXT: &str = "pub";
 const SIG_EXT: &str = "rsg";
+const MSG_EXT: &str = "rsm";
 const ENCRYPT_EXT: &str = "rfe";
 const SIG_LEN: usize = 64;
 const RSG_ASCII_HEADER: &str = "#### Start of rsg data ";
@@ -67,9 +68,22 @@ fn main() {
         || args.has("X")
         || args.has("export-prv")
         || args.has("s")
+        || args.has("sign")
+        || args.has("S")
+        || args.has("sign-message")
         || args.has("e")
+        || args.has("encrypt")
         || args.has("d")
-        || (args.has("w") && !args.has("e") && !args.has("d"))
+        || args.has("decrypt")
+        || (args.has("w")
+            && !args.has("e")
+            && !args.has("encrypt")
+            && !args.has("d")
+            && !args.has("decrypt")
+            && !args.has("s")
+            && !args.has("sign")
+            && !args.has("S")
+            && !args.has("sign-message"))
         || args.has("generate")
         || args.has("g");
 
@@ -112,6 +126,12 @@ fn main() {
         operated = true;
     }
 
+    if args.has("S") || args.has("sign-message") {
+        let identity = require_identity(identity_ref.as_ref());
+        sign_message(identity, &args).unwrap_or_else(|e| die(&e, 1));
+        operated = true;
+    }
+
     if args.has("e") || args.has("encrypt") {
         let identity = require_identity(identity_ref.as_ref());
         let paths = operation_paths(&args, "e", "encrypt").unwrap_or_else(|e| die(&e, 1));
@@ -126,7 +146,16 @@ fn main() {
         operated = true;
     }
 
-    if args.has("w") && !args.has("e") && !args.has("d") {
+    if args.has("w")
+        && !args.has("e")
+        && !args.has("encrypt")
+        && !args.has("d")
+        && !args.has("decrypt")
+        && !args.has("s")
+        && !args.has("sign")
+        && !args.has("S")
+        && !args.has("sign-message")
+    {
         let identity = require_identity(identity_ref.as_ref());
         write_identity(&args, identity).unwrap_or_else(|e| die(&e, 1));
         operated = true;
@@ -146,6 +175,7 @@ fn validate_args(args: &Args) -> Result<(), String> {
         args.has("e") || args.has("encrypt"),
         args.has("d") || args.has("decrypt"),
         args.has("s") || args.has("sign"),
+        args.has("S") || args.has("sign-message"),
         args.has("V") || args.has("validate"),
     ]
     .into_iter()
@@ -153,7 +183,8 @@ fn validate_args(args: &Args) -> Result<(), String> {
     .count();
     if operations > 1 {
         return Err(
-            "Only one of encrypt, decrypt, sign or validate is supported per invocation".into(),
+            "Only one of encrypt, decrypt, sign, sign-message or validate is supported per invocation"
+                .into(),
         );
     }
 
@@ -566,6 +597,12 @@ fn sign_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), St
 }
 
 fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), String> {
+    if path
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{}", MSG_EXT))
+    {
+        return validate_message_signature(path, required);
+    }
     let sig_ext = format!(".{}", SIG_EXT);
     let (signature_path, file_path) = if path.to_ascii_lowercase().ends_with(&sig_ext) {
         (
@@ -641,6 +678,45 @@ fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), 
     }
 }
 
+fn validate_message_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), String> {
+    let signature_input =
+        fs::read(path).map_err(|e| format!("Could not read signature {}: {}", path, e))?;
+    let signature =
+        decode_rsg_data(&signature_input).ok_or_else(|| format!("Invalid signature {}", path))?;
+    let value = rsg_envelope(&signature)?.ok_or_else(|| format!("Invalid signature {}", path))?;
+    let Some(message) = rsg_embedded_message(&value) else {
+        return Err(format!("No embedded message in {}", path));
+    };
+    let required_hash = match required {
+        Some(IdentityRef::Identity(identity)) => Some(*identity.hash()),
+        Some(IdentityRef::Hash(hash)) => Some(*hash),
+        None => None,
+    };
+
+    match validate_rsg(&signature, &message, required_hash)? {
+        RsgValidation::Valid { signer_hash } => {
+            let text = String::from_utf8(message)
+                .map_err(|e| format!("Embedded message in {} is not UTF-8: {}", path, e))?;
+            println!(
+                "\nSignature is valid, the following message was signed by {}:\n",
+                prettyhexrep(&signer_hash)
+            );
+            println!("{}", text);
+            Ok(())
+        }
+        RsgValidation::WrongSigner { signer_hash } => {
+            let required = required_hash.map(|h| prettyhexrep(&h)).unwrap_or_default();
+            Err(format!(
+                "Invalid signature in {}\nThe message was NOT signed by {} (actual signer {})",
+                path,
+                required,
+                prettyhexrep(&signer_hash)
+            ))
+        }
+        RsgValidation::Invalid => Err(format!("Invalid signature in {}", path)),
+    }
+}
+
 fn validate_signatures(paths: &[&str], required: Option<&IdentityRef>) -> Result<(), String> {
     for path in paths {
         validate_signature(path, required)?;
@@ -649,10 +725,18 @@ fn validate_signatures(paths: &[&str], required: Option<&IdentityRef>) -> Result
 }
 
 fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
+    create_rsg_with_embed(identity, message, false)
+}
+
+fn create_rsg_with_embed(
+    identity: &Identity,
+    message: &[u8],
+    embed_message: bool,
+) -> Result<Vec<u8>, String> {
     let public_key = identity
         .get_public_key()
         .ok_or_else(|| "Identity does not hold a public key".to_string())?;
-    let envelope = Value::Map(vec![
+    let mut envelope_items = vec![
         (Value::Str("hashtype".into()), Value::Str("sha256".into())),
         (
             Value::Str("hash".into()),
@@ -669,7 +753,11 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
                 (Value::Str("note".into()), Value::Nil),
             ]),
         ),
-    ]);
+    ];
+    if embed_message {
+        envelope_items.push((Value::Str("message".into()), Value::Bin(message.to_vec())));
+    }
+    let envelope = Value::Map(envelope_items);
     let envelope = msgpack::pack(&envelope);
     let signature = identity
         .sign(&envelope)
@@ -678,6 +766,47 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
     rsg.extend_from_slice(&signature);
     rsg.extend_from_slice(&envelope);
     Ok(rsg)
+}
+
+fn sign_message(identity: &Identity, args: &Args) -> Result<(), String> {
+    let message = args
+        .get("S")
+        .or_else(|| args.get("sign-message"))
+        .unwrap_or("true");
+    let message = if message == "true" {
+        editor_content()?
+    } else {
+        message.as_bytes().to_vec()
+    };
+    if message.is_empty() {
+        return Err("No message specified".into());
+    }
+
+    let output_format = rsg_output_format(args);
+    let rsg = create_rsg_with_embed(identity, &message, true)?;
+    if matches!(output_format, RsgOutputFormat::Binary) {
+        let Some(output) = args.get("w").or_else(|| args.get("write")) else {
+            return Err("No write path specified".into());
+        };
+        let output = if output
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{}", MSG_EXT))
+        {
+            output.to_string()
+        } else {
+            format!("{}.{}", output, MSG_EXT)
+        };
+        write_file_checked(&output, &rsg, args.has("f") || args.has("force"))?;
+        println!(
+            "Message signed with {} saved to {}",
+            prettyhexrep(identity.hash()),
+            output
+        );
+    } else {
+        println!("{}", wrap_rsg_ascii(&encode_rsg(&rsg, output_format)));
+        println!("Message signed with {}", prettyhexrep(identity.hash()));
+    }
+    Ok(())
 }
 
 fn rsg_output_format(args: &Args) -> RsgOutputFormat {
@@ -806,6 +935,27 @@ enum RsgValidation {
     Invalid,
 }
 
+fn rsg_envelope(rsg: &[u8]) -> Result<Option<Value>, String> {
+    if rsg.len() <= SIG_LEN {
+        return Ok(None);
+    }
+    let envelope = &rsg[SIG_LEN..];
+    msgpack::unpack_exact(envelope)
+        .map(Some)
+        .map_err(|e| format!("Invalid rsg envelope: {}", e))
+}
+
+fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
+    if let Some(message) = value.map_get("message").and_then(Value::as_bin) {
+        Some(message.to_vec())
+    } else {
+        value
+            .map_get("message")
+            .and_then(Value::as_str)
+            .map(|message| message.as_bytes().to_vec())
+    }
+}
+
 fn validate_rsg(
     rsg: &[u8],
     message: &[u8],
@@ -816,8 +966,9 @@ fn validate_rsg(
     }
     let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
     let envelope = &rsg[SIG_LEN..];
-    let value =
-        msgpack::unpack_exact(envelope).map_err(|e| format!("Invalid rsg envelope: {}", e))?;
+    let Some(value) = rsg_envelope(rsg)? else {
+        return Ok(RsgValidation::Invalid);
+    };
 
     if value.map_get("hashtype").and_then(Value::as_str) != Some("sha256") {
         return Ok(RsgValidation::Invalid);
@@ -929,6 +1080,27 @@ fn decrypt_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(),
         decrypt_file(path, identity, args)?;
     }
     Ok(())
+}
+
+fn editor_content() -> Result<Vec<u8>, String> {
+    let editor = std::env::var("EDITOR").map_err(|_| "Could not launch editor".to_string())?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("System clock error: {}", e))?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("rnid-message-{}-{timestamp}.tmp", process::id()));
+    fs::write(&path, "").map_err(|e| format!("Could not create editor buffer: {}", e))?;
+    let status = Command::new(&editor)
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("Could not launch editor {}: {}", editor, e))?;
+    if !status.success() {
+        let _ = fs::remove_file(&path);
+        return Err(format!("Editor exited with status {}", status));
+    }
+    let content = fs::read(&path).map_err(|e| format!("Could not read editor buffer: {}", e))?;
+    let _ = fs::remove_file(&path);
+    Ok(content)
 }
 
 fn read_input(path: &str, args: &Args) -> Result<Vec<u8>, String> {
@@ -1104,6 +1276,7 @@ fn print_usage() {
     println!("  -e FILE...         Encrypt one or more files to .rfe");
     println!("  -d FILE.rfe...     Decrypt one or more files");
     println!("  -s FILE...         Sign one or more files to .rsg");
+    println!("  -S MESSAGE         Create embedded signed message");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
     println!("  -R                 Request unknown identity from the local daemon");

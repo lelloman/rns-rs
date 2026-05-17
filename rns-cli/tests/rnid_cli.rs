@@ -275,6 +275,31 @@ fn rsg_sign_accepts_multiple_paths() {
 }
 
 #[test]
+fn embedded_message_sign_validate_and_display() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let output = dir.path().join("signed-message");
+    let rid_s = path_str(&rid);
+    let output_s = path_str(&output);
+    assert_success(rnid(&["-g", &rid_s]));
+
+    assert_success(rnid(&[
+        "-i",
+        &rid_s,
+        "-S",
+        "hello embedded message",
+        "-w",
+        &output_s,
+    ]));
+    let message_file = dir.path().join("signed-message.rsm");
+    assert!(message_file.exists());
+
+    let validated = assert_success(rnid(&["-V", &path_str(&message_file)]));
+    assert!(validated.contains("Signature is valid"));
+    assert!(validated.contains("hello embedded message"));
+}
+
+#[test]
 fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");
