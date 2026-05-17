@@ -190,3 +190,7 @@ queue.
   - Audited as upstream hosted `README.mu` content only. rns-rs renders
     repository-provided README files but does not vendor Reticulum's
     self-hosted README.mu, so there is no Rust code or local documentation delta.
+- [x] `eee93546` Updated readme
+  - Audited as another upstream hosted `README.mu` link/content update for the
+    Reticulum repository page. No rns-rs renderer, CLI, protocol, or vendored
+    documentation change is required.
