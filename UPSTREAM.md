@@ -435,3 +435,8 @@ queue.
   - No local code change is required because rns-rs does not mirror upstream's
     Python alignment style and the underlying proposal validation behavior was
     unchanged.
+- [x] `176567e3` Updated version
+  - Audited as upstream Reticulum release metadata only, bumping Python
+    `RNS/_version.py` from `1.2.6` to `1.2.7`.
+  - No Cargo version bump was made because rns-rs crates are versioned and
+    released independently from upstream Python Reticulum.
