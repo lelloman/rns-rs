@@ -159,3 +159,13 @@ analysis for this range is in
   - Audited as already covered by Rust rendering. Repository README content is
     appended once and normalized to a single trailing newline, so the upstream
     Python spacing cleanup has no Rust delta.
+- [x] `1d7ddc3f` Implemented rngit work document signing
+  - Added client-side signing for `rngit work create` and content-changing
+    `rngit work edit` requests.
+  - Added server-side validation for provided work document signatures against
+    the identified link public key, and stored that public key with the document
+    for later validation.
+  - Exposed work document `signature` and `identity` metadata in view
+    responses, plus signature status in CLI and Nomad Network page rendering.
+  - Kept unsigned work documents accepted for compatibility with existing Rust
+    clients and persisted data; invalid provided signatures are rejected.

@@ -3,12 +3,15 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use rns_core::msgpack::{self, Value};
+use rns_crypto::identity::Identity;
 
 use crate::client::{decode_status, SyncClient};
 use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
-use crate::util::{default_reticulum_dir, default_rngit_dir, parse_rns_url};
+use crate::util::{
+    default_reticulum_dir, default_rngit_dir, load_or_create_identity, parse_rns_url,
+};
 use crate::{Error, Result};
 
 pub fn main<I>(args: I) -> Result<()>
@@ -28,18 +31,25 @@ where
         )));
     }
 
+    let identity = load_or_create_identity(&config.identity_path)?;
     let client = SyncClient::connect(config, dest_hash)?;
-    let mut transport = NetWorkTransport { client, repository };
+    let mut transport = NetWorkTransport {
+        client,
+        repository,
+        identity,
+    };
     run_work_command(&mut transport, &options.command, io::stdout())
 }
 
 trait WorkTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>>;
+    fn sign(&self, content: &str) -> Result<Vec<u8>>;
 }
 
 struct NetWorkTransport {
     client: SyncClient,
     repository: String,
+    identity: Identity,
 }
 
 impl WorkTransport for NetWorkTransport {
@@ -50,6 +60,13 @@ impl WorkTransport for NetWorkTransport {
         )?;
         let bytes = protocol::response_bin(&response.data)?;
         decode_status(bytes)
+    }
+
+    fn sign(&self, content: &str) -> Result<Vec<u8>> {
+        self.identity
+            .sign(content.trim().as_bytes())
+            .map(|signature| signature.to_vec())
+            .map_err(|_| Error::msg("client identity has no private key"))
     }
 }
 
@@ -239,12 +256,14 @@ fn run_work_command(
             content_path,
         } => {
             let content = fs::read_to_string(content_path)?;
+            let signature = transport.sign(&content)?;
             let body = transport.request(request(
                 "create",
                 &[
                     ("title", Value::Str(title.clone())),
                     ("content", Value::Str(content)),
                     ("format", Value::Str(format_for_path(content_path))),
+                    ("signature", Value::Bin(signature)),
                 ],
             ))?;
             let value = msgpack::unpack_exact(&body)
@@ -274,7 +293,10 @@ fn run_work_command(
                 fields.push(("title", Value::Str(title.clone())));
             }
             if let Some(path) = content_path {
-                fields.push(("content", Value::Str(fs::read_to_string(path)?)));
+                let content = fs::read_to_string(path)?;
+                let signature = transport.sign(&content)?;
+                fields.push(("content", Value::Str(content)));
+                fields.push(("signature", Value::Bin(signature)));
             }
             transport.request(request("edit", &fields))?;
             writeln!(output, "Updated work document {scope} #{id}")?;
@@ -452,6 +474,11 @@ fn print_work_document(value: &Value, mut output: impl Write) -> Result<()> {
     )?;
     writeln!(
         output,
+        "Signature : {}",
+        work_document_signature_status(value)
+    )?;
+    writeln!(
+        output,
         "{}",
         value
             .map_get("content")
@@ -477,6 +504,36 @@ fn print_work_document(value: &Value, mut output: impl Write) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn work_document_signature_status(value: &Value) -> &'static str {
+    let Some(content) = value.map_get("content").and_then(Value::as_str) else {
+        return "Document not signed";
+    };
+    let Some(meta) = value.map_get("meta") else {
+        return "Document not signed";
+    };
+    let Some(signature) = meta.map_get("signature").and_then(Value::as_bin) else {
+        return "Document not signed";
+    };
+    if signature.len() != 64 {
+        return "Not valid";
+    }
+    let Ok(signature) = <&[u8; 64]>::try_from(signature) else {
+        return "Not valid";
+    };
+    let Some(identity_bytes) = meta.map_get("identity").and_then(Value::as_bin) else {
+        return "Not valid";
+    };
+    let Ok(public_key) = <[u8; 64]>::try_from(identity_bytes) else {
+        return "Not valid";
+    };
+    let identity = Identity::from_public_key(&public_key);
+    if identity.verify(signature, content.as_bytes()) {
+        "Valid"
+    } else {
+        "Not valid"
+    }
 }
 
 fn parse_id(value: &str) -> Result<u64> {
@@ -509,6 +566,10 @@ mod tests {
         fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
             Ok(self.responses.remove(0))
+        }
+
+        fn sign(&self, _content: &str) -> Result<Vec<u8>> {
+            Ok(vec![0x5A; 64])
         }
     }
 
@@ -598,6 +659,13 @@ mod tests {
                 .map_get("content")
                 .and_then(Value::as_str),
             Some("# Body\n")
+        );
+        assert_eq!(
+            transport.requests[0]
+                .map_get("signature")
+                .and_then(Value::as_bin)
+                .map(|signature| signature.len()),
+            Some(64)
         );
     }
 
@@ -747,6 +815,13 @@ mod tests {
         assert_eq!(
             request.map_get("content").and_then(Value::as_str),
             Some("Edited body\n")
+        );
+        assert_eq!(
+            request
+                .map_get("signature")
+                .and_then(Value::as_bin)
+                .map(|signature| signature.len()),
+            Some(64)
         );
     }
 

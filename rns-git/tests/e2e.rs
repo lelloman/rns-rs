@@ -686,6 +686,7 @@ fn rngit_work_document_local_permissions_work_over_rns_link() {
             content: "Doc-local permission target".into(),
             format: "markdown".into(),
             signature: None,
+            identity: None,
             author: [0xAB; 16],
         },
     )

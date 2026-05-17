@@ -435,7 +435,7 @@ pub fn handle_work(
     data: &[u8],
     remote: Option<&([u8; 16], [u8; 64])>,
 ) -> Result<Vec<u8>> {
-    let Some((remote_hash, _)) = remote else {
+    let Some((remote_hash, remote_pubkey)) = remote else {
         return Ok(protocol::status_bytes(
             protocol::RES_DISALLOWED,
             b"not identified",
@@ -501,24 +501,43 @@ pub fn handle_work(
             let scope = work_scope(request.scope.as_deref())?;
             crate::work::view_response(&work_path, scope, doc_id)
         }
-        "create" => work_status_result(
-            crate::work::create_document(
-                &work_path,
-                crate::work::WorkInput {
-                    title: request.title.unwrap_or_default(),
-                    content: request.content.unwrap_or_default(),
-                    format: request.format.unwrap_or_else(|| "markdown".into()),
-                    signature: request.signature,
-                    author: *remote_hash,
-                },
+        "create" => {
+            let content = request.content.unwrap_or_default();
+            let signature = request.signature;
+            let identity =
+                match validate_work_signature(&content, signature.as_deref(), remote_pubkey) {
+                    Ok(identity) => identity,
+                    Err(err) => return Ok(work_error_response(err)),
+                };
+            work_status_result(
+                crate::work::create_document(
+                    &work_path,
+                    crate::work::WorkInput {
+                        title: request.title.unwrap_or_default(),
+                        content,
+                        format: request.format.unwrap_or_else(|| "markdown".into()),
+                        signature,
+                        identity,
+                        author: *remote_hash,
+                    },
+                )
+                .map(crate::work::created_response),
             )
-            .map(crate::work::created_response),
-        ),
+        }
         "edit" => {
             let doc_id = request
                 .doc_id
                 .ok_or_else(|| Error::msg("no document ID specified"))?;
             let scope = work_scope(request.scope.as_deref())?;
+            let signature = request.signature;
+            let identity = if let Some(content) = request.content.as_deref() {
+                match validate_work_signature(content, signature.as_deref(), remote_pubkey) {
+                    Ok(identity) => identity,
+                    Err(err) => return Ok(work_error_response(err)),
+                }
+            } else {
+                None
+            };
             work_status_result(
                 crate::work::edit_document(
                     &work_path,
@@ -528,7 +547,8 @@ pub fn handle_work(
                     crate::work::WorkEdit {
                         title: request.title,
                         content: request.content,
-                        signature: request.signature,
+                        signature,
+                        identity,
                     },
                 )
                 .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
@@ -643,6 +663,25 @@ fn work_permissions_allowed(
         Some(remote_hash),
     )?;
     Ok((is_author && manage_access) || doc_admin)
+}
+
+fn validate_work_signature(
+    content: &str,
+    signature: Option<&[u8]>,
+    remote_pubkey: &[u8; 64],
+) -> Result<Option<Vec<u8>>> {
+    let Some(signature) = signature else {
+        return Ok(None);
+    };
+    if signature.len() != 64 {
+        return Err(Error::msg("invalid signature"));
+    }
+    let signature: &[u8; 64] = signature.try_into().unwrap();
+    let identity = Identity::from_public_key(remote_pubkey);
+    if !identity.verify(signature, content.trim().as_bytes()) {
+        return Err(Error::msg("invalid signature"));
+    }
+    Ok(Some(remote_pubkey.to_vec()))
 }
 
 fn work_scope(scope: Option<&str>) -> Result<crate::work::WorkScope> {
@@ -1384,7 +1423,6 @@ mod tests {
                 ("doc_id", uintv(1)),
                 ("title", strv("Edited title")),
                 ("content", strv("Edited body")),
-                ("signature", binv(&[0xAA; 64])),
             ]),
             Some(&(REMOTE, REMOTE_SIG)),
         )
@@ -1469,6 +1507,71 @@ mod tests {
     }
 
     #[test]
+    fn work_protocol_validates_and_exposes_document_signatures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_interact = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+        let access = make_access(&config);
+        let identity = Identity::new(&mut OsRng);
+        let remote_hash = *identity.hash();
+        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap().try_into().unwrap();
+        let signature = identity.sign(b"Signed body").unwrap().to_vec();
+
+        let create = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Signed task")),
+                ("content", strv("Signed body")),
+                ("signature", binv(&signature)),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        assert_eq!(create[0], protocol::RES_OK);
+
+        let view = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("view")),
+                ("doc_id", uintv(1)),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        let view = body_value(&view);
+        let meta = view.map_get("meta").unwrap();
+        assert_eq!(
+            meta.map_get("signature").and_then(Value::as_bin),
+            Some(signature.as_slice())
+        );
+        assert_eq!(
+            meta.map_get("identity").and_then(Value::as_bin),
+            Some(remote_pubkey.as_slice())
+        );
+
+        let invalid = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("create")),
+                ("title", strv("Invalid task")),
+                ("content", strv("Different body")),
+                ("signature", binv(&signature)),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        assert_eq!(invalid[0], protocol::RES_INVALID_REQ);
+    }
+
+    #[test]
     fn work_protocol_rejects_non_author_management_operations() {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = cfg(tmp.path());
@@ -1523,6 +1626,7 @@ mod tests {
                 content: "Body".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: REMOTE,
             },
         )
@@ -1574,6 +1678,7 @@ mod tests {
                 content: "Body".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: REMOTE,
             },
         )
@@ -1685,6 +1790,7 @@ mod tests {
                 content: "Body".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: REMOTE,
             },
         )

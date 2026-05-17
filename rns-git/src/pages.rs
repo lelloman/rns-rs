@@ -1281,9 +1281,10 @@ fn render_work_doc_page(
         m_escape(&document.title)
     );
     out.push_str(&format!(
-        "`F666Status: {} | Author: {} | Created: {} | Edited: {}`f\n\n",
+        "`F666Status: {} | Author: {} | Signature: {} | Created: {} | Edited: {}`f\n\n",
         scope.as_str(),
         m_escape(&document.author),
+        work_signature_status(&document),
         format_unix_time(document.created as i64),
         format_unix_time(document.edited as i64)
     ));
@@ -1318,6 +1319,30 @@ fn render_work_doc_page(
         }
     }
     Ok(out)
+}
+
+fn work_signature_status(document: &crate::work::WorkDocument) -> &'static str {
+    let Some(signature) = document.signature.as_deref() else {
+        return "Document not signed";
+    };
+    if signature.len() != 64 {
+        return "Not valid";
+    }
+    let Ok(signature) = <&[u8; 64]>::try_from(signature) else {
+        return "Not valid";
+    };
+    let Some(identity_bytes) = document.identity.as_deref() else {
+        return "Not valid";
+    };
+    let Ok(public_key) = <[u8; 64]>::try_from(identity_bytes) else {
+        return "Not valid";
+    };
+    let identity = Identity::from_public_key(&public_key);
+    if identity.verify(signature, document.content.as_bytes()) {
+        "Valid"
+    } else {
+        "Not valid"
+    }
 }
 
 fn resolve_work_document(
@@ -3708,6 +3733,7 @@ Unmatched * marker\n\
                 content: "# Active Body\n".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: [0x11; 16],
             },
         )
@@ -3731,6 +3757,7 @@ Unmatched * marker\n\
                 content: "Done".into(),
                 format: "micron".into(),
                 signature: None,
+                identity: None,
                 author: [0x11; 16],
             },
         )

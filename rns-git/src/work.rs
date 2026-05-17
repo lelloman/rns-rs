@@ -31,6 +31,7 @@ pub struct WorkInput {
     pub content: String,
     pub format: String,
     pub signature: Option<Vec<u8>>,
+    pub identity: Option<Vec<u8>>,
     pub author: [u8; 16],
 }
 
@@ -39,6 +40,7 @@ pub struct WorkEdit {
     pub title: Option<String>,
     pub content: Option<String>,
     pub signature: Option<Vec<u8>>,
+    pub identity: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +86,7 @@ pub struct WorkDocument {
     pub author_hash: [u8; 16],
     pub format: String,
     pub signature: Option<Vec<u8>>,
+    pub identity: Option<Vec<u8>>,
     pub comments: Vec<WorkComment>,
 }
 
@@ -121,6 +124,7 @@ struct StoredDocument {
     edited: u64,
     author: [u8; 16],
     signature: Option<Vec<u8>>,
+    identity: Option<Vec<u8>>,
 }
 
 pub fn work_sidecar_path(repo: &Path) -> PathBuf {
@@ -252,6 +256,7 @@ pub fn create_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated
         edited: now,
         author: input.author,
         signature: input.signature,
+        identity: input.identity,
     };
     let doc_dir = scope_dir(work_path, WorkScope::Active).join(id.to_string());
     write_document(&doc_dir.join("root"), &document)?;
@@ -294,6 +299,7 @@ pub fn view_document(
         author_hash: doc.author,
         format: doc.format,
         signature: doc.signature,
+        identity: doc.identity,
         comments: list_comments(&doc_dir)?,
     }))
 }
@@ -305,6 +311,7 @@ pub fn edit_document(
     author: &[u8; 16],
     edit: WorkEdit,
 ) -> Result<()> {
+    let content_changed = edit.content.is_some();
     if edit.title.is_none() && edit.content.is_none() {
         return Err(Error::msg("no changes specified"));
     }
@@ -323,7 +330,10 @@ pub fn edit_document(
         doc.content = content.trim().to_string();
     }
     doc.edited = unix_time();
-    doc.signature = edit.signature;
+    if content_changed || edit.signature.is_some() || edit.identity.is_some() {
+        doc.signature = edit.signature;
+        doc.identity = edit.identity;
+    }
     write_document(&root_path, &doc)
 }
 
@@ -365,6 +375,7 @@ pub fn add_comment(
         edited: now,
         author: input.author,
         signature: input.signature,
+        identity: None,
     };
     write_document(&doc_dir.join(comment_id.to_string()), &comment)?;
     Ok(comment_id)
@@ -650,6 +661,14 @@ fn document_value(document: &StoredDocument) -> Value {
                         .unwrap_or(Value::Nil),
                 ),
                 (
+                    Value::Str("identity".into()),
+                    document
+                        .identity
+                        .clone()
+                        .map(Value::Bin)
+                        .unwrap_or(Value::Nil),
+                ),
+                (
                     Value::Str("author".into()),
                     Value::Bin(document.author.to_vec()),
                 ),
@@ -702,6 +721,14 @@ fn document_value_response(document: WorkDocument) -> Value {
                 (Value::Str("created".into()), Value::UInt(document.created)),
                 (Value::Str("edited".into()), Value::UInt(document.edited)),
                 (Value::Str("author".into()), Value::Str(document.author)),
+                (
+                    Value::Str("identity".into()),
+                    document.identity.map(Value::Bin).unwrap_or(Value::Nil),
+                ),
+                (
+                    Value::Str("signature".into()),
+                    document.signature.map(Value::Bin).unwrap_or(Value::Nil),
+                ),
                 (Value::Str("format".into()), Value::Str(document.format)),
             ]),
         ),
@@ -748,6 +775,7 @@ fn stored_document_from_value(value: &Value) -> Result<StoredDocument> {
         .and_then(value_to_author)
         .unwrap_or([0; 16]);
     let signature = map_get(meta, "signature").and_then(value_to_signature);
+    let identity = map_get(meta, "identity").and_then(value_to_identity);
     Ok(StoredDocument {
         content,
         title,
@@ -756,6 +784,7 @@ fn stored_document_from_value(value: &Value) -> Result<StoredDocument> {
         edited,
         author,
         signature,
+        identity,
     })
 }
 
@@ -785,6 +814,13 @@ fn value_to_author(value: &Value) -> Option<[u8; 16]> {
 fn value_to_signature(value: &Value) -> Option<Vec<u8>> {
     match value {
         Value::Bin(bytes) => Some(bytes.clone()),
+        _ => None,
+    }
+}
+
+fn value_to_identity(value: &Value) -> Option<Vec<u8>> {
+    match value {
+        Value::Bin(bytes) if bytes.len() == 64 => Some(bytes.clone()),
         _ => None,
     }
 }
@@ -863,6 +899,7 @@ mod tests {
                 content: "  Do the thing  ".into(),
                 format: "unknown".into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -992,6 +1029,7 @@ mod tests {
                 title: Some("nope".into()),
                 content: None,
                 signature: None,
+                identity: None,
             },
         )
         .is_err());
@@ -1004,6 +1042,7 @@ mod tests {
                 title: Some("  updated title ".into()),
                 content: Some(" updated content ".into()),
                 signature: Some(vec![0x55; 64]),
+                identity: Some(vec![0x66; 64]),
             },
         )
         .unwrap();
@@ -1013,6 +1052,7 @@ mod tests {
         assert_eq!(document.title, "updated title");
         assert_eq!(document.content, "updated content");
         assert_eq!(document.signature, Some(vec![0x55; 64]));
+        assert_eq!(document.identity, Some(vec![0x66; 64]));
 
         assert!(complete_document(&work_path, 1, &OTHER).is_err());
         complete_document(&work_path, 1, &AUTHOR).unwrap();
@@ -1051,6 +1091,7 @@ mod tests {
                 content: "content".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -1062,6 +1103,7 @@ mod tests {
                 content: " ".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -1073,6 +1115,7 @@ mod tests {
                 content: "content".into(),
                 format: "markdown".into(),
                 signature: Some(vec![0; 63]),
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -1097,6 +1140,7 @@ mod tests {
                 content: at_limit,
                 format: format.into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -1109,6 +1153,7 @@ mod tests {
                 content: over_limit,
                 format: format.into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
@@ -1124,6 +1169,7 @@ mod tests {
                 content: "content".into(),
                 format: "markdown".into(),
                 signature: None,
+                identity: None,
                 author: AUTHOR,
             },
         )
