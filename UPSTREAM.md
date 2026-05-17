@@ -186,3 +186,7 @@ queue.
     renderer.
   - Added a regression covering a blob-page request for `src` that renders the
     directory listing instead of raw tree output.
+- [x] `ff86a1d7` Updated readme
+  - Audited as upstream hosted `README.mu` content only. rns-rs renders
+    repository-provided README files but does not vendor Reticulum's
+    self-hosted README.mu, so there is no Rust code or local documentation delta.
