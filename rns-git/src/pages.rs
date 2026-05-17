@@ -522,6 +522,7 @@ fn render_repo_page(
 ) -> Result<String> {
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
     let description = repository_description(&repository)?;
+    let origin = repository_origin(&repository)?;
     let refs = git_refs(&repository)?;
     let readme = readme_content(&repository)?;
     let repo_url = format!("rns://<repository-destination>/{group}/{repo}");
@@ -538,12 +539,20 @@ fn render_repo_page(
     let branch_count = refs.heads.len().to_string();
     let tag_count = refs.tags.len().to_string();
     let mut out = format!(
-        ">>\n{} / {} / {} `F666{}`f\n\n",
+        ">>\n{} / {} / {} `F666{}`f\n",
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_escape(&repo),
         m_escape(&repo_url)
     );
+    if let Some(origin) = origin {
+        out.push_str(&format!(
+            "`F666{} from {}`f\n",
+            origin.label(),
+            m_escape(&origin.source)
+        ));
+    }
+    out.push('\n');
     if !description.is_empty() {
         out.push_str(&format!("{}\n\n", m_escape(&description)));
     }
@@ -1945,6 +1954,66 @@ fn repository_description(repo: &Path) -> Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepositoryOrigin {
+    kind: RepositoryOriginKind,
+    source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RepositoryOriginKind {
+    Fork,
+    Mirror,
+}
+
+impl RepositoryOrigin {
+    fn label(&self) -> &'static str {
+        match self.kind {
+            RepositoryOriginKind::Fork => "Forked",
+            RepositoryOriginKind::Mirror => "Mirrored",
+        }
+    }
+}
+
+fn repository_origin(repo: &Path) -> Result<Option<RepositoryOrigin>> {
+    let kind_output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("config")
+            .arg("--get")
+            .arg("repository.rngit.type"),
+        GIT_COMMAND_TIMEOUT,
+    )?;
+    if !kind_output.status.success() {
+        return Ok(None);
+    }
+    let kind = match String::from_utf8_lossy(&kind_output.stdout).trim() {
+        "fork" => RepositoryOriginKind::Fork,
+        "mirror" => RepositoryOriginKind::Mirror,
+        _ => return Ok(None),
+    };
+    let source_output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("config")
+            .arg("--get")
+            .arg("repository.rngit.upstream.source"),
+        GIT_COMMAND_TIMEOUT,
+    )?;
+    if !source_output.status.success() {
+        return Ok(None);
+    }
+    let source = String::from_utf8_lossy(&source_output.stdout)
+        .trim()
+        .to_string();
+    if source.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(RepositoryOrigin { kind, source }))
+}
+
 fn repository_thanks(repo: &Path, add: bool) -> Result<u64> {
     let path = repo.with_extension("thanks");
     let mut count = if path.exists() {
@@ -3017,6 +3086,65 @@ mod tests {
         assert!(repo.contains("rns://"));
         assert!(repo.contains("Alpha repository"));
         assert!(repo.contains(">Alpha"));
+    }
+
+    #[test]
+    fn repo_page_renders_fork_and_mirror_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let fork = create_repo(
+            config.repositories_dir.join("public/forked"),
+            "README.md",
+            "# Forked\n",
+        );
+        let mirror = create_repo(
+            config.repositories_dir.join("public/mirrored"),
+            "README.md",
+            "# Mirrored\n",
+        );
+        run_git(Command::new("git").arg("--git-dir").arg(&fork).args([
+            "config",
+            "repository.rngit.type",
+            "fork",
+        ]));
+        run_git(Command::new("git").arg("--git-dir").arg(&fork).args([
+            "config",
+            "repository.rngit.upstream.source",
+            "rns://00112233445566778899aabbccddeeff/source/repo",
+        ]));
+        run_git(Command::new("git").arg("--git-dir").arg(&mirror).args([
+            "config",
+            "repository.rngit.type",
+            "mirror",
+        ]));
+        run_git(Command::new("git").arg("--git-dir").arg(&mirror).args([
+            "config",
+            "repository.rngit.upstream.source",
+            "https://example.invalid/upstream.git",
+        ]));
+        let access = access(&config);
+
+        let fork_page = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "forked")]),
+            None,
+        )
+        .unwrap();
+        assert!(fork_page.contains("Forked from"));
+        assert!(fork_page.contains("rns://00112233445566778899aabbccddeeff/source/repo"));
+
+        let mirror_page = render_page(
+            PATH_REPO,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "mirrored")]),
+            None,
+        )
+        .unwrap();
+        assert!(mirror_page.contains("Mirrored from"));
+        assert!(mirror_page.contains("https://example.invalid/upstream.git"));
     }
 
     #[test]

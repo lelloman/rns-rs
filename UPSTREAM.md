@@ -383,3 +383,10 @@ queue.
   - Covered fork/mirror handler success against local Git sources, metadata
     persistence, missing-source rejection, duplicate-target rejection, protocol
     request round-tripping, and CLI parsing.
+- [x] `0c68f649` Added fork and mirror indications to rngit page node
+  - Render repository-page provenance when `repository.rngit.type` is `fork` or
+    `mirror` and `repository.rngit.upstream.source` is set in Git config.
+  - Kept the Rust page renderer stateless by reading provenance directly from
+    repository config instead of adding an upstream-style loaded repository map.
+  - Added page coverage for both `Forked from ...` and `Mirrored from ...`
+    repository headers.
