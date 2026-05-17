@@ -429,3 +429,9 @@ queue.
   - Audited as upstream periodic mirror scheduler configuration.
   - No local code change is required because rns-rs currently implements manual
     `rngit sync` only and has no background mirror interval loop to disable.
+- [x] `15cd4268` Cleanup
+  - Audited as whitespace-only alignment cleanup in upstream
+    `ReticulumGitNode._work_propose` validation guards.
+  - No local code change is required because rns-rs does not mirror upstream's
+    Python alignment style and the underlying proposal validation behavior was
+    unchanged.
