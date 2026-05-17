@@ -155,3 +155,7 @@ analysis for this range is in
   - Audited as release metadata only. Rust crate versions are maintained
     independently from Python `RNS/_version.py`; no Cargo version bump was
     applied for this upstream release marker.
+- [x] `d731b439` Repo page rendering
+  - Audited as already covered by Rust rendering. Repository README content is
+    appended once and normalized to a single trailing newline, so the upstream
+    Python spacing cleanup has no Rust delta.
