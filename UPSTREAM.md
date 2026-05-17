@@ -101,3 +101,8 @@ analysis for this range is in
   - Audited as already implemented in Rust. `git-remote-rns` loads or creates
     `client_config` before initializing the file logger and before constructing
     the Reticulum node, then exits with the first-run edit-config message.
+- [x] `eeefb60c` Added signature validation of multiple file path inputs
+  - Ported `rnid -V/--validate` to validate the first flag value plus any
+    trailing positional paths, matching shell-expanded multi-file usage.
+  - Added a CLI regression covering successful validation of two `.rsg` files
+    in one invocation.

@@ -99,8 +99,9 @@ fn main() {
         operated = true;
     }
 
-    if let Some(path) = args.get("V").or_else(|| args.get("validate")) {
-        validate_signature(path, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
+    if args.has("V") || args.has("validate") {
+        let paths = operation_paths(&args, "V", "validate").unwrap_or_else(|e| die(&e, 1));
+        validate_signatures(&paths, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
         operated = true;
     }
 
@@ -180,6 +181,21 @@ fn validate_args(args: &Args) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn operation_paths<'a>(args: &'a Args, short: &str, long: &str) -> Result<Vec<&'a str>, String> {
+    let mut paths = Vec::new();
+    if let Some(path) = args.get(short).or_else(|| args.get(long)) {
+        if path != "true" {
+            paths.push(path);
+        }
+    }
+    paths.extend(args.positional.iter().map(String::as_str));
+    if paths.is_empty() {
+        Err("missing operation path".into())
+    } else {
+        Ok(paths)
+    }
 }
 
 fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef>, String> {
@@ -613,6 +629,13 @@ fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), 
             signature_path, file_path
         )),
     }
+}
+
+fn validate_signatures(paths: &[&str], required: Option<&IdentityRef>) -> Result<(), String> {
+    for path in paths {
+        validate_signature(path, required)?;
+    }
+    Ok(())
 }
 
 fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
@@ -1057,7 +1080,7 @@ fn print_usage() {
     println!("  -e FILE            Encrypt file to .rfe");
     println!("  -d FILE.rfe        Decrypt file");
     println!("  -s FILE            Sign file to .rsg");
-    println!("  -V FILE[.rsg]      Validate signature");
+    println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
     println!("  -R                 Request unknown identity from the local daemon");
     println!("  -N                 Do not use cache/network identity resolution");
