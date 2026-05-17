@@ -138,3 +138,7 @@ analysis for this range is in
     names are treated as empty before sanitization and fall back to the
     interface type label.
   - Added a focused discovery parser regression for a Nil discovery name.
+- [x] `35c7a89b` Fixed typo
+  - Audited as not applicable. The upstream typo was in Python thanks-counter
+    error logging that referenced undefined group/repo variables; Rust thanks
+    handling does not have that logging path.
