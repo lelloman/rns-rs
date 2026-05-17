@@ -276,3 +276,7 @@ queue.
   - Audited as Python transport log-level cleanup for transported link request
     proof handling. No equivalent Rust log site exists in the current transport
     implementation, so no code change is required.
+- [x] `869a8031` Updated logging
+  - Audited as Python `BackboneInterface` invalid file descriptor deregistration
+    log-level cleanup. The Rust Backbone implementation does not have an
+    equivalent epoll deregistration warning path.
