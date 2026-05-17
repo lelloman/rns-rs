@@ -411,3 +411,10 @@ queue.
     returning success for the previous scaffold.
   - Added coverage that advances a local source repository after fork creation
     and verifies `rngit sync` updates the target bare repository.
+- [x] `b2a4ceb8` Updated default config
+  - Audited as upstream embedded default-config documentation for the new
+    `propose` and `admin` permission shorthands.
+  - No code change was needed: rns-rs already generates explicit
+    `propose = none` and `admin = none` defaults, and its default config
+    template is intentionally compact rather than carrying upstream's full
+    explanatory comments.
