@@ -208,6 +208,20 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
     )
     .map_err(|_| Error::msg("failed to register fork handler"))?;
 
+    let sync_config = config.clone();
+    let sync_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_SYNC,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_sync(&sync_config, &sync_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register sync handler"))?;
+
     let mirror_config = config.clone();
     let mirror_access = access.clone();
     node.register_request_handler(
@@ -543,6 +557,53 @@ fn handle_remote_clone(
     if let Err(err) = std::fs::write(&allowed_path, permissions) {
         let _ = std::fs::remove_dir_all(&repository_path);
         return Ok(remote_error_response(repository_type, &repo, err));
+    }
+
+    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+}
+
+pub fn handle_sync(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let repo = protocol::repository_from_request(data)?;
+    let remote_hash = Some(remote_hash);
+    let read_access = access.allows(Operation::Read, &repo, remote_hash)?;
+    let write_access = access.allows(Operation::Write, &repo, remote_hash)?;
+    if !read_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    if !write_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not allowed",
+        ));
+    }
+
+    let repository_path = git::repository_path(&config.repositories_dir, &repo)?;
+    if !git::is_bare_repository(&repository_path) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    let repository_type = git::repository_config(&repository_path, "repository.rngit.type")?;
+    if !matches!(repository_type.as_deref(), Some("fork" | "mirror")) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"repository is neither fork nor mirror",
+        ));
     }
 
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
@@ -1550,6 +1611,9 @@ mod tests {
         let target = config.repositories_dir.join("group/mirrored");
         assert_eq!(resp[0], protocol::RES_OK);
         assert_eq!(git_config(&target, "repository.rngit.type"), "mirror");
+        assert!(git_config(&target, "repository.rngit.upstream.sync")
+            .parse::<u64>()
+            .is_ok());
     }
 
     #[test]
@@ -1580,6 +1644,64 @@ mod tests {
         .unwrap();
         assert_eq!(existing[0], protocol::RES_DISALLOWED);
         assert_eq!(&existing[1..], b"repository already exists");
+    }
+
+    #[test]
+    fn sync_handler_accepts_fork_or_mirror_with_write_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let repo = config.repositories_dir.join("group/forked");
+        git::ensure_bare_repository(&repo).unwrap();
+        set_git_config(&repo, "repository.rngit.type", "fork");
+        set_git_config(
+            &repo,
+            "repository.rngit.upstream.source",
+            "https://example.invalid/upstream.git",
+        );
+        let access = make_access(&config);
+        let remote = ([0x22; 16], [0u8; 64]);
+
+        let resp = handle_sync(
+            &config,
+            &access,
+            &protocol::repository_request("group/forked"),
+            Some(&remote),
+        )
+        .unwrap();
+
+        assert_eq!(resp[0], protocol::RES_OK);
+    }
+
+    #[test]
+    fn sync_handler_rejects_non_clone_or_missing_write_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        let repo = config.repositories_dir.join("group/plain");
+        git::ensure_bare_repository(&repo).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x22; 16], [0u8; 64]);
+
+        let no_write = handle_sync(
+            &config,
+            &access,
+            &protocol::repository_request("group/plain"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(no_write[0], protocol::RES_DISALLOWED);
+
+        config.allow_write = vec!["all".into()];
+        let access = make_access(&config);
+        let plain = handle_sync(
+            &config,
+            &access,
+            &protocol::repository_request("group/plain"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(plain[0], protocol::RES_INVALID_REQ);
+        assert_eq!(&plain[1..], b"repository is neither fork nor mirror");
     }
 
     #[test]
@@ -2455,6 +2577,22 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn set_git_config(repo: &std::path::Path, key: &str, value: &str) {
+        let output = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("config")
+            .arg(key)
+            .arg(value)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn run_git(cwd: &std::path::Path, args: &[&str]) {

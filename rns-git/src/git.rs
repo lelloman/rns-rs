@@ -114,6 +114,14 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
             .arg("config")
             .arg("repository.rngit.upstream.source")
             .arg(source))?;
+        if repository_type == "mirror" {
+            run(Command::new("git")
+                .arg("--git-dir")
+                .arg(&temp)
+                .arg("config")
+                .arg("repository.rngit.upstream.sync")
+                .arg(unix_timestamp().to_string()))?;
+        }
         fs::rename(&temp, path)?;
         Ok(())
     })();
@@ -122,6 +130,23 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
         let _ = fs::remove_dir_all(&temp);
     }
     result
+}
+
+pub fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
+    require_repository(path)?;
+    let output = Command::new("git")
+        .arg("--git-dir")
+        .arg(path)
+        .arg("config")
+        .arg("--get")
+        .arg(key)
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 pub fn is_bare_repository(path: &Path) -> bool {
@@ -424,6 +449,13 @@ fn temp_path(prefix: &str, extension: &str) -> PathBuf {
         .unwrap_or_default()
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{}-{now}.{extension}", std::process::id()))
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn run(cmd: &mut Command) -> Result<String> {

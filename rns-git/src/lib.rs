@@ -12,6 +12,7 @@ pub mod release;
 pub mod release_cli;
 pub mod server;
 mod stats;
+pub mod sync_cli;
 pub mod util;
 pub mod work;
 pub mod work_cli;

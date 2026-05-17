@@ -10,6 +10,7 @@ pub const PATH_FETCH: &str = "/git/fetch";
 pub const PATH_PUSH: &str = "/git/push";
 pub const PATH_CREATE: &str = "/git/create";
 pub const PATH_FORK: &str = "/git/fork";
+pub const PATH_SYNC: &str = "/git/sync";
 pub const PATH_MIRROR: &str = "/git/mirror";
 pub const PATH_DELETE: &str = "/git/delete";
 pub const PATH_RELEASE: &str = "/mgmt/release";

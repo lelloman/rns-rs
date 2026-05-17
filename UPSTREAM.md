@@ -390,3 +390,14 @@ queue.
     repository config instead of adding an upstream-style loaded repository map.
   - Added page coverage for both `Forked from ...` and `Mirrored from ...`
     repository headers.
+- [x] `b76beb60` Added scaffolding for periodic upstream mirror sync and manual fork/mirror sync
+  - Added upstream `/git/sync` request path and `rngit sync <repository>` CLI
+    command plumbing.
+  - Ported the scaffolded sync handler checks: identified peer, read/write
+    access, repository existence, and fork/mirror metadata requirement. Like
+    upstream in this commit, the handler returns success without performing the
+    actual upstream fetch/update yet.
+  - Mirror creation now records `repository.rngit.upstream.sync` alongside the
+    existing mirror source metadata.
+  - Covered sync CLI parsing, sync handler success/rejection paths, and mirror
+    sync timestamp metadata.
