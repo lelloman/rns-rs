@@ -33,13 +33,18 @@ Important config paths:
 - `identity_path`: repository server identity
 - `client_identity_path`: local client identity used by the helper
 - `allow_read`, `allow_write`, `allow_create`, `allow_stats`, `allow_release`,
-  `allow_interact`, and `allow_admin`: repository ACL rules. Creating a missing
-  repository requires create access; pushing to an existing repository requires
-  write access. Stats pages require stats access. Release creation and deletion
-  require release access, while release listing and viewing require read
-  access. Admin identities satisfy repository permission checks. Repository
-  `.allowed` and group `group.allowed` files can grant `stats`/`s`,
-  `release`/`rel`, `interact`/`i`, and `admin`/`adm`.
+  `allow_interact`, `allow_propose`, and `allow_admin`: repository ACL rules.
+  Creating a missing repository requires create access; pushing to an existing
+  repository requires write access. Stats pages require stats access. Release
+  creation and deletion require release access, while release listing and
+  viewing require read access. Work document proposals require propose access.
+  Admin identities satisfy repository permission checks. Repository permission
+  files can be stored as either `<repo>/.allowed` or the upstream-style sidecar
+  `<repo>.allowed`; group rules can be stored as `<group>/group.allowed` or
+  `<group>.allowed`. Permission files may be executable scripts that emit rules
+  on stdout. They can grant `read`/`r`, `write`/`w`, `readwrite`/`rw`,
+  `create`/`c`, `stats`/`s`, `release`/`rel`, `interact`/`i`, `propose`/`p`,
+  and `admin`/`adm`.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
@@ -73,6 +78,30 @@ Important config paths:
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
   `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
   add simple Unicode icons to page navigation.
+  Repositories created with `rngit fork` or `rngit mirror` record their upstream
+  source in Git config and show a `Forked from ...` or `Mirrored from ...`
+  provenance line on the repository page.
+
+## Repository Management
+
+`rngit` can create empty repositories and ask a remote node to clone an
+upstream Git source into a new fork or mirror. The target repository URL is
+always the `rns://` URL of the server that will host the new repository.
+
+```bash
+rngit create rns://<destination_hash>/<group>/<repo>
+rngit fork https://example.invalid/project.git rns://<destination_hash>/<group>/<repo>
+rngit mirror https://example.invalid/project.git rns://<destination_hash>/<group>/<repo>
+rngit sync rns://<destination_hash>/<group>/<repo>
+```
+
+`create`, `fork`, and `mirror` require create access in the target group. The
+server initializes a bare repository and writes a sidecar `<repo>.allowed` file
+granting the requester admin access. Forks and mirrors store
+`repository.rngit.type` and `repository.rngit.upstream.source` in the bare
+repository config. `sync` requires read and write access and fetches
+`+refs/*:refs/*` from that recorded upstream source; mirror syncs also update
+`repository.rngit.upstream.sync`.
 
 ## Git Remote Helper
 
@@ -121,6 +150,7 @@ per-file progress as each artifact is sent.
 rngit work rns://<destination_hash>/<repository> list --scope all
 rngit work rns://<destination_hash>/<repository> view --id 1
 rngit work rns://<destination_hash>/<repository> create --title "Task" --content ./WORK.md
+rngit work rns://<destination_hash>/<repository> propose --title "Idea" --content ./PROPOSAL.md
 rngit work rns://<destination_hash>/<repository> comment --id 1 --content ./UPDATE.md
 rngit work rns://<destination_hash>/<repository> perms --id 1
 rngit work rns://<destination_hash>/<repository> perms --id 1 --content ./WORK.allowed
@@ -131,6 +161,13 @@ rngit work rns://<destination_hash>/<repository> delete --id 1 --yes
 Rust `rngit work` is non-interactive: create, edit, and comment operations read
 document bodies from `--content PATH`. Files ending in `.mu` are sent as Micron;
 other content is sent as Markdown.
+
+Proposals are stored in the `proposed` scope and must include a valid signature
+from the submitting identity. `--scope proposed` lists or views proposed
+documents, and `--scope all` includes active, completed, and proposed documents.
+The server writes document-local interact/write permissions for the proposer so
+they can continue updating their proposal without broader repository write
+access.
 
 Document-local permissions are stored as `<repo>.work/<id>.allowed` and use the
 same syntax as repository `.allowed` files. A document-local `interact` grant

@@ -418,3 +418,10 @@ queue.
     `propose = none` and `admin = none` defaults, and its default config
     template is intentionally compact rather than carrying upstream's full
     explanatory comments.
+- [x] `0f29ab62` Updated rngit documentation
+  - Updated local `docs/rns-git.md` with rns-rs-specific coverage for
+    `rngit create`, `fork`, `mirror`, and `sync`.
+  - Documented sidecar and executable permission files, `propose`/`admin`
+    permission keys, proposal work-document scope, and fork/mirror provenance.
+  - Did not import upstream generated manual artifacts; rns-rs keeps concise
+    Markdown documentation instead of generated Sphinx output.
