@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::util::{parse_hex_16, validate_repo_name};
 use crate::{Error, Result};
@@ -104,7 +105,7 @@ impl Access {
             if !path.exists() {
                 continue;
             }
-            let rules = parse_allowed_file(&fs::read_to_string(path)?)?;
+            let rules = parse_allowed_file(&allowed_input(&path)?)?;
             let Some(rule) = rules.get(operation_key(op)) else {
                 continue;
             };
@@ -117,9 +118,13 @@ impl Access {
 
     fn allowed_files(&self, repository: &str) -> Vec<PathBuf> {
         let repo = self.repositories_dir.join(repository);
-        let mut out = vec![repo.join(".allowed")];
+        let mut out = vec![
+            repo.join(".allowed"),
+            self.repositories_dir.join(format!("{repository}.allowed")),
+        ];
         if let Some(group) = repository.split('/').next() {
             out.push(self.repositories_dir.join(group).join("group.allowed"));
+            out.push(self.repositories_dir.join(format!("{group}.allowed")));
         }
         out
     }
@@ -137,6 +142,35 @@ pub(crate) fn allowed_input_allows(
 
 pub(crate) fn validate_allowed_input(input: &str) -> Result<()> {
     parse_allowed_file(input).map(|_| ())
+}
+
+fn allowed_input(path: &Path) -> Result<String> {
+    if is_executable_file(path)? {
+        let output = Command::new(path).output()?;
+        if !output.status.success() {
+            return Err(Error::msg(format!(
+                "allowed file {} exited with status {}",
+                path.display(),
+                output.status
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Ok(fs::read_to_string(path)?)
+    }
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path)?;
+    Ok(metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> Result<bool> {
+    Ok(fs::metadata(path)?.is_file() && false)
 }
 
 fn operation_key(op: Operation) -> &'static str {
@@ -272,6 +306,25 @@ mod tests {
     }
 
     #[test]
+    fn repo_sidecar_allowed_file_can_grant_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("group/repo")).unwrap();
+        fs::write(tmp.path().join("group/repo.allowed"), "write = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access.allows(Operation::Write, "group/repo", None).unwrap());
+    }
+
+    #[test]
     fn repo_allowed_file_can_grant_stats_with_long_or_short_key() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("group/repo");
@@ -341,6 +394,55 @@ mod tests {
         assert!(access
             .allows(Operation::Create, "group/repo", None)
             .unwrap());
+    }
+
+    #[test]
+    fn group_sidecar_allowed_file_can_grant_create() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("group")).unwrap();
+        fs::write(tmp.path().join("group.allowed"), "create = all\n").unwrap();
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access
+            .allows(Operation::Create, "group/repo", None)
+            .unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_allowed_file_uses_stdout_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("group/repo");
+        fs::create_dir_all(&repo).unwrap();
+        let allowed = tmp.path().join("group/repo.allowed");
+        fs::write(&allowed, "#!/bin/sh\nprintf 'stats = all\\n'\n").unwrap();
+        let mut perms = fs::metadata(&allowed).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&allowed, perms).unwrap();
+
+        let access = Access::new(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().into(),
+        )
+        .unwrap();
+        assert!(access.allows(Operation::Stats, "group/repo", None).unwrap());
     }
 
     #[test]

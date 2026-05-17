@@ -1128,6 +1128,36 @@ mod tests {
     }
 
     #[test]
+    fn repo_sidecar_allowed_file_can_grant_create_for_missing_bare_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["none".into()];
+        let repo = config.repositories_dir.join("group/repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            config.repositories_dir.join("group/repo.allowed"),
+            "create = all\n",
+        )
+        .unwrap();
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            &config.allow_stats,
+            &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("group/repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(&repo));
+    }
+
+    #[test]
     fn group_allowed_file_can_grant_create_for_missing_repo() {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = cfg(tmp.path());
@@ -1136,6 +1166,38 @@ mod tests {
         let group = config.repositories_dir.join("group");
         std::fs::create_dir_all(&group).unwrap();
         std::fs::write(group.join("group.allowed"), "create = all\n").unwrap();
+        let access = Access::new(
+            &config.allow_read,
+            &config.allow_write,
+            &config.allow_create,
+            &config.allow_stats,
+            &config.allow_release,
+            &config.allow_interact,
+            &config.allow_admin,
+            config.repositories_dir.clone(),
+        )
+        .unwrap();
+        let req = protocol::push_request("group/repo", Vec::new(), Vec::new());
+        let resp = handle_push(&config, &access, &req, None).unwrap();
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(
+            &config.repositories_dir.join("group/repo")
+        ));
+    }
+
+    #[test]
+    fn group_sidecar_allowed_file_can_grant_create_for_missing_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_create = vec!["none".into()];
+        let group = config.repositories_dir.join("group");
+        std::fs::create_dir_all(&group).unwrap();
+        std::fs::write(
+            config.repositories_dir.join("group.allowed"),
+            "create = all\n",
+        )
+        .unwrap();
         let access = Access::new(
             &config.allow_read,
             &config.allow_write,

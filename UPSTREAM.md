@@ -347,3 +347,16 @@ queue.
   - Added CLI `rngit work ... propose`, updated usage text, and added protocol
     coverage for signed proposals, proposed-scope listing, local edit
     permission, and unsigned proposal rejection.
+- [x] `db7359f5` Preparation for create, fork and mirror functionality. Refactored and expanded permissions system. Added group .allowed files. Prepared dynamic permissions resolution. Basic functional scaffolding for create/fork/mirror.
+  - Ported the upstream permission preparation by accepting sidecar permission
+    files next to repositories and groups (`<repo>.allowed` and
+    `<group>.allowed`) while preserving existing rns-rs paths
+    (`<repo>/.allowed` and `<group>/group.allowed`).
+  - Added executable `.allowed` support so a permission file can emit dynamic
+    permission rules on stdout, matching the upstream dynamic-permission
+    preparation.
+  - Covered sidecar repository/group permissions in ACL tests and in the
+    create-on-push server path.
+  - Audited the new create/fork/mirror command scaffolding: the explicit
+    `/git/create` path remains for `df0b4a51`, where upstream implements the
+    stubbed create behavior; fork/mirror remain preparatory only in this commit.
