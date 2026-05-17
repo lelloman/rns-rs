@@ -290,3 +290,6 @@ queue.
 - [x] `5667a0bb` Better transfer completed feedback in rncp, thanks to neutral
   - Audited as upstream `rncp.py` user-facing receive/fetch feedback. rns-rs
     does not currently include an `rncp` utility, so no local port is available.
+- [x] `d5b64a4a` Cleaned up log/print consistency for listener/initiator modes in rncp
+  - Audited as upstream `rncp.py` logging consistency cleanup. No local port is
+    available because rns-rs does not currently implement rncp.
