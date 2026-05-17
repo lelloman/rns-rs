@@ -79,5 +79,10 @@ analysis for this range is in
   - Audited as not applicable to Rust behavior. The upstream commit only
     compacts Python helper formatting in `RNS/__init__.py` and refreshes
     generated manual artifacts.
-- [ ] `d0ceeacb` Allow setting title on workdoc edit
+- [x] `d0ceeacb` Allow setting title on workdoc edit
+  - Audited as already implemented in Rust: `rngit work edit` accepts
+    `--title`, includes it in the work edit request, and the server applies it.
+  - Added a focused `work_cli` regression to lock the edit request payload for
+    simultaneous title and content edits.
+- [ ] `bd0e1ad0` Better workdoc page handling
   - Next item to inspect for Rust applicability.

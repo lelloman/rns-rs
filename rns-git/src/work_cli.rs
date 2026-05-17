@@ -714,6 +714,43 @@ mod tests {
     }
 
     #[test]
+    fn edit_sends_title_and_content_when_provided() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp.path().join("EDIT.md");
+        fs::write(&content, "Edited body\n").unwrap();
+        let mut transport = FakeTransport {
+            requests: Vec::new(),
+            responses: vec![Vec::new()],
+        };
+
+        run_work_command(
+            &mut transport,
+            &WorkCommand::Edit {
+                scope: "active".into(),
+                id: 9,
+                title: Some("Edited title".into()),
+                content_path: Some(content),
+            },
+            Vec::new(),
+        )
+        .unwrap();
+
+        let request = &transport.requests[0];
+        assert_eq!(
+            request.map_get("operation").and_then(Value::as_str),
+            Some("edit")
+        );
+        assert_eq!(
+            request.map_get("title").and_then(Value::as_str),
+            Some("Edited title")
+        );
+        assert_eq!(
+            request.map_get("content").and_then(Value::as_str),
+            Some("Edited body\n")
+        );
+    }
+
+    #[test]
     fn perms_get_and_set_send_work_permission_requests() {
         let tmp = tempfile::tempdir().unwrap();
         let permissions = tmp.path().join("allowed.txt");
