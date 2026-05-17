@@ -180,3 +180,9 @@ queue.
   - Audited as generated upstream manual and release artifact updates for RNS
     1.2.6. No Rust runtime, protocol, CLI, or crate documentation source files
     map directly to this generated artifact commit.
+- [x] `e49f3132` Redirect blob to tree page if target is a tree
+  - Added object-type detection before blob rendering so directory paths
+    requested through `/page/blob.mu` are served by the existing tree page
+    renderer.
+  - Added a regression covering a blob-page request for `src` that renders the
+    directory listing instead of raw tree output.

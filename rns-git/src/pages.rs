@@ -685,6 +685,9 @@ fn render_blob_page(
     let path = required_var(vars, "path")?;
     validate_git_path(path)?;
     let resolved = resolve_ref(&repository, reference)?;
+    if git_object_kind(&repository, &resolved, path)? == "tree" {
+        return render_tree_page(config, access, remote, vars);
+    }
     let blob = blob_info(&repository, &resolved, path)?;
     let renderable = renderable_blob(path);
     let raw_requested = var(vars, "raw").is_some();
@@ -2483,6 +2486,24 @@ fn tree_entries(repo: &Path, reference: &str, path: &str) -> Result<Vec<TreeEntr
     Ok(entries)
 }
 
+fn git_object_kind(repo: &Path, reference: &str, path: &str) -> Result<String> {
+    validate_git_path(path)?;
+    let spec = if path.is_empty() {
+        reference.to_string()
+    } else {
+        format!("{reference}:{path}")
+    };
+    let output = run_git(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("cat-file")
+            .arg("-t")
+            .arg(spec),
+    )?;
+    Ok(output.trim().to_string())
+}
+
 struct BlobInfo {
     content: String,
     size: u64,
@@ -2854,6 +2875,32 @@ mod tests {
         .unwrap();
         assert!(refs.contains("main"));
         assert!(refs.contains("v1"));
+    }
+
+    #[test]
+    fn blob_page_renders_tree_when_path_is_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo(
+            config.repositories_dir.join("public/alpha"),
+            "src/lib.rs",
+            "pub fn answer() -> u8 { 42 }\n",
+        );
+        let access = access(&config);
+
+        let page = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[("var_g", "public"), ("var_r", "alpha"), ("var_path", "src")]),
+            None,
+        )
+        .unwrap();
+
+        assert!(page.contains("files / src"));
+        assert!(page.contains("lib.rs"));
+        assert!(page.contains(PATH_BLOB));
+        assert!(!page.contains("Displaying Raw"));
     }
 
     #[test]
