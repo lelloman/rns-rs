@@ -169,3 +169,6 @@ analysis for this range is in
     responses, plus signature status in CLI and Nomad Network page rendering.
   - Kept unsigned work documents accepted for compatibility with existing Rust
     clients and persisted data; invalid provided signatures are rejected.
+- [x] `3dd4145e` Updated changelog
+  - Audited as documentation-only. The upstream changelog refinement is covered
+    by the explicit workdoc signing tracker entry above.
