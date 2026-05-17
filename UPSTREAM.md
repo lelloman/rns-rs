@@ -75,5 +75,9 @@ analysis for this range is in
   - Ported `rnid` base256 RSG output/validation support, including
     character-aware ASCII wrapping so multi-byte base256 glyphs are not split.
   - Added focused base256 display, RSG unit, and CLI output-format tests.
-- [ ] `7d5fb6a1` Cleanup
+- [x] `7d5fb6a1` Cleanup
+  - Audited as not applicable to Rust behavior. The upstream commit only
+    compacts Python helper formatting in `RNS/__init__.py` and refreshes
+    generated manual artifacts.
+- [ ] `d0ceeacb` Allow setting title on workdoc edit
   - Next item to inspect for Rust applicability.
