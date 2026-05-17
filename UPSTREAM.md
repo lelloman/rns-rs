@@ -7,13 +7,14 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Tag: `1.2.5`
-- Commit: `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`
-- Commit date: `2026-05-09 19:17:38 +0200`
-- Subject: `Yes, that was indeed a bit overkill`
+- Version: `1.2.7`
+- Tag: `not present in local checkout`
+- Commit: `b1f522277c99b076ea4b43e9048aec8962e0e4a2`
+- Commit date: `2026-05-17 00:56:08 +0200`
+- Subject: `Prepare release`
 
-The previous recorded baseline was Reticulum `1.2.4`, with release commit
-`9d076d6a194ee9675a5bf585de1b2c2a634f3946`. The upstream
+The previous recorded baseline was Reticulum `1.2.5`, with release commit
+`e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The earlier upstream
 `1.2.4..1.2.5` range was reviewed and the relevant path-request control,
 `rnstatus`, `rnpath`, `rnid`, discovery, transport, and `rngit` changes were
 ported or explicitly audited with the following local commits:
@@ -41,7 +42,7 @@ Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
 
-## Active 1.2.5..1.2.7 Porting Queue
+## Completed 1.2.5..1.2.7 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced to upstream
 `b1f522277c99b076ea4b43e9048aec8962e0e4a2` on 2026-05-17. The detailed
@@ -49,8 +50,8 @@ analysis for this range is in
 `docs/reticulum-upstream-commit-analysis-2026-05-17.md`.
 
 The RNS 1.2.6 boundary is integrated through upstream `95502e2c` (`Prepare
-release`). Later entries in the analysis document belong to the ongoing 1.2.7
-queue.
+release`). The 1.2.7 queue is integrated through upstream `b1f52227`
+(`Prepare release`).
 
 - [x] `0ebec014` Improved release page
   - Ported the remaining Rust-applicable rendering change: empty release
@@ -445,3 +446,11 @@ queue.
   - No local changelog source was updated because rns-rs tracks upstream port
     status in this document and the detailed per-commit analysis document
     instead of vendoring Python Reticulum release notes.
+- [x] `b1f52227` Prepare release
+  - Audited as generated upstream Sphinx/manual release artifacts and binary
+    manual exports that update documentation branding from RNS 1.2.6 to 1.2.7.
+  - Did not vendor upstream generated HTML, PDF, or EPUB artifacts; rns-rs keeps
+    source-level documentation in `docs/`, and the `rngit` workflow material was
+    already ported in the earlier documentation commit.
+  - Updated this upstream baseline metadata and the README upstream badge to
+    Reticulum 1.2.7.
