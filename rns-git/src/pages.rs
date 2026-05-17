@@ -1236,14 +1236,36 @@ fn render_work_doc_page(
     vars: &BTreeMap<String, String>,
 ) -> Result<String> {
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
-    let scope = var(vars, "scope").unwrap_or("active");
-    let scope = crate::work::WorkScope::parse(scope).ok_or_else(|| Error::msg("invalid scope"))?;
+    let requested_scope = var(vars, "scope").unwrap_or("all");
+    let requested_scope = if matches!(requested_scope, "active" | "completed" | "all") {
+        requested_scope
+    } else {
+        "active"
+    };
     let id = required_var(vars, "id")?
         .parse::<u64>()
         .map_err(|_| Error::msg("invalid work document ID"))?;
-    let Some(document) =
-        crate::work::view_document(&crate::work::work_sidecar_path(&repository), scope, id)?
-    else {
+    let work_path = crate::work::work_sidecar_path(&repository);
+    let (scope, document) = match requested_scope {
+        "active" | "completed" => {
+            let scope = crate::work::WorkScope::parse(requested_scope).unwrap();
+            (scope, crate::work::view_document(&work_path, scope, id)?)
+        }
+        "all" => {
+            if let Some(document) =
+                crate::work::view_document(&work_path, crate::work::WorkScope::Active, id)?
+            {
+                (crate::work::WorkScope::Active, Some(document))
+            } else {
+                (
+                    crate::work::WorkScope::Completed,
+                    crate::work::view_document(&work_path, crate::work::WorkScope::Completed, id)?,
+                )
+            }
+        }
+        _ => unreachable!(),
+    };
+    let Some(document) = document else {
         return Ok(
             ">Work Document Not Found\n\nThe requested work document was not found.\n".into(),
         );
@@ -3690,6 +3712,22 @@ Unmatched * marker\n\
         assert!(doc.contains(">Active Body"));
         assert!(doc.contains(">Updates (1)"));
         assert!(doc.contains("Progress update"));
+
+        let completed_doc = render_page(
+            PATH_WORK_DOC,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "worked"),
+                ("var_id", &completed.id.to_string()),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(completed_doc.contains(">Completed task"));
+        assert!(completed_doc.contains("Status: completed"));
+        assert!(completed_doc.contains("`[work`:/page/work.mu`g=public|r=worked|scope=completed]"));
     }
 
     #[test]

@@ -84,5 +84,10 @@ analysis for this range is in
     `--title`, includes it in the work edit request, and the server applies it.
   - Added a focused `work_cli` regression to lock the edit request payload for
     simultaneous title and content edits.
-- [ ] `bd0e1ad0` Better workdoc page handling
+- [x] `bd0e1ad0` Better workdoc page handling
+  - Ported work document page lookup semantics: missing `scope` now behaves as
+    `all`, resolving an active document first and then a completed document.
+  - Added page regression coverage for viewing a completed work document without
+    an explicit scope.
+- [ ] `93ead774` Added workdoc downloads
   - Next item to inspect for Rust applicability.
