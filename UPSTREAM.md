@@ -233,3 +233,7 @@ queue.
     is now trimmed at the end before appending the renderer newline.
   - Added regression coverage for README.mu content without a trailing newline
     and with excessive trailing blank lines.
+- [x] `d69491eb` Updated readme
+  - Audited as upstream hosted `README.mu` line-wrapping/content polish only.
+    No rns-rs renderer, protocol, CLI, or vendored documentation change is
+    required.
