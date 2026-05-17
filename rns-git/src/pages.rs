@@ -2242,6 +2242,23 @@ enum InlineToken {
     Code(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MarkdownLinkStyle<'a> {
+    bold: bool,
+    underline: bool,
+    color: Option<&'a str>,
+}
+
+impl Default for MarkdownLinkStyle<'_> {
+    fn default() -> Self {
+        Self {
+            bold: true,
+            underline: true,
+            color: None,
+        }
+    }
+}
+
 fn format_markdown_inline_scoped(input: &str, url_scope: Option<&str>) -> String {
     let (with_placeholders, tokens) = extract_markdown_inline_tokens(input);
     let escaped = m_escape(&with_placeholders);
@@ -2322,17 +2339,46 @@ fn restore_markdown_inline_tokens(
     let mut out = input.to_string();
     for (index, token) in tokens.iter().enumerate() {
         let replacement = match token {
-            InlineToken::Link { label, target } => format!(
-                "`!`[{}{}{}]`!",
-                sanitize_label(label).trim(),
-                "`",
-                markdown_link_target(target, url_scope)
-            ),
+            InlineToken::Link { label, target } => {
+                format_markdown_link(label, target, url_scope, MarkdownLinkStyle::default())
+            }
             InlineToken::Code(value) => format!("`BT383838`Fddd{}`f`b", m_escape(value)),
         };
         out = out.replace(&markdown_token_placeholder(index), &replacement);
     }
     out
+}
+
+fn format_markdown_link(
+    label: &str,
+    target: &str,
+    url_scope: Option<&str>,
+    style: MarkdownLinkStyle<'_>,
+) -> String {
+    let mut link = String::new();
+    if style.underline {
+        link.push_str("`_");
+    }
+    if style.bold {
+        link.push_str("`!");
+    }
+    link.push_str("`[");
+    link.push_str(sanitize_label(label).trim());
+    link.push('`');
+    link.push_str(&markdown_link_target(target, url_scope));
+    link.push(']');
+    if style.bold {
+        link.push_str("`!");
+    }
+    if style.underline {
+        link.push_str("`_");
+    }
+
+    match style.color {
+        Some(color) if color.len() == 3 => format!("`F{color}{link}`f"),
+        Some(color) if color.len() == 6 => format!("`FT{color}{link}`f"),
+        _ => link,
+    }
 }
 
 fn markdown_link_target(value: &str, url_scope: Option<&str>) -> String {
@@ -3244,12 +3290,12 @@ See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
 
         let out = markdown_to_micron(input);
         assert!(out.contains(">Title"));
-        assert!(out.contains("`!`[the docs`https://example.invalid/a_b]`!"));
+        assert!(out.contains("`_`!`[the docs`https://example.invalid/a_b]`!`_"));
         assert!(out.contains("`BT383838`Fdddliteral *code*`f`b"));
         assert!(out.contains(" • `!bold`! and `*italic`*"));
         assert!(out.contains("\n-\n"));
         assert!(out.contains("│ Name"));
-        assert!(out.contains("`!`[go`rns://abc]`!"));
+        assert!(out.contains("`_`!`[go`rns://abc]`!`_"));
     }
 
     #[test]
@@ -3262,16 +3308,55 @@ See [the docs](https://example.invalid/a_b) and `literal *code*`.\n\
 after\n",
         );
         assert!(out.contains(">`!Important`!"));
-        assert!(out.contains(" │ `!Quoted`! text with `!`[link`rns://abc]`!"));
+        assert!(out.contains(" │ `!Quoted`! text with `_`!`[link`rns://abc]`!`_"));
         assert!(out.contains("\nafter\n"));
     }
 
     #[test]
     fn markdown_link_conversion_is_isolated_from_later_substitutions() {
         let out = markdown_to_micron("[**bold** `code`](https://example.invalid?q=*x*)");
-        assert!(out.contains("`!`[**bold** code`https://example.invalid?q=*x*]`!"));
+        assert!(out.contains("`_`!`[**bold** code`https://example.invalid?q=*x*]`!`_"));
         assert!(!out.contains("`!`!"));
         assert!(!out.contains("`*x`*"));
+    }
+
+    #[test]
+    fn markdown_link_style_can_disable_wrappers_and_apply_color() {
+        let plain = format_markdown_link(
+            "label",
+            "rns://abc",
+            None,
+            MarkdownLinkStyle {
+                bold: false,
+                underline: false,
+                color: None,
+            },
+        );
+        assert_eq!(plain, "`[label`rns://abc]");
+
+        let short_color = format_markdown_link(
+            "label",
+            "rns://abc",
+            None,
+            MarkdownLinkStyle {
+                bold: true,
+                underline: false,
+                color: Some("abc"),
+            },
+        );
+        assert_eq!(short_color, "`Fabc`!`[label`rns://abc]`!`f");
+
+        let true_color = format_markdown_link(
+            "label",
+            "rns://abc",
+            None,
+            MarkdownLinkStyle {
+                bold: false,
+                underline: true,
+                color: Some("aabbcc"),
+            },
+        );
+        assert_eq!(true_color, "`FTaabbcc`_`[label`rns://abc]`_`f");
     }
 
     #[test]
@@ -3281,8 +3366,8 @@ after\n",
         );
 
         assert!(out.contains("`BT383838`Fddd[literal](https://example.invalid/no)`f`b"));
-        assert!(out.contains("`!`[real`https://example.invalid/yes]`!"));
-        assert!(!out.contains("`!`[literal`https://example.invalid/no]`!"));
+        assert!(out.contains("`_`!`[real`https://example.invalid/yes]`!`_"));
+        assert!(!out.contains("`_`!`[literal`https://example.invalid/no]`!`_"));
     }
 
     #[test]
@@ -3301,7 +3386,7 @@ after\n",
         assert!(out.contains("`!ok`!"));
         assert!(out.contains("a|b"));
         assert!(out.contains("empty"));
-        assert!(out.contains("`!`[go`rns://abc]`!"));
+        assert!(out.contains("`_`!`[go`rns://abc]`!`_"));
         assert!(!out.contains("a\\|b"));
     }
 
@@ -3312,7 +3397,7 @@ after\n",
 | [x](rns://abc) | `y` |\n";
 
         let out = markdown_to_micron(input);
-        assert!(out.contains("│ `!`[x`rns://abc]`! "));
+        assert!(out.contains("│ `_`!`[x`rns://abc]`!`_ "));
         assert!(out.contains("│ `BT383838`Fdddy`f`b "));
         assert!(out.contains("┌─────┬─────┐"));
     }
@@ -3322,7 +3407,7 @@ after\n",
         let out =
             markdown_to_micron("literal `!not bold`! and [bad`label](rns://abc`def) plus `raw`");
         assert!(out.contains("literal \\`!not bold\\`!"));
-        assert!(out.contains("`!`[badlabel`rns://abcdef]`!"));
+        assert!(out.contains("`_`!`[badlabel`rns://abcdef]`!`_"));
         assert!(out.contains("`BT383838`Fdddraw`f`b"));
         assert!(!out.contains("`!not bold`!"));
     }
@@ -3506,9 +3591,9 @@ Unmatched * marker\n\
         assert!(rendered.contains("Displaying Rendered"));
         assert!(rendered.contains("View raw"));
         assert!(rendered.contains(">Title"));
-        assert!(rendered.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(rendered.contains("`_`!`[docs`https://example.invalid]`!`_"));
         assert!(rendered.contains(
-            "`!`[guide`:/page/blob.mu`g=public|r=docs|ref=HEAD|path=docs/guide.md|anchor=intro]`!"
+            "`_`!`[guide`:/page/blob.mu`g=public|r=docs|ref=HEAD|path=docs/guide.md|anchor=intro]`!`_"
         ));
         assert!(rendered.contains("`BT383838`Fdddtick`f`b"));
         assert!(!rendered.contains("# Title"));
@@ -3531,7 +3616,7 @@ Unmatched * marker\n\
         assert!(raw.contains("Title"));
         assert!(raw.contains("\\`"));
         assert!(raw.contains("tick"));
-        assert!(!raw.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(!raw.contains("`_`!`[docs`https://example.invalid]`!`_"));
     }
 
     #[test]
@@ -3746,9 +3831,9 @@ Unmatched * marker\n\
         )
         .unwrap();
         assert!(markdown.contains(">Markdown"));
-        assert!(markdown.contains("`!`[docs`https://example.invalid]`!"));
+        assert!(markdown.contains("`_`!`[docs`https://example.invalid]`!`_"));
         assert!(markdown.contains(
-            "`!`[local`:/page/blob.mu`g=public|r=markdown|ref=HEAD|path=docs/intro.md]`!"
+            "`_`!`[local`:/page/blob.mu`g=public|r=markdown|ref=HEAD|path=docs/intro.md]`!`_"
         ));
 
         let micron = render_page(

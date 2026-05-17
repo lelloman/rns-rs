@@ -209,3 +209,13 @@ queue.
   - Audited as upstream hosted `README.mu` source/thanks link polish. This does
     not map to rns-rs because the changed page content is repository data, not
     local renderer behavior.
+- [x] `42b56619` Updated readme
+  - Ported the markdown-to-Micron link rendering change: Markdown links now
+    render bold and underlined by default, matching upstream's updated
+    `README.mu` presentation.
+  - Added a reusable link-style helper with optional Micron color wrapping so
+    callers can disable bold/underline or apply 3/6-digit color codes as in the
+    upstream converter.
+  - Updated Markdown, table-width, blob, and repository README rendering tests
+    for the new link output and added direct coverage for the configurable link
+    style.
