@@ -246,3 +246,7 @@ queue.
 - [x] `bdc79b90` Updated readme
   - Audited as upstream hosted `README.mu` application-example wrapping polish.
     No local port is required.
+- [x] `c15f566c` Updated readme
+  - Audited as upstream hosted `README.mu` support/testnet Micron formatting.
+    rns-rs passes repository README.mu content through at runtime and does not
+    vendor this page.
