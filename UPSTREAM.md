@@ -48,6 +48,10 @@ The `/home/lelloman/Reticulum` checkout was advanced to upstream
 analysis for this range is in
 `docs/reticulum-upstream-commit-analysis-2026-05-17.md`.
 
+The RNS 1.2.6 boundary is integrated through upstream `95502e2c` (`Prepare
+release`). Later entries in the analysis document belong to the ongoing 1.2.7
+queue.
+
 - [x] `0ebec014` Improved release page
   - Ported the remaining Rust-applicable rendering change: empty release
     artifact lists now use Micron emphasis.
