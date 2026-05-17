@@ -13,6 +13,7 @@ pub enum Operation {
     Stats,
     Release,
     Interact,
+    Propose,
     Admin,
 }
 
@@ -24,6 +25,7 @@ pub struct Access {
     stats: Rule,
     release: Rule,
     interact: Rule,
+    propose: Rule,
     admin: Rule,
     repositories_dir: PathBuf,
 }
@@ -53,9 +55,15 @@ impl Access {
             stats: Rule::parse(stats)?,
             release: Rule::parse(release)?,
             interact: Rule::parse(interact)?,
+            propose: Rule::None,
             admin: Rule::parse(admin)?,
             repositories_dir,
         })
+    }
+
+    pub fn with_propose(mut self, propose: &[String]) -> Result<Self> {
+        self.propose = Rule::parse(propose)?;
+        Ok(self)
     }
 
     pub fn allows(
@@ -81,6 +89,7 @@ impl Access {
             Operation::Stats => self.stats.allows(identity),
             Operation::Release => self.release.allows(identity),
             Operation::Interact => self.interact.allows(identity),
+            Operation::Propose => self.propose.allows(identity),
             Operation::Admin => self.admin.allows(identity),
         })
     }
@@ -138,6 +147,7 @@ fn operation_key(op: Operation) -> &'static str {
         Operation::Stats => "stats",
         Operation::Release => "release",
         Operation::Interact => "interact",
+        Operation::Propose => "propose",
         Operation::Admin => "admin",
     }
 }
@@ -188,6 +198,7 @@ fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
             "s" | "stats" => "stats",
             "rel" | "release" => "release",
             "i" | "interact" => "interact",
+            "p" | "propose" => "propose",
             "adm" | "admin" => "admin",
             _ => return Err(Error::msg(format!("invalid permission \"{raw_key}\""))),
         };

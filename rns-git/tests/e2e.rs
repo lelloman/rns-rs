@@ -121,6 +121,7 @@ impl E2eHarness {
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
             allow_interact: vec!["none".into()],
+            allow_propose: vec!["none".into()],
             allow_admin: vec!["none".into()],
             log_level: rns_git::logging::DEFAULT_LOG_LEVEL,
         };

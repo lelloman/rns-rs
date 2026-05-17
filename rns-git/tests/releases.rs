@@ -741,6 +741,7 @@ fn cfg(root: &Path) -> ServerConfig {
         allow_stats: vec!["all".into()],
         allow_release: vec!["all".into()],
         allow_interact: vec!["none".into()],
+        allow_propose: vec!["none".into()],
         allow_admin: vec!["none".into()],
         log_level: logging::DEFAULT_LOG_LEVEL,
     }

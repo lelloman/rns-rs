@@ -26,6 +26,7 @@ pub struct ServerConfig {
     pub allow_stats: Vec<String>,
     pub allow_release: Vec<String>,
     pub allow_interact: Vec<String>,
+    pub allow_propose: Vec<String>,
     pub allow_admin: Vec<String>,
     pub log_level: u8,
 }
@@ -92,6 +93,7 @@ impl ServerConfig {
         cfg.allow_stats = split_list(get(&ini, "access", "stats").unwrap_or("none"));
         cfg.allow_release = split_list(get(&ini, "access", "release").unwrap_or("none"));
         cfg.allow_interact = split_list(get(&ini, "access", "interact").unwrap_or("none"));
+        cfg.allow_propose = split_list(get(&ini, "access", "propose").unwrap_or("none"));
         cfg.allow_admin = split_list(get(&ini, "access", "admin").unwrap_or("none"));
         Ok((cfg, false))
     }
@@ -116,6 +118,7 @@ impl ServerConfig {
             allow_stats: vec!["none".to_string()],
             allow_release: vec!["none".to_string()],
             allow_interact: vec!["none".to_string()],
+            allow_propose: vec!["none".to_string()],
             allow_admin: vec!["none".to_string()],
             log_level: DEFAULT_LOG_LEVEL,
         }
@@ -229,7 +232,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {

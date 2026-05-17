@@ -16,12 +16,14 @@ pub const WORK_DOC_LIMIT: usize = 256 * 1024;
 pub enum WorkScope {
     Active,
     Completed,
+    Proposed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkListScope {
     Active,
     Completed,
+    Proposed,
     All,
 }
 
@@ -72,6 +74,7 @@ pub struct WorkSummary {
 pub struct WorkLists {
     pub active: Vec<WorkSummary>,
     pub completed: Vec<WorkSummary>,
+    pub proposed: Vec<WorkSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +243,22 @@ pub fn permissions_response(content: String) -> Vec<u8> {
 }
 
 pub fn create_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
+    create_document_in_scope(work_path, WorkScope::Active, input)
+}
+
+pub fn propose_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
+    let author = input.author;
+    let created = create_document_in_scope(work_path, WorkScope::Proposed, input)?;
+    let permissions = format!("interact = {}\nwrite = {}\n", hex(&author), hex(&author));
+    set_document_permissions(work_path, created.id, &permissions)?;
+    Ok(created)
+}
+
+fn create_document_in_scope(
+    work_path: &Path,
+    scope: WorkScope,
+    input: WorkInput,
+) -> Result<WorkCreated> {
     let title = non_empty_trimmed(&input.title, "title is required")?;
     let content = non_empty_trimmed(&input.content, "content is required")?;
     let format = normalize_format(&input.format);
@@ -258,12 +277,9 @@ pub fn create_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated
         signature: input.signature,
         identity: input.identity,
     };
-    let doc_dir = scope_dir(work_path, WorkScope::Active).join(id.to_string());
+    let doc_dir = scope_dir(work_path, scope).join(id.to_string());
     write_document(&doc_dir.join("root"), &document)?;
-    Ok(WorkCreated {
-        id,
-        scope: WorkScope::Active,
-    })
+    Ok(WorkCreated { id, scope })
 }
 
 pub fn list_documents(work_path: &Path, scope: WorkListScope) -> Result<WorkLists> {
@@ -273,6 +289,9 @@ pub fn list_documents(work_path: &Path, scope: WorkListScope) -> Result<WorkList
     }
     if matches!(scope, WorkListScope::Completed | WorkListScope::All) {
         lists.completed = list_scope(work_path, WorkScope::Completed)?;
+    }
+    if matches!(scope, WorkListScope::Proposed | WorkListScope::All) {
+        lists.proposed = list_scope(work_path, WorkScope::Proposed)?;
     }
     Ok(lists)
 }
@@ -395,6 +414,16 @@ pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Re
     move_document(
         work_path,
         WorkScope::Completed,
+        WorkScope::Active,
+        doc_id,
+        author,
+    )
+}
+
+pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
+    move_document(
+        work_path,
+        WorkScope::Proposed,
         WorkScope::Active,
         doc_id,
         author,
@@ -536,9 +565,15 @@ fn comment_count(doc_dir: &Path) -> Result<u64> {
 
 fn next_document_id(work_path: &Path) -> Result<u64> {
     Ok(
-        next_numeric_child(&scope_dir(work_path, WorkScope::Active))?.max(next_numeric_child(
-            &scope_dir(work_path, WorkScope::Completed),
-        )?),
+        next_numeric_child(&scope_dir(work_path, WorkScope::Active))?
+            .max(next_numeric_child(&scope_dir(
+                work_path,
+                WorkScope::Completed,
+            ))?)
+            .max(next_numeric_child(&scope_dir(
+                work_path,
+                WorkScope::Proposed,
+            ))?),
     )
 }
 
@@ -571,7 +606,7 @@ fn permissions_path(work_path: &Path, doc_id: u64) -> PathBuf {
 }
 
 fn find_document_dir(work_path: &Path, doc_id: u64) -> Result<Option<PathBuf>> {
-    for scope in [WorkScope::Active, WorkScope::Completed] {
+    for scope in [WorkScope::Active, WorkScope::Completed, WorkScope::Proposed] {
         let doc_dir = scope_dir(work_path, scope).join(doc_id.to_string());
         if doc_dir.join("root").is_file() {
             return Ok(Some(doc_dir));
@@ -585,6 +620,7 @@ impl WorkScope {
         match value {
             "active" => Some(WorkScope::Active),
             "completed" => Some(WorkScope::Completed),
+            "proposed" => Some(WorkScope::Proposed),
             _ => None,
         }
     }
@@ -593,6 +629,7 @@ impl WorkScope {
         match self {
             WorkScope::Active => "active",
             WorkScope::Completed => "completed",
+            WorkScope::Proposed => "proposed",
         }
     }
 }
@@ -602,6 +639,7 @@ impl WorkListScope {
         match value {
             "active" => Some(WorkListScope::Active),
             "completed" => Some(WorkListScope::Completed),
+            "proposed" => Some(WorkListScope::Proposed),
             "all" => Some(WorkListScope::All),
             _ => None,
         }
@@ -686,6 +724,10 @@ fn lists_value(lists: WorkLists) -> Value {
         (
             Value::Str("completed".into()),
             Value::Array(lists.completed.into_iter().map(summary_value).collect()),
+        ),
+        (
+            Value::Str("proposed".into()),
+            Value::Array(lists.proposed.into_iter().map(summary_value).collect()),
         ),
     ])
 }

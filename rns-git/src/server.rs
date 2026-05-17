@@ -108,7 +108,8 @@ pub fn register_repository_destination(
         &config.allow_interact,
         &config.allow_admin,
         config.repositories_dir.clone(),
-    )?;
+    )?
+    .with_propose(&config.allow_propose)?;
     let destination = Destination::single_in(
         protocol::APP_NAME,
         &[protocol::ASPECT_REPOSITORIES],
@@ -318,6 +319,7 @@ pub fn handle_push(
             Operation::Stats => b"stats denied".as_slice(),
             Operation::Release => b"release denied".as_slice(),
             Operation::Interact => b"interact denied".as_slice(),
+            Operation::Propose => b"propose denied".as_slice(),
             Operation::Admin => b"admin denied".as_slice(),
         };
         return Ok(protocol::status_bytes(protocol::RES_DISALLOWED, message));
@@ -459,6 +461,7 @@ pub fn handle_work(
     }
     let work_path = crate::work::work_sidecar_path(&repository_path);
     let mut interact_access = access.allows(Operation::Interact, repo, Some(remote_hash))?;
+    let propose_access = access.allows(Operation::Propose, repo, Some(remote_hash))?;
     if request.operation == "comment" {
         if let Some(doc_id) = request.doc_id {
             interact_access |= crate::work::document_permission_allows(
@@ -469,11 +472,28 @@ pub fn handle_work(
             )?;
         }
     }
-    let write_access = access.allows(Operation::Write, repo, Some(remote_hash))?;
+    let mut write_access = access.allows(Operation::Write, repo, Some(remote_hash))?;
+    if request.operation == "edit" {
+        if let Some(doc_id) = request.doc_id {
+            interact_access |= crate::work::document_permission_allows(
+                &work_path,
+                doc_id,
+                Operation::Interact,
+                Some(remote_hash),
+            )?;
+            write_access |= crate::work::document_permission_allows(
+                &work_path,
+                doc_id,
+                Operation::Write,
+                Some(remote_hash),
+            )?;
+        }
+    }
     let manage_access = interact_access && write_access;
     let permitted = match request.operation.as_str() {
         "list" | "view" => true,
         "comment" => interact_access,
+        "propose" => propose_access,
         "create" | "edit" | "delete" | "complete" | "activate" => manage_access,
         "perms" => true,
         _ => false,
@@ -512,6 +532,32 @@ pub fn handle_work(
                 };
             work_status_result(
                 crate::work::create_document(
+                    &work_path,
+                    crate::work::WorkInput {
+                        title: request.title.unwrap_or_default(),
+                        content,
+                        format: request.format.unwrap_or_else(|| "markdown".into()),
+                        signature,
+                        identity,
+                        author: *remote_hash,
+                    },
+                )
+                .map(crate::work::created_response),
+            )
+        }
+        "propose" => {
+            let content = request.content.unwrap_or_default();
+            let signature = request.signature;
+            let identity =
+                match validate_work_signature(&content, signature.as_deref(), remote_pubkey) {
+                    Ok(Some(identity)) => Some(identity),
+                    Ok(None) => {
+                        return Ok(work_error_response(Error::msg("no signature provided")))
+                    }
+                    Err(err) => return Ok(work_error_response(err)),
+                };
+            work_status_result(
+                crate::work::propose_document(
                     &work_path,
                     crate::work::WorkInput {
                         title: request.title.unwrap_or_default(),
@@ -709,9 +755,12 @@ fn work_error_response(err: Error) -> Vec<u8> {
     } else {
         match message.as_str() {
             "document not found" => protocol::RES_NOT_FOUND,
-            "no access, not author" => protocol::RES_DISALLOWED,
+            "no access, not author" => {
+                return protocol::status_bytes(protocol::RES_DISALLOWED, b"not allowed");
+            }
             "title is required"
             | "content is required"
+            | "no signature provided"
             | "invalid signature"
             | "content limit exceeded"
             | "no changes specified" => protocol::RES_INVALID_REQ,
@@ -887,6 +936,7 @@ mod tests {
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
             allow_interact: vec!["none".into()],
+            allow_propose: vec!["none".into()],
             allow_admin: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
@@ -1508,6 +1558,90 @@ mod tests {
     }
 
     #[test]
+    fn work_protocol_proposes_signed_documents_in_proposed_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["none".into()];
+        config.allow_interact = vec!["none".into()];
+        config.allow_propose = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+        let access = make_access(&config);
+        let identity = Identity::new(&mut OsRng);
+        let remote_hash = *identity.hash();
+        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap().try_into().unwrap();
+        let signature = identity.sign(b"Proposal body").unwrap().to_vec();
+
+        let proposed = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("propose")),
+                ("title", strv("Proposal")),
+                ("content", strv("Proposal body")),
+                ("signature", binv(&signature)),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        let proposed = body_value(&proposed);
+        assert_eq!(proposed.map_get("id").and_then(Value::as_integer), Some(1));
+        assert_eq!(
+            proposed.map_get("scope").and_then(Value::as_str),
+            Some("proposed")
+        );
+
+        let list = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("list")),
+                ("scope", strv("all")),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        let list = body_value(&list);
+        assert_eq!(
+            list.map_get("proposed")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let edit = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("edit")),
+                ("scope", strv("proposed")),
+                ("doc_id", uintv(1)),
+                ("title", strv("Updated proposal")),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        assert_eq!(edit, vec![protocol::RES_OK]);
+
+        let invalid = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("propose")),
+                ("title", strv("Unsigned")),
+                ("content", strv("Unsigned body")),
+            ]),
+            Some(&(remote_hash, remote_pubkey)),
+        )
+        .unwrap();
+        assert_eq!(invalid[0], protocol::RES_INVALID_REQ);
+    }
+
+    #[test]
     fn work_protocol_validates_and_exposes_document_signatures() {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = cfg(tmp.path());
@@ -1848,6 +1982,8 @@ mod tests {
             &config.allow_admin,
             config.repositories_dir.clone(),
         )
+        .unwrap()
+        .with_propose(&config.allow_propose)
         .unwrap()
     }
 

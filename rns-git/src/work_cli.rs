@@ -91,6 +91,10 @@ enum WorkCommand {
         title: String,
         content_path: PathBuf,
     },
+    Propose {
+        title: String,
+        content_path: PathBuf,
+    },
     Edit {
         scope: String,
         id: u64,
@@ -188,6 +192,11 @@ impl WorkOptions {
                 content_path: content_path
                     .ok_or_else(|| Error::msg("work create requires --content"))?,
             },
+            "propose" => WorkCommand::Propose {
+                title: title.ok_or_else(|| Error::msg("work propose requires --title"))?,
+                content_path: content_path
+                    .ok_or_else(|| Error::msg("work propose requires --content"))?,
+            },
             "edit" => WorkCommand::Edit {
                 scope,
                 id: id.ok_or_else(|| Error::msg("work edit requires --id"))?,
@@ -275,6 +284,34 @@ fn run_work_command(
                     .map_get("scope")
                     .and_then(Value::as_str)
                     .unwrap_or("active"),
+                value.map_get("id").and_then(Value::as_integer).unwrap_or(0)
+            )?;
+            Ok(())
+        }
+        WorkCommand::Propose {
+            title,
+            content_path,
+        } => {
+            let content = fs::read_to_string(content_path)?;
+            let signature = transport.sign(&content)?;
+            let body = transport.request(request(
+                "propose",
+                &[
+                    ("title", Value::Str(title.clone())),
+                    ("content", Value::Str(content)),
+                    ("format", Value::Str(format_for_path(content_path))),
+                    ("signature", Value::Bin(signature)),
+                ],
+            ))?;
+            let value = msgpack::unpack_exact(&body)
+                .map_err(|e| Error::msg(format!("invalid propose response: {e}")))?;
+            writeln!(
+                output,
+                "Proposed work document {} #{}",
+                value
+                    .map_get("scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("proposed"),
                 value.map_get("id").and_then(Value::as_integer).unwrap_or(0)
             )?;
             Ok(())
@@ -426,12 +463,17 @@ fn print_work_list(value: &Value, mut output: impl Write) -> Result<()> {
         .map_get("completed")
         .and_then(Value::as_array)
         .unwrap_or(&[]);
-    if active.is_empty() && completed.is_empty() {
+    let proposed = value
+        .map_get("proposed")
+        .and_then(Value::as_array)
+        .unwrap_or(&[]);
+    if active.is_empty() && completed.is_empty() && proposed.is_empty() {
         writeln!(output, "No work documents")?;
         return Ok(());
     }
     print_work_section("Active documents", active, &mut output)?;
     print_work_section("Completed documents", completed, &mut output)?;
+    print_work_section("Proposed documents", proposed, &mut output)?;
     Ok(())
 }
 
@@ -549,7 +591,7 @@ fn format_for_path(path: &std::path::Path) -> String {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit work [--config DIR] [--rnsconfig DIR] [--scope active|completed|all] [--id N] [--title TITLE] [--content PATH] [-y|--yes] <rns://destination/repo> <list|view|create|edit|delete|comment|perms|complete|activate>"
+    "usage: rngit work [--config DIR] [--rnsconfig DIR] [--scope active|completed|proposed|all] [--id N] [--title TITLE] [--content PATH] [-y|--yes] <rns://destination/repo> <list|view|create|propose|edit|delete|comment|perms|complete|activate>"
 }
 
 #[cfg(test)]

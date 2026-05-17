@@ -336,3 +336,14 @@ queue.
     half-block category colors.
   - Updated stats page regression expectations for the new layout and chart
     legend behavior.
+- [x] `12e45b64` Added work document proposals
+  - Added the `proposed` work-document scope to storage, listing, viewing,
+    Nomad Network work pages, downloads, and CLI list output.
+  - Added proposal access parsing and config support, plus the `propose` work
+    operation that requires a valid content signature and stores documents in
+    the proposed scope.
+  - Proposal creation now writes document-local interact/write permissions for
+    the proposer, and edit handling can use those local permissions.
+  - Added CLI `rngit work ... propose`, updated usage text, and added protocol
+    coverage for signed proposals, proposed-scope listing, local edit
+    permission, and unsigned proposal rejection.

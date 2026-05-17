@@ -98,7 +98,8 @@ pub fn register_nomadnet_destination(
         &config.allow_interact,
         &config.allow_admin,
         config.repositories_dir.clone(),
-    )?;
+    )?
+    .with_propose(&config.allow_propose)?;
     register_page_handlers(node, config.clone(), access)?;
 
     Ok(destination)
@@ -1223,6 +1224,11 @@ fn render_work_page(
             &[("g", &group), ("r", &repo), ("scope", "completed")],
         ),
         m_link_raw(
+            "Proposed",
+            PATH_WORK,
+            &[("g", &group), ("r", &repo), ("scope", "proposed")],
+        ),
+        m_link_raw(
             "All",
             PATH_WORK,
             &[("g", &group), ("r", &repo), ("scope", "all")],
@@ -1256,6 +1262,18 @@ fn render_work_page(
             &lists.completed,
         );
     }
+    if matches!(
+        list_scope,
+        crate::work::WorkListScope::Proposed | crate::work::WorkListScope::All
+    ) {
+        append_work_section(
+            &mut out,
+            &group,
+            &repo,
+            crate::work::WorkScope::Proposed,
+            &lists.proposed,
+        );
+    }
     Ok(out)
 }
 
@@ -1269,6 +1287,7 @@ fn append_work_section(
     let title = match scope {
         crate::work::WorkScope::Active => "Active Work Documents",
         crate::work::WorkScope::Completed => "Completed Work Documents",
+        crate::work::WorkScope::Proposed => "Proposed Work Documents",
     };
     out.push_str(&format!(">{title} ({})\n\n", docs.len()));
     if docs.is_empty() {
@@ -1400,13 +1419,14 @@ fn resolve_work_document(
     requested_scope: &str,
     id: u64,
 ) -> Result<(crate::work::WorkScope, Option<crate::work::WorkDocument>)> {
-    let requested_scope = if matches!(requested_scope, "active" | "completed" | "all") {
+    let requested_scope = if matches!(requested_scope, "active" | "completed" | "proposed" | "all")
+    {
         requested_scope
     } else {
         "active"
     };
     match requested_scope {
-        "active" | "completed" => {
+        "active" | "completed" | "proposed" => {
             let scope = crate::work::WorkScope::parse(requested_scope).unwrap();
             Ok((scope, crate::work::view_document(work_path, scope, id)?))
         }
@@ -1415,10 +1435,14 @@ fn resolve_work_document(
                 crate::work::view_document(work_path, crate::work::WorkScope::Active, id)?
             {
                 Ok((crate::work::WorkScope::Active, Some(document)))
+            } else if let Some(document) =
+                crate::work::view_document(work_path, crate::work::WorkScope::Completed, id)?
+            {
+                Ok((crate::work::WorkScope::Completed, Some(document)))
             } else {
                 Ok((
-                    crate::work::WorkScope::Completed,
-                    crate::work::view_document(work_path, crate::work::WorkScope::Completed, id)?,
+                    crate::work::WorkScope::Proposed,
+                    crate::work::view_document(work_path, crate::work::WorkScope::Proposed, id)?,
                 ))
             }
         }
@@ -4231,6 +4255,7 @@ Unmatched * marker\n\
             allow_stats: vec!["none".into()],
             allow_release: vec!["none".into()],
             allow_interact: vec!["none".into()],
+            allow_propose: vec!["none".into()],
             allow_admin: vec!["none".into()],
             log_level: logging::DEFAULT_LOG_LEVEL,
         }
