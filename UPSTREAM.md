@@ -401,3 +401,13 @@ queue.
     existing mirror source metadata.
   - Covered sync CLI parsing, sync handler success/rejection paths, and mirror
     sync timestamp metadata.
+- [x] `6c7f1d06` Implemented fork and mirror sync from upstreams
+  - Implemented upstream sync by fetching `+refs/*:refs/*` from the stored
+    `repository.rngit.upstream.source` into existing fork or mirror
+    repositories.
+  - Mirror sync updates `repository.rngit.upstream.sync` after a successful
+    fetch, matching upstream timestamp behavior.
+  - Updated the sync handler to report fork/mirror sync failures instead of
+    returning success for the previous scaffold.
+  - Added coverage that advances a local source repository after fork creation
+    and verifies `rngit sync` updates the target bare repository.

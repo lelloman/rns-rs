@@ -149,6 +149,33 @@ pub fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
     ))
 }
 
+pub fn sync_upstream(path: &Path) -> Result<String> {
+    require_repository(path)?;
+    let repository_type = repository_config(path, "repository.rngit.type")?
+        .ok_or_else(|| Error::msg("repository is neither fork nor mirror"))?;
+    if !matches!(repository_type.as_str(), "fork" | "mirror") {
+        return Err(Error::msg("repository is neither fork nor mirror"));
+    }
+    let source = repository_config(path, "repository.rngit.upstream.source")?
+        .filter(|source| !source.is_empty())
+        .ok_or_else(|| Error::msg("missing upstream source"))?;
+    run(Command::new("git")
+        .arg("--git-dir")
+        .arg(path)
+        .arg("fetch")
+        .arg(&source)
+        .arg("+refs/*:refs/*"))?;
+    if repository_type == "mirror" {
+        run(Command::new("git")
+            .arg("--git-dir")
+            .arg(path)
+            .arg("config")
+            .arg("repository.rngit.upstream.sync")
+            .arg(unix_timestamp().to_string()))?;
+    }
+    Ok(repository_type)
+}
+
 pub fn is_bare_repository(path: &Path) -> bool {
     path.join("HEAD").exists() && path.join("objects").is_dir()
 }

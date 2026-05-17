@@ -605,6 +605,14 @@ pub fn handle_sync(
             b"repository is neither fork nor mirror",
         ));
     }
+    if let Err(_err) = git::sync_upstream(&repository_path) {
+        let message = match repository_type.as_deref() {
+            Some("mirror") => b"mirror sync failed".as_slice(),
+            Some("fork") => b"fork sync failed".as_slice(),
+            _ => b"sync failed".as_slice(),
+        };
+        return Ok(protocol::status_bytes(protocol::RES_REMOTE_FAIL, message));
+    }
 
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
@@ -1647,19 +1655,22 @@ mod tests {
     }
 
     #[test]
-    fn sync_handler_accepts_fork_or_mirror_with_write_access() {
+    fn sync_handler_fetches_upstream_updates_for_fork() {
         let tmp = tempfile::tempdir().unwrap();
-        let config = cfg(tmp.path());
-        let repo = config.repositories_dir.join("group/forked");
-        git::ensure_bare_repository(&repo).unwrap();
-        set_git_config(&repo, "repository.rngit.type", "fork");
-        set_git_config(
-            &repo,
-            "repository.rngit.upstream.source",
-            "https://example.invalid/upstream.git",
-        );
+        let source = create_source_repo(tmp.path());
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
         let access = make_access(&config);
         let remote = ([0x22; 16], [0u8; 64]);
+        let fork_req =
+            protocol::remote_clone_request("group/forked", source.to_str().expect("utf-8 path"));
+        assert_eq!(
+            handle_fork(&config, &access, &fork_req, Some(&remote)).unwrap()[0],
+            protocol::RES_OK
+        );
+
+        let updated_sha = commit_source_file(&source, "second.txt", "second\n");
 
         let resp = handle_sync(
             &config,
@@ -1670,6 +1681,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(resp[0], protocol::RES_OK);
+        assert_eq!(
+            git_rev_parse(&config.repositories_dir.join("group/forked"), "HEAD"),
+            updated_sha
+        );
     }
 
     #[test]
@@ -2562,6 +2577,50 @@ mod tests {
         source
     }
 
+    fn commit_source_file(repo: &std::path::Path, file: &str, content: &str) -> String {
+        std::fs::write(repo.join(file), content).unwrap();
+        run_git(repo, &["add", file]);
+        run_git(
+            repo,
+            &[
+                "-c",
+                "user.name=rngit test",
+                "-c",
+                "user.email=rngit@example.invalid",
+                "commit",
+                "-m",
+                file,
+            ],
+        );
+        git_rev_parse(repo, "HEAD")
+    }
+
+    fn git_rev_parse(repo: &std::path::Path, rev: &str) -> String {
+        let output = if repo.join(".git").is_dir() {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .arg("rev-parse")
+                .arg(rev)
+                .output()
+                .unwrap()
+        } else {
+            std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(repo)
+                .arg("rev-parse")
+                .arg(rev)
+                .output()
+                .unwrap()
+        };
+        assert!(
+            output.status.success(),
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     fn git_config(repo: &std::path::Path, key: &str) -> String {
         let output = std::process::Command::new("git")
             .arg("--git-dir")
@@ -2577,22 +2636,6 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
-    }
-
-    fn set_git_config(repo: &std::path::Path, key: &str, value: &str) {
-        let output = std::process::Command::new("git")
-            .arg("--git-dir")
-            .arg(repo)
-            .arg("config")
-            .arg(key)
-            .arg(value)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git config failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 
     fn run_git(cwd: &std::path::Path, args: &[&str]) {
