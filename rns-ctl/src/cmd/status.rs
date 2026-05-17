@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::process;
+use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::format::{prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
@@ -12,6 +13,8 @@ use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
 use rns_net::{RpcAddr, RpcClient};
+
+const MONITOR_MIN_SLEEP: Duration = Duration::from_millis(200);
 
 pub fn run(args: Args) {
     if args.has("version") {
@@ -98,13 +101,18 @@ pub fn run(args: Args) {
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
 
     loop {
+        let monitor_started = Instant::now();
+
         // Connect to RPC server
         let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
             Ok(c) => c,
             Err(e) => {
                 if monitor_mode {
                     eprintln!("Could not connect to rnsd: {} — retrying...", e);
-                    std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
+                    std::thread::sleep(monitor_sleep_duration(
+                        monitor_interval,
+                        monitor_started.elapsed(),
+                    ));
                     continue;
                 }
                 eprintln!("Could not connect to rnsd: {}", e);
@@ -122,7 +130,10 @@ pub fn run(args: Args) {
             Err(e) => {
                 eprintln!("RPC error: {}", e);
                 if monitor_mode {
-                    std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
+                    std::thread::sleep(monitor_sleep_duration(
+                        monitor_interval,
+                        monitor_started.elapsed(),
+                    ));
                     continue;
                 }
                 process::exit(1);
@@ -170,8 +181,19 @@ pub fn run(args: Args) {
             break;
         }
 
-        std::thread::sleep(std::time::Duration::from_secs_f64(monitor_interval));
+        std::thread::sleep(monitor_sleep_duration(
+            monitor_interval,
+            monitor_started.elapsed(),
+        ));
     }
+}
+
+fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
+    let interval = Duration::from_secs_f64(interval_secs);
+    interval
+        .checked_sub(elapsed)
+        .unwrap_or(MONITOR_MIN_SLEEP)
+        .max(MONITOR_MIN_SLEEP)
 }
 
 fn print_status(
@@ -397,4 +419,25 @@ fn print_usage() {
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_sleep_accounts_for_elapsed_iteration_time() {
+        assert_eq!(
+            monitor_sleep_duration(1.0, Duration::from_millis(250)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            monitor_sleep_duration(1.0, Duration::from_millis(950)),
+            MONITOR_MIN_SLEEP
+        );
+        assert_eq!(
+            monitor_sleep_duration(1.0, Duration::from_millis(1500)),
+            MONITOR_MIN_SLEEP
+        );
+    }
 }
