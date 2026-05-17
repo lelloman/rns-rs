@@ -198,3 +198,7 @@ queue.
   - Audited as upstream hosted `README.mu` wording and self-hosted manual link
     conversion. rns-rs has no vendored copy of this page, and existing README
     rendering already consumes repository content at runtime.
+- [x] `358f9c3b` Updated readme
+  - Audited as upstream hosted `README.mu` formatting, dependency wording, and
+    internal link updates. No local port is required because rns-rs does not
+    ship Reticulum's repository README.mu content.
