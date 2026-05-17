@@ -97,3 +97,7 @@ analysis for this range is in
   - Added focused page coverage for download links and work document resource
     responses. Rust resource metadata currently carries status only, so the
     upstream Python filename hint is not represented yet.
+- [x] `018df10a` Fixed rngit remote helper startup hang on first config
+  - Audited as already implemented in Rust. `git-remote-rns` loads or creates
+    `client_config` before initializing the file logger and before constructing
+    the Reticulum node, then exits with the first-run edit-config message.
