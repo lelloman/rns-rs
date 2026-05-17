@@ -237,3 +237,6 @@ queue.
   - Audited as upstream hosted `README.mu` line-wrapping/content polish only.
     No rns-rs renderer, protocol, CLI, or vendored documentation change is
     required.
+- [x] `e8b236c7` Updated readme
+  - Audited as a follow-up upstream hosted `README.mu` wrapping adjustment for
+    application examples. No local port is required.
