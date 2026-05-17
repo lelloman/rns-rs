@@ -1517,7 +1517,7 @@ fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) ->
     let max = data.iter().copied().max().unwrap_or(1).max(1) as f64;
     let primary = expand_chart_color(color);
     let secondary = dim_chart_color(&primary);
-    let mut out = format!("`FT{primary}Peak: {} | {} pts`f\n", max as u64, data.len());
+    let mut out = format!("`FT{primary}Peak: {}`f\n", max as u64);
     for row in (1..=height).rev() {
         let row_top = row as f64 / height as f64 * max;
         let row_mid = (row as f64 - 0.5) / height as f64 * max;

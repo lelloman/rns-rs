@@ -319,7 +319,11 @@ queue.
     separate persisted counters and the rendered combined download total.
 - [x] `03cfbc2e` Added half-block chart rendering
   - Ported stats chart rendering from full-block shade glyphs to upstream-style
-    half-block charts with foreground/background gradient colors and point
-    counts in the peak label.
+    half-block charts with foreground/background gradient colors.
   - Covered the rendered stats page output so the new half-block glyphs and
-    peak/point label are exercised through a real download chart.
+    peak label are exercised through a real download chart.
+- [x] `9b99b72f` Cleanup
+  - Ported the follow-up half-block chart label cleanup by removing the point
+    count suffix from the peak line.
+  - Audited the full-block chart local-variable rename as not applicable
+    because rns-rs only retains the active half-block renderer.
