@@ -267,3 +267,8 @@ queue.
   - Marked configured latest releases on Nomad Network release listings and
     covered explicit latest selection for pages, downloads, protocol listing,
     invalid tags, CLI parsing, and CLI request generation.
+- [x] `1a7607cb` Improved shared instance RPC error handling
+  - Audited as Python `Reticulum.py` shared-instance destination/identity
+    retention RPC handling. rns-rs does not expose the same retention RPC
+    methods, and its existing CLI RPC callers already handle `RpcClient::call`
+    failures at command boundaries.
