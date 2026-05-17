@@ -756,6 +756,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_falls_back_when_discovered_interface_name_is_nil() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.retain(|(key, _)| key.as_uint() != Some(NAME as u64));
+        entries.push((Value::UInt(NAME as u64), Value::Nil));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.name, "Discovered BackboneInterface");
+    }
+
+    #[test]
     fn parse_rejects_invalid_discovered_interface_field_types() {
         for (field, replacement) in [
             (TRANSPORT, Value::Str("yes".to_string())),

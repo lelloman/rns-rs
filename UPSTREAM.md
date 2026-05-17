@@ -133,3 +133,8 @@ analysis for this range is in
 - [x] `64ebdd0e` Cleanup
   - Audited as not applicable. The upstream change only removes a stale Python
     progress-reporting comment in the `rngit` remote helper.
+- [x] `c86b9c97` Fixed missing none check in interface discovery sanitizer
+  - Audited Rust parsing as already defensive: non-string and missing discovery
+    names are treated as empty before sanitization and fall back to the
+    interface type label.
+  - Added a focused discovery parser regression for a Nil discovery name.
