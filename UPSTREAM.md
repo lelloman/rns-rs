@@ -111,3 +111,8 @@ analysis for this range is in
     positional paths in one invocation.
   - Added a CLI regression covering two generated `.rsg` files and validating
     them in one batch.
+- [x] `54c36f51` Added file encryption for multiple file path inputs
+  - Ported `rnid -e/--encrypt` to encrypt the first flag value plus any
+    trailing positional paths in one invocation.
+  - Added a CLI regression covering two generated `.rfe` files and decrypting
+    both outputs back to their original plaintext.

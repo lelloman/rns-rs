@@ -364,6 +364,49 @@ fn public_only_encrypts_but_cannot_decrypt_or_sign() {
 }
 
 #[test]
+fn encrypt_accepts_multiple_paths() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let msg1 = dir.path().join("secret-one.txt");
+    let msg2 = dir.path().join("secret-two.txt");
+    let out1 = dir.path().join("secret-one.out");
+    let out2 = dir.path().join("secret-two.out");
+    let rid_s = path_str(&rid);
+    let msg1_s = path_str(&msg1);
+    let msg2_s = path_str(&msg2);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&msg1, b"first secret").unwrap();
+    fs::write(&msg2, b"second secret").unwrap();
+
+    let output = assert_success(rnid(&["-i", &rid_s, "-e", &msg1_s, &msg2_s]));
+    assert_eq!(output.matches("encrypted to").count(), 2);
+
+    let encrypted1 = path_str(&msg1.with_extension("txt.rfe"));
+    let encrypted2 = path_str(&msg2.with_extension("txt.rfe"));
+    assert!(Path::new(&encrypted1).exists());
+    assert!(Path::new(&encrypted2).exists());
+
+    assert_success(rnid(&[
+        "-i",
+        &rid_s,
+        "-d",
+        &encrypted1,
+        "-w",
+        &path_str(&out1),
+    ]));
+    assert_success(rnid(&[
+        "-i",
+        &rid_s,
+        "-d",
+        &encrypted2,
+        "-w",
+        &path_str(&out2),
+    ]));
+    assert_eq!(fs::read(out1).unwrap(), b"first secret");
+    assert_eq!(fs::read(out2).unwrap(), b"second secret");
+}
+
+#[test]
 fn rsg_validation_accepts_required_signer_identity_hash() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");

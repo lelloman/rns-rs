@@ -112,9 +112,10 @@ fn main() {
         operated = true;
     }
 
-    if let Some(path) = args.get("e").or_else(|| args.get("encrypt")) {
+    if args.has("e") || args.has("encrypt") {
         let identity = require_identity(identity_ref.as_ref());
-        encrypt_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        let paths = operation_paths(&args, "e", "encrypt").unwrap_or_else(|e| die(&e, 1));
+        encrypt_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
         operated = true;
     }
 
@@ -882,6 +883,13 @@ fn encrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), Stri
     Ok(())
 }
 
+fn encrypt_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
+    for path in paths {
+        encrypt_file(path, identity, args)?;
+    }
+    Ok(())
+}
+
 fn decrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), String> {
     if !path
         .to_ascii_lowercase()
@@ -1085,7 +1093,7 @@ fn print_usage() {
     println!();
     println!("Operations:");
     println!("  -H APP.ASPECT      Compute destination hash");
-    println!("  -e FILE            Encrypt file to .rfe");
+    println!("  -e FILE...         Encrypt one or more files to .rfe");
     println!("  -d FILE.rfe        Decrypt file");
     println!("  -s FILE...         Sign one or more files to .rsg");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
