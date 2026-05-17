@@ -194,3 +194,7 @@ queue.
   - Audited as another upstream hosted `README.mu` link/content update for the
     Reticulum repository page. No rns-rs renderer, CLI, protocol, or vendored
     documentation change is required.
+- [x] `cb3ef690` Updated readme
+  - Audited as upstream hosted `README.mu` wording and self-hosted manual link
+    conversion. rns-rs has no vendored copy of this page, and existing README
+    rendering already consumes repository content at runtime.
