@@ -241,7 +241,7 @@ pub fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result
         .artifact_data
         .as_deref()
         .ok_or_else(|| Error::msg("missing artifact data"))?;
-    let release_dir = releases_path.join(tag);
+    let release_dir = releases_path.join(&tag);
     if !release_dir.is_dir() {
         return Ok(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
@@ -269,7 +269,7 @@ pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result
             b"invalid tag name",
         ));
     };
-    let release_dir = releases_path.join(tag);
+    let release_dir = releases_path.join(&tag);
     if !release_dir.is_dir() {
         return Ok(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
@@ -287,6 +287,13 @@ pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result
     set_meta(&mut meta, "status", "published");
     set_meta(&mut meta, "published_at", &unix_time().to_string());
     write_meta(&meta_path, &meta)?;
+    if let Err(err) = write_latest_marker(releases_path, &tag) {
+        log::error!(
+            "error setting latest release for {:?}: {}",
+            releases_path,
+            err
+        );
+    }
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
@@ -323,10 +330,7 @@ pub fn set_latest_release(releases_path: &Path, request: &ReleaseRequest) -> Res
         ));
     }
     fs::create_dir_all(releases_path)?;
-    let latest_path = releases_path.join("latest");
-    let tmp_path = releases_path.join("latest.tmp");
-    fs::write(&tmp_path, &tag)?;
-    fs::rename(tmp_path, latest_path)?;
+    write_latest_marker(releases_path, &tag)?;
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
@@ -457,6 +461,14 @@ fn data_value(release: ReleaseData) -> Value {
         ),
         (Value::Str("thanks".into()), Value::UInt(release.thanks)),
     ])
+}
+
+fn write_latest_marker(releases_path: &Path, tag: &str) -> Result<()> {
+    let latest_path = releases_path.join("latest");
+    let tmp_path = releases_path.join("latest.tmp");
+    fs::write(&tmp_path, tag)?;
+    fs::rename(tmp_path, latest_path)?;
+    Ok(())
 }
 
 fn artifact_value(artifact: Artifact) -> Value {

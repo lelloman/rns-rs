@@ -280,3 +280,10 @@ queue.
   - Audited as Python `BackboneInterface` invalid file descriptor deregistration
     log-level cleanup. The Rust Backbone implementation does not have an
     equivalent epoll deregistration warning path.
+- [x] `7e46422c` Auto-set latest release on creation
+  - Ported auto-latest behavior when a release is finalized: the release
+    sidecar `latest` marker is updated to the newly published tag.
+  - Kept auto-latest marker write failures non-fatal, matching upstream, while
+    explicit `latest` management requests still report failures.
+  - Added tests that finalized releases write/update the latest marker and that
+    explicit latest management can override the automatically selected tag.

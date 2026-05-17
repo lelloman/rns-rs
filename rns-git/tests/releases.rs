@@ -142,6 +142,10 @@ fn release_create_stores_metadata_notes_artifacts_and_finalizes() {
     assert!(fs::read_to_string(release_dir.join("META"))
         .unwrap()
         .contains("status = published"));
+    assert_eq!(
+        fs::read_to_string(config.repositories_dir.join("public/alpha.releases/latest")).unwrap(),
+        "v1"
+    );
 
     let view = server::handle_release(
         &config,
@@ -378,6 +382,18 @@ fn release_latest_operation_sets_explicit_latest_for_pages_and_downloads() {
     let access_rules = access(&config);
     create_published_release(&config, &access_rules, "public/alpha", "v1", "# First\n");
     create_published_release(&config, &access_rules, "public/alpha", "v2", "# Second\n");
+
+    let listed = server::handle_release(
+        &config,
+        &access_rules,
+        &release_request(&[
+            ("repository", strv("public/alpha")),
+            ("operation", strv("list")),
+        ]),
+        Some(&(REMOTE, REMOTE_SIG)),
+    )
+    .unwrap();
+    assert_eq!(listed_latest(&listed), Some("v2".to_string()));
 
     let latest = server::handle_release(
         &config,
