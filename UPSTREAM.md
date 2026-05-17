@@ -440,3 +440,8 @@ queue.
     `RNS/_version.py` from `1.2.6` to `1.2.7`.
   - No Cargo version bump was made because rns-rs crates are versioned and
     released independently from upstream Python Reticulum.
+- [x] `af6e0c9e` Updated changelog
+  - Audited as upstream `Changelog.md` release-note text for RNS 1.2.7.
+  - No local changelog source was updated because rns-rs tracks upstream port
+    status in this document and the detailed per-commit analysis document
+    instead of vendoring Python Reticulum release notes.
