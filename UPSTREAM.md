@@ -243,3 +243,6 @@ queue.
 - [x] `102eccb7` Updated readme
   - Audited as a single upstream hosted `README.mu` line-wrap correction. No
     local code or documentation source is affected.
+- [x] `bdc79b90` Updated readme
+  - Audited as upstream hosted `README.mu` application-example wrapping polish.
+    No local port is required.
