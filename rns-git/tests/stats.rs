@@ -211,6 +211,8 @@ fn download_stats_are_recorded_and_rendered() {
     .unwrap();
     assert!(alpha_stats.contains("Downloads`f:     2  total"));
     assert!(alpha_stats.contains(">Downloads"));
+    assert!(alpha_stats.contains("Peak: 2 | 90 pts"));
+    assert!(alpha_stats.contains('▀') || alpha_stats.contains('▄'));
 
     let persisted = msgpack::unpack_exact(&fs::read(config.dir.join("stats")).unwrap()).unwrap();
     assert_eq!(

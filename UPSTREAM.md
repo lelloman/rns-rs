@@ -317,3 +317,9 @@ queue.
     weight.
   - Added integration coverage for blob and release artifact downloads updating
     separate persisted counters and the rendered combined download total.
+- [x] `03cfbc2e` Added half-block chart rendering
+  - Ported stats chart rendering from full-block shade glyphs to upstream-style
+    half-block charts with foreground/background gradient colors and point
+    counts in the peak label.
+  - Covered the rendered stats page output so the new half-block glyphs and
+    peak/point label are exercised through a real download chart.

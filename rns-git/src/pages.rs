@@ -1514,23 +1514,24 @@ fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) ->
     if data.is_empty() || data.iter().all(|value| *value == 0) {
         return "No data available\n".to_string();
     }
-    let max = data.iter().copied().max().unwrap_or(1).max(1);
-    let mut out = format!("`F{color}Peak: {max}`f\n");
+    let max = data.iter().copied().max().unwrap_or(1).max(1) as f64;
+    let primary = expand_chart_color(color);
+    let secondary = dim_chart_color(&primary);
+    let mut out = format!("`FT{primary}Peak: {} | {} pts`f\n", max as u64, data.len());
     for row in (1..=height).rev() {
-        let threshold = (row - 1) as f64 / height as f64 * max as f64;
+        let row_top = row as f64 / height as f64 * max;
+        let row_mid = (row as f64 - 0.5) / height as f64 * max;
+        let grad_top = row as f64 / height as f64;
+        let grad_mid = (row as f64 - 0.5) / height as f64;
+        let top_color = gradient_chart_color(&primary, &secondary, grad_top, 1.3);
+        let mid_color = gradient_chart_color(&primary, &secondary, grad_mid, 1.3);
         out.push('│');
         for value in data {
-            if *value as f64 > threshold {
-                let block = if row as f64 >= height as f64 * 0.875 {
-                    '█'
-                } else if row as f64 >= height as f64 * 0.625 {
-                    '▓'
-                } else if row as f64 >= height as f64 * 0.375 {
-                    '▒'
-                } else {
-                    '░'
-                };
-                out.push_str(&format!("`F{color}{block}`f"));
+            let value = *value as f64;
+            if value >= row_top {
+                out.push_str(&format!("`FT{top_color}`BT{mid_color}▀`f`b"));
+            } else if value >= row_mid {
+                out.push_str(&format!("`FT{mid_color}▄`f"));
             } else {
                 out.push(' ');
             }
@@ -1548,6 +1549,46 @@ fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) ->
     out.push_str(&" ".repeat(spacing));
     out.push_str(&format!("`F666{:>12}`f\n", labels[1]));
     out
+}
+
+fn expand_chart_color(color: &str) -> String {
+    let color = color.trim_start_matches('#');
+    if color.len() == 3 {
+        color.chars().flat_map(|ch| [ch, ch]).collect()
+    } else {
+        color.chars().take(6).collect()
+    }
+}
+
+fn dim_chart_color(primary: &str) -> String {
+    let rgb = chart_rgb(primary);
+    format!(
+        "{:02x}{:02x}{:02x}",
+        (rgb[0] as f64 * 0.42) as u8,
+        (rgb[1] as f64 * 0.42) as u8,
+        (rgb[2] as f64 * 0.42) as u8
+    )
+}
+
+fn gradient_chart_color(primary: &str, secondary: &str, t: f64, factor: f64) -> String {
+    let primary = chart_rgb(primary);
+    let secondary = chart_rgb(secondary);
+    let t = (t * factor).min(1.0);
+    format!(
+        "{:02x}{:02x}{:02x}",
+        (secondary[0] as f64 + (primary[0] as f64 - secondary[0] as f64) * t) as u8,
+        (secondary[1] as f64 + (primary[1] as f64 - secondary[1] as f64) * t) as u8,
+        (secondary[2] as f64 + (primary[2] as f64 - secondary[2] as f64) * t) as u8
+    )
+}
+
+fn chart_rgb(color: &str) -> [u8; 3] {
+    let color = expand_chart_color(color);
+    [
+        u8::from_str_radix(color.get(0..2).unwrap_or("00"), 16).unwrap_or(0),
+        u8::from_str_radix(color.get(2..4).unwrap_or("00"), 16).unwrap_or(0),
+        u8::from_str_radix(color.get(4..6).unwrap_or("00"), 16).unwrap_or(0),
+    ]
 }
 
 fn render_combined_chart(
