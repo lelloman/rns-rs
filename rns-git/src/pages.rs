@@ -37,6 +37,14 @@ pub const PATH_DOWNLOAD: &str = "/file/download";
 pub const PATH_WORK_DOC_DOWNLOAD: &str = "/file/workdoc";
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+const RCLR_PUSH: &str = "B9A810";
+const RCLR_PUSH_G: &str = "791212";
+const RCLR_FETCH: &str = "10b981";
+const RCLR_FETCH_G: &str = "1c5e71";
+const RCLR_VIEW: &str = "3b82f6";
+const RCLR_VIEW_G: &str = "13428A";
+const RCLR_DOWNLOAD: &str = "7831E0";
+const RCLR_DOWNLOAD_G: &str = "c5754d";
 
 const PAGE_PATHS: &[&str] = &[
     PATH_INDEX,
@@ -938,23 +946,31 @@ fn render_stats_page(
         m_escape(&stats.repository)
     );
     out.push_str(&format!(
-        "`F66dViews`f    : {:>5}  total `F666(peak: {:>3})`f\n",
-        stats.views.total, stats.views.peak
+        "`FT{RCLR_FETCH}Fetches`f   : {:>5}  total `F666  today: {:>3}  peak: {:>3} `f\n",
+        stats.fetches.total,
+        stats.fetches.daily.last().copied().unwrap_or(0),
+        stats.fetches.peak
     ));
     out.push_str(&format!(
-        "`F0a0Fetches`f  : {:>5}  total `F666(peak: {:>3})`f\n",
-        stats.fetches.total, stats.fetches.peak
+        "`FT{RCLR_PUSH}Pushes`f    : {:>5}  total `F666  today: {:>3}  peak: {:>3} `f\n",
+        stats.pushes.total,
+        stats.pushes.daily.last().copied().unwrap_or(0),
+        stats.pushes.peak
     ));
     out.push_str(&format!(
-        "`Faa0Pushes`f   : {:>5}  total `F666(peak: {:>3})`f\n",
-        stats.pushes.total, stats.pushes.peak
+        "`FT{RCLR_VIEW}Views`f     : {:>5}  total `F666  today: {:>3}  peak: {:>3} `f\n",
+        stats.views.total,
+        stats.views.daily.last().copied().unwrap_or(0),
+        stats.views.peak
     ));
     out.push_str(&format!(
-        "`Fa22Downloads`f: {:>5}  total `F666(peak: {:>3})`f\n",
-        stats.downloads_combined.total, stats.downloads_combined.peak
+        "`FT{RCLR_DOWNLOAD}Downloads`f : {:>5}  total `F666  today: {:>3}  peak: {:>3} `f\n",
+        stats.downloads_combined.total,
+        stats.downloads_combined.daily.last().copied().unwrap_or(0),
+        stats.downloads_combined.peak
     ));
     out.push_str(&format!(
-        "`F0aaActivity`f : {:>5} points\n\n",
+        "`F0aaActivity`f  : {:>5} points\n\n",
         stats.activity_score
     ));
     out.push_str(&format!(
@@ -965,22 +981,14 @@ fn render_stats_page(
         stats.date_range
     ));
 
-    if stats.views.total > 0 {
-        out.push_str(">Views\n\n");
-        out.push_str(&render_chart(
-            &stats.views.daily,
-            &stats.timeline_labels,
-            "66d",
-            10,
-        ));
-        out.push('\n');
-    }
     if stats.fetches.total > 0 {
         out.push_str(">Fetches\n\n");
         out.push_str(&render_chart(
             &stats.fetches.daily,
             &stats.timeline_labels,
-            "0a0",
+            RCLR_FETCH,
+            Some(RCLR_FETCH_G),
+            1.3,
             10,
         ));
         out.push('\n');
@@ -990,7 +998,21 @@ fn render_stats_page(
         out.push_str(&render_chart(
             &stats.pushes.daily,
             &stats.timeline_labels,
-            "aa0",
+            RCLR_PUSH,
+            Some(RCLR_PUSH_G),
+            1.3,
+            10,
+        ));
+        out.push('\n');
+    }
+    if stats.views.total > 0 {
+        out.push_str(">Views\n\n");
+        out.push_str(&render_chart(
+            &stats.views.daily,
+            &stats.timeline_labels,
+            RCLR_VIEW,
+            Some(RCLR_VIEW_G),
+            1.3,
             10,
         ));
         out.push('\n');
@@ -1000,7 +1022,9 @@ fn render_stats_page(
         out.push_str(&render_chart(
             &stats.downloads_combined.daily,
             &stats.timeline_labels,
-            "a22",
+            RCLR_DOWNLOAD,
+            Some(RCLR_DOWNLOAD_G),
+            1.7,
             10,
         ));
         out.push('\n');
@@ -1011,8 +1035,9 @@ fn render_stats_page(
             &stats.views.daily,
             &stats.fetches.daily,
             &stats.pushes.daily,
+            &stats.downloads_combined.daily,
             &stats.timeline_labels,
-            4,
+            6,
         ));
     } else {
         out.push_str(
@@ -1510,21 +1535,30 @@ pub fn download_file(
     })
 }
 
-fn render_chart(data: &[u64], labels: &[String; 2], color: &str, height: u64) -> String {
+fn render_chart(
+    data: &[u64],
+    labels: &[String; 2],
+    color: &str,
+    secondary_color: Option<&str>,
+    gradient_factor: f64,
+    height: u64,
+) -> String {
     if data.is_empty() || data.iter().all(|value| *value == 0) {
         return "No data available\n".to_string();
     }
     let max = data.iter().copied().max().unwrap_or(1).max(1) as f64;
     let primary = expand_chart_color(color);
-    let secondary = dim_chart_color(&primary);
+    let secondary = secondary_color
+        .map(expand_chart_color)
+        .unwrap_or_else(|| dim_chart_color(&primary));
     let mut out = format!("`FT{primary}Peak: {}`f\n", max as u64);
     for row in (1..=height).rev() {
         let row_top = row as f64 / height as f64 * max;
         let row_mid = (row as f64 - 0.5) / height as f64 * max;
         let grad_top = row as f64 / height as f64;
         let grad_mid = (row as f64 - 0.5) / height as f64;
-        let top_color = gradient_chart_color(&primary, &secondary, grad_top, 1.3);
-        let mid_color = gradient_chart_color(&primary, &secondary, grad_mid, 1.3);
+        let top_color = gradient_chart_color(&primary, &secondary, grad_top, gradient_factor);
+        let mid_color = gradient_chart_color(&primary, &secondary, grad_mid, gradient_factor);
         out.push('│');
         for value in data {
             let value = *value as f64;
@@ -1595,55 +1629,113 @@ fn render_combined_chart(
     views: &[u64],
     fetches: &[u64],
     pushes: &[u64],
+    downloads: &[u64],
     labels: &[String; 2],
     height: u64,
 ) -> String {
-    if views.is_empty() {
+    if views.is_empty() || fetches.is_empty() || pushes.is_empty() || downloads.is_empty() {
         return "No data available\n".to_string();
     }
-    let totals: Vec<u64> = views
+
+    let categories = [
+        ("Pushes", dim_to_black(RCLR_PUSH, 0.87), pushes),
+        ("Fetches", dim_to_black(RCLR_FETCH, 0.87), fetches),
+        ("Views", dim_to_black(RCLR_VIEW, 0.87), views),
+        ("Downloads", dim_to_black(RCLR_DOWNLOAD, 0.87), downloads),
+    ];
+    let mut out = categories
         .iter()
-        .zip(fetches.iter())
-        .zip(pushes.iter())
-        .map(|((view, fetch), push)| view + fetch + push)
-        .collect();
-    let max = totals.iter().copied().max().unwrap_or(1).max(1);
-    let mut out = String::from("`F66d██`f Views  `F0a0██`f Fetches  `Faa0██`f Pushes\n\n");
+        .map(|(label, color, _)| format!("`FT{color}`BT{color}██`f`b {label}"))
+        .collect::<Vec<_>>()
+        .join("  ");
+    out.push_str("\n\n");
+    let num_points = views.len();
+
     for row in (1..=height).rev() {
-        let threshold = (row - 1) as f64 / height as f64 * max as f64;
+        let lower_min = (row as f64 - 1.0) / height as f64;
+        let lower_max = (row as f64 - 0.5) / height as f64;
+        let upper_min = (row as f64 - 0.5) / height as f64;
+        let upper_max = row as f64 / height as f64;
         out.push('│');
-        for i in 0..views.len() {
-            let view = views[i] as f64;
-            let fetch = fetches.get(i).copied().unwrap_or(0) as f64;
-            let push = pushes.get(i).copied().unwrap_or(0) as f64;
-            let total = view + fetch + push;
-            if total > threshold {
-                if push > 0.0 && threshold >= view + fetch {
-                    out.push_str("`Faa0█`f");
-                } else if fetch > 0.0 && threshold >= view {
-                    out.push_str("`F0a0▓`f");
-                } else if view > 0.0 {
-                    out.push_str("`F66d░`f");
-                } else {
-                    out.push_str("`F666▒`f");
-                }
-            } else {
+        for index in 0..num_points {
+            let total: u64 = categories
+                .iter()
+                .map(|(_, _, data)| data.get(index).copied().unwrap_or(0))
+                .sum();
+            if total == 0 {
                 out.push(' ');
+                continue;
+            }
+
+            let upper_cat = stacked_pixel_category(&categories, index, total, upper_min, upper_max);
+            let lower_cat = stacked_pixel_category(&categories, index, total, lower_min, lower_max);
+            match (upper_cat, lower_cat) {
+                (Some(upper), Some(lower)) if upper == lower => {
+                    let color = &categories[upper].1;
+                    out.push_str(&format!("`FT{color}`BT{color}█`f`b"));
+                }
+                (Some(upper), Some(lower)) => {
+                    let upper_color = &categories[upper].1;
+                    let lower_color = &categories[lower].1;
+                    out.push_str(&format!("`FT{upper_color}`BT{lower_color}▀`f`b"));
+                }
+                (Some(upper), None) => {
+                    let color = &categories[upper].1;
+                    out.push_str(&format!("`FT{color}▀`f"));
+                }
+                (None, Some(lower)) => {
+                    let color = &categories[lower].1;
+                    out.push_str(&format!("`FT{color}▄`f"));
+                }
+                (None, None) => out.push(' '),
             }
         }
         out.push('\n');
     }
     out.push('└');
-    for _ in views {
+    for _ in 0..num_points {
         out.push('─');
     }
     out.push_str("┘\n");
-    out.push_str(&format!("`F666{:<12}`f", labels[0]));
-    let chart_width = views.len() + 2;
+    out.push_str(&format!(
+        "`F666{:<12}`f",
+        labels[0].chars().take(12).collect::<String>()
+    ));
+    let chart_width = num_points + 2;
     let spacing = chart_width.saturating_sub(24);
     out.push_str(&" ".repeat(spacing));
-    out.push_str(&format!("`F666{:>12}`f\n", labels[1]));
+    out.push_str(&format!(
+        "`F666{:>12}`f\n",
+        labels[1].chars().take(12).collect::<String>()
+    ));
     out
+}
+
+fn stacked_pixel_category(
+    categories: &[(&str, String, &[u64])],
+    index: usize,
+    total: u64,
+    pixel_min: f64,
+    pixel_max: f64,
+) -> Option<usize> {
+    let mut cumulative = 0u64;
+    for (category_index, (_, _, data)) in categories.iter().enumerate() {
+        let value = data.get(index).copied().unwrap_or(0);
+        if value == 0 {
+            continue;
+        }
+        let start = cumulative as f64 / total as f64;
+        cumulative += value;
+        let end = cumulative as f64 / total as f64;
+        if pixel_min < end && pixel_max > start {
+            return Some(category_index);
+        }
+    }
+    None
+}
+
+fn dim_to_black(color: &str, dim: f64) -> String {
+    gradient_chart_color(&expand_chart_color(color), "000000", dim, 1.0)
 }
 
 fn accessible_groups(

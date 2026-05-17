@@ -327,3 +327,12 @@ queue.
     count suffix from the peak line.
   - Audited the full-block chart local-variable rename as not applicable
     because rns-rs only retains the active half-block renderer.
+- [x] `ba8fca6f` Nicer stats page
+  - Ported the updated stats summary layout with fetches, pushes, views, and
+    downloads shown in upstream order, including today and peak columns.
+  - Added the upstream category color palette, per-series secondary gradient
+    colors, and the stronger download chart gradient.
+  - Reworked the combined activity chart to include downloads and render stacked
+    half-block category colors.
+  - Updated stats page regression expectations for the new layout and chart
+    legend behavior.

@@ -115,10 +115,11 @@ fn page_fetch_and_push_stats_are_recorded_and_rendered() {
     assert!(alpha_stats.contains(">Stats for alpha"));
     assert!(alpha_stats.contains("Views"));
     assert!(alpha_stats.contains("Fetches"));
-    assert!(alpha_stats.contains("Views`f    :     1  total"));
-    assert!(alpha_stats.contains("Fetches`f  :     1  total"));
-    assert!(alpha_stats.contains("Pushes`f   :     0  total"));
-    assert!(alpha_stats.contains("Activity`f :     2 points"));
+    assert!(alpha_stats.contains("Views`f     :     1  total"));
+    assert!(alpha_stats.contains("Fetches`f   :     1  total"));
+    assert!(alpha_stats.contains("Pushes`f    :     0  total"));
+    assert!(alpha_stats.contains("Activity`f  :     2 points"));
+    assert!(alpha_stats.contains("today:   1  peak:   1"));
     assert!(alpha_stats.contains("Low activity"));
     let persisted = msgpack::unpack_exact(&fs::read(config.dir.join("stats")).unwrap()).unwrap();
     assert_eq!(sum_counter(&persisted, &["pages", "front"]), 1);
@@ -147,8 +148,8 @@ fn page_fetch_and_push_stats_are_recorded_and_rendered() {
     )
     .unwrap();
     assert!(beta_stats.contains(">Stats for beta"));
-    assert!(beta_stats.contains("Pushes`f   :     1  total"));
-    assert!(beta_stats.contains("Activity`f :     5 points"));
+    assert!(beta_stats.contains("Pushes`f    :     1  total"));
+    assert!(beta_stats.contains("Activity`f  :     5 points"));
 
     assert!(config.dir.join("stats").exists());
 }
@@ -209,7 +210,7 @@ fn download_stats_are_recorded_and_rendered() {
         Some(&REMOTE),
     )
     .unwrap();
-    assert!(alpha_stats.contains("Downloads`f:     2  total"));
+    assert!(alpha_stats.contains("Downloads`f :     2  total"));
     assert!(alpha_stats.contains(">Downloads"));
     assert!(alpha_stats.contains("Peak: 2"));
     assert!(!alpha_stats.contains("90 pts"));
@@ -321,7 +322,7 @@ fn stats_persist_across_config_reloads() {
     )
     .unwrap();
 
-    assert!(stats.contains("Views`f    :     1  total"));
+    assert!(stats.contains("Views`f     :     1  total"));
 }
 
 #[test]
@@ -369,7 +370,7 @@ fn ignored_identities_and_disabled_recording_do_not_mutate_stats() {
         Some(&REMOTE),
     )
     .unwrap();
-    assert!(ignored_stats.contains("Views`f    :     0  total"));
+    assert!(ignored_stats.contains("Views`f     :     0  total"));
     assert!(ignored_stats.contains(
         "No development activity recorded for this repository in the selected time period.\n\n`*"
     ));
@@ -381,7 +382,7 @@ fn ignored_identities_and_disabled_recording_do_not_mutate_stats() {
         Some(&REMOTE),
     )
     .unwrap();
-    assert!(ignored_beta.contains("Pushes`f   :     0  total"));
+    assert!(ignored_beta.contains("Pushes`f    :     0  total"));
 
     let tmp = tempfile::tempdir().unwrap();
     let mut disabled = cfg(tmp.path());
@@ -410,7 +411,7 @@ fn ignored_identities_and_disabled_recording_do_not_mutate_stats() {
         Some(&REMOTE),
     )
     .unwrap();
-    assert!(disabled_stats.contains("Views`f    :     0  total"));
+    assert!(disabled_stats.contains("Views`f     :     0  total"));
     assert!(!disabled.dir.join("stats").exists());
 }
 
