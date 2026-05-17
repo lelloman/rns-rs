@@ -71,6 +71,59 @@ pub fn ensure_bare_repository(path: &Path) -> Result<()> {
     run(Command::new("git").arg("init").arg("--bare").arg(path)).map(|_| ())
 }
 
+pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Result<()> {
+    if source.trim().is_empty() {
+        return Err(Error::msg("missing source"));
+    }
+    if path.exists() {
+        return Err(Error::msg("repository already exists"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::msg("repository path has no parent"))?;
+    fs::create_dir_all(parent)?;
+
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repository");
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp = parent.join(format!(".{name}.clone-{suffix}"));
+
+    let result = (|| {
+        fs::create_dir_all(&temp)?;
+        run(Command::new("git").arg("init").arg("--bare").arg(&temp))?;
+        run(Command::new("git")
+            .arg("--git-dir")
+            .arg(&temp)
+            .arg("fetch")
+            .arg(source)
+            .arg("+refs/*:refs/*"))?;
+        run(Command::new("git")
+            .arg("--git-dir")
+            .arg(&temp)
+            .arg("config")
+            .arg("repository.rngit.type")
+            .arg(repository_type))?;
+        run(Command::new("git")
+            .arg("--git-dir")
+            .arg(&temp)
+            .arg("config")
+            .arg("repository.rngit.upstream.source")
+            .arg(source))?;
+        fs::rename(&temp, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temp);
+    }
+    result
+}
+
 pub fn is_bare_repository(path: &Path) -> bool {
     path.join("HEAD").exists() && path.join("objects").is_dir()
 }

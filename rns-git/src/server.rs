@@ -194,6 +194,34 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
     )
     .map_err(|_| Error::msg("failed to register create handler"))?;
 
+    let fork_config = config.clone();
+    let fork_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_FORK,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_fork(&fork_config, &fork_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register fork handler"))?;
+
+    let mirror_config = config.clone();
+    let mirror_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_MIRROR,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_mirror(&mirror_config, &mirror_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register mirror handler"))?;
+
     let release_config = config.clone();
     let release_access = access.clone();
     node.register_request_handler(
@@ -415,6 +443,106 @@ pub fn handle_create(
     if let Err(err) = std::fs::write(&allowed_path, permissions) {
         let _ = std::fs::remove_dir_all(&repository_path);
         return Ok(remote_error_response("create", &repo, err));
+    }
+
+    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+}
+
+pub fn handle_fork(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    handle_remote_clone(config, access, data, remote, "fork")
+}
+
+pub fn handle_mirror(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    handle_remote_clone(config, access, data, remote, "mirror")
+}
+
+fn handle_remote_clone(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+    repository_type: &str,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let (repo, source) = match protocol::parse_remote_clone_request(data) {
+        Ok(request) => request,
+        Err(err) => {
+            return Ok(protocol::status_bytes(
+                protocol::RES_INVALID_REQ,
+                err.to_string(),
+            ));
+        }
+    };
+    let Some((group, name)) = repo.split_once('/') else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        ));
+    };
+    if group.is_empty() || name.is_empty() || name.contains('/') {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        ));
+    }
+
+    let group_path = config.repositories_dir.join(group);
+    if !group_path.is_dir() {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+
+    let read_access = access.allows(Operation::Read, &repo, Some(remote_hash))?;
+    let create_access = access.allows(Operation::Create, &repo, Some(remote_hash))?;
+    if !create_access {
+        let (code, message) = if read_access {
+            (protocol::RES_DISALLOWED, b"not allowed".as_slice())
+        } else {
+            (protocol::RES_NOT_FOUND, b"not found".as_slice())
+        };
+        return Ok(protocol::status_bytes(code, message));
+    }
+
+    let repository_path = git::repository_path(&config.repositories_dir, &repo)?;
+    if repository_path.exists() {
+        let (code, message) = if read_access {
+            (
+                protocol::RES_DISALLOWED,
+                b"repository already exists".as_slice(),
+            )
+        } else {
+            (protocol::RES_NOT_FOUND, b"not found".as_slice())
+        };
+        return Ok(protocol::status_bytes(code, message));
+    }
+
+    if let Err(err) = git::clone_remote_bare(&source, &repository_path, repository_type) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response(repository_type, &repo, err));
+    }
+
+    let allowed_path = config.repositories_dir.join(format!("{repo}.allowed"));
+    let permissions = format!("adm:{}\n", hex(remote_hash));
+    if let Err(err) = std::fs::write(&allowed_path, permissions) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response(repository_type, &repo, err));
     }
 
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
@@ -1377,6 +1505,84 @@ mod tests {
     }
 
     #[test]
+    fn fork_handler_fetches_source_repo_and_records_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = create_source_repo(tmp.path());
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x22; 16], [0u8; 64]);
+        let req =
+            protocol::remote_clone_request("group/forked", source.to_str().expect("utf-8 path"));
+
+        let resp = handle_fork(&config, &access, &req, Some(&remote)).unwrap();
+
+        let target = config.repositories_dir.join("group/forked");
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert!(git::is_bare_repository(&target));
+        assert!(!git::list_refs(&target).unwrap().is_empty());
+        assert_eq!(git_config(&target, "repository.rngit.type"), "fork");
+        assert_eq!(
+            git_config(&target, "repository.rngit.upstream.source"),
+            source.to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::read_to_string(config.repositories_dir.join("group/forked.allowed")).unwrap(),
+            "adm:22222222222222222222222222222222\n"
+        );
+    }
+
+    #[test]
+    fn mirror_handler_records_mirror_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = create_source_repo(tmp.path());
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x22; 16], [0u8; 64]);
+        let req =
+            protocol::remote_clone_request("group/mirrored", source.to_str().expect("utf-8 path"));
+
+        let resp = handle_mirror(&config, &access, &req, Some(&remote)).unwrap();
+
+        let target = config.repositories_dir.join("group/mirrored");
+        assert_eq!(resp[0], protocol::RES_OK);
+        assert_eq!(git_config(&target, "repository.rngit.type"), "mirror");
+    }
+
+    #[test]
+    fn remote_clone_rejects_missing_source_and_existing_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_create = vec!["all".into()];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        git::ensure_bare_repository(&config.repositories_dir.join("group/existing")).unwrap();
+        let access = make_access(&config);
+        let remote = ([0x22; 16], [0u8; 64]);
+
+        let missing_source = handle_fork(
+            &config,
+            &access,
+            &protocol::repository_request("group/new"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(missing_source[0], protocol::RES_INVALID_REQ);
+
+        let existing = handle_fork(
+            &config,
+            &access,
+            &protocol::remote_clone_request("group/existing", "unused"),
+            Some(&remote),
+        )
+        .unwrap();
+        assert_eq!(existing[0], protocol::RES_DISALLOWED);
+        assert_eq!(&existing[1..], b"repository already exists");
+    }
+
+    #[test]
     fn push_rejects_invalid_repository_name_before_create_acl() {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = cfg(tmp.path());
@@ -2211,6 +2417,58 @@ mod tests {
     fn create_corrupt_bare_repo(path: &std::path::Path) {
         std::fs::create_dir_all(path.join("objects")).unwrap();
         std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    }
+
+    fn create_source_repo(root: &std::path::Path) -> std::path::PathBuf {
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        run_git(&source, &["init"]);
+        std::fs::write(source.join("README.md"), "source\n").unwrap();
+        run_git(&source, &["add", "README.md"]);
+        run_git(
+            &source,
+            &[
+                "-c",
+                "user.name=rngit test",
+                "-c",
+                "user.email=rngit@example.invalid",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        source
+    }
+
+    fn git_config(repo: &std::path::Path, key: &str) -> String {
+        let output = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("config")
+            .arg("--get")
+            .arg(key)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn run_git(cwd: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn assert_generic_remote_error(response: &[u8]) {

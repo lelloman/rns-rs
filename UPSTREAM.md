@@ -371,3 +371,15 @@ queue.
   - Covered successful creation, creator admin grant, anonymous rejection,
     missing-group rejection, duplicate rejection, invalid nested repository
     rejection, and create CLI parsing.
+- [x] `03898147` Added fork and mirroring support to rngit CLI and node
+  - Added upstream `/git/fork` and `/git/mirror` request paths and registered
+    repository handlers for both operations.
+  - Implemented remote clone handling that validates create access, fetches all
+    refs from the supplied source URL into a bare repository, records
+    `repository.rngit.type` and `repository.rngit.upstream.source`, and grants
+    the caller admin permissions through the sidecar `.allowed` file.
+  - Added `rngit fork <source> <target>` and `rngit mirror <source> <target>`
+    CLI entry points with config, RNS config, and identity override parsing.
+  - Covered fork/mirror handler success against local Git sources, metadata
+    persistence, missing-source rejection, duplicate-target rejection, protocol
+    request round-tripping, and CLI parsing.

@@ -9,6 +9,8 @@ pub const PATH_LIST: &str = "/git/list";
 pub const PATH_FETCH: &str = "/git/fetch";
 pub const PATH_PUSH: &str = "/git/push";
 pub const PATH_CREATE: &str = "/git/create";
+pub const PATH_FORK: &str = "/git/fork";
+pub const PATH_MIRROR: &str = "/git/mirror";
 pub const PATH_DELETE: &str = "/git/delete";
 pub const PATH_RELEASE: &str = "/mgmt/release";
 pub const PATH_WORK: &str = "/mgmt/work";
@@ -64,6 +66,38 @@ pub fn repository_from_request(data: &[u8]) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| Error::msg("request missing repository"))
+}
+
+pub fn remote_clone_request(repository: &str, source: &str) -> Vec<u8> {
+    msgpack::pack(&Value::Map(vec![
+        (
+            Value::UInt(IDX_REPOSITORY),
+            Value::Str(repository.to_string()),
+        ),
+        (
+            Value::Str("source".to_string()),
+            Value::Str(source.to_string()),
+        ),
+    ]))
+}
+
+pub fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
+    let value =
+        msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
+    let map = value
+        .as_map()
+        .ok_or_else(|| Error::msg("request must be a msgpack map"))?;
+    let repo = map_get(map, IDX_REPOSITORY)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| Error::msg("request missing repository"))?;
+    let source = map_get_str(map, "source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| Error::msg("request missing source"))?;
+    Ok((repo, source))
 }
 
 pub fn fetch_request(repository: &str, have: &[String]) -> Vec<u8> {
@@ -285,6 +319,18 @@ mod tests {
         assert_eq!(
             repository_from_request(&repository_request("group/repo")).unwrap(),
             "group/repo"
+        );
+    }
+
+    #[test]
+    fn remote_clone_request_roundtrip_includes_source() {
+        let req = remote_clone_request("group/repo", "https://example.invalid/repo.git");
+        assert_eq!(
+            parse_remote_clone_request(&req).unwrap(),
+            (
+                "group/repo".into(),
+                "https://example.invalid/repo.git".into()
+            )
         );
     }
 

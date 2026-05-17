@@ -9,6 +9,12 @@ fn main() {
     } else if args.first().is_some_and(|arg| arg == "create") {
         args.remove(0);
         rns_git::create_cli::main(args)
+    } else if args.first().is_some_and(|arg| arg == "fork") {
+        args.remove(0);
+        rns_git::clone_cli::main(rns_git::clone_cli::CloneCommand::Fork, args)
+    } else if args.first().is_some_and(|arg| arg == "mirror") {
+        args.remove(0);
+        rns_git::clone_cli::main(rns_git::clone_cli::CloneCommand::Mirror, args)
     } else {
         rns_git::server::main(args)
     };
