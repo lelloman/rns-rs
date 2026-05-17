@@ -250,3 +250,7 @@ queue.
   - Audited as upstream hosted `README.mu` support/testnet Micron formatting.
     rns-rs passes repository README.mu content through at runtime and does not
     vendor this page.
+- [x] `bdac57ec` Readme formatting
+  - Audited as upstream hosted `README.mu` emphasis and wording formatting
+    only. No local port is required because the formatted page content is not
+    vendored in rns-rs.
