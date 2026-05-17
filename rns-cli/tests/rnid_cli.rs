@@ -407,6 +407,30 @@ fn encrypt_accepts_multiple_paths() {
 }
 
 #[test]
+fn decrypt_accepts_multiple_paths() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let msg1 = dir.path().join("sealed-one.txt");
+    let msg2 = dir.path().join("sealed-two.txt");
+    let rid_s = path_str(&rid);
+    let msg1_s = path_str(&msg1);
+    let msg2_s = path_str(&msg2);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&msg1, b"first sealed message").unwrap();
+    fs::write(&msg2, b"second sealed message").unwrap();
+    assert_success(rnid(&["-i", &rid_s, "-e", &msg1_s, &msg2_s]));
+    let encrypted1 = path_str(&msg1.with_extension("txt.rfe"));
+    let encrypted2 = path_str(&msg2.with_extension("txt.rfe"));
+    fs::remove_file(&msg1).unwrap();
+    fs::remove_file(&msg2).unwrap();
+
+    let output = assert_success(rnid(&["-i", &rid_s, "-d", &encrypted1, &encrypted2]));
+    assert_eq!(output.matches("decrypted to").count(), 2);
+    assert_eq!(fs::read(msg1).unwrap(), b"first sealed message");
+    assert_eq!(fs::read(msg2).unwrap(), b"second sealed message");
+}
+
+#[test]
 fn rsg_validation_accepts_required_signer_identity_hash() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");

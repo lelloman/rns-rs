@@ -116,3 +116,8 @@ analysis for this range is in
     trailing positional paths in one invocation.
   - Added a CLI regression covering two generated `.rfe` files and decrypting
     both outputs back to their original plaintext.
+- [x] `eb5d46b2` Added file decryption for multiple file path inputs
+  - Ported `rnid -d/--decrypt` to decrypt the first flag value plus any
+    trailing positional paths in one invocation.
+  - Added a CLI regression covering batch decryption back to the default output
+    filenames after the plaintext originals are removed.

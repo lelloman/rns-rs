@@ -119,9 +119,10 @@ fn main() {
         operated = true;
     }
 
-    if let Some(path) = args.get("d").or_else(|| args.get("decrypt")) {
+    if args.has("d") || args.has("decrypt") {
         let identity = require_identity(identity_ref.as_ref());
-        decrypt_file(path, identity, &args).unwrap_or_else(|e| die(&e, 1));
+        let paths = operation_paths(&args, "d", "decrypt").unwrap_or_else(|e| die(&e, 1));
+        decrypt_files(&paths, identity, &args).unwrap_or_else(|e| die(&e, 1));
         operated = true;
     }
 
@@ -923,6 +924,13 @@ fn decrypt_file(path: &str, identity: &Identity, args: &Args) -> Result<(), Stri
     Ok(())
 }
 
+fn decrypt_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), String> {
+    for path in paths {
+        decrypt_file(path, identity, args)?;
+    }
+    Ok(())
+}
+
 fn read_input(path: &str, args: &Args) -> Result<Vec<u8>, String> {
     if args.has("stdin") {
         let mut buf = Vec::new();
@@ -1094,7 +1102,7 @@ fn print_usage() {
     println!("Operations:");
     println!("  -H APP.ASPECT      Compute destination hash");
     println!("  -e FILE...         Encrypt one or more files to .rfe");
-    println!("  -d FILE.rfe        Decrypt file");
+    println!("  -d FILE.rfe...     Decrypt one or more files");
     println!("  -s FILE...         Sign one or more files to .rsg");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
