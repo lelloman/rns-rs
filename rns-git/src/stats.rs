@@ -14,6 +14,8 @@ enum Counter {
     View,
     Fetch,
     Push,
+    Download,
+    ReleaseDownload,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,6 +40,8 @@ struct RepositoryCounters {
     view: BTreeMap<String, u64>,
     fetch: BTreeMap<String, u64>,
     push: BTreeMap<String, u64>,
+    download: BTreeMap<String, u64>,
+    release_download: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +52,7 @@ pub(crate) struct RepositoryStats {
     pub(crate) views: CounterStats,
     pub(crate) fetches: CounterStats,
     pub(crate) pushes: CounterStats,
+    pub(crate) downloads_combined: CounterStats,
     pub(crate) activity_score: u64,
     pub(crate) activity_level: ActivityLevel,
     pub(crate) actual_days: usize,
@@ -128,6 +133,22 @@ pub(crate) fn record_push(config: &ServerConfig, repository: &str, remote: Optio
     }
 }
 
+pub(crate) fn record_download(config: &ServerConfig, repository: &str, remote: Option<&[u8; 16]>) {
+    if let Some((group, repo)) = split_repository(repository) {
+        record_repository_counter(config, group, repo, remote, Counter::Download);
+    }
+}
+
+pub(crate) fn record_release_download(
+    config: &ServerConfig,
+    repository: &str,
+    remote: Option<&[u8; 16]>,
+) {
+    if let Some((group, repo)) = split_repository(repository) {
+        record_repository_counter(config, group, repo, remote, Counter::ReleaseDownload);
+    }
+}
+
 pub(crate) fn repository_stats(
     config: &ServerConfig,
     access: &Access,
@@ -173,6 +194,8 @@ fn record_repository_counter(
             Counter::View => increment(&mut repo.view, day),
             Counter::Fetch => increment(&mut repo.fetch, day),
             Counter::Push => increment(&mut repo.push, day),
+            Counter::Download => increment(&mut repo.download, day),
+            Counter::ReleaseDownload => increment(&mut repo.release_download, day),
         }
     });
 }
@@ -201,8 +224,12 @@ fn aggregate_repository_stats(
     let views = summarize_counter(&counters.view, &days);
     let fetches = summarize_counter(&counters.fetch, &days);
     let pushes = summarize_counter(&counters.push, &days);
-    let total_score =
-        views.total as f64 * 0.2 + fetches.total as f64 * 2.0 + pushes.total as f64 * 5.0;
+    let downloads = summarize_counter(&counters.download, &days);
+    let release_downloads = summarize_counter(&counters.release_download, &days);
+    let downloads_combined = combine_counter_stats(&downloads, &release_downloads);
+    let total_score = (views.total + downloads.total + release_downloads.total) as f64 * 0.2
+        + fetches.total as f64 * 2.0
+        + pushes.total as f64 * 5.0;
     let activity_score = total_score as u64;
     let actual_days = actual_days(&counters, today_index, lookback_days);
     let daily_score = if actual_days > 0 {
@@ -227,6 +254,7 @@ fn aggregate_repository_stats(
         views,
         fetches,
         pushes,
+        downloads_combined,
         activity_score,
         activity_level,
         actual_days,
@@ -248,12 +276,30 @@ fn summarize_counter(counter: &BTreeMap<String, u64>, days: &[String]) -> Counte
     stats
 }
 
+fn combine_counter_stats(first: &CounterStats, second: &CounterStats) -> CounterStats {
+    let mut stats = CounterStats {
+        daily: Vec::with_capacity(first.daily.len().max(second.daily.len())),
+        total: first.total + second.total,
+        peak: 0,
+    };
+    let len = first.daily.len().max(second.daily.len());
+    for index in 0..len {
+        let count = first.daily.get(index).copied().unwrap_or(0)
+            + second.daily.get(index).copied().unwrap_or(0);
+        stats.peak = stats.peak.max(count);
+        stats.daily.push(count);
+    }
+    stats
+}
+
 fn actual_days(counters: &RepositoryCounters, today_index: i64, lookback_days: usize) -> usize {
     let earliest = counters
         .view
         .iter()
         .chain(counters.fetch.iter())
         .chain(counters.push.iter())
+        .chain(counters.download.iter())
+        .chain(counters.release_download.iter())
         .filter(|(_, count)| **count > 0)
         .filter_map(|(day, _)| parse_day(day))
         .min();
@@ -417,6 +463,14 @@ impl RepositoryCounters {
                 .map_get("push")
                 .map(date_counter_from_value)
                 .unwrap_or_default(),
+            download: value
+                .map_get("download")
+                .map(date_counter_from_value)
+                .unwrap_or_default(),
+            release_download: value
+                .map_get("release_download")
+                .map(date_counter_from_value)
+                .unwrap_or_default(),
         }
     }
 
@@ -433,6 +487,14 @@ impl RepositoryCounters {
             (
                 Value::Str("push".to_string()),
                 date_counter_to_value(&self.push),
+            ),
+            (
+                Value::Str("download".to_string()),
+                date_counter_to_value(&self.download),
+            ),
+            (
+                Value::Str("release_download".to_string()),
+                date_counter_to_value(&self.release_download),
             ),
         ])
     }

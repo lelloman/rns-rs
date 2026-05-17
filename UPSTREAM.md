@@ -306,3 +306,14 @@ queue.
 - [x] `f3f4d9bc` Cleanup
   - Audited as a follow-up `rncp.py` saved-file feedback/logging cleanup. No
     local port is available because rns-rs does not currently implement rncp.
+- [x] `c92872a8` Added download stats to rngit
+  - Added repository `download` and `release_download` counters to persisted
+    rngit stats while preserving compatibility with existing stats files that
+    lack those keys.
+  - Recorded successful blob and work-document downloads as normal downloads,
+    and successful release artifact downloads as release downloads.
+  - Rendered combined download totals and a downloads chart on repository stats
+    pages, with activity scoring counting downloads at the upstream view
+    weight.
+  - Added integration coverage for blob and release artifact downloads updating
+    separate persisted counters and the rendered combined download total.

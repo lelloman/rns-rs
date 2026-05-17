@@ -950,6 +950,10 @@ fn render_stats_page(
         stats.pushes.total, stats.pushes.peak
     ));
     out.push_str(&format!(
+        "`Fa22Downloads`f: {:>5}  total `F666(peak: {:>3})`f\n",
+        stats.downloads_combined.total, stats.downloads_combined.peak
+    ));
+    out.push_str(&format!(
         "`F0aaActivity`f : {:>5} points\n\n",
         stats.activity_score
     ));
@@ -987,6 +991,16 @@ fn render_stats_page(
             &stats.pushes.daily,
             &stats.timeline_labels,
             "aa0",
+            10,
+        ));
+        out.push('\n');
+    }
+    if stats.downloads_combined.total > 0 {
+        out.push_str(">Downloads\n\n");
+        out.push_str(&render_chart(
+            &stats.downloads_combined.daily,
+            &stats.timeline_labels,
+            "a22",
             10,
         ));
         out.push('\n');
@@ -1405,7 +1419,7 @@ pub fn download_work_document(
     remote: Option<&[u8; 16]>,
 ) -> Result<RequestResponse> {
     let vars = parse_page_vars(data)?;
-    let (_group, _repo, repository) = match accessible_repository(config, access, remote, &vars) {
+    let (group, repo, repository) = match accessible_repository(config, access, remote, &vars) {
         Ok(repo) => repo,
         Err(_) => {
             return Ok(RequestResponse::Bytes(protocol::status_bytes(
@@ -1426,6 +1440,7 @@ pub fn download_work_document(
             b"work document not found",
         )));
     };
+    crate::stats::record_download(config, &format!("{group}/{repo}"), remote);
     Ok(RequestResponse::Resource {
         data: document.content.into_bytes(),
         metadata: Some(protocol::metadata_status(protocol::RES_OK)),
@@ -1440,7 +1455,7 @@ pub fn download_file(
     remote: Option<&[u8; 16]>,
 ) -> Result<RequestResponse> {
     let vars = parse_page_vars(data)?;
-    let (_group, _repo, repository) = match accessible_repository(config, access, remote, &vars) {
+    let (group, repo, repository) = match accessible_repository(config, access, remote, &vars) {
         Ok(repo) => repo,
         Err(_) => {
             return Ok(RequestResponse::Bytes(protocol::status_bytes(
@@ -1459,8 +1474,10 @@ pub fn download_file(
                 b"file not found",
             )));
         };
+        let data = fs::read(path)?;
+        crate::stats::record_release_download(config, &format!("{group}/{repo}"), remote);
         return Ok(RequestResponse::Resource {
-            data: fs::read(path)?,
+            data,
             metadata: Some(protocol::metadata_status(protocol::RES_OK)),
             auto_compress: true,
         });
@@ -1485,6 +1502,7 @@ pub fn download_file(
             b"file not found",
         )));
     }
+    crate::stats::record_download(config, &format!("{group}/{repo}"), remote);
     Ok(RequestResponse::Resource {
         data: output.stdout,
         metadata: Some(protocol::metadata_status(protocol::RES_OK)),

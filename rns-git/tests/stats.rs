@@ -6,7 +6,7 @@ use rns_core::msgpack::{self, Value};
 use rns_git::acl::Access;
 use rns_git::config::ServerConfig;
 use rns_git::logging;
-use rns_git::{pages, protocol, server};
+use rns_git::{pages, protocol, release, server};
 use rns_net::RequestResponse;
 
 const REMOTE: [u8; 16] = [
@@ -151,6 +151,88 @@ fn page_fetch_and_push_stats_are_recorded_and_rendered() {
     assert!(beta_stats.contains("Activity`f :     5 points"));
 
     assert!(config.dir.join("stats").exists());
+}
+
+#[test]
+fn download_stats_are_recorded_and_rendered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "payload.txt",
+        "blob bytes\n",
+    );
+    let releases_path = release::release_sidecar_path(&repo_path);
+    let release_dir = releases_path.join("v1");
+    fs::create_dir_all(release_dir.join("artifacts")).unwrap();
+    fs::write(
+        release_dir.join("META"),
+        "tag = v1\ncreated = 1\nstatus = published\ncreated_by = test\n",
+    )
+    .unwrap();
+    fs::write(release_dir.join("artifacts/dist.tar"), b"artifact bytes").unwrap();
+    let access_rules = access(&config);
+
+    let blob = pages::download_file(
+        &config,
+        &access_rules,
+        &page_request(&[
+            ("var_g", "public"),
+            ("var_r", "alpha"),
+            ("var_ref", "HEAD"),
+            ("var_path", "payload.txt"),
+        ]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert_resource_bytes(blob, b"blob bytes\n");
+
+    let artifact = pages::download_file(
+        &config,
+        &access_rules,
+        &page_request(&[
+            ("var_g", "public"),
+            ("var_r", "alpha"),
+            ("var_tag", "v1"),
+            ("var_artifact", "dist.tar"),
+        ]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert_resource_bytes(artifact, b"artifact bytes");
+
+    let alpha_stats = pages::render_page(
+        pages::PATH_STATS,
+        &config,
+        &access_rules,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(alpha_stats.contains("Downloads`f:     2  total"));
+    assert!(alpha_stats.contains(">Downloads"));
+
+    let persisted = msgpack::unpack_exact(&fs::read(config.dir.join("stats")).unwrap()).unwrap();
+    assert_eq!(
+        sum_counter(
+            &persisted,
+            &["groups", "public", "repositories", "alpha", "download"]
+        ),
+        1
+    );
+    assert_eq!(
+        sum_counter(
+            &persisted,
+            &[
+                "groups",
+                "public",
+                "repositories",
+                "alpha",
+                "release_download",
+            ]
+        ),
+        1
+    );
 }
 
 #[test]
@@ -432,6 +514,19 @@ fn assert_fetch_ok(response: RequestResponse) {
             );
         }
         RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_OK),
+    }
+}
+
+fn assert_resource_bytes(response: RequestResponse, expected: &[u8]) {
+    match response {
+        RequestResponse::Resource { data, metadata, .. } => {
+            assert_eq!(data, expected);
+            assert_eq!(
+                metadata.as_deref(),
+                Some(&protocol::metadata_status(protocol::RES_OK)[..])
+            );
+        }
+        RequestResponse::Bytes(bytes) => panic!("expected resource response, got {bytes:?}"),
     }
 }
 
