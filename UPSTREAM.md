@@ -64,12 +64,13 @@ release`). The 1.2.7 queue is integrated through upstream `b1f52227`
     increments are not lost under simultaneous receives for the same discovery
     hash.
 - [x] `32389002` Better remote monitor loop
-  - Remote management link reuse is not yet applicable because Rust `rnstatus
-    -R` and `rns-ctl status -R` still report remote management as not fully
-    implemented.
-  - Ported the applicable monitor-loop pacing: successful monitor iterations
-    and monitor retry sleeps now subtract elapsed query/render time and keep the
-    upstream 200 ms minimum sleep.
+  - Implemented upstream-compatible remote management client support for
+    `rnstatus -R`, `rns-ctl status -R`, `rnpath -R`, and `rns-ctl path -R`.
+    Remote status monitor mode reuses the active management link between
+    refreshes.
+  - Ported monitor-loop pacing: successful monitor iterations and monitor retry
+    sleeps now subtract elapsed query/render time and keep the upstream 200 ms
+    minimum sleep.
   - Added focused monitor sleep duration tests for both `rnstatus` and
     `rns-ctl status`.
 - [x] `855ef7bf` Base256 encoding

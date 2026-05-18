@@ -53,6 +53,11 @@ fn main() {
     let show_bursts = args.has("B") || args.has("burst");
     let monitor_mode = args.has("m");
     let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let remote_timeout = args
+        .get("w")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
+    let management_identity = args.get("i").or_else(|| args.get("identity"));
     let remote_hash = args.get("R").map(|s| s.to_string());
     let show_discovered = args.has("d");
     let show_discovered_config = args.has("D");
@@ -60,7 +65,24 @@ fn main() {
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
-        remote_status(hash_str, config_path.as_deref());
+        remote_status(
+            hash_str,
+            management_identity,
+            config_path.as_deref(),
+            remote_timeout,
+            show_links,
+            json_output,
+            monitor_mode,
+            monitor_interval,
+            show_all,
+            sort_by.as_deref(),
+            reverse,
+            filter.as_deref(),
+            show_totals,
+            show_announces,
+            show_pr_stats,
+            show_bursts,
+        );
         return;
     }
 
@@ -635,34 +657,95 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
     }
 }
 
-fn remote_status(hash_str: &str, config_path: Option<&str>) {
-    let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
-        Some(h) => h,
-        None => {
-            eprintln!(
-                "Invalid destination hash: {} (expected 32 hex chars)",
-                hash_str
-            );
+#[allow(clippy::too_many_arguments)]
+fn remote_status(
+    hash_str: &str,
+    management_identity: Option<&str>,
+    config_path: Option<&str>,
+    remote_timeout: f64,
+    show_links: bool,
+    json_output: bool,
+    monitor_mode: bool,
+    monitor_interval: f64,
+    show_all: bool,
+    sort_by: Option<&str>,
+    reverse: bool,
+    filter: Option<&str>,
+    show_totals: bool,
+    show_announces: bool,
+    show_pr_stats: bool,
+    show_bursts: bool,
+) {
+    let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(1);
+        }
+    };
+    let Some(identity_path) = management_identity else {
+        eprintln!(
+            "{}",
+            rns_net::remote_management::RemoteManagementError::MissingIdentity
+        );
+        process::exit(1);
+    };
+    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
+    let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
+        config_path.map(Path::new),
+        Some(Path::new(identity_path)),
+        timeout,
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("{e}");
             process::exit(1);
         }
     };
 
-    eprintln!(
-        "Remote management query to {} (not yet fully implemented)",
-        prettyhexrep(&dest_hash),
-    );
-    eprintln!("Requires an active link to the remote management destination.");
-    eprintln!("This feature will work once rnsd is running and the remote node is reachable.");
+    loop {
+        let monitor_started = Instant::now();
+        match client.status(transport_hash, show_links) {
+            Ok(remote) => {
+                if monitor_mode {
+                    print!("\x1b[2J\x1b[H");
+                }
+                if json_output {
+                    print_json(&remote.stats);
+                } else {
+                    print_status(
+                        &remote.stats,
+                        show_all,
+                        sort_by,
+                        reverse,
+                        filter,
+                        show_totals,
+                        show_announces,
+                        show_pr_stats,
+                        show_bursts,
+                    );
+                }
+                if let Some(count) = remote.link_count {
+                    println!(" Active links  : {}", count);
+                    println!();
+                }
+            }
+            Err(e) => {
+                eprintln!("Remote status error: {e}");
+                if !monitor_mode {
+                    process::exit(1);
+                }
+            }
+        }
 
-    // In a full implementation, this would:
-    // 1. Connect as shared client
-    // 2. Wait for path to management destination
-    // 3. Create link
-    // 4. Identify
-    // 5. Send /status request
-    // 6. Parse msgpack response
-    // 7. Display like local status
-    let _ = (dest_hash, config_path);
+        if !monitor_mode {
+            break;
+        }
+        std::thread::sleep(monitor_sleep_duration(
+            monitor_interval,
+            monitor_started.elapsed(),
+        ));
+    }
 }
 
 /// Show discovered interfaces
@@ -923,7 +1006,9 @@ fn print_usage() {
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
     println!("  -I SECONDS              Monitor interval (default: 1.0)");
-    println!("  -R HASH                 Query remote node via management link");
+    println!("  -R HASH                 Query remote transport identity via management link");
+    println!("  -i PATH                 Identity file for remote management");
+    println!("  -w SECONDS              Timeout for remote queries");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");
     println!("  --help, -h              Print this help");

@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::process;
+use std::time::Duration;
 
 use rns_cli::args::Args;
 use rns_cli::format::{prettyfrequency, prettyhexrep, prettytime};
@@ -50,11 +51,32 @@ fn main() {
     let unblackhole_hash = args.get("U").map(|s| s.to_string());
     let duration_hours: Option<f64> = args.get("duration").and_then(|s| s.parse().ok());
     let reason = args.get("reason").map(|s| s.to_string());
+    let remote_blackholed = args.has("p") || args.has("blackholed-list");
+    let remote_timeout = args
+        .get("W")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
+    let management_identity = args.get("i").or_else(|| args.get("identity"));
     let remote_hash = args.get("R").map(|s| s.to_string());
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
-        remote_path(hash_str, config_path.as_deref());
+        remote_path(
+            hash_str,
+            management_identity,
+            config_path.as_deref(),
+            remote_timeout,
+            show_table,
+            show_rates,
+            remote_blackholed,
+            max_hops,
+            args.positional.first().map(String::as_str),
+            drop_hash.as_deref(),
+            drop_via.as_deref(),
+            drop_queues,
+            blackhole_hash.as_deref(),
+            unblackhole_hash.as_deref(),
+        );
         return;
     }
 
@@ -167,6 +189,10 @@ fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<
         }
     };
 
+    render_path_table(&response);
+}
+
+fn render_path_table(response: &PickleValue) {
     if let Some(entries) = response.as_list() {
         if entries.is_empty() {
             println!("Path table is empty");
@@ -232,6 +258,10 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
         }
     };
 
+    render_rate_table(&response);
+}
+
+fn render_rate_table(response: &PickleValue) {
     if let Some(entries) = response.as_list() {
         if entries.is_empty() {
             println!("Rate table is empty");
@@ -336,6 +366,10 @@ fn show_blackholed_list(client: &mut RpcClient) {
         }
     };
 
+    render_blackholed_list(&response);
+}
+
+fn render_blackholed_list(response: &PickleValue) {
     if let Some(entries) = response.as_list() {
         if entries.is_empty() {
             println!("Blackhole list is empty");
@@ -576,26 +610,106 @@ fn drop_announce_queues(client: &mut RpcClient) {
     }
 }
 
-fn remote_path(hash_str: &str, config_path: Option<&str>) {
-    let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
-        Some(h) => h,
+#[allow(clippy::too_many_arguments)]
+fn remote_path(
+    hash_str: &str,
+    management_identity: Option<&str>,
+    config_path: Option<&str>,
+    remote_timeout: f64,
+    show_table: bool,
+    show_rates: bool,
+    remote_blackholed: bool,
+    max_hops: Option<u8>,
+    destination_filter: Option<&str>,
+    drop_hash: Option<&str>,
+    drop_via: Option<&str>,
+    drop_queues: bool,
+    blackhole_hash: Option<&str>,
+    unblackhole_hash: Option<&str>,
+) {
+    if drop_hash.is_some()
+        || drop_via.is_some()
+        || drop_queues
+        || blackhole_hash.is_some()
+        || unblackhole_hash.is_some()
+    {
+        eprintln!(
+            "{}",
+            rns_net::remote_management::RemoteManagementError::Unsupported(
+                "remote path mutations are not implemented upstream in Reticulum 1.2.7".into(),
+            )
+        );
+        process::exit(1);
+    }
+
+    let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(1);
+        }
+    };
+    let management_identity_path = match management_identity {
+        Some(path) => Some(Path::new(path)),
+        None if remote_blackholed => None,
         None => {
             eprintln!(
-                "Invalid destination hash: {} (expected 32 hex chars)",
-                hash_str
+                "{}",
+                rns_net::remote_management::RemoteManagementError::MissingIdentity
             );
             process::exit(1);
         }
     };
+    let destination_filter = match destination_filter {
+        Some(hash) => Some(parse_fixed_hash(hash, "destination").unwrap_or_else(|e| {
+            eprintln!("{e}");
+            process::exit(1);
+        })),
+        None => None,
+    };
+    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
+    let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
+        config_path.map(Path::new),
+        management_identity_path,
+        timeout,
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(1);
+        }
+    };
 
-    eprintln!(
-        "Remote management query to {} (not yet fully implemented)",
-        prettyhexrep(&dest_hash),
-    );
-    eprintln!("Requires an active link to the remote management destination.");
-    eprintln!("This feature will work once rnsd is running and the remote node is reachable.");
+    let result = if show_rates {
+        client.rate_table(transport_hash, destination_filter)
+    } else if remote_blackholed {
+        client.published_blackhole_list(transport_hash)
+    } else if show_table || destination_filter.is_some() || max_hops.is_some() {
+        client.path_table(transport_hash, destination_filter, max_hops)
+    } else {
+        eprintln!("Remote path mode requires -t, -r, or -p/--blackholed-list");
+        process::exit(1);
+    };
 
-    let _ = (dest_hash, config_path);
+    match result {
+        Ok(response) if show_rates => render_rate_table(&response),
+        Ok(response) if remote_blackholed => render_blackholed_list(&response),
+        Ok(response) => render_path_table(&response),
+        Err(e) => {
+            eprintln!("Remote path error: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+fn parse_fixed_hash(s: &str, label: &str) -> Result<[u8; 16], String> {
+    let bytes = parse_hex_hash(s).ok_or_else(|| format!("Invalid {label} hash: {s}"))?;
+    if bytes.len() < 16 {
+        return Err(format!("Invalid {label} hash: {s}"));
+    }
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&bytes[..16]);
+    Ok(out)
 }
 
 fn print_usage() {
@@ -610,11 +724,14 @@ fn print_usage() {
     println!("  -x HASH                 Drop all paths via transport");
     println!("  -D                      Drop all announce queues");
     println!("  -b                      Show blackholed identities");
+    println!("  -p, --blackholed-list   View published remote blackhole list with -R");
     println!("  -B HASH                 Blackhole an identity");
     println!("  -U HASH                 Remove identity from blackhole list");
     println!("  --duration HOURS        Blackhole duration (default: permanent)");
     println!("  --reason TEXT           Reason for blackholing");
-    println!("  -R HASH                 Query remote node via management link");
+    println!("  -R HASH                 Query remote transport identity via management link");
+    println!("  -i PATH                 Identity file for remote management");
+    println!("  -W SECONDS              Timeout for remote path queries");
     println!("  -j                      JSON output");
     println!("  -v                      Increase verbosity");
     println!("  --version               Print version and exit");

@@ -4790,6 +4790,152 @@ fn start_shared_client(
     .expect("Failed to connect shared client")
 }
 
+fn start_managed_transport_client(
+    port: u16,
+    identity: &Identity,
+    allowed_identity: [u8; 16],
+) -> RnsNode {
+    let mut management = rns_net::ManagementConfig {
+        enable_remote_management: true,
+        remote_management_allowed: vec![allowed_identity],
+        publish_blackhole: true,
+    };
+    management.remote_management_allowed = vec![allowed_identity];
+
+    RnsNode::start(
+        NodeConfig {
+            panic_on_interface_error: true,
+            transport_enabled: true,
+            identity: Some(Identity::from_private_key(
+                &identity.get_private_key().unwrap(),
+            )),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
+                type_name: "TCPClientInterface".to_string(),
+                config_data: Box::new(TcpClientConfig {
+                    name: "Managed Remote TCP".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: port,
+                    interface_id: InterfaceId(1),
+                    ..Default::default()
+                }),
+                mode: MODE_FULL,
+                ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+                ifac: None,
+                discovery: None,
+            }],
+            share_instance: false,
+            instance_name: "remote-managed".into(),
+            shared_instance_port: 0,
+            rpc_port: 0,
+            cache_dir: None,
+            ratchet_store: None,
+            ratchet_expiry: std::time::Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
+            management,
+            probe_port: None,
+            probe_addrs: vec![],
+            probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: false,
+            discovery_required_value: None,
+            respond_to_probes: false,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            known_destinations_max_entries: 8192,
+            announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            interface_writer_queue_capacity:
+                rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            announce_rate_defaults: rns_net::AnnounceRateDefaults::default(),
+            ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_pool: None,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl: Duration::from_secs(
+                rns_core::constants::ANNOUNCE_SIG_CACHE_TTL as u64,
+            ),
+            registry: None,
+            #[cfg(feature = "hooks")]
+            provider_bridge: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start managed remote transport")
+}
+
+#[test]
+fn test_remote_management_status_query_over_shared_instance() {
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("rm-status-{}-{}", std::process::id(), tcp_port);
+    let local_config = std::env::temp_dir().join(format!(
+        "rns-remote-management-local-{}-{}",
+        std::process::id(),
+        tcp_port
+    ));
+    let identity_dir = local_config.join("identities");
+    fs::create_dir_all(&identity_dir).unwrap();
+
+    let management_identity = Identity::new(&mut OsRng);
+    let management_identity_path = identity_dir.join("management_identity");
+    rns_net::storage::save_identity(&management_identity, &management_identity_path).unwrap();
+    fs::write(
+        local_config.join("config"),
+        format!(
+            "[reticulum]\nshare_instance = true\ninstance_name = {}\nshared_instance_port = {}\ninstance_control_port = 0\n",
+            instance_name, shared_port
+        ),
+    )
+    .unwrap();
+
+    let _local = start_shared_daemon(tcp_port, shared_port, &instance_name);
+    let remote_identity = Identity::new(&mut OsRng);
+    let _remote =
+        start_managed_transport_client(tcp_port, &remote_identity, *management_identity.hash());
+
+    let mut client = rns_net::remote_management::RemoteManagementClient::connect(
+        Some(local_config.as_path()),
+        Some(management_identity_path.as_path()),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        match client.status(*remote_identity.hash(), true) {
+            Ok(status) => break status,
+            Err(err) if Instant::now() < deadline => {
+                eprintln!("remote status retry after: {}", err);
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(err) => panic!("remote status query failed: {}", err),
+        }
+    };
+
+    assert!(status.link_count.is_some());
+    let interfaces = status
+        .stats
+        .get("interfaces")
+        .and_then(|value| value.as_list())
+        .expect("remote status should include interfaces");
+    assert!(!interfaces.is_empty());
+    assert_eq!(
+        status
+            .stats
+            .get("transport_enabled")
+            .and_then(|value| value.as_bool()),
+        Some(true),
+    );
+}
+
 #[test]
 fn test_issue4_shared_client_announce_reaches_remote() {
     // Verify that announces from a shared client propagate to remote TCP peers.
