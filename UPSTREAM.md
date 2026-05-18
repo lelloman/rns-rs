@@ -8,7 +8,7 @@ The current upstream reference baseline is:
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
 - Version: `1.2.7`
-- Tag: `not present in local checkout`
+- Tag: `1.2.7`
 - Commit: `b1f522277c99b076ea4b43e9048aec8962e0e4a2`
 - Commit date: `2026-05-17 00:56:08 +0200`
 - Subject: `Prepare release`
