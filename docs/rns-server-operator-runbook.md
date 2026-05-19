@@ -154,15 +154,29 @@ for host in vps-eu vps-us; do
 done
 ```
 
-Daily VPS snapshots should also be captured per host. Refresh the local refs
-first when an internet connection is available; the version check compares the
-remote binaries against the local `origin/master` and `origin/dev` refs by
-default:
+Daily VPS snapshots should also be captured per host. The shared daily report
+database lives on `vps-eu` at `/var/lib/rns-node/vps_daily_reports.db`, with a
+working copy at `data/vps_daily_reports.db` on whichever workstation is running
+the report. Pull the shared database first, collect both host snapshots locally,
+then push the updated database back to `vps-eu` so the next workstation starts
+from the latest history.
+
+Refresh the local refs first when an internet connection is available; the
+version check compares the remote binaries against the local `origin/master` and
+`origin/dev` refs by default:
 
 ```bash
 git fetch origin
+
+mkdir -p data
+if ssh root@vps-eu 'test -f /var/lib/rns-node/vps_daily_reports.db'; then
+  scp root@vps-eu:/var/lib/rns-node/vps_daily_reports.db data/vps_daily_reports.db
+fi
+
 python3 scripts/vps_daily_report.py --host vps-eu --ssh-target root@vps-eu --stdout-summary
 python3 scripts/vps_daily_report.py --host vps-us --ssh-target root@vps-us --stdout-summary
+
+scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 ```
 
 The snapshot records `/usr/local/bin/rns-server --version` and
@@ -198,8 +212,10 @@ ORDER BY host;
 "
 ```
 
-The report database stores the SSH target in the `host` column, so use the
-stable aliases above instead of raw IP addresses.
+The report database stores the stable host key in the `host` column, so use the
+aliases above instead of raw IP addresses. This daily report database is
+separate from each node's live `/var/lib/rns-node/stats.db`, which is read by
+the report script but is not copied between hosts.
 
 ## Control Plane
 
