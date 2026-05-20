@@ -2095,10 +2095,9 @@ fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) -> String {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
             if let Some((language, content)) = code_block.take() {
-                out.push_str(&crate::highlight::literal_block(
-                    &content,
-                    None,
+                out.push_str(&markdown_code_block_to_micron(
                     language.as_deref(),
+                    &content,
                 ));
             } else {
                 code_block = Some((markdown_fence_language(trimmed), String::new()));
@@ -2164,14 +2163,20 @@ fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) -> String {
         index += 1;
     }
     if let Some((language, content)) = code_block {
-        out.push_str(&crate::highlight::literal_block(
-            &content,
-            None,
+        out.push_str(&markdown_code_block_to_micron(
             language.as_deref(),
+            &content,
         ));
     }
 
     out
+}
+
+fn markdown_code_block_to_micron(language: Option<&str>, content: &str) -> String {
+    if language.is_some_and(|language| language.eq_ignore_ascii_case("rawmu")) {
+        return content.to_string();
+    }
+    crate::highlight::literal_block(content, None, language)
 }
 
 fn markdown_fence_language(trimmed: &str) -> Option<String> {
@@ -3815,6 +3820,28 @@ Unmatched * marker\n\
         assert!(page.contains("`FT"));
         assert!(page.contains("\\`"));
         assert!(page.contains("answer"));
+    }
+
+    #[test]
+    fn rawmu_fenced_blocks_pass_through_without_escaping() {
+        let markdown = markdown_to_micron(
+            "```rawmu
+`!raw micron`!
+>Heading
+```
+",
+        );
+
+        assert!(markdown.contains(
+            "`!raw micron`!
+>Heading
+"
+        ));
+        assert!(!markdown.contains(r"\`!raw micron"));
+        assert!(!markdown.contains(
+            "`=
+"
+        ));
     }
 
     #[test]
