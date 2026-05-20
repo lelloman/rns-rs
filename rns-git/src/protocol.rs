@@ -15,6 +15,7 @@ pub const PATH_MIRROR: &str = "/git/mirror";
 pub const PATH_DELETE: &str = "/git/delete";
 pub const PATH_RELEASE: &str = "/mgmt/release";
 pub const PATH_WORK: &str = "/mgmt/work";
+pub const PATH_PERMS: &str = "/mgmt/perms";
 
 pub const RES_OK: u8 = 0x00;
 pub const RES_DISALLOWED: u8 = 0x01;
@@ -24,6 +25,7 @@ pub const RES_REMOTE_FAIL: u8 = 0xff;
 
 pub const IDX_REPOSITORY: u64 = 0x00;
 pub const IDX_RESULT_CODE: u64 = 0x01;
+pub const IDX_GROUP: u64 = 0x02;
 
 const ACTION_UPDATE_REF: &str = "update_ref";
 const ACTION_DELETE_REF: &str = "delete_ref";

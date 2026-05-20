@@ -7,6 +7,7 @@ pub mod git;
 mod highlight;
 pub mod logging;
 pub mod pages;
+pub mod perms_cli;
 pub mod protocol;
 pub mod release;
 pub mod release_cli;

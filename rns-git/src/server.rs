@@ -3,6 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use rns_core::display::prettyb256rep;
+use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
 use rns_crypto::identity::Identity;
 use rns_net::link_manager::ResourceStrategy;
@@ -264,6 +265,20 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
         },
     )
     .map_err(|_| Error::msg("failed to register work handler"))?;
+
+    let perms_config = config.clone();
+    let perms_access = access.clone();
+    node.register_request_handler(
+        protocol::PATH_PERMS,
+        None,
+        move |_link, _path, data, remote| {
+            Some(
+                handle_perms(&perms_config, &perms_access, data, remote)
+                    .unwrap_or_else(error_response),
+            )
+        },
+    )
+    .map_err(|_| Error::msg("failed to register permissions handler"))?;
 
     node.register_request_handler(
         protocol::PATH_DELETE,
@@ -715,6 +730,189 @@ pub fn handle_release(
             b"invalid request",
         )),
     }
+}
+
+pub fn handle_perms(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    let Some((remote_hash, _)) = remote else {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not identified",
+        ));
+    };
+    let value =
+        msgpack::unpack_exact(data).map_err(|err| Error::msg(format!("invalid msgpack: {err}")))?;
+    let map = value
+        .as_map()
+        .ok_or_else(|| Error::msg("request must be a msgpack map"))?;
+    let operation = map_get_str(map, "operation").unwrap_or("");
+    match operation {
+        "gperms" => {
+            let group = map_get_index_str(map, protocol::IDX_GROUP).unwrap_or("");
+            handle_group_permissions(config, access, group, map, remote_hash)
+        }
+        "rperms" => {
+            let repo = map_get_index_str(map, protocol::IDX_REPOSITORY).unwrap_or("");
+            handle_repository_permissions(config, access, repo, map, remote_hash)
+        }
+        _ => Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        )),
+    }
+}
+
+fn handle_group_permissions(
+    config: &ServerConfig,
+    access: &Access,
+    group: &str,
+    map: &[(Value, Value)],
+    remote_hash: &[u8; 16],
+) -> Result<Vec<u8>> {
+    if !valid_group_name(group) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid group",
+        ));
+    }
+    let group_dir = config.repositories_dir.join(group);
+    if !group_dir.is_dir() {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    let synthetic_repo = format!("{group}/__group__");
+    let read_access = access.allows(Operation::Read, &synthetic_repo, Some(remote_hash))?;
+    let admin_access = access.allows(Operation::Admin, &synthetic_repo, Some(remote_hash))?;
+    if !read_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    if !admin_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not allowed",
+        ));
+    }
+    let allowed_path = config.repositories_dir.join(format!("{group}.allowed"));
+    handle_permissions_step(config, map, &allowed_path)
+}
+
+fn handle_repository_permissions(
+    config: &ServerConfig,
+    access: &Access,
+    repo: &str,
+    map: &[(Value, Value)],
+    remote_hash: &[u8; 16],
+) -> Result<Vec<u8>> {
+    if let Err(err) = crate::util::validate_repo_name(repo) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            err.to_string(),
+        ));
+    }
+    let read_access = access.allows(Operation::Read, repo, Some(remote_hash))?;
+    let admin_access = access.allows(Operation::Admin, repo, Some(remote_hash))?;
+    let repo_path = git::repository_path(&config.repositories_dir, repo)?;
+    if !git::is_bare_repository(&repo_path) {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    if !read_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"not found",
+        ));
+    }
+    if !admin_access {
+        return Ok(protocol::status_bytes(
+            protocol::RES_DISALLOWED,
+            b"not allowed",
+        ));
+    }
+    let allowed_path = config.repositories_dir.join(format!("{repo}.allowed"));
+    handle_permissions_step(config, map, &allowed_path)
+}
+
+fn handle_permissions_step(
+    config: &ServerConfig,
+    map: &[(Value, Value)],
+    allowed_path: &std::path::Path,
+) -> Result<Vec<u8>> {
+    match map_get_str(map, "step") {
+        Some("get") => {
+            let content = match std::fs::read_to_string(allowed_path) {
+                Ok(content) => content,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(err) => return Err(err.into()),
+            };
+            Ok(protocol::status_bytes(
+                protocol::RES_OK,
+                msgpack::pack(&Value::Map(vec![(
+                    Value::Str("content".into()),
+                    Value::Str(content),
+                )])),
+            ))
+        }
+        Some("set") => {
+            let content = map_get_str(map, "content").unwrap_or("");
+            if let Err(err) =
+                crate::acl::validate_allowed_input_with_aliases(content, &config.identity_aliases)
+            {
+                return Ok(protocol::status_bytes(
+                    protocol::RES_INVALID_REQ,
+                    format!("invalid permissions: {err}"),
+                ));
+            }
+            write_permissions_file(allowed_path, content)?;
+            Ok(protocol::status_bytes(protocol::RES_OK, b""))
+        }
+        Some(_) => Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid step",
+        )),
+        None => Ok(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid request",
+        )),
+    }
+}
+
+fn write_permissions_file(path: &std::path::Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("allowed.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
+fn valid_group_name(group: &str) -> bool {
+    !group.is_empty() && !group.contains('/') && crate::util::validate_repo_name(group).is_ok()
+}
+
+fn map_get_str<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a str> {
+    map.iter().find_map(|(candidate, value)| match candidate {
+        Value::Str(candidate) if candidate == key => value.as_str(),
+        _ => None,
+    })
+}
+
+fn map_get_index_str<'a>(map: &'a [(Value, Value)], key: u64) -> Option<&'a str> {
+    map.iter().find_map(|(candidate, value)| match candidate {
+        Value::UInt(candidate) if *candidate == key => value.as_str(),
+        _ => None,
+    })
 }
 
 pub fn handle_work(
@@ -2537,8 +2735,135 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repository_permissions_get_set_and_validate_allowed_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_admin = vec![crate::util::hex(&REMOTE)];
+        let repo_path = config.repositories_dir.join("group/repo");
+        git::ensure_bare_repository(&repo_path).unwrap();
+        let access = make_access(&config);
+
+        let get = handle_perms(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("rperms")),
+                ("step", strv("get")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(
+            body_value(&get).map_get("content").and_then(Value::as_str),
+            Some("")
+        );
+
+        let set = handle_perms(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("rperms")),
+                ("step", strv("set")),
+                (
+                    "content",
+                    strv(
+                        "write = all
+",
+                    ),
+                ),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(set, vec![protocol::RES_OK]);
+        assert_eq!(
+            std::fs::read_to_string(config.repositories_dir.join("group/repo.allowed")).unwrap(),
+            "write = all
+"
+        );
+
+        let invalid = handle_perms(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("rperms")),
+                ("step", strv("set")),
+                (
+                    "content",
+                    strv(
+                        "write = not-a-hex-identity
+",
+                    ),
+                ),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(invalid[0], protocol::RES_INVALID_REQ);
+        assert_eq!(
+            std::fs::read_to_string(config.repositories_dir.join("group/repo.allowed")).unwrap(),
+            "write = all
+"
+        );
+    }
+
+    #[test]
+    fn group_permissions_write_group_sidecar_allowed_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_admin = vec![crate::util::hex(&REMOTE)];
+        std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
+        let access = make_access(&config);
+
+        let request = msgpack::pack(&Value::Map(vec![
+            (Value::UInt(protocol::IDX_GROUP), strv("group")),
+            (Value::Str("operation".into()), strv("gperms")),
+            (Value::Str("step".into()), strv("set")),
+            (
+                Value::Str("content".into()),
+                strv(
+                    "create = all
+",
+                ),
+            ),
+        ]));
+        let set = handle_perms(&config, &access, &request, Some(&(REMOTE, REMOTE_SIG))).unwrap();
+        assert_eq!(set, vec![protocol::RES_OK]);
+        assert_eq!(
+            std::fs::read_to_string(config.repositories_dir.join("group.allowed")).unwrap(),
+            "create = all
+"
+        );
+    }
+
+    #[test]
+    fn permissions_management_requires_admin_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let repo_path = config.repositories_dir.join("group/repo");
+        git::ensure_bare_repository(&repo_path).unwrap();
+        let access = make_access(&config);
+
+        let denied = handle_perms(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("rperms")),
+                ("step", strv("get")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(denied[0], protocol::RES_DISALLOWED);
+    }
+
     fn make_access(config: &ServerConfig) -> Access {
-        Access::new(
+        Access::new_with_aliases(
             &config.allow_read,
             &config.allow_write,
             &config.allow_create,
@@ -2547,6 +2872,7 @@ mod tests {
             &config.allow_interact,
             &config.allow_admin,
             config.repositories_dir.clone(),
+            config.identity_aliases.clone(),
         )
         .unwrap()
         .with_propose(&config.allow_propose)

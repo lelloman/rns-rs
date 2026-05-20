@@ -161,13 +161,29 @@ pub(crate) fn allowed_input_allows(
     op: Operation,
     identity: Option<&[u8; 16]>,
 ) -> Result<bool> {
-    Ok(parse_allowed_file(input)?
+    allowed_input_allows_with_aliases(input, op, identity, &BTreeMap::new())
+}
+
+pub(crate) fn allowed_input_allows_with_aliases(
+    input: &str,
+    op: Operation,
+    identity: Option<&[u8; 16]>,
+    aliases: &BTreeMap<String, [u8; 16]>,
+) -> Result<bool> {
+    Ok(parse_allowed_file_with_aliases(input, aliases)?
         .get(operation_key(op))
         .is_some_and(|rule| rule.allows(identity)))
 }
 
 pub(crate) fn validate_allowed_input(input: &str) -> Result<()> {
-    parse_allowed_file(input).map(|_| ())
+    validate_allowed_input_with_aliases(input, &BTreeMap::new())
+}
+
+pub(crate) fn validate_allowed_input_with_aliases(
+    input: &str,
+    aliases: &BTreeMap<String, [u8; 16]>,
+) -> Result<()> {
+    parse_allowed_file_with_aliases(input, aliases).map(|_| ())
 }
 
 fn allowed_input(path: &Path) -> Result<String> {
@@ -244,10 +260,6 @@ fn parse_identity_ref(value: &str, aliases: &BTreeMap<String, [u8; 16]>) -> Resu
         .copied()
         .map(Ok)
         .unwrap_or_else(|| parse_hex_16(value))
-}
-
-fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
-    parse_allowed_file_with_aliases(input, &BTreeMap::new())
 }
 
 fn parse_allowed_file_with_aliases(
