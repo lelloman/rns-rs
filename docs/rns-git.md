@@ -45,6 +45,11 @@ Important config paths:
   on stdout. They can grant `read`/`r`, `write`/`w`, `readwrite`/`rw`,
   `create`/`c`, `stats`/`s`, `release`/`rel`, `interact`/`i`, `propose`/`p`,
   and `admin`/`adm`.
+- `[aliases]`: optional local aliases for 16-byte hashes. In `server_config`,
+  aliases name identities used by global ACL values and repository/group
+  `.allowed` files. In `client_config`, aliases name destination hashes used in
+  `rns://<destination>/<repository>` URLs. Aliases are resolved locally before a
+  request is sent; fork and mirror upstream metadata stores the canonical hash.
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
@@ -81,6 +86,30 @@ Important config paths:
   Repositories created with `rngit fork` or `rngit mirror` record their upstream
   source in Git config and show a `Forked from ...` or `Mirrored from ...`
   provenance line on the repository page.
+
+## Identity And Destination Aliases
+
+Define aliases in the `[aliases]` section of `server_config` or `client_config`:
+
+```ini
+[aliases]
+alice = d09285e660cfe27cee6d9a0beb58b7e0
+my_node = 063d38912bffc850af4a1b8a270a9d85
+```
+
+Server aliases are identity aliases. They can be used in ACL config values and
+allowed files, for example `write = alice` or `adm:alice`. Client aliases are
+destination aliases. They can be used wherever a client command accepts an
+`rns://` remote URL, for example:
+
+```bash
+rngit create rns://my_node/public/project
+rngit fork rns://my_node/public/project rns://my_node/forks/project
+```
+
+Aliases are not sent over the network. Client commands canonicalize aliased
+`rns://` URLs to full destination hashes before sending requests, so stored fork
+and mirror upstream URLs remain portable between clients.
 
 ## Repository Management
 
