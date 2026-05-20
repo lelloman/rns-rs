@@ -61,6 +61,9 @@ Important config paths:
   binary and oversized blobs kept on safe fallback messages.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
+  Markdown fenced code blocks tagged `rawmu` are passed through as raw Micron
+  instead of being escaped or syntax-highlighted; use this only for repository
+  content that intentionally needs native Micron markup.
   Build with `--no-default-features` to disable syntax highlighting and render
   plain escaped literal blocks instead. Set `record_stats = yes` in `[rngit]`
   to persist front/group/repository page views plus successful fetch and push
