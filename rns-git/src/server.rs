@@ -99,7 +99,7 @@ pub fn register_repository_destination(
     identity: &Identity,
 ) -> Result<Destination> {
     crate::util::ensure_dir(&config.repositories_dir)?;
-    let access = Access::new(
+    let access = Access::new_with_aliases(
         &config.allow_read,
         &config.allow_write,
         &config.allow_create,
@@ -108,6 +108,7 @@ pub fn register_repository_destination(
         &config.allow_interact,
         &config.allow_admin,
         config.repositories_dir.clone(),
+        config.identity_aliases.clone(),
     )?
     .with_propose(&config.allow_propose)?;
     let destination = Destination::single_in(
@@ -1214,6 +1215,7 @@ mod tests {
             unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
+            identity_aliases: std::collections::BTreeMap::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],

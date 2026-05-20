@@ -679,6 +679,7 @@ mod tests {
             unicode_icons: false,
             record_stats: true,
             stats_ignore_identities: Vec::new(),
+            identity_aliases: std::collections::BTreeMap::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
             allow_create: vec!["all".into()],

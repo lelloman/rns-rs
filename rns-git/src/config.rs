@@ -20,6 +20,7 @@ pub struct ServerConfig {
     pub unicode_icons: bool,
     pub record_stats: bool,
     pub stats_ignore_identities: Vec<[u8; 16]>,
+    pub identity_aliases: BTreeMap<String, [u8; 16]>,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
     pub allow_create: Vec<String>,
@@ -38,6 +39,7 @@ pub struct ClientConfig {
     pub identity_path: PathBuf,
     pub connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
+    pub destination_aliases: BTreeMap<String, [u8; 16]>,
     pub log_level: u8,
 }
 
@@ -75,6 +77,7 @@ impl ServerConfig {
                 .filter_map(|value| parse_hex_16(&value).ok())
                 .collect();
         }
+        cfg.identity_aliases = parse_aliases(&ini, "aliases");
         if let Some(v) = get(&ini, "pages", "serve_nomadnet") {
             cfg.serve_nomadnet = parse_bool(v, cfg.serve_nomadnet);
         }
@@ -112,6 +115,7 @@ impl ServerConfig {
             unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
+            identity_aliases: BTreeMap::new(),
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
             allow_create: vec!["none".to_string()],
@@ -144,6 +148,7 @@ impl ClientConfig {
         if let Some(v) = get(&ini, "client", "request_timeout") {
             cfg.request_timeout_secs = v.parse().unwrap_or(cfg.request_timeout_secs);
         }
+        cfg.destination_aliases = parse_aliases(&ini, "aliases");
         if let Some(v) = get(&ini, "logging", "loglevel") {
             cfg.log_level = parse_log_level(v, cfg.log_level);
         }
@@ -157,6 +162,7 @@ impl ClientConfig {
             reticulum_dir,
             connect_timeout_secs: 30,
             request_timeout_secs: 300,
+            destination_aliases: BTreeMap::new(),
             log_level: DEFAULT_LOG_LEVEL,
         }
     }
@@ -187,6 +193,14 @@ fn parse_ini(input: &str) -> Result<Ini> {
 
 fn get<'a>(ini: &'a Ini, section: &str, key: &str) -> Option<&'a str> {
     ini.get(section)?.get(key).map(String::as_str)
+}
+
+fn parse_aliases(ini: &Ini, section: &str) -> BTreeMap<String, [u8; 16]> {
+    ini.get(section)
+        .into_iter()
+        .flat_map(|section| section.iter())
+        .filter_map(|(alias, value)| parse_hex_16(value).ok().map(|hash| (alias.clone(), hash)))
+        .collect()
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -232,11 +246,11 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
-    "[client]\nidentity = client_identity\nconnect_timeout = 30\nrequest_timeout = 300\n\n[logging]\nloglevel = 4\n"
+    "[client]\nidentity = client_identity\nconnect_timeout = 30\nrequest_timeout = 300\n\n[aliases]\n# my_node = 00112233445566778899aabbccddeeff\n\n[logging]\nloglevel = 4\n"
 }
 
 #[cfg(test)]
@@ -340,6 +354,38 @@ mod tests {
             cfg.allow_admin,
             vec!["00112233445566778899aabbccddeeff".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_client_destination_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("client_config"),
+            "[client]\n[aliases]\nhome = 00112233445566778899aabbccddeeff\nbad = not-hex\n",
+        )
+        .unwrap();
+
+        let (cfg, created) = ClientConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+
+        assert!(!created);
+        assert_eq!(cfg.destination_aliases.len(), 1);
+        assert_eq!(cfg.destination_aliases["home"][15], 0xff);
+    }
+
+    #[test]
+    fn parses_server_identity_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("server_config"),
+            "[aliases]\nalice = 00112233445566778899aabbccddeeff\nbad = not-hex\n",
+        )
+        .unwrap();
+
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+
+        assert!(!created);
+        assert_eq!(cfg.identity_aliases.len(), 1);
+        assert_eq!(cfg.identity_aliases["alice"][15], 0xff);
     }
 
     #[test]

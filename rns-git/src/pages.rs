@@ -89,7 +89,7 @@ pub fn register_nomadnet_destination(
     )
     .map_err(|_| Error::msg("failed to register Nomad Network page destination"))?;
 
-    let access = Access::new(
+    let access = Access::new_with_aliases(
         &config.allow_read,
         &config.allow_write,
         &config.allow_create,
@@ -98,6 +98,7 @@ pub fn register_nomadnet_destination(
         &config.allow_interact,
         &config.allow_admin,
         config.repositories_dir.clone(),
+        config.identity_aliases.clone(),
     )?
     .with_propose(&config.allow_propose)?;
     register_page_handlers(node, config.clone(), access)?;
@@ -4377,6 +4378,7 @@ Unmatched * marker\n\
             unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
+            identity_aliases: std::collections::BTreeMap::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["none".into()],
             allow_create: vec!["none".into()],

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,6 +28,7 @@ pub struct Access {
     interact: Rule,
     propose: Rule,
     admin: Rule,
+    aliases: BTreeMap<String, [u8; 16]>,
     repositories_dir: PathBuf,
 }
 
@@ -49,21 +50,46 @@ impl Access {
         admin: &[String],
         repositories_dir: PathBuf,
     ) -> Result<Self> {
+        Self::new_with_aliases(
+            read,
+            write,
+            create,
+            stats,
+            release,
+            interact,
+            admin,
+            repositories_dir,
+            BTreeMap::new(),
+        )
+    }
+
+    pub fn new_with_aliases(
+        read: &[String],
+        write: &[String],
+        create: &[String],
+        stats: &[String],
+        release: &[String],
+        interact: &[String],
+        admin: &[String],
+        repositories_dir: PathBuf,
+        aliases: BTreeMap<String, [u8; 16]>,
+    ) -> Result<Self> {
         Ok(Self {
-            read: Rule::parse(read)?,
-            write: Rule::parse(write)?,
-            create: Rule::parse(create)?,
-            stats: Rule::parse(stats)?,
-            release: Rule::parse(release)?,
-            interact: Rule::parse(interact)?,
+            read: Rule::parse(read, &aliases)?,
+            write: Rule::parse(write, &aliases)?,
+            create: Rule::parse(create, &aliases)?,
+            stats: Rule::parse(stats, &aliases)?,
+            release: Rule::parse(release, &aliases)?,
+            interact: Rule::parse(interact, &aliases)?,
             propose: Rule::None,
-            admin: Rule::parse(admin)?,
+            admin: Rule::parse(admin, &aliases)?,
+            aliases,
             repositories_dir,
         })
     }
 
     pub fn with_propose(mut self, propose: &[String]) -> Result<Self> {
-        self.propose = Rule::parse(propose)?;
+        self.propose = Rule::parse(propose, &self.aliases)?;
         Ok(self)
     }
 
@@ -105,7 +131,7 @@ impl Access {
             if !path.exists() {
                 continue;
             }
-            let rules = parse_allowed_file(&allowed_input(&path)?)?;
+            let rules = parse_allowed_file_with_aliases(&allowed_input(&path)?, &self.aliases)?;
             let Some(rule) = rules.get(operation_key(op)) else {
                 continue;
             };
@@ -187,14 +213,14 @@ fn operation_key(op: Operation) -> &'static str {
 }
 
 impl Rule {
-    fn parse(values: &[String]) -> Result<Self> {
+    fn parse(values: &[String], aliases: &BTreeMap<String, [u8; 16]>) -> Result<Self> {
         if values.iter().any(|v| v.eq_ignore_ascii_case("all")) {
             return Ok(Rule::All);
         }
         let identities: Vec<[u8; 16]> = values
             .iter()
             .filter(|v| !v.eq_ignore_ascii_case("none"))
-            .map(|v| parse_hex_16(v))
+            .map(|v| parse_identity_ref(v, aliases))
             .collect::<Result<_>>()?;
         if identities.is_empty() {
             Ok(Rule::None)
@@ -212,7 +238,22 @@ impl Rule {
     }
 }
 
+fn parse_identity_ref(value: &str, aliases: &BTreeMap<String, [u8; 16]>) -> Result<[u8; 16]> {
+    aliases
+        .get(value.trim())
+        .copied()
+        .map(Ok)
+        .unwrap_or_else(|| parse_hex_16(value))
+}
+
 fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
+    parse_allowed_file_with_aliases(input, &BTreeMap::new())
+}
+
+fn parse_allowed_file_with_aliases(
+    input: &str,
+    aliases: &BTreeMap<String, [u8; 16]>,
+) -> Result<HashMap<String, Rule>> {
     let mut values: HashMap<String, Vec<String>> = HashMap::new();
     for raw in input.lines() {
         let line = raw.split('#').next().unwrap_or("").trim();
@@ -249,7 +290,7 @@ fn parse_allowed_file(input: &str) -> Result<HashMap<String, Rule>> {
     }
     values
         .into_iter()
-        .map(|(key, values)| Ok((key, Rule::parse(&values)?)))
+        .map(|(key, values)| Ok((key, Rule::parse(&values, aliases)?)))
         .collect()
 }
 
@@ -283,6 +324,74 @@ mod tests {
             .allows(Operation::Interact, "group/repo", None)
             .unwrap());
         assert!(!access.allows(Operation::Admin, "group/repo", None).unwrap());
+    }
+
+    #[test]
+    fn global_permission_rules_resolve_identity_aliases() {
+        let mut aliases = BTreeMap::new();
+        aliases.insert(
+            "alice".into(),
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        );
+        let access = Access::new_with_aliases(
+            &["alice".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            PathBuf::from("."),
+            aliases,
+        )
+        .unwrap();
+
+        let alice = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        assert!(access
+            .allows(Operation::Read, "group/repo", Some(&alice))
+            .unwrap());
+    }
+
+    #[test]
+    fn allowed_files_resolve_identity_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("group/repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".allowed"), "write = alice\n").unwrap();
+        let mut aliases = BTreeMap::new();
+        aliases.insert(
+            "alice".into(),
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        );
+        let access = Access::new_with_aliases(
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            &["none".into()],
+            tmp.path().to_path_buf(),
+            aliases,
+        )
+        .unwrap();
+        let alice = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+
+        assert!(access
+            .allows(Operation::Write, "group/repo", Some(&alice))
+            .unwrap());
     }
 
     #[test]

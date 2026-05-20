@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -75,15 +76,37 @@ fn parse_hex_byte(s: &str) -> Result<u8> {
 }
 
 pub fn parse_rns_url(url: &str) -> Result<([u8; 16], String)> {
+    parse_rns_url_with_aliases(url, &BTreeMap::new())
+}
+
+pub fn parse_rns_url_with_aliases(
+    url: &str,
+    destination_aliases: &BTreeMap<String, [u8; 16]>,
+) -> Result<([u8; 16], String)> {
     let rest = url
         .strip_prefix("rns://")
         .ok_or_else(|| Error::msg("RNS Git URL must start with rns://"))?;
     let (hash, repo) = rest
         .split_once('/')
         .ok_or_else(|| Error::msg("RNS Git URL must be rns://<destination>/<repo>"))?;
-    let dest_hash = parse_hex_16(hash)?;
+    let dest_hash = destination_aliases
+        .get(hash)
+        .copied()
+        .map(Ok)
+        .unwrap_or_else(|| parse_hex_16(hash))?;
     validate_repo_name(repo)?;
     Ok((dest_hash, repo.trim_matches('/').to_string()))
+}
+
+pub fn resolve_rns_url_aliases(
+    url: &str,
+    destination_aliases: &BTreeMap<String, [u8; 16]>,
+) -> Result<String> {
+    if !url.starts_with("rns://") {
+        return Ok(url.to_string());
+    }
+    let (dest_hash, repo) = parse_rns_url_with_aliases(url, destination_aliases)?;
+    Ok(format!("rns://{}/{}", hex(&dest_hash), repo))
 }
 
 pub fn validate_repo_name(name: &str) -> Result<()> {
@@ -112,6 +135,51 @@ mod tests {
         assert_eq!(hash[0], 0x00);
         assert_eq!(hash[15], 0xff);
         assert_eq!(repo, "group/repo");
+    }
+
+    #[test]
+    fn parse_url_resolves_destination_aliases() {
+        let mut aliases = BTreeMap::new();
+        aliases.insert(
+            "home".to_string(),
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        );
+
+        let (hash, repo) = parse_rns_url_with_aliases("rns://home/group/repo", &aliases).unwrap();
+
+        assert_eq!(hash[0], 0x00);
+        assert_eq!(hash[15], 0xff);
+        assert_eq!(repo, "group/repo");
+    }
+
+    #[test]
+    fn resolve_url_aliases_canonicalizes_rns_urls() {
+        let mut aliases = BTreeMap::new();
+        aliases.insert(
+            "home".to_string(),
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        );
+
+        assert_eq!(
+            resolve_rns_url_aliases("rns://home/group/repo", &aliases).unwrap(),
+            "rns://00112233445566778899aabbccddeeff/group/repo"
+        );
+        assert_eq!(
+            resolve_rns_url_aliases("https://example.invalid/repo.git", &aliases).unwrap(),
+            "https://example.invalid/repo.git"
+        );
+    }
+
+    #[test]
+    fn parse_url_rejects_unknown_destination_aliases() {
+        let aliases = BTreeMap::new();
+        assert!(parse_rns_url_with_aliases("rns://unknown/group/repo", &aliases).is_err());
     }
 
     #[test]

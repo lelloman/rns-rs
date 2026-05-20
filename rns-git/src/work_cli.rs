@@ -10,7 +10,7 @@ use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
 use crate::util::{
-    default_reticulum_dir, default_rngit_dir, load_or_create_identity, parse_rns_url,
+    default_reticulum_dir, default_rngit_dir, load_or_create_identity, parse_rns_url_with_aliases,
 };
 use crate::{Error, Result};
 
@@ -19,7 +19,6 @@ where
     I: IntoIterator<Item = String>,
 {
     let options = WorkOptions::parse(args)?;
-    let (dest_hash, repository) = parse_rns_url(&options.remote)?;
     let rngit_dir = options.config_dir.unwrap_or_else(default_rngit_dir);
     let rns_dir = options.rns_config_dir.or_else(default_reticulum_dir);
     let (config, created) = ClientConfig::load_or_create(rngit_dir, rns_dir)?;
@@ -30,6 +29,8 @@ where
             config.dir.join("client_config").display()
         )));
     }
+    let (dest_hash, repository) =
+        parse_rns_url_with_aliases(&options.remote, &config.destination_aliases)?;
 
     let identity = load_or_create_identity(&config.identity_path)?;
     let client = SyncClient::connect(config, dest_hash)?;
