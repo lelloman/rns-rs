@@ -122,6 +122,9 @@ rngit create rns://<destination_hash>/<group>/<repo>
 rngit fork https://example.invalid/project.git rns://<destination_hash>/<group>/<repo>
 rngit mirror https://example.invalid/project.git rns://<destination_hash>/<group>/<repo>
 rngit sync rns://<destination_hash>/<group>/<repo>
+rngit perms rns://<destination_hash>/<group>
+rngit perms rns://<destination_hash>/<group>/<repo>
+rngit perms rns://<destination_hash>/<group>/<repo> --content ./repo.allowed
 ```
 
 `create`, `fork`, and `mirror` require create access in the target group. The
@@ -131,6 +134,14 @@ granting the requester admin access. Forks and mirrors store
 repository config. `sync` requires read and write access and fetches
 `+refs/*:refs/*` from that recorded upstream source; mirror syncs also update
 `repository.rngit.upstream.sync`.
+
+`rngit perms` gets or replaces group and repository permission sidecar files over
+`/mgmt/perms`. A URL ending at `<group>` targets `<group>.allowed`; a URL ending
+at `<group>/<repo>` targets `<group>/<repo>.allowed`. Reading or replacing these
+files requires admin access, and the server validates replacement content before
+atomically writing it. Rust `rngit perms` is non-interactive: without
+`--content`, it prints the current permission file; with `--content PATH`, it
+replaces the remote permission file with `PATH`.
 
 ## Git Remote Helper
 
