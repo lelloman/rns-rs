@@ -112,7 +112,7 @@ fn page_fetch_and_push_stats_are_recorded_and_rendered() {
         Some(&REMOTE),
     )
     .unwrap();
-    assert!(alpha_stats.contains(">Stats for alpha"));
+    assert!(alpha_stats.contains("/ stats\n\n>Stats for alpha"));
     assert!(alpha_stats.contains("Views"));
     assert!(alpha_stats.contains("Fetches"));
     assert!(alpha_stats.contains("Views`f     :     1  total"));

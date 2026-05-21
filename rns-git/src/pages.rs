@@ -986,7 +986,7 @@ fn render_stats_page(
     };
 
     let mut out = format!(
-        ">>\n{} / {} / {}\n\n>Stats for {}\n\n",
+        ">>\n{} / {} / {} / stats\n\n>Stats for {}\n\n",
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
