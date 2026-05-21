@@ -819,6 +819,46 @@ fn rsm_meta_value(value: &Value) -> String {
     }
 }
 
+#[allow(dead_code)]
+fn check_release_rsm_structure(signed_data: &Value) -> Result<(), &'static str> {
+    let Some(release_meta) = signed_data.map_get("meta") else {
+        return Err("No release metadata in manifest");
+    };
+    let release_name = release_meta.map_get("name").and_then(Value::as_str);
+    let release_version = release_meta.map_get("version").and_then(Value::as_str);
+    let release_origin = release_meta.map_get("origin");
+    let release_origin_path = release_meta.map_get("path").and_then(Value::as_str);
+
+    let Some(release_name) = release_name.filter(|value| !value.is_empty()) else {
+        return Err("Incomplete package data in manifest");
+    };
+    let Some(release_version) = release_version.filter(|value| !value.is_empty()) else {
+        return Err("Incomplete package data in manifest");
+    };
+    let Some(release_origin) = release_origin else {
+        return Err("Incomplete release origin data in manifest");
+    };
+    let Some(_release_origin_path) = release_origin_path.filter(|value| !value.is_empty()) else {
+        return Err("Incomplete release origin data in manifest");
+    };
+
+    if release_name.contains('/') || release_version.contains('/') {
+        return Err("Invalid data in release manifest");
+    }
+    let origin_len = match release_origin {
+        Value::Bin(bytes) => bytes.len(),
+        Value::Str(value) => value.len(),
+        _ => return Err("Invalid origin hash in manifest"),
+    };
+    if origin_len != 16 {
+        return Err("Invalid origin hash length in manifest");
+    }
+    if !matches!(release_origin, Value::Bin(_)) {
+        return Err("Invalid origin hash in manifest");
+    }
+    Ok(())
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
 }
@@ -1734,6 +1774,62 @@ mod tests {
             &Value::Str("kept".into())
         ));
         assert!(should_print_rsm_meta_entry("other", &Value::Nil));
+    }
+
+    #[test]
+    fn release_rsm_structure_accepts_canonical_manifest_metadata() {
+        let manifest = Value::Map(vec![(
+            Value::Str("meta".into()),
+            Value::Map(vec![
+                (Value::Str("name".into()), Value::Str("pkg".into())),
+                (Value::Str("version".into()), Value::Str("v1".into())),
+                (Value::Str("origin".into()), Value::Bin(vec![0x11; 16])),
+                (Value::Str("path".into()), Value::Str("group/repo".into())),
+            ]),
+        )]);
+
+        assert_eq!(check_release_rsm_structure(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn release_rsm_structure_rejects_incomplete_or_unsafe_metadata() {
+        let valid_meta = vec![
+            (Value::Str("name".into()), Value::Str("pkg".into())),
+            (Value::Str("version".into()), Value::Str("v1".into())),
+            (Value::Str("origin".into()), Value::Bin(vec![0x11; 16])),
+            (Value::Str("path".into()), Value::Str("group/repo".into())),
+        ];
+        let manifest = |meta: Vec<(Value, Value)>| {
+            Value::Map(vec![(Value::Str("meta".into()), Value::Map(meta))])
+        };
+
+        let mut missing_version = valid_meta.clone();
+        missing_version.retain(|(key, _)| !matches!(key, Value::Str(key) if key == "version"));
+        assert_eq!(
+            check_release_rsm_structure(&manifest(missing_version)),
+            Err("Incomplete package data in manifest")
+        );
+
+        let mut unsafe_name = valid_meta.clone();
+        unsafe_name[0].1 = Value::Str("group/pkg".into());
+        assert_eq!(
+            check_release_rsm_structure(&manifest(unsafe_name)),
+            Err("Invalid data in release manifest")
+        );
+
+        let mut short_origin = valid_meta.clone();
+        short_origin[2].1 = Value::Bin(vec![0x11; 15]);
+        assert_eq!(
+            check_release_rsm_structure(&manifest(short_origin)),
+            Err("Invalid origin hash length in manifest")
+        );
+
+        let mut string_origin = valid_meta;
+        string_origin[2].1 = Value::Str("0123456789abcdef".into());
+        assert_eq!(
+            check_release_rsm_structure(&manifest(string_origin)),
+            Err("Invalid origin hash in manifest")
+        );
     }
 
     #[test]
