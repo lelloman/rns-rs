@@ -178,6 +178,7 @@ repository served by `rngit`.
 rngit release rns://<destination_hash>/<repository> list
 rngit release rns://<destination_hash>/<repository> view v1.0.0
 rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --notes ./RELEASE.md
+rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --signer ./release_identity --name package-name
 rngit release rns://<destination_hash>/<repository> delete v1.0.0 --yes
 ```
 
@@ -185,8 +186,12 @@ The release tag must already exist in the remote bare repository. `create`
 initializes the release, uploads every regular file from the artifact directory
 except `RELEASE.md` and `RELEASE.mu`, then finalizes it as published. If no
 `--notes` path is provided, `rngit release create` uses `RELEASE.mu` or
-`RELEASE.md` from the artifact directory when present. Artifact uploads print
-per-file progress as each artifact is sent.
+`RELEASE.md` from the artifact directory when present. Release creation signs
+each artifact with the client identity, or with `--signer PATH` when supplied,
+and writes local `<artifact>.rsg` files plus `manifest.rsm` into the artifact
+directory. Use `--name NAME` when the package name should differ from the
+repository name. Artifact uploads print per-file progress as each artifact is
+sent.
 
 ## Work Documents
 

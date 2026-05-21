@@ -1,8 +1,11 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
+use rns_crypto::identity::Identity;
+use rns_crypto::sha256::sha256;
 
 use crate::client::{decode_status, SyncClient};
 use crate::config::ClientConfig;
@@ -29,9 +32,22 @@ where
     let (dest_hash, repository) =
         parse_rns_url_with_aliases(&options.remote, &config.destination_aliases)?;
 
+    let default_signer_path = config.identity_path.clone();
+    let default_package_name = repository
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&repository)
+        .to_string();
     let client = SyncClient::connect(config, dest_hash)?;
     let mut transport = NetReleaseTransport { client, repository };
-    run_release_command(&mut transport, &options.command, io::stdout())
+    run_release_command_with_defaults(
+        &mut transport,
+        &options.command,
+        Some(default_signer_path.as_path()),
+        Some(default_package_name.as_str()),
+        io::stdout(),
+    )
 }
 
 trait ReleaseTransport {
@@ -73,6 +89,7 @@ enum ReleaseCommand {
         artifacts_dir: PathBuf,
         notes_path: Option<PathBuf>,
         signer_path: Option<PathBuf>,
+        package_name: Option<String>,
     },
     Delete {
         tag: String,
@@ -93,6 +110,7 @@ impl ReleaseOptions {
         let mut rns_config_dir = None;
         let mut notes_path = None;
         let mut signer_path = None;
+        let mut package_name = None;
         let mut yes = false;
         let mut positional = Vec::new();
         let mut args = args.into_iter();
@@ -122,6 +140,12 @@ impl ReleaseOptions {
                             .ok_or_else(|| Error::msg("missing signer identity path"))?,
                     ));
                 }
+                "-n" | "--name" => {
+                    package_name = Some(
+                        args.next()
+                            .ok_or_else(|| Error::msg("missing package name"))?,
+                    );
+                }
                 "-y" | "--yes" => yes = true,
                 "-h" | "--help" => return Err(Error::msg(usage())),
                 other => positional.push(other.to_string()),
@@ -145,7 +169,9 @@ impl ReleaseOptions {
                     .cloned()
                     .ok_or_else(|| Error::msg("release view requires a tag"))?,
             },
-            "create" => parse_create_target(&positional[2..], notes_path, signer_path)?,
+            "create" => {
+                parse_create_target(&positional[2..], notes_path, signer_path, package_name)?
+            }
             "delete" => ReleaseCommand::Delete {
                 tag: positional
                     .get(2)
@@ -175,6 +201,7 @@ fn parse_create_target(
     args: &[String],
     notes_path: Option<PathBuf>,
     signer_path: Option<PathBuf>,
+    package_name: Option<String>,
 ) -> Result<ReleaseCommand> {
     let first = args
         .first()
@@ -195,12 +222,24 @@ fn parse_create_target(
         artifacts_dir,
         notes_path,
         signer_path,
+        package_name,
     })
 }
 
+#[cfg(test)]
 fn run_release_command(
     transport: &mut impl ReleaseTransport,
     command: &ReleaseCommand,
+    output: impl Write,
+) -> Result<()> {
+    run_release_command_with_defaults(transport, command, None, None, output)
+}
+
+fn run_release_command_with_defaults(
+    transport: &mut impl ReleaseTransport,
+    command: &ReleaseCommand,
+    default_signer_path: Option<&Path>,
+    default_package_name: Option<&str>,
     mut output: impl Write,
 ) -> Result<()> {
     match command {
@@ -221,12 +260,14 @@ fn run_release_command(
             artifacts_dir,
             notes_path,
             signer_path,
+            package_name,
         } => create_release(
             transport,
             tag,
             artifacts_dir,
             notes_path.as_deref(),
-            signer_path.as_deref(),
+            signer_path.as_deref().or(default_signer_path),
+            package_name.as_deref().or(default_package_name),
             &mut output,
         ),
         ReleaseCommand::Delete { tag, yes } => {
@@ -253,7 +294,8 @@ fn create_release(
     tag: &str,
     artifacts_dir: &Path,
     notes_path: Option<&Path>,
-    _signer_path: Option<&Path>,
+    signer_path: Option<&Path>,
+    package_name: Option<&str>,
     mut output: impl Write,
 ) -> Result<()> {
     if !artifacts_dir.is_dir() {
@@ -263,6 +305,17 @@ fn create_release(
         )));
     }
     let notes = load_notes(artifacts_dir, notes_path)?;
+    let artifacts = artifact_files(artifacts_dir)?;
+    if let Some(signer_path) = signer_path {
+        sign_release_artifacts(
+            artifacts_dir,
+            &artifacts,
+            tag,
+            &notes.content,
+            signer_path,
+            package_name,
+        )?;
+    }
     writeln!(output, "Initializing release {tag}")?;
     transport.request(request(
         "create",
@@ -274,7 +327,6 @@ fn create_release(
         ],
     ))?;
 
-    let artifacts = artifact_files(artifacts_dir)?;
     for (index, artifact) in artifacts.iter().enumerate() {
         let data = fs::read(&artifact.path)?;
         writeln!(
@@ -311,6 +363,139 @@ fn create_release(
     Ok(())
 }
 
+fn sign_release_artifacts(
+    artifacts_dir: &Path,
+    artifacts: &[ArtifactFile],
+    tag: &str,
+    notes: &str,
+    signer_path: &Path,
+    package_name: Option<&str>,
+) -> Result<()> {
+    let signer = rns_net::storage::load_identity(signer_path).map_err(|e| {
+        Error::msg(format!(
+            "could not load signer identity {}: {e}",
+            signer_path.display()
+        ))
+    })?;
+    let timestamp = current_unix_timestamp()?;
+    let mut manifest_artifacts = Vec::new();
+
+    for artifact in artifacts {
+        if artifact.name.ends_with(".rsg") || artifact.name.ends_with(".rsm") {
+            continue;
+        }
+        let data = fs::read(&artifact.path)?;
+        let rsg = create_rsg(
+            &signer,
+            &data,
+            false,
+            vec![("timestamp".into(), Value::UInt(timestamp))],
+        )?;
+        fs::write(artifacts_dir.join(format!("{}.rsg", artifact.name)), &rsg)?;
+        manifest_artifacts.push(Value::Map(vec![
+            (Value::Str("name".into()), Value::Str(artifact.name.clone())),
+            (Value::Str("rsg".into()), Value::Bin(rsg)),
+        ]));
+    }
+
+    let package_name = package_name
+        .map(str::to_string)
+        .or_else(|| {
+            artifacts_dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "release".into());
+    let manifest_meta = vec![
+        ("name".into(), Value::Str(package_name)),
+        ("version".into(), Value::Str(tag.to_string())),
+        ("released".into(), Value::Str(unix_timestamp_iso(timestamp))),
+        ("timestamp".into(), Value::UInt(timestamp)),
+        ("artifacts".into(), Value::Array(manifest_artifacts)),
+    ];
+    let manifest = create_rsg(&signer, notes.as_bytes(), true, manifest_meta)?;
+    fs::write(artifacts_dir.join("manifest.rsm"), manifest)?;
+    Ok(())
+}
+
+fn create_rsg(
+    identity: &Identity,
+    message: &[u8],
+    embed_message: bool,
+    extra_meta: Vec<(String, Value)>,
+) -> Result<Vec<u8>> {
+    const SIG_LEN: usize = 64;
+    let public_key = identity
+        .get_public_key()
+        .ok_or_else(|| Error::msg("signer identity has no public key"))?;
+    let mut meta = vec![
+        (
+            Value::Str("signer".into()),
+            Value::Bin(identity.hash().to_vec()),
+        ),
+        (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
+    ];
+    for (key, value) in extra_meta {
+        if !meta
+            .iter()
+            .any(|(existing, _)| matches!(existing, Value::Str(existing) if existing == &key))
+        {
+            meta.push((Value::Str(key), value));
+        }
+    }
+
+    let mut envelope = vec![
+        (Value::Str("hashtype".into()), Value::Str("sha256".into())),
+        (
+            Value::Str("hash".into()),
+            Value::Bin(sha256(message).to_vec()),
+        ),
+        (Value::Str("meta".into()), Value::Map(meta)),
+    ];
+    if embed_message {
+        envelope.push((Value::Str("message".into()), Value::Bin(message.to_vec())));
+    }
+    let envelope = msgpack::pack(&Value::Map(envelope));
+    let signature = identity
+        .sign(&envelope)
+        .map_err(|_| Error::msg("signer identity has no private key"))?;
+    let mut rsg = Vec::with_capacity(SIG_LEN + envelope.len());
+    rsg.extend_from_slice(&signature);
+    rsg.extend_from_slice(&envelope);
+    Ok(rsg)
+}
+
+fn current_unix_timestamp() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| Error::msg(format!("system clock is before UNIX epoch: {e}")))?
+        .as_secs())
+}
+
+fn unix_timestamp_iso(timestamp: u64) -> String {
+    let days = (timestamp / 86_400) as i64;
+    let seconds = timestamp % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds / 3_600;
+    let minute = (seconds % 3_600) / 60;
+    let second = seconds % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, u64, u64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year, month as u64, day as u64)
+}
+
 fn request(operation: &str, fields: &[(&str, Value)]) -> Vec<u8> {
     let mut map = vec![
         (
@@ -345,7 +530,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -524,12 +709,15 @@ mod tests {
                 artifacts_dir: PathBuf::from("dist"),
                 notes_path: Some(PathBuf::from("NOTES.md")),
                 signer_path: None,
+                package_name: None,
             }
         );
 
         let signed_create = ReleaseOptions::parse([
             "--signer".into(),
             "signer.rid".into(),
+            "--name".into(),
+            "pkg".into(),
             "rns://00112233445566778899aabbccddeeff/group/repo".into(),
             "create".into(),
             "v2".into(),
@@ -543,6 +731,7 @@ mod tests {
                 artifacts_dir: PathBuf::from("dist"),
                 notes_path: None,
                 signer_path: Some(PathBuf::from("signer.rid")),
+                package_name: Some("pkg".into()),
             }
         );
 
@@ -589,7 +778,7 @@ mod tests {
         };
         let mut out = Vec::new();
 
-        create_release(&mut fake, "v1", tmp.path(), None, None, &mut out).unwrap();
+        create_release(&mut fake, "v1", tmp.path(), None, None, None, &mut out).unwrap();
 
         assert_eq!(fake.requests.len(), 4);
         assert_eq!(
@@ -628,6 +817,70 @@ mod tests {
         assert!(out.contains("Uploading b.bin (2/2, 1 bytes)"));
         assert!(out.contains("Finalizing release v1"));
         assert!(out.ends_with("Created release v1 with 2 artifact(s)\n"));
+    }
+
+    #[test]
+    fn create_with_signer_writes_artifact_signatures_and_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer_dir = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("RELEASE.md"), "# Notes\n").unwrap();
+        fs::write(tmp.path().join("app.bin"), b"app").unwrap();
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let signer_path = signer_dir.path().join("signer.rid");
+        rns_net::storage::save_identity(&signer, &signer_path).unwrap();
+        let mut fake = FakeTransport {
+            responses: vec![Vec::new(), Vec::new(), Vec::new()],
+            requests: Vec::new(),
+        };
+        let mut out = Vec::new();
+
+        create_release(
+            &mut fake,
+            "v1",
+            tmp.path(),
+            None,
+            Some(&signer_path),
+            Some("pkg"),
+            &mut out,
+        )
+        .unwrap();
+
+        assert!(tmp.path().join("app.bin.rsg").exists());
+        assert!(tmp.path().join("manifest.rsm").exists());
+        assert_eq!(fake.requests.len(), 3);
+        assert_eq!(
+            fake.requests[1]
+                .map_get("artifact_name")
+                .and_then(Value::as_str),
+            Some("app.bin")
+        );
+
+        let manifest = rsg_envelope(&tmp.path().join("manifest.rsm"));
+        let meta = manifest.map_get("meta").unwrap();
+        assert_eq!(meta.map_get("name").and_then(Value::as_str), Some("pkg"));
+        assert_eq!(meta.map_get("version").and_then(Value::as_str), Some("v1"));
+        assert!(meta.map_get("released").and_then(Value::as_str).is_some());
+        let artifacts = meta.map_get("artifacts").and_then(Value::as_array).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        let artifact = &artifacts[0];
+        assert_eq!(
+            artifact.map_get("name").and_then(Value::as_str),
+            Some("app.bin")
+        );
+        assert!(artifact.map_get("rsg").and_then(Value::as_bin).is_some());
+
+        let artifact_sig = rsg_envelope(&tmp.path().join("app.bin.rsg"));
+        assert!(artifact_sig
+            .map_get("meta")
+            .unwrap()
+            .map_get("timestamp")
+            .and_then(Value::as_integer)
+            .is_some());
+    }
+
+    fn rsg_envelope(path: &Path) -> Value {
+        let data = fs::read(path).unwrap();
+        msgpack::unpack_exact(&data[64..]).unwrap()
     }
 
     #[test]
