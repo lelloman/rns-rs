@@ -478,19 +478,21 @@ fn fetch_release_into(
 ) -> Result<()> {
     let (tag, requested_artifact) = parse_fetch_target(target)?;
     let required_signer = required_signer.map(parse_hex_16).transpose()?;
-    let manifest = transport.request_resource(request(
+    let manifest_bytes = transport.request_resource(request(
         "fetch",
         &[
             ("tag", Value::Str(tag.clone())),
             ("artifact", Value::Str("manifest.rsm".into())),
         ],
     ))?;
-    let manifest = validate_embedded_manifest(&manifest, required_signer)?;
+    let manifest = validate_embedded_manifest(&manifest_bytes, required_signer)?;
     writeln!(
         output,
         "Release manifest validated, signed by {}",
         crate::util::hex(&manifest.signer_hash)
     )?;
+    let manifest_name = manifest_output_name(&manifest.envelope)?;
+    fs::write(output_dir.join(manifest_name), &manifest_bytes)?;
     let artifacts = manifest_artifacts(&manifest.envelope)?;
     if artifacts.is_empty() {
         return Err(Error::msg("Release manifest contains no artifacts"));
@@ -647,6 +649,32 @@ fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
                 .and_then(Value::as_str)
                 .map(|message| message.as_bytes().to_vec())
         })
+}
+
+fn manifest_output_name(manifest: &Value) -> Result<String> {
+    let meta = manifest
+        .map_get("meta")
+        .ok_or_else(|| Error::msg("No release metadata in manifest"))?;
+    let name = meta
+        .map_get("name")
+        .and_then(Value::as_str)
+        .and_then(sanitize_manifest_component)
+        .ok_or_else(|| Error::msg("Incomplete release data in manifest"))?;
+    let version = meta
+        .map_get("version")
+        .and_then(Value::as_str)
+        .and_then(sanitize_manifest_component)
+        .ok_or_else(|| Error::msg("Incomplete release data in manifest"))?;
+    Ok(format!("{name}_{version}.rsm"))
+}
+
+fn sanitize_manifest_component(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\'))
+    .then(|| value.to_string())
 }
 
 fn manifest_artifacts(manifest: &Value) -> Result<Vec<ManifestArtifact>> {
@@ -1219,13 +1247,17 @@ mod tests {
             &signer,
             b"notes",
             true,
-            vec![(
-                "artifacts".into(),
-                Value::Array(vec![Value::Map(vec![
-                    (Value::Str("name".into()), Value::Str("app.bin".into())),
-                    (Value::Str("rsg".into()), Value::Bin(artifact_rsg)),
-                ])]),
-            )],
+            vec![
+                ("name".into(), Value::Str("pkg".into())),
+                ("version".into(), Value::Str("v1".into())),
+                (
+                    "artifacts".into(),
+                    Value::Array(vec![Value::Map(vec![
+                        (Value::Str("name".into()), Value::Str("app.bin".into())),
+                        (Value::Str("rsg".into()), Value::Bin(artifact_rsg)),
+                    ])]),
+                ),
+            ],
         )
         .unwrap();
         let required = crate::util::hex(signer.hash());
@@ -1246,6 +1278,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read(tmp.path().join("app.bin")).unwrap(), b"app");
+        assert!(tmp.path().join("pkg_v1.rsm").exists());
         assert_eq!(fake.requests.len(), 2);
         assert_eq!(
             fake.requests[0].map_get("artifact").and_then(Value::as_str),
