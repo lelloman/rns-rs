@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn mirror_handler_records_mirror_type() {
         let tmp = tempfile::tempdir().unwrap();
-        let source = create_source_repo(tmp.path());
+        let source = create_source_repo_on_branch(tmp.path(), "main");
         let mut config = cfg(tmp.path());
         config.allow_create = vec!["all".into()];
         std::fs::create_dir_all(config.repositories_dir.join("group")).unwrap();
@@ -1857,6 +1857,7 @@ mod tests {
         let target = config.repositories_dir.join("group/mirrored");
         assert_eq!(resp[0], protocol::RES_OK);
         assert_eq!(git_config(&target, "repository.rngit.type"), "mirror");
+        assert_eq!(git_symbolic_ref(&target, "HEAD"), "refs/heads/main");
         assert!(git_config(&target, "repository.rngit.upstream.sync")
             .parse::<u64>()
             .is_ok());
@@ -2929,9 +2930,13 @@ mod tests {
     }
 
     fn create_source_repo(root: &std::path::Path) -> std::path::PathBuf {
-        let source = root.join("source");
+        create_source_repo_on_branch(root, "master")
+    }
+
+    fn create_source_repo_on_branch(root: &std::path::Path, branch: &str) -> std::path::PathBuf {
+        let source = root.join(format!("source-{branch}"));
         std::fs::create_dir_all(&source).unwrap();
-        run_git(&source, &["init"]);
+        run_git(&source, &["init", "-b", branch]);
         std::fs::write(source.join("README.md"), "source\n").unwrap();
         run_git(&source, &["add", "README.md"]);
         run_git(
@@ -2965,6 +2970,22 @@ mod tests {
             ],
         );
         git_rev_parse(repo, "HEAD")
+    }
+
+    fn git_symbolic_ref(repo: &std::path::Path, name: &str) -> String {
+        let output = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("symbolic-ref")
+            .arg(name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git symbolic-ref failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
     fn git_rev_parse(repo: &std::path::Path, rev: &str) -> String {

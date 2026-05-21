@@ -102,6 +102,7 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
             .arg("fetch")
             .arg(source)
             .arg("+refs/*:refs/*"))?;
+        update_head_to_source_default(&temp, source)?;
         run(Command::new("git")
             .arg("--git-dir")
             .arg(&temp)
@@ -130,6 +131,75 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
         let _ = fs::remove_dir_all(&temp);
     }
     result
+}
+
+pub fn update_head_to_source_default(repo_path: &Path, source: &str) -> Result<()> {
+    require_repository(repo_path)?;
+    let mut target_branch = source_default_head(source)?;
+    if let Some(branch) = target_branch.as_deref() {
+        let check = Command::new("git")
+            .arg("--git-dir")
+            .arg(repo_path)
+            .arg("show-ref")
+            .arg("--verify")
+            .arg("--quiet")
+            .arg(branch)
+            .status()?;
+        if !check.success() {
+            target_branch = None;
+        }
+    }
+    let target_branch = match target_branch {
+        Some(branch) => branch,
+        None => first_local_branch(repo_path)?
+            .ok_or_else(|| Error::msg("repository has no local branch for HEAD"))?,
+    };
+    run(Command::new("git")
+        .arg("--git-dir")
+        .arg(repo_path)
+        .arg("symbolic-ref")
+        .arg("HEAD")
+        .arg(target_branch))?;
+    Ok(())
+}
+
+fn source_default_head(source: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("ls-remote")
+        .arg("--symref")
+        .arg(source)
+        .arg("HEAD")
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("ref: ") else {
+            continue;
+        };
+        let Some((target, name)) = rest.split_once('\t') else {
+            continue;
+        };
+        if name == "HEAD" && target.starts_with("refs/heads/") {
+            return Ok(Some(target.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn first_local_branch(repo_path: &Path) -> Result<Option<String>> {
+    let output = run(Command::new("git")
+        .arg("--git-dir")
+        .arg(repo_path)
+        .arg("for-each-ref")
+        .arg("--format=%(refname)")
+        .arg("--sort=refname")
+        .arg("refs/heads"))?;
+    Ok(output
+        .lines()
+        .find(|line| line.starts_with("refs/heads/"))
+        .map(ToOwned::to_owned))
 }
 
 pub fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
@@ -165,6 +235,9 @@ pub fn sync_upstream(path: &Path) -> Result<String> {
         .arg("fetch")
         .arg(&source)
         .arg("+refs/*:refs/*"))?;
+    if repository_type == "mirror" {
+        update_head_to_source_default(path, &source)?;
+    }
     if matches!(repository_type.as_str(), "fork" | "mirror") {
         run(Command::new("git")
             .arg("--git-dir")
