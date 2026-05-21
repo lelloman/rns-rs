@@ -107,13 +107,12 @@ impl Channel {
         }
 
         let sequence = self.next_sequence;
-        self.next_sequence = ((self.next_sequence as u32 + 1) % CHANNEL_SEQ_MODULUS) as u16;
-
         let raw = pack_envelope(msgtype, sequence, payload);
         if raw.len() > link_mdu {
             return Err(ChannelError::MessageTooBig);
         }
 
+        self.next_sequence = ((self.next_sequence as u32 + 1) % CHANNEL_SEQ_MODULUS) as u16;
         self.tx_ring.push_back(Envelope {
             sequence,
             raw: raw.clone(),
@@ -163,6 +162,19 @@ impl Channel {
     /// Used after holepunch completion where signaling messages are fire-and-forget.
     pub fn flush_tx(&mut self) {
         self.tx_ring.clear();
+    }
+
+    /// Cancel a send that did not reach the link layer.
+    pub fn cancel_send(&mut self, sequence: Sequence) -> bool {
+        let Some(pos) = self.tx_ring.iter().position(|e| e.sequence == sequence) else {
+            return false;
+        };
+        self.tx_ring.remove(pos);
+        let expected_next = ((sequence as u32 + 1) % CHANNEL_SEQ_MODULUS) as u16;
+        if self.next_sequence == expected_next {
+            self.next_sequence = sequence;
+        }
+        true
     }
 
     /// Notify that a packet with given sequence was delivered (acknowledged).
@@ -427,6 +439,40 @@ mod tests {
         // Window = 2, both outstanding
         assert!(!ch.is_ready_to_send());
         assert_eq!(ch.send(0x01, b"c", 1.0, 500), Err(ChannelError::NotReady));
+    }
+
+    #[test]
+    fn test_message_too_big_does_not_consume_sequence() {
+        let mut ch = Channel::new(0.1);
+        assert_eq!(
+            ch.send(0x01, b"hello", 1.0, 2),
+            Err(ChannelError::MessageTooBig)
+        );
+
+        let actions = ch.send(0x01, b"ok", 2.0, 500).unwrap();
+        match &actions[0] {
+            ChannelAction::SendOnLink { sequence, .. } => assert_eq!(*sequence, 0),
+            _ => panic!("Expected SendOnLink"),
+        }
+    }
+
+    #[test]
+    fn test_cancel_send_rewinds_sequence_and_frees_window() {
+        let mut ch = Channel::new(CHANNEL_RTT_SLOW + 1.0);
+        let actions = ch.send(0x01, b"first", 1.0, 500).unwrap();
+        let sequence = match &actions[0] {
+            ChannelAction::SendOnLink { sequence, .. } => *sequence,
+            _ => panic!("Expected SendOnLink"),
+        };
+        assert!(!ch.is_ready_to_send());
+
+        assert!(ch.cancel_send(sequence));
+        assert!(ch.is_ready_to_send());
+        let actions = ch.send(0x01, b"retry", 2.0, 500).unwrap();
+        match &actions[0] {
+            ChannelAction::SendOnLink { sequence, .. } => assert_eq!(*sequence, 0),
+            _ => panic!("Expected SendOnLink"),
+        }
     }
 
     #[test]

@@ -3175,11 +3175,20 @@ impl LinkManager {
         for action in actions {
             match action {
                 rns_core::channel::ChannelAction::SendOnLink { raw, sequence } => {
-                    // Encrypt and send as CHANNEL context
+                    // Encrypt and send as CHANNEL context. If the packet cannot be
+                    // emitted, remove the reserved channel sequence so receivers do
+                    // not stall on a gap that never reached the wire.
                     let encrypted = match self.links.get(link_id) {
                         Some(link) => match link.engine.encrypt(&raw, rng) {
                             Ok(encrypted) => encrypted,
-                            Err(_) => continue,
+                            Err(_) => {
+                                if let Some(link_mut) = self.links.get_mut(link_id) {
+                                    if let Some(channel) = link_mut.channel.as_mut() {
+                                        channel.cancel_send(sequence);
+                                    }
+                                }
+                                continue;
+                            }
                         },
                         None => continue,
                     };
@@ -3190,7 +3199,7 @@ impl LinkManager {
                         destination_type: constants::DESTINATION_LINK,
                         packet_type: constants::PACKET_TYPE_DATA,
                     };
-                    if let Ok((raw_bytes, packet_hash)) = RawPacket::pack_raw_with_hash(
+                    match RawPacket::pack_raw_with_hash(
                         flags,
                         0,
                         link_id,
@@ -3198,16 +3207,25 @@ impl LinkManager {
                         constants::CONTEXT_CHANNEL,
                         &encrypted,
                     ) {
-                        if let Some(link_mut) = self.links.get_mut(link_id) {
-                            link_mut
-                                .pending_channel_packets
-                                .insert(packet_hash, sequence);
+                        Ok((raw_bytes, packet_hash)) => {
+                            if let Some(link_mut) = self.links.get_mut(link_id) {
+                                link_mut
+                                    .pending_channel_packets
+                                    .insert(packet_hash, sequence);
+                            }
+                            result.push(LinkManagerAction::SendPacket {
+                                raw: raw_bytes,
+                                dest_type: constants::DESTINATION_LINK,
+                                attached_interface: None,
+                            });
                         }
-                        result.push(LinkManagerAction::SendPacket {
-                            raw: raw_bytes,
-                            dest_type: constants::DESTINATION_LINK,
-                            attached_interface: None,
-                        });
+                        Err(_) => {
+                            if let Some(link_mut) = self.links.get_mut(link_id) {
+                                if let Some(channel) = link_mut.channel.as_mut() {
+                                    channel.cancel_send(sequence);
+                                }
+                            }
+                        }
                     }
                 }
                 rns_core::channel::ChannelAction::MessageReceived {
