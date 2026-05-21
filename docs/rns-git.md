@@ -201,7 +201,12 @@ per-file progress as each artifact is sent.
 
 `release fetch` first validates `manifest.rsm`, saves it locally as
 `<name>_<version>.rsm`, then validates each downloaded artifact against the
-embedded RSG. The remote argument can also be a saved `.rsm` manifest; in that
+embedded RSG. Use `tag:artifact` for an exact artifact, `tag:all` for every
+artifact, or quote a shell-style wildcard such as `"v1.0.0:*-py3-*.whl"`,
+`"v1.0.0:app-1.2.?-linux-*.tar.gz"`, or `"v1.0.0:source_*.tgz"` to match
+multiple artifact names. Supported wildcards are `*`, `?`, `[seq]`, and
+`[!seq]`; quote patterns so your shell does not expand them before `rngit` sees
+the target. The remote argument can also be a saved `.rsm` manifest; in that
 case `rngit` validates the local manifest and uses its embedded origin metadata
 to contact the release repository. Add `--offline` with a local manifest to
 validate the manifest and local artifact files without opening a network link.

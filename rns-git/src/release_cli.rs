@@ -974,12 +974,88 @@ fn select_manifest_artifacts(
     if requested == "all" {
         return Ok(artifacts.to_vec());
     }
-    artifacts
+    let selected: Vec<_> = artifacts
         .iter()
-        .find(|artifact| artifact.name == requested)
+        .filter(|artifact| artifact_pattern_matches(requested, &artifact.name))
         .cloned()
-        .map(|artifact| vec![artifact])
-        .ok_or_else(|| Error::msg("No available artifacts specified for fetch"))
+        .collect();
+    if selected.is_empty() {
+        return Err(Error::msg("No available artifacts specified for fetch"));
+    }
+    Ok(selected)
+}
+
+fn artifact_pattern_matches(pattern: &str, name: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let name: Vec<char> = name.chars().collect();
+    wildcard_match(&pattern, 0, &name, 0)
+}
+
+fn wildcard_match(pattern: &[char], pi: usize, name: &[char], ni: usize) -> bool {
+    if pi == pattern.len() {
+        return ni == name.len();
+    }
+    match pattern[pi] {
+        '*' => {
+            let mut next = pi + 1;
+            while next < pattern.len() && pattern[next] == '*' {
+                next += 1;
+            }
+            (ni..=name.len()).any(|candidate| wildcard_match(pattern, next, name, candidate))
+        }
+        '?' => ni < name.len() && wildcard_match(pattern, pi + 1, name, ni + 1),
+        '[' => {
+            let Some((matches_class, next)) = match_char_class(pattern, pi, name.get(ni).copied())
+            else {
+                return ni < name.len()
+                    && name[ni] == '['
+                    && wildcard_match(pattern, pi + 1, name, ni + 1);
+            };
+            matches_class && wildcard_match(pattern, next, name, ni + 1)
+        }
+        literal => {
+            ni < name.len() && name[ni] == literal && wildcard_match(pattern, pi + 1, name, ni + 1)
+        }
+    }
+}
+
+fn match_char_class(pattern: &[char], start: usize, value: Option<char>) -> Option<(bool, usize)> {
+    let value = value?;
+    let mut end = start + 1;
+    while end < pattern.len() && pattern[end] != ']' {
+        end += 1;
+    }
+    if end == pattern.len() || end == start + 1 {
+        return None;
+    }
+
+    let mut i = start + 1;
+    let negated = matches!(pattern.get(i), Some('!' | '^'));
+    if negated {
+        i += 1;
+    }
+    if i >= end {
+        return None;
+    }
+
+    let mut matched = false;
+    while i < end {
+        if i + 2 < end && pattern[i + 1] == '-' {
+            let lo = pattern[i];
+            let hi = pattern[i + 2];
+            if lo <= value && value <= hi {
+                matched = true;
+            }
+            i += 3;
+        } else {
+            if pattern[i] == value {
+                matched = true;
+            }
+            i += 1;
+        }
+    }
+
+    Some((if negated { !matched } else { matched }, end + 1))
 }
 
 fn create_rsg(
@@ -1600,6 +1676,49 @@ mod tests {
             err.to_string(),
             "No available artifacts specified for fetch"
         );
+    }
+
+    #[test]
+    fn wildcard_artifact_selection_matches_shell_style_patterns() {
+        let artifacts = vec![
+            ManifestArtifact {
+                name: "app-1.2.3-linux-x86_64.tar.gz".into(),
+                rsg: Vec::new(),
+            },
+            ManifestArtifact {
+                name: "app-1.2.4-linux-aarch64.tar.gz".into(),
+                rsg: Vec::new(),
+            },
+            ManifestArtifact {
+                name: "app-1.2.3-py3-none-any.whl".into(),
+                rsg: Vec::new(),
+            },
+            ManifestArtifact {
+                name: "source_1.2.3.tgz".into(),
+                rsg: Vec::new(),
+            },
+        ];
+
+        let wheel = select_manifest_artifacts(&artifacts, "*-py3-*.whl").unwrap();
+        assert_eq!(
+            wheel
+                .iter()
+                .map(|artifact| artifact.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app-1.2.3-py3-none-any.whl"]
+        );
+
+        let patch = select_manifest_artifacts(&artifacts, "app-1.2.?-linux-*.tar.gz").unwrap();
+        assert_eq!(patch.len(), 2);
+
+        let class = select_manifest_artifacts(&artifacts, "app-1.2.[34]-linux-*.tar.gz").unwrap();
+        assert_eq!(class.len(), 2);
+
+        let negated = select_manifest_artifacts(&artifacts, "app-1.2.[!4]-linux-*.tar.gz").unwrap();
+        assert_eq!(negated[0].name, "app-1.2.3-linux-x86_64.tar.gz");
+
+        let source = select_manifest_artifacts(&artifacts, "source_*.tgz").unwrap();
+        assert_eq!(source[0].name, "source_1.2.3.tgz");
     }
 
     #[test]
