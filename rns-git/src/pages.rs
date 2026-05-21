@@ -709,18 +709,18 @@ fn render_blob_page(
 ) -> Result<String> {
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
     let reference = var(vars, "ref").unwrap_or("HEAD");
-    let path = required_var(vars, "path")?;
-    validate_git_path(path)?;
+    let path = normalize_blob_path(required_var(vars, "path")?);
+    validate_git_path(&path)?;
     let resolved = resolve_ref(&repository, reference)?;
-    if git_object_kind(&repository, &resolved, path)? == "tree" {
+    if git_object_kind(&repository, &resolved, &path)? == "tree" {
         return render_tree_page(config, access, remote, vars);
     }
-    let blob = blob_info(&repository, &resolved, path)?;
-    let renderable = renderable_blob(path);
+    let blob = blob_info(&repository, &resolved, &path)?;
+    let renderable = renderable_blob(&path);
     let raw_requested = var(vars, "raw").is_some();
     let render_requested = var(vars, "render").is_some();
     let render =
-        renderable.is_some() && !raw_requested && (render_requested || render_by_default(path));
+        renderable.is_some() && !raw_requested && (render_requested || render_by_default(&path));
     let download_link = m_link(
         "Download",
         PATH_DOWNLOAD,
@@ -728,7 +728,7 @@ fn render_blob_page(
             ("g", &group),
             ("r", &repo),
             ("ref", reference),
-            ("path", path),
+            ("path", path.as_str()),
         ],
     );
     let controls = if renderable.is_some() {
@@ -739,7 +739,7 @@ fn render_blob_page(
                 ("g", &group),
                 ("r", &repo),
                 ("ref", reference),
-                ("path", path),
+                ("path", path.as_str()),
                 ("render", "y"),
             ],
         );
@@ -750,7 +750,7 @@ fn render_blob_page(
                 ("g", &group),
                 ("r", &repo),
                 ("ref", reference),
-                ("path", path),
+                ("path", path.as_str()),
                 ("raw", "y"),
             ],
         );
@@ -772,7 +772,7 @@ fn render_blob_page(
         match renderable {
             Some(RenderableBlob::Markdown) => markdown_to_micron_scoped(
                 &blob.content,
-                Some(&markdown_blob_url_scope(&group, &repo, reference, path)),
+                Some(&markdown_blob_url_scope(&group, &repo, reference, &path)),
             ),
             Some(RenderableBlob::Micron) => {
                 let mut out = blob.content.clone();
@@ -781,10 +781,10 @@ fn render_blob_page(
                 }
                 out
             }
-            None => crate::highlight::literal_block(&blob.content, Some(path), None),
+            None => crate::highlight::literal_block(&blob.content, Some(&path), None),
         }
     } else {
-        crate::highlight::literal_block(&blob.content, Some(path), None)
+        crate::highlight::literal_block(&blob.content, Some(&path), None)
     };
     let controls = controls
         .map(|controls| format!("{controls}\n\n"))
@@ -794,8 +794,8 @@ fn render_blob_page(
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
-        m_escape(path),
-        m_escape(path),
+        m_escape(&path),
+        m_escape(&path),
         &resolved[..8],
         if blob.binary { "Binary" } else { "Text" },
         format_size(blob.size),
@@ -1936,6 +1936,14 @@ fn validate_git_path(path: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn normalize_blob_path(path: &str) -> String {
+    path.trim_start_matches(['.', '/'])
+        .split('/')
+        .filter(|component| *component != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn validate_refish(value: &str) -> Result<()> {
@@ -3630,6 +3638,21 @@ mod tests {
         assert!(!blob.contains("View raw"));
         assert!(blob.contains("answer"));
         assert!(blob.contains("\\`"));
+
+        let silly_blob = render_page(
+            PATH_BLOB,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "alpha"),
+                ("var_path", "./src/./lib.rs"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(silly_blob.contains(">src/lib.rs `F666"));
+        assert!(silly_blob.contains("answer"));
 
         let commit_hash = run_git(
             Command::new("git")
