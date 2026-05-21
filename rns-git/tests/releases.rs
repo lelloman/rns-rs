@@ -185,6 +185,45 @@ fn release_create_stores_metadata_notes_artifacts_and_finalizes() {
 }
 
 #[test]
+fn release_fetch_returns_published_artifact_resource_for_readers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = cfg(tmp.path());
+    let repo_path = create_repo(
+        config.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    tag_repo(&repo_path, "v1");
+    let access_rules = access(&config);
+    create_published_release(&config, &access_rules, "public/alpha", "v1", "# Release\n");
+
+    let response = server::handle_release_response(
+        &config,
+        &access_rules,
+        &release_request(&[
+            ("repository", strv("public/alpha")),
+            ("operation", strv("fetch")),
+            ("tag", strv("v1")),
+            ("artifact", strv("dist.tar")),
+        ]),
+        Some(&(REMOTE, REMOTE_SIG)),
+    )
+    .unwrap();
+
+    let RequestResponse::Resource { data, metadata, .. } = response else {
+        panic!("release fetch should return a resource response");
+    };
+    assert_eq!(data, b"artifact bytes");
+    let metadata = msgpack::unpack_exact(&metadata.unwrap()).unwrap();
+    let map = metadata.as_map().unwrap();
+    assert_eq!(
+        map_uint(map, protocol::IDX_RESULT_CODE),
+        Some(protocol::RES_OK as u64)
+    );
+    assert_eq!(map_str(map, "name"), Some("dist.tar"));
+}
+
+#[test]
 fn release_delete_removes_sidecar_and_invalid_tags_are_rejected() {
     let tmp = tempfile::tempdir().unwrap();
     let config = cfg(tmp.path());
@@ -921,6 +960,13 @@ fn body_value(response: &[u8]) -> Value {
 fn map_str<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a str> {
     map.iter().find_map(|(k, v)| match (k, v) {
         (Value::Str(k), Value::Str(v)) if k == key => Some(v.as_str()),
+        _ => None,
+    })
+}
+
+fn map_uint(map: &[(Value, Value)], key: u64) -> Option<u64> {
+    map.iter().find_map(|(k, v)| match (k, v) {
+        (Value::UInt(k), Value::UInt(v)) if *k == key => Some(*v),
         _ => None,
     })
 }

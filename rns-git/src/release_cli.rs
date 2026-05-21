@@ -11,7 +11,9 @@ use crate::client::{decode_status, SyncClient};
 use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
-use crate::util::{default_reticulum_dir, default_rngit_dir, parse_rns_url_with_aliases};
+use crate::util::{
+    default_reticulum_dir, default_rngit_dir, parse_hex_16, parse_rns_url_with_aliases,
+};
 use crate::{Error, Result};
 
 pub fn main<I>(args: I) -> Result<()>
@@ -53,6 +55,10 @@ where
 
 trait ReleaseTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>>;
+
+    fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+        self.request(data)
+    }
 }
 
 struct NetReleaseTransport {
@@ -66,6 +72,19 @@ impl ReleaseTransport for NetReleaseTransport {
             protocol::PATH_RELEASE,
             request_with_repository(data, &self.repository)?,
         )?;
+        let bytes = protocol::response_bin(&response.data)?;
+        decode_status(bytes)
+    }
+
+    fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+        let response = self.client.request(
+            protocol::PATH_RELEASE,
+            request_with_repository(data, &self.repository)?,
+        )?;
+        if let Some(metadata) = response.metadata {
+            crate::client::ensure_metadata_ok(&metadata)?;
+            return Ok(response.data);
+        }
         let bytes = protocol::response_bin(&response.data)?;
         decode_status(bytes)
     }
@@ -87,6 +106,7 @@ enum ReleaseCommand {
     },
     Fetch {
         target: String,
+        required_signer: Option<String>,
     },
     Create {
         tag: String,
@@ -178,6 +198,7 @@ impl ReleaseOptions {
                     .get(2)
                     .cloned()
                     .ok_or_else(|| Error::msg("release fetch requires a target"))?,
+                required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
             },
             "create" => {
                 parse_create_target(&positional[2..], notes_path, signer_path, package_name)?
@@ -266,7 +287,16 @@ fn run_release_command_with_defaults(
                 .map_err(|e| Error::msg(format!("invalid release view: {e}")))?;
             print_release_view(&release, &mut output)
         }
-        ReleaseCommand::Fetch { target } => fetch_release(target),
+        ReleaseCommand::Fetch {
+            target,
+            required_signer,
+        } => fetch_release_into(
+            transport,
+            target,
+            required_signer.as_deref(),
+            Path::new("."),
+            &mut output,
+        ),
         ReleaseCommand::Create {
             tag,
             artifacts_dir,
@@ -438,14 +468,227 @@ fn sign_release_artifacts(
     Ok(())
 }
 
-fn fetch_release(target: &str) -> Result<()> {
+fn fetch_release_into(
+    transport: &mut impl ReleaseTransport,
+    target: &str,
+    required_signer: Option<&str>,
+    output_dir: &Path,
+    mut output: impl Write,
+) -> Result<()> {
+    let (tag, requested_artifact) = parse_fetch_target(target)?;
+    let required_signer = required_signer.map(parse_hex_16).transpose()?;
+    let manifest = transport.request_resource(request(
+        "fetch",
+        &[
+            ("tag", Value::Str(tag.clone())),
+            ("artifact", Value::Str("manifest.rsm".into())),
+        ],
+    ))?;
+    let manifest = validate_embedded_manifest(&manifest, required_signer)?;
+    writeln!(
+        output,
+        "Release manifest validated, signed by {}",
+        crate::util::hex(&manifest.signer_hash)
+    )?;
+    let artifacts = manifest_artifacts(&manifest.envelope)?;
+    if artifacts.is_empty() {
+        return Err(Error::msg("Release manifest contains no artifacts"));
+    }
+    let selected = select_manifest_artifacts(&artifacts, &requested_artifact)?;
+    fs::create_dir_all(output_dir)?;
+
+    for artifact in selected {
+        let output_path = output_dir.join(&artifact.name);
+        if output_path.exists() {
+            let existing = fs::read(&output_path)?;
+            if validate_rsg(&artifact.rsg, &existing, required_signer).is_ok() {
+                writeln!(
+                    output,
+                    "Existing file {} validated, not fetching again",
+                    artifact.name
+                )?;
+                continue;
+            }
+            writeln!(
+                output,
+                "Existing file {} does not match manifest, fetching and overwriting",
+                artifact.name
+            )?;
+        }
+        let data = transport.request_resource(request(
+            "fetch",
+            &[
+                ("tag", Value::Str(tag.clone())),
+                ("artifact", Value::Str(artifact.name.clone())),
+            ],
+        ))?;
+        validate_rsg(&artifact.rsg, &data, required_signer)?;
+        fs::write(&output_path, data)?;
+        writeln!(output, "Fetched {}", artifact.name)?;
+    }
+    Ok(())
+}
+
+fn parse_fetch_target(target: &str) -> Result<(String, String)> {
     let (tag, artifact) = target
         .split_once(':')
         .ok_or_else(|| Error::msg("Invalid release specification"))?;
     if tag.is_empty() || artifact.is_empty() {
         return Err(Error::msg("Invalid release specification"));
     }
-    Ok(())
+    Ok((tag.to_string(), artifact.to_string()))
+}
+
+#[derive(Debug)]
+struct ValidRsg {
+    envelope: Value,
+    signer_hash: [u8; 16],
+}
+
+#[derive(Debug, Clone)]
+struct ManifestArtifact {
+    name: String,
+    rsg: Vec<u8>,
+}
+
+fn validate_embedded_manifest(rsg: &[u8], required_signer: Option<[u8; 16]>) -> Result<ValidRsg> {
+    let envelope = rsg_envelope(rsg)?;
+    let message = rsg_embedded_message(&envelope)
+        .ok_or_else(|| Error::msg("No embedded message in release manifest"))?;
+    validate_rsg_parts(rsg, &message, required_signer, Some(envelope))
+}
+
+fn validate_rsg(rsg: &[u8], message: &[u8], required_signer: Option<[u8; 16]>) -> Result<ValidRsg> {
+    validate_rsg_parts(rsg, message, required_signer, None)
+}
+
+fn validate_rsg_parts(
+    rsg: &[u8],
+    message: &[u8],
+    required_signer: Option<[u8; 16]>,
+    envelope: Option<Value>,
+) -> Result<ValidRsg> {
+    const SIG_LEN: usize = 64;
+    if rsg.len() <= SIG_LEN {
+        return Err(Error::msg("invalid RSG"));
+    }
+    let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
+    let envelope_bytes = &rsg[SIG_LEN..];
+    let envelope = match envelope {
+        Some(envelope) => envelope,
+        None => msgpack::unpack_exact(envelope_bytes)
+            .map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))?,
+    };
+    if envelope.map_get("hashtype").and_then(Value::as_str) != Some("sha256") {
+        return Err(Error::msg("unsupported RSG hash type"));
+    }
+    let signed_hash = envelope
+        .map_get("hash")
+        .and_then(Value::as_bin)
+        .ok_or_else(|| Error::msg("RSG is missing hash"))?;
+    let calculated_hash = sha256(message);
+    if signed_hash != calculated_hash.as_slice() {
+        return Err(Error::msg("RSG hash does not match message"));
+    }
+    let meta = envelope
+        .map_get("meta")
+        .ok_or_else(|| Error::msg("RSG is missing metadata"))?;
+    let pubkey = meta
+        .map_get("pubkey")
+        .and_then(Value::as_bin)
+        .ok_or_else(|| Error::msg("RSG is missing public key"))?;
+    let public_key: [u8; 64] = pubkey
+        .try_into()
+        .map_err(|_| Error::msg("RSG public key has invalid length"))?;
+    let identity = Identity::from_public_key(&public_key);
+    let signer_hash = *identity.hash();
+    let meta_signer = meta
+        .map_get("signer")
+        .and_then(Value::as_bin)
+        .ok_or_else(|| Error::msg("RSG is missing signer"))?;
+    if meta_signer != signer_hash.as_slice() {
+        return Err(Error::msg("RSG signer does not match public key"));
+    }
+    if let Some(required) = required_signer {
+        if signer_hash != required {
+            return Err(Error::msg(format!(
+                "RSG is not signed by required signer {}",
+                crate::util::hex(&required)
+            )));
+        }
+    }
+    if !identity.verify(&signature, envelope_bytes) {
+        return Err(Error::msg("RSG signature verification failed"));
+    }
+    Ok(ValidRsg {
+        envelope,
+        signer_hash,
+    })
+}
+
+fn rsg_envelope(rsg: &[u8]) -> Result<Value> {
+    const SIG_LEN: usize = 64;
+    if rsg.len() <= SIG_LEN {
+        return Err(Error::msg("invalid RSG"));
+    }
+    msgpack::unpack_exact(&rsg[SIG_LEN..])
+        .map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))
+}
+
+fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
+    value
+        .map_get("message")
+        .and_then(Value::as_bin)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            value
+                .map_get("message")
+                .and_then(Value::as_str)
+                .map(|message| message.as_bytes().to_vec())
+        })
+}
+
+fn manifest_artifacts(manifest: &Value) -> Result<Vec<ManifestArtifact>> {
+    let artifacts = manifest
+        .map_get("meta")
+        .and_then(|meta| meta.map_get("artifacts"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::msg("Release manifest contains no artifacts"))?;
+    artifacts
+        .iter()
+        .map(|artifact| {
+            let name = artifact
+                .map_get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::msg("manifest artifact is missing name"))?;
+            if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+                return Err(Error::msg("manifest artifact has invalid name"));
+            }
+            let rsg = artifact
+                .map_get("rsg")
+                .and_then(Value::as_bin)
+                .ok_or_else(|| Error::msg("manifest artifact is missing RSG"))?;
+            Ok(ManifestArtifact {
+                name: name.to_string(),
+                rsg: rsg.to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn select_manifest_artifacts(
+    artifacts: &[ManifestArtifact],
+    requested: &str,
+) -> Result<Vec<ManifestArtifact>> {
+    if requested == "all" {
+        return Ok(artifacts.to_vec());
+    }
+    artifacts
+        .iter()
+        .find(|artifact| artifact.name == requested)
+        .cloned()
+        .map(|artifact| vec![artifact])
+        .ok_or_else(|| Error::msg("No available artifacts specified for fetch"))
 }
 
 fn create_rsg(
@@ -705,6 +948,7 @@ mod tests {
     #[derive(Default)]
     struct FakeTransport {
         responses: Vec<Vec<u8>>,
+        resource_responses: Vec<Vec<u8>>,
         requests: Vec<Value>,
     }
 
@@ -712,6 +956,11 @@ mod tests {
         fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
             Ok(self.responses.remove(0))
+        }
+
+        fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+            self.requests.push(msgpack::unpack_exact(&data).unwrap());
+            Ok(self.resource_responses.remove(0))
         }
     }
 
@@ -775,6 +1024,7 @@ mod tests {
             fetch.command,
             ReleaseCommand::Fetch {
                 target: "v1:app.bin".into(),
+                required_signer: None,
             }
         );
 
@@ -817,6 +1067,7 @@ mod tests {
         fs::write(tmp.path().join("a.bin"), b"a").unwrap();
         let mut fake = FakeTransport {
             responses: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            resource_responses: Vec::new(),
             requests: Vec::new(),
         };
         let mut out = Vec::new();
@@ -883,6 +1134,7 @@ mod tests {
         rns_net::storage::save_identity(&signer, &signer_path).unwrap();
         let mut fake = FakeTransport {
             responses: vec![Vec::new(), Vec::new(), Vec::new()],
+            resource_responses: Vec::new(),
             requests: Vec::new(),
         };
         let mut out = Vec::new();
@@ -943,27 +1195,69 @@ mod tests {
     }
 
     #[test]
-    fn fetch_validates_release_target_without_requesting_yet() {
+    fn fetch_validates_release_target_before_requesting() {
         let mut fake = FakeTransport::default();
-        run_release_command(
-            &mut fake,
-            &ReleaseCommand::Fetch {
-                target: "v1:app.bin".into(),
-            },
-            Vec::new(),
-        )
-        .unwrap();
-        assert!(fake.requests.is_empty());
-
         let err = run_release_command(
             &mut fake,
             &ReleaseCommand::Fetch {
                 target: "v1".into(),
+                required_signer: None,
             },
             Vec::new(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("Invalid release specification"));
+        assert!(fake.requests.is_empty());
+    }
+
+    #[test]
+    fn fetch_validates_manifest_and_downloads_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let artifact_rsg = create_rsg(&signer, b"app", false, Vec::new()).unwrap();
+        let manifest = create_rsg(
+            &signer,
+            b"notes",
+            true,
+            vec![(
+                "artifacts".into(),
+                Value::Array(vec![Value::Map(vec![
+                    (Value::Str("name".into()), Value::Str("app.bin".into())),
+                    (Value::Str("rsg".into()), Value::Bin(artifact_rsg)),
+                ])]),
+            )],
+        )
+        .unwrap();
+        let required = crate::util::hex(signer.hash());
+        let mut fake = FakeTransport {
+            responses: Vec::new(),
+            resource_responses: vec![manifest, b"app".to_vec()],
+            requests: Vec::new(),
+        };
+        let mut out = Vec::new();
+
+        fetch_release_into(
+            &mut fake,
+            "v1:app.bin",
+            Some(&required),
+            tmp.path(),
+            &mut out,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(tmp.path().join("app.bin")).unwrap(), b"app");
+        assert_eq!(fake.requests.len(), 2);
+        assert_eq!(
+            fake.requests[0].map_get("artifact").and_then(Value::as_str),
+            Some("manifest.rsm")
+        );
+        assert_eq!(
+            fake.requests[1].map_get("artifact").and_then(Value::as_str),
+            Some("app.bin")
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("Release manifest validated"));
+        assert!(out.contains("Fetched app.bin"));
     }
 
     #[test]
@@ -1035,6 +1329,7 @@ mod tests {
     fn delete_with_yes_sends_delete_request() {
         let mut fake = FakeTransport {
             responses: vec![Vec::new()],
+            resource_responses: Vec::new(),
             requests: Vec::new(),
         };
         let mut out = Vec::new();
@@ -1079,6 +1374,7 @@ mod tests {
 
         let mut fake = FakeTransport {
             responses: vec![Vec::new()],
+            resource_responses: Vec::new(),
             requests: Vec::new(),
         };
         let mut out = Vec::new();

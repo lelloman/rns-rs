@@ -4,6 +4,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
+use rns_net::RequestResponse;
 
 use crate::protocol;
 use crate::util::{hex, validate_repo_name};
@@ -51,6 +52,7 @@ pub struct ReleaseRequest {
     pub notes_format: Option<String>,
     pub artifact_name: Option<String>,
     pub artifact_data: Option<Vec<u8>>,
+    pub artifact: Option<String>,
 }
 
 pub fn parse_request(data: &[u8]) -> Result<ReleaseRequest> {
@@ -76,6 +78,7 @@ pub fn parse_request(data: &[u8]) -> Result<ReleaseRequest> {
         notes_format: map_get_str(map, "notes_format").map(ToOwned::to_owned),
         artifact_name: map_get_str(map, "artifact_name").map(ToOwned::to_owned),
         artifact_data: map_get(map, "artifact_data").and_then(value_to_bytes),
+        artifact: map_get_str(map, "artifact").map(ToOwned::to_owned),
     })
 }
 
@@ -387,6 +390,84 @@ pub fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
             b"release not found",
         )),
     }
+}
+
+pub fn fetch_response(releases_path: &Path, request: &ReleaseRequest) -> Result<RequestResponse> {
+    let Some(tag) = request.tag.as_deref() else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        )));
+    };
+    let tag = if tag == "latest" {
+        let Some(tag) = latest_published_tag(releases_path)? else {
+            return Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_NOT_FOUND,
+                b"no latest release found",
+            )));
+        };
+        tag
+    } else if let Some(tag) = clean_tag(tag) {
+        tag
+    } else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid tag name",
+        )));
+    };
+    let Some(raw_artifact) = request.artifact.as_deref() else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid artifact name",
+        )));
+    };
+    if raw_artifact.contains('/') || raw_artifact.contains('\\') {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid artifact name",
+        )));
+    }
+    let Some(artifact) = clean_component(raw_artifact) else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            b"invalid artifact name",
+        )));
+    };
+    let Some(release) = release_data(releases_path, &tag)? else {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"release not found",
+        )));
+    };
+    if release.status != "published" {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"release not found",
+        )));
+    }
+    let path = releases_path.join(tag).join("artifacts").join(&artifact);
+    if !path.is_file() {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_NOT_FOUND,
+            b"artifact not found",
+        )));
+    }
+    let data = fs::read(path)?;
+    Ok(RequestResponse::Resource {
+        data,
+        metadata: Some(release_fetch_metadata(&artifact)),
+        auto_compress: true,
+    })
+}
+
+fn release_fetch_metadata(name: &str) -> Vec<u8> {
+    msgpack::pack(&Value::Map(vec![
+        (
+            Value::UInt(protocol::IDX_RESULT_CODE),
+            Value::UInt(protocol::RES_OK as u64),
+        ),
+        (Value::Str("name".into()), Value::Str(name.to_string())),
+    ]))
 }
 
 pub fn release_thanks(release_dir: &Path, add: bool) -> Result<u64> {

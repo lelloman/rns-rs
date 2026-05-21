@@ -241,13 +241,13 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
 
     let release_config = config.clone();
     let release_access = access.clone();
-    node.register_request_handler(
+    node.register_request_handler_response(
         protocol::PATH_RELEASE,
         None,
         move |_link, _path, data, remote| {
             Some(
-                handle_release(&release_config, &release_access, data, remote)
-                    .unwrap_or_else(error_response),
+                handle_release_response(&release_config, &release_access, data, remote)
+                    .unwrap_or_else(|err| RequestResponse::Bytes(error_response(err))),
             )
         },
     )
@@ -671,70 +671,98 @@ pub fn handle_release(
     data: &[u8],
     remote: Option<&([u8; 16], [u8; 64])>,
 ) -> Result<Vec<u8>> {
+    match handle_release_response(config, access, data, remote)? {
+        RequestResponse::Bytes(data) => Ok(data),
+        RequestResponse::Resource { data, .. } => {
+            Ok(protocol::status_bytes(protocol::RES_OK, data))
+        }
+    }
+}
+
+pub fn handle_release_response(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<RequestResponse> {
     let Some((remote_hash, _)) = remote else {
-        return Ok(protocol::status_bytes(
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_DISALLOWED,
             b"not identified",
-        ));
+        )));
     };
     let request = crate::release::parse_request(data)?;
     let repo = request.repository.as_str();
     if !access.allows(Operation::Read, repo, Some(remote_hash))? {
-        return Ok(protocol::status_bytes(
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
             b"not found",
-        ));
+        )));
     }
     let release_access = access.allows(Operation::Release, repo, Some(remote_hash))?;
     let permitted = match request.operation.as_str() {
-        "list" | "view" => true,
+        "list" | "view" | "fetch" => true,
         "create" | "delete" | "latest" => release_access,
         _ => false,
     };
     if !permitted {
-        return Ok(protocol::status_bytes(
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_DISALLOWED,
             b"not allowed",
-        ));
+        )));
     }
 
     let repository_path = git::repository_path(&config.repositories_dir, repo)?;
     if !git::is_bare_repository(&repository_path) {
-        return Ok(protocol::status_bytes(
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
             b"repository not found",
-        ));
+        )));
     }
     let releases_path = crate::release::release_sidecar_path(&repository_path);
-    match request.operation.as_str() {
-        "list" => crate::release::list_response(&releases_path),
+    let response = match request.operation.as_str() {
+        "list" => RequestResponse::Bytes(crate::release::list_response(&releases_path)?),
         "view" => {
             let Some(tag) = request.tag.as_deref() else {
-                return Ok(protocol::status_bytes(
+                return Ok(RequestResponse::Bytes(protocol::status_bytes(
                     protocol::RES_INVALID_REQ,
                     b"no tag specified",
-                ));
+                )));
             };
-            crate::release::view_response(&releases_path, tag)
+            RequestResponse::Bytes(crate::release::view_response(&releases_path, tag)?)
         }
+        "fetch" => crate::release::fetch_response(&releases_path, &request)?,
         "create" => match request.step.as_deref() {
-            Some("init") => {
-                crate::release::create_init(&releases_path, &repository_path, &request, remote_hash)
+            Some("init") => RequestResponse::Bytes(crate::release::create_init(
+                &releases_path,
+                &repository_path,
+                &request,
+                remote_hash,
+            )?),
+            Some("artifact") => {
+                RequestResponse::Bytes(crate::release::create_artifact(&releases_path, &request)?)
             }
-            Some("artifact") => crate::release::create_artifact(&releases_path, &request),
-            Some("finalize") => crate::release::create_finalize(&releases_path, &request),
-            _ => Ok(protocol::status_bytes(
+            Some("finalize") => {
+                RequestResponse::Bytes(crate::release::create_finalize(&releases_path, &request)?)
+            }
+            _ => RequestResponse::Bytes(protocol::status_bytes(
                 protocol::RES_INVALID_REQ,
                 b"invalid request",
             )),
         },
-        "delete" => crate::release::delete_release(&releases_path, &request),
-        "latest" => crate::release::set_latest_release(&releases_path, &request),
-        _ => Ok(protocol::status_bytes(
+        "delete" => {
+            RequestResponse::Bytes(crate::release::delete_release(&releases_path, &request)?)
+        }
+        "latest" => RequestResponse::Bytes(crate::release::set_latest_release(
+            &releases_path,
+            &request,
+        )?),
+        _ => RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
             b"invalid request",
         )),
-    }
+    };
+    Ok(response)
 }
 
 pub fn handle_perms(
