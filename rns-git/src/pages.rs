@@ -1619,7 +1619,7 @@ fn render_chart(
             let value = *value as f64;
             if value >= row_top {
                 out.push_str(&format!("`FT{top_color}`BT{mid_color}▀`f`b"));
-            } else if value >= row_mid {
+            } else if value >= row_mid || (row == 1 && value > 0.0) {
                 out.push_str(&format!("`FT{mid_color}▄`f"));
             } else {
                 out.push(' ');
@@ -3080,6 +3080,16 @@ mod tests {
         let expected =
             Destination::single_in("nomadnetwork", &["node"], IdentityHash(*identity.hash()));
         assert_eq!(destination.hash, expected.hash);
+    }
+
+    #[test]
+    fn chart_renders_positive_values_on_bottom_row() {
+        let labels = ["start".to_string(), "end".to_string()];
+        let chart = render_chart(&[1, 100], &labels, "57c", None, 1.3, 10);
+        let bottom_row = chart.lines().nth(10).unwrap();
+
+        assert!(bottom_row.starts_with("│`FT"));
+        assert!(bottom_row.contains('▄'));
     }
 
     #[test]
