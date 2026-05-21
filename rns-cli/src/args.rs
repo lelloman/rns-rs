@@ -44,7 +44,7 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" | "hex" => {
+                        | "export-prv" | "pr-stats" | "burst" | "hex" | "meta" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -191,6 +191,7 @@ mod tests {
             "--export-prv",
             "--pr-stats",
             "--burst",
+            "--meta",
         ]);
         assert!(a.has("stdin"));
         assert!(a.has("stdout"));
@@ -208,6 +209,7 @@ mod tests {
         assert!(a.has("export-prv"));
         assert!(a.has("pr-stats"));
         assert!(a.has("burst"));
+        assert!(a.has("meta"));
     }
 
     #[test]

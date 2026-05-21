@@ -300,6 +300,70 @@ fn embedded_message_sign_validate_and_display() {
 }
 
 #[test]
+fn embedded_message_can_be_signed_from_file() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let input = dir.path().join("message.txt");
+    let output = dir.path().join("signed-from-file");
+    let rid_s = path_str(&rid);
+    let input_s = path_str(&input);
+    let output_s = path_str(&output);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&input, "hello from file\nsecond line").unwrap();
+
+    assert_success(rnid(&["-i", &rid_s, "-S", "-r", &input_s, "-w", &output_s]));
+    let message_file = dir.path().join("signed-from-file.rsm");
+    assert!(message_file.exists());
+
+    let validated = assert_success(rnid(&["-V", &path_str(&message_file)]));
+    assert!(validated.contains("Signature is valid"));
+    assert!(validated.contains("hello from file"));
+    assert!(validated.contains("second line"));
+}
+
+#[test]
+fn embedded_message_validation_can_print_metadata() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let output = dir.path().join("signed-message");
+    let rid_s = path_str(&rid);
+    let output_s = path_str(&output);
+    assert_success(rnid(&["-g", &rid_s]));
+
+    assert_success(rnid(&[
+        "-i",
+        &rid_s,
+        "-S",
+        "metadata message",
+        "-w",
+        &output_s,
+    ]));
+    let message_file = dir.path().join("signed-message.rsm");
+
+    let validated = assert_success(rnid(&["--meta", "-V", &path_str(&message_file)]));
+    assert!(validated.contains("RSM Metadata"));
+    assert!(validated.contains("bsigner="));
+    assert!(validated.contains("bpubkey="));
+    assert!(validated.contains("Validation"));
+    assert!(validated.contains("Message"));
+    assert!(validated.contains("metadata message"));
+}
+
+#[test]
+fn embedded_message_rejects_file_and_cli_message_together() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let input = dir.path().join("message.txt");
+    let rid_s = path_str(&rid);
+    let input_s = path_str(&input);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&input, "hello").unwrap();
+
+    let failure = assert_failure(rnid(&["-i", &rid_s, "-S", "inline", "-r", &input_s]));
+    assert!(failure.contains("Both an input file and command-line provided message"));
+}
+
+#[test]
 fn rsg_ascii_output_formats_validate_and_do_not_overwrite_signature_file() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");

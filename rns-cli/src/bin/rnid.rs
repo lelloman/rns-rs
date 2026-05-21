@@ -115,7 +115,7 @@ fn main() {
 
     if args.has("V") || args.has("validate") {
         let paths = operation_paths(&args, "V", "validate").unwrap_or_else(|e| die(&e, 1));
-        validate_signatures(&paths, identity_ref.as_ref()).unwrap_or_else(|e| die(&e, 1));
+        validate_signatures(&paths, identity_ref.as_ref(), &args).unwrap_or_else(|e| die(&e, 1));
         operated = true;
     }
 
@@ -596,12 +596,16 @@ fn sign_files(paths: &[&str], identity: &Identity, args: &Args) -> Result<(), St
     Ok(())
 }
 
-fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), String> {
+fn validate_signature(
+    path: &str,
+    required: Option<&IdentityRef>,
+    args: &Args,
+) -> Result<(), String> {
     if path
         .to_ascii_lowercase()
         .ends_with(&format!(".{}", MSG_EXT))
     {
-        return validate_message_signature(path, required);
+        return validate_message_signature(path, required, args);
     }
     let sig_ext = format!(".{}", SIG_EXT);
     let (signature_path, file_path) = if path.to_ascii_lowercase().ends_with(&sig_ext) {
@@ -678,7 +682,11 @@ fn validate_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), 
     }
 }
 
-fn validate_message_signature(path: &str, required: Option<&IdentityRef>) -> Result<(), String> {
+fn validate_message_signature(
+    path: &str,
+    required: Option<&IdentityRef>,
+    args: &Args,
+) -> Result<(), String> {
     let signature_input =
         fs::read(path).map_err(|e| format!("Could not read signature {}: {}", path, e))?;
     let signature =
@@ -697,10 +705,23 @@ fn validate_message_signature(path: &str, required: Option<&IdentityRef>) -> Res
         RsgValidation::Valid { signer_hash } => {
             let text = String::from_utf8(message)
                 .map_err(|e| format!("Embedded message in {} is not UTF-8: {}", path, e))?;
-            println!(
-                "\nSignature is valid, the following message was signed by {}:\n",
-                prettyhexrep(&signer_hash)
-            );
+            if args.has("meta") {
+                println!("RSM Metadata\n============\n");
+                if let Some(meta) = value.map_get("meta") {
+                    print_rsm_metadata(meta);
+                }
+                println!("\nValidation\n==========");
+                println!(
+                    "\nSignature is valid, the message was signed by {}\n",
+                    prettyhexrep(&signer_hash)
+                );
+                println!("Message\n=======\n");
+            } else {
+                println!(
+                    "\nSignature is valid, the following message was signed by {}:\n",
+                    prettyhexrep(&signer_hash)
+                );
+            }
             println!("{}", text);
             Ok(())
         }
@@ -717,9 +738,89 @@ fn validate_message_signature(path: &str, required: Option<&IdentityRef>) -> Res
     }
 }
 
-fn validate_signatures(paths: &[&str], required: Option<&IdentityRef>) -> Result<(), String> {
+fn print_rsm_metadata(meta: &Value) {
+    if let Some(entries) = meta.as_map() {
+        for (key, value) in entries {
+            let key = rsm_meta_key(key);
+            print_rsm_metadata_entry(value, &key, 0);
+        }
+    } else {
+        print_rsm_metadata_entry(meta, "meta", 0);
+    }
+}
+
+fn print_rsm_metadata_entry(value: &Value, key: &str, level: usize) {
+    let indent = "  ".repeat(level);
+    if let Some(entries) = value.as_map() {
+        println!("d{}{}:", indent, key);
+        for (child_key, child_value) in entries {
+            let child_key = rsm_meta_key(child_key);
+            print_rsm_metadata_entry(child_value, &child_key, level + 1);
+        }
+        return;
+    }
+
+    println!(
+        "{}{}{}={}",
+        rsm_meta_type(value),
+        indent,
+        key,
+        rsm_meta_value(value)
+    );
+}
+
+fn rsm_meta_key(value: &Value) -> String {
+    match value {
+        Value::Str(value) => value.clone(),
+        Value::Bin(value) => hex(value),
+        Value::UInt(value) => value.to_string(),
+        Value::Int(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Float(value) => value.to_string(),
+        Value::Nil => "nil".into(),
+        Value::Array(_) => "array".into(),
+        Value::Map(_) => "map".into(),
+    }
+}
+
+fn rsm_meta_type(value: &Value) -> char {
+    match value {
+        Value::Str(_) => 's',
+        Value::Bin(_) => 'b',
+        Value::Array(_) => 'l',
+        Value::Map(_) => 'd',
+        Value::UInt(_) | Value::Int(_) => 'i',
+        Value::Float(_) => 'f',
+        Value::Nil => 'N',
+        Value::Bool(_) => 'u',
+    }
+}
+
+fn rsm_meta_value(value: &Value) -> String {
+    match value {
+        Value::Nil => "None".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::UInt(value) => value.to_string(),
+        Value::Int(value) => value.to_string(),
+        Value::Float(value) => value.to_string(),
+        Value::Bin(value) => hex(value),
+        Value::Str(value) => value.clone(),
+        Value::Array(values) => format!("{:?}", values),
+        Value::Map(values) => format!("{:?}", values),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
+}
+
+fn validate_signatures(
+    paths: &[&str],
+    required: Option<&IdentityRef>,
+    args: &Args,
+) -> Result<(), String> {
     for path in paths {
-        validate_signature(path, required)?;
+        validate_signature(path, required, args)?;
     }
     Ok(())
 }
@@ -768,15 +869,33 @@ fn create_rsg_with_embed(
     Ok(rsg)
 }
 
+fn sign_message_read_path(args: &Args) -> Option<&str> {
+    args.get("read").or_else(|| {
+        if args.has("r") {
+            args.positional.first().map(String::as_str)
+        } else {
+            None
+        }
+    })
+}
+
 fn sign_message(identity: &Identity, args: &Args) -> Result<(), String> {
-    let message = args
+    let cli_message = args
         .get("S")
         .or_else(|| args.get("sign-message"))
         .unwrap_or("true");
-    let message = if message == "true" {
+    let read_path = sign_message_read_path(args);
+    let message = if let Some(path) = read_path {
+        if cli_message != "true" {
+            return Err(
+                "Both an input file and command-line provided message was specified".into(),
+            );
+        }
+        fs::read(path).map_err(|e| format!("Error reading {}: {}", path, e))?
+    } else if cli_message == "true" {
         editor_content()?
     } else {
-        message.as_bytes().to_vec()
+        cli_message.as_bytes().to_vec()
     };
     if message.is_empty() {
         return Err("No message specified".into());
@@ -1277,6 +1396,7 @@ fn print_usage() {
     println!("  -d FILE.rfe...     Decrypt one or more files");
     println!("  -s FILE...         Sign one or more files to .rsg");
     println!("  -S MESSAGE         Create embedded signed message");
+    println!("  -r, --read FILE    Read embedded signed message content from file");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
     println!("  -R                 Request unknown identity from the local daemon");
@@ -1290,6 +1410,7 @@ fn print_usage() {
     println!("  -f, --force        Force overwrite existing files");
     println!("  --stdin            Read operation input from stdin");
     println!("  --stdout           Write operation output to stdout");
+    println!("  --meta             Show RSM metadata when validating signed messages");
     println!("  --version          Print version and exit");
     println!("  --help, -h         Print this help");
 }
