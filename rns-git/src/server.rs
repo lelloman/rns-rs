@@ -630,6 +630,10 @@ pub fn handle_sync(
         return Ok(protocol::status_bytes(protocol::RES_REMOTE_FAIL, message));
     }
 
+    if let Some(kind) = repository_type.as_deref() {
+        log::info!("rngit {kind} {repo} synced successfully");
+    }
+
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
