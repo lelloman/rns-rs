@@ -241,6 +241,12 @@ write+interact access; document admins can get or set the document permission
 file. `rngit work perms --id N` prints the current permission file, and
 `--content PATH` atomically replaces it after syntax validation.
 
+Work documents and comments carry Reticulum identity signatures where the
+remote side can validate authorship. Valid signatures bind the stored content to
+the author's identity hash, so later edits or tampering invalidate attribution.
+Unsigned or locally unvalidated documents remain readable, but should not be
+treated as cryptographically attributed records.
+
 ## Logging
 
 `rngit` writes `server_log` in the server config directory. `git-remote-rns`
