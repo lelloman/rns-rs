@@ -7,10 +7,10 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.2.7`
-- Tag: `1.2.7`
-- Commit: `b1f522277c99b076ea4b43e9048aec8962e0e4a2`
-- Commit date: `2026-05-17 00:56:08 +0200`
+- Version: `1.2.9`
+- Tag: `1.2.9`
+- Commit: `6c989eb38ea731c7381668969c1cfdaf2b08ce67`
+- Commit date: `2026-05-19 01:08:42 +0200`
 - Subject: `Prepare release`
 
 The previous recorded baseline was Reticulum `1.2.5`, with release commit
@@ -41,6 +41,51 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.2.7..1.2.9 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was inspected at upstream
+`6c989eb38ea731c7381668969c1cfdaf2b08ce67` on 2026-05-20. The RNS 1.2.8
+boundary is integrated through upstream `9885a70a` (`Prepare release`), and the
+RNS 1.2.9 queue is integrated through upstream `6c989eb3` (`Prepare release`).
+
+This range was dominated by `rngit` release-manifest, repository-management, and
+page-node behavior. Rust-applicable changes were ported or audited individually,
+including identity/destination aliases, remote permission management, raw Micron
+markdown blocks, `rnid` RSM metadata and manifest validation, signed release
+manifest generation, verified release fetch, local/offline manifest workflows,
+blocked identities, push-stat ignores, fork/mirror HEAD tracking, commit-link ref
+preservation, atomic known-destination persistence, work-document signature
+docs, and stats chart rendering for small positive values.
+
+No Cargo crate versions were bumped for upstream Python `RNS/_version.py`
+release markers. Generated upstream manual HTML/PDF/EPUB artifacts and upstream
+`Changelog.md` release text were not vendored; local source docs were updated
+where they describe implemented Rust behavior.
+
+Key local commits for this range include:
+
+- `017e630` Add rngit destination aliases
+- `66d1ae5` Add rngit remote perms management
+- `b1aef04` Render raw Micron markdown blocks
+- `9fd8804` Add rnid file message signing
+- `5ddb1da` Embed rnid signature metadata
+- `d183456` Show rngit upstream sync time
+- `873a379` Normalize rngit page paths
+- `4391a21` Add rngit blocked identities
+- `ca6cfe4` Generate signed rngit releases
+- `c81c397` Fetch verified rngit releases
+- `f365f61` Upload rngit release signatures
+- `c3efe21` Clear rngit request progress
+- `18f7ef5` Save fetched rngit manifests
+- `38618f7` Track rngit mirror HEAD
+- `39632d5` Validate release RSM structure in rnid
+- `4cf42c4` Support local rngit release manifests
+- `9e8dece` Preserve rngit page commit refs
+- `192ceaa` Atomically save known destinations
+- `e81ff98` Verify rngit release manifests offline
+- `63be631` Document rngit work signatures
+- `d2caef8` Render small rngit stats values
 
 ## Completed 1.2.5..1.2.7 Porting Queue
 
