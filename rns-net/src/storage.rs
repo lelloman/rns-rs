@@ -10,6 +10,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
@@ -351,7 +352,27 @@ pub fn save_known_destinations(
         .collect();
 
     let packed = msgpack::pack(&Value::Map(entries));
-    fs::write(path, packed)
+    atomic_write(path, &packed)
+}
+
+fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("known_destinations");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let temp_path = parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce));
+    match fs::write(&temp_path, data).and_then(|_| fs::rename(&temp_path, path)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
 }
 
 /// Load known destinations from a msgpack file.
@@ -604,6 +625,42 @@ mod tests {
         assert!(!d2.was_used);
         assert_eq!(d2.last_used_at, None);
         assert!(!d2.retained);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_known_destinations_replaces_existing_file_atomically() {
+        let dir = temp_dir();
+        let path = dir.join("known_destinations");
+        fs::write(&path, b"old").unwrap();
+
+        let mut dests = HashMap::new();
+        dests.insert(
+            [0x03u8; 16],
+            KnownDestination {
+                identity_hash: [0x33u8; 16],
+                public_key: [0xEFu8; 64],
+                app_data: None,
+                hops: 3,
+                received_at: 1700000002.0,
+                receiving_interface: 9,
+                was_used: false,
+                last_used_at: None,
+                retained: false,
+            },
+        );
+
+        save_known_destinations(&dests, &path).unwrap();
+
+        let loaded = load_known_destinations(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.contains_key(&[0x03u8; 16]));
+        let leftover_temp = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp."));
+        assert!(!leftover_temp);
 
         let _ = fs::remove_dir_all(&dir);
     }
