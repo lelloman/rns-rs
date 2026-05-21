@@ -856,7 +856,12 @@ fn render_commits_page(
                 m_link_raw(
                     &commit.hash[..7],
                     PATH_COMMIT,
-                    &[("g", &group), ("r", &repo), ("h", &commit.hash)]
+                    &[
+                        ("g", &group),
+                        ("r", &repo),
+                        ("ref", reference),
+                        ("h", &commit.hash),
+                    ],
                 ),
                 m_escape(&commit.author),
                 format_unix_time(commit.timestamp),
@@ -874,14 +879,22 @@ fn render_commit_page(
     vars: &BTreeMap<String, String>,
 ) -> Result<String> {
     let (group, repo, repository) = accessible_repository(config, access, remote, vars)?;
+    let reference = var(vars, "ref").unwrap_or("HEAD");
+    let _resolved = resolve_ref(&repository, reference)?;
     let hash = required_var(vars, "h")?;
     validate_refish(hash)?;
     let commit = commit_info(&repository, hash)?;
+    let commits_link = m_link(
+        "commits",
+        PATH_COMMITS,
+        &[("g", &group), ("r", &repo), ("ref", reference)],
+    );
     let mut out = format!(
-        ">>\n{} / {} / {} / commit {}\n\n>Commit {}\n\n{}\nAuthor: {} <{}>\nDate: {}\n",
+        ">>\n{} / {} / {} / {} / commit {}\n\n>Commit {}\n\n{}\nAuthor: {} <{}>\nDate: {}\n",
         m_link("Node", PATH_INDEX, &[]),
         m_link(&group, PATH_GROUP, &[("g", &group)]),
         m_link(&repo, PATH_REPO, &[("g", &group), ("r", &repo)]),
+        commits_link,
         &commit.hash[..7],
         commit.hash,
         m_escape(&commit.subject),
@@ -3283,6 +3296,24 @@ mod tests {
                 .arg(&repo)
                 .args(["rev-parse", "refs/heads/main"]),
         );
+        run_git(Command::new("git").arg("--git-dir").arg(&repo).args([
+            "update-ref",
+            "refs/heads/feature",
+            commit_hash.trim(),
+        ]));
+        let branch_commits = render_page(
+            PATH_COMMITS,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "alpha"),
+                ("var_ref", "feature"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(branch_commits.contains("|ref=feature|h="));
         let commit = render_page(
             PATH_COMMIT,
             &config,
@@ -3290,6 +3321,7 @@ mod tests {
             &page_request(&[
                 ("var_g", "public"),
                 ("var_r", "alpha"),
+                ("var_ref", "feature"),
                 ("var_h", commit_hash.trim()),
             ]),
             None,
@@ -3297,6 +3329,7 @@ mod tests {
         .unwrap();
         assert!(commit.contains("initial"));
         assert!(commit.contains("src/lib.rs"));
+        assert!(commit.contains("/page/commits.mu`g=public|r=alpha|ref=feature"));
 
         let refs = render_page(
             PATH_REFS,
