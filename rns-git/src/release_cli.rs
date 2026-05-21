@@ -1588,6 +1588,21 @@ mod tests {
     }
 
     #[test]
+    fn missing_requested_artifact_returns_clear_error() {
+        let artifacts = vec![ManifestArtifact {
+            name: "app.tar.gz".into(),
+            rsg: Vec::new(),
+        }];
+
+        let err = select_manifest_artifacts(&artifacts, "missing.whl").unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "No available artifacts specified for fetch"
+        );
+    }
+
+    #[test]
     fn fetch_validates_release_target_before_requesting() {
         let mut fake = FakeTransport::default();
         let err = run_release_command(
