@@ -182,6 +182,7 @@ rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --signe
 rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --local
 rngit release rns://<destination_hash>/<repository> fetch v1.0.0:artifact.tar.gz --signer <identity_hash>
 rngit release package_v1.0.0.rsm fetch v1.0.0:all --signer <identity_hash>
+rngit release package_v1.0.0.rsm fetch --offline --signer <identity_hash>
 rngit release rns://<destination_hash>/<repository> delete v1.0.0 --yes
 ```
 
@@ -202,7 +203,8 @@ per-file progress as each artifact is sent.
 `<name>_<version>.rsm`, then validates each downloaded artifact against the
 embedded RSG. The remote argument can also be a saved `.rsm` manifest; in that
 case `rngit` validates the local manifest and uses its embedded origin metadata
-to contact the release repository.
+to contact the release repository. Add `--offline` with a local manifest to
+validate the manifest and local artifact files without opening a network link.
 
 ## Work Documents
 

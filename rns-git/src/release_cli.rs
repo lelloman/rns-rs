@@ -21,6 +21,22 @@ where
     I: IntoIterator<Item = String>,
 {
     let options = ReleaseOptions::parse(args)?;
+    if let ReleaseCommand::Fetch {
+        target,
+        required_signer,
+        offline: true,
+    } = &options.command
+    {
+        let manifest_path = local_manifest_path(&options.remote).ok_or_else(|| {
+            Error::msg("Cannot perform offline verification without a local manifest")
+        })?;
+        return verify_release_manifest_offline(
+            &manifest_path,
+            target,
+            required_signer.as_deref(),
+            io::stdout(),
+        );
+    }
     let rngit_dir = options.config_dir.clone().unwrap_or_else(default_rngit_dir);
     let rns_dir = options
         .rns_config_dir
@@ -135,6 +151,7 @@ enum ReleaseCommand {
     Fetch {
         target: String,
         required_signer: Option<String>,
+        offline: bool,
     },
     Create {
         tag: String,
@@ -165,6 +182,7 @@ impl ReleaseOptions {
         let mut signer_path = None;
         let mut package_name = None;
         let mut local = false;
+        let mut offline = false;
         let mut yes = false;
         let mut positional = Vec::new();
         let mut args = args.into_iter();
@@ -201,6 +219,7 @@ impl ReleaseOptions {
                     );
                 }
                 "-L" | "--local" => local = true,
+                "-o" | "--offline" => offline = true,
                 "-y" | "--yes" => yes = true,
                 "-h" | "--help" => return Err(Error::msg(usage())),
                 other => positional.push(other.to_string()),
@@ -228,8 +247,9 @@ impl ReleaseOptions {
                 target: positional
                     .get(2)
                     .cloned()
-                    .ok_or_else(|| Error::msg("release fetch requires a target"))?,
+                    .unwrap_or_else(|| "latest:all".into()),
                 required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
+                offline,
             },
             "create" => parse_create_target(
                 &positional[2..],
@@ -328,6 +348,7 @@ fn run_release_command_with_defaults(
         ReleaseCommand::Fetch {
             target,
             required_signer,
+            offline: _,
         } => fetch_release_into(
             transport,
             target,
@@ -597,6 +618,71 @@ fn fetch_release_into(
         writeln!(output, "Fetched {}", artifact.name)?;
     }
     Ok(())
+}
+
+fn verify_release_manifest_offline(
+    manifest_path: &Path,
+    target: &str,
+    required_signer: Option<&str>,
+    mut output: impl Write,
+) -> Result<()> {
+    let (_tag, requested_artifact) = parse_fetch_target(target)?;
+    let required_signer = required_signer.map(parse_hex_16).transpose()?;
+    let manifest_bytes = fs::read(manifest_path)?;
+    let manifest = validate_embedded_manifest(&manifest_bytes, required_signer)?;
+    validate_release_rsm_structure(&manifest.envelope)?;
+    writeln!(
+        output,
+        "Release manifest validated, signed by {}",
+        crate::util::hex(&manifest.signer_hash)
+    )?;
+    let artifacts = manifest_artifacts(&manifest.envelope)?;
+    if artifacts.is_empty() {
+        return Err(Error::msg("Release manifest contains no artifacts"));
+    }
+    let selected = select_manifest_artifacts(&artifacts, &requested_artifact)?;
+    let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut valid_count = 0usize;
+    let plural = if selected.len() == 1 { "" } else { "s" };
+    writeln!(output, "Validating {} artifact{plural}...", selected.len())?;
+    for artifact in &selected {
+        let path = base_dir.join(&artifact.name);
+        if !path.exists() {
+            writeln!(
+                output,
+                "  File {} from manifest does not exist locally, cannot validate",
+                artifact.name
+            )?;
+            continue;
+        }
+        let data = fs::read(&path)?;
+        if validate_rsg(&artifact.rsg, &data, required_signer).is_ok() {
+            writeln!(
+                output,
+                "  File {} validated against manifest {}",
+                artifact.name,
+                manifest_path.display()
+            )?;
+            valid_count += 1;
+        } else {
+            writeln!(output, "  File {} does not match manifest", artifact.name)?;
+        }
+    }
+    if valid_count == selected.len() {
+        writeln!(
+            output,
+            "
+All files validated"
+        )?;
+        Ok(())
+    } else {
+        writeln!(
+            output,
+            "
+Release is not valid"
+        )?;
+        Err(Error::msg("Release is not valid"))
+    }
 }
 
 fn resolved_release_remote(options: &ReleaseOptions) -> Result<String> {
@@ -960,7 +1046,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-L|--local] [-y|--yes] <rns://destination/repo|manifest.rsm> <list|view|fetch|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-L|--local] [-o|--offline] [-y|--yes] <rns://destination/repo|manifest.rsm> <list|view|fetch|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -1196,6 +1282,19 @@ mod tests {
             ReleaseCommand::Fetch {
                 target: "v1:app.bin".into(),
                 required_signer: None,
+                offline: false,
+            }
+        );
+
+        let offline_fetch =
+            ReleaseOptions::parse(["--offline".into(), "pkg_v1.rsm".into(), "fetch".into()])
+                .unwrap();
+        assert_eq!(
+            offline_fetch.command,
+            ReleaseCommand::Fetch {
+                target: "latest:all".into(),
+                required_signer: None,
+                offline: true,
             }
         );
 
@@ -1371,12 +1470,7 @@ mod tests {
     fn local_create_signs_release_without_uploading() {
         let tmp = tempfile::tempdir().unwrap();
         let signer_dir = tempfile::tempdir().unwrap();
-        fs::write(
-            tmp.path().join("RELEASE.md"),
-            "# Notes
-",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("RELEASE.md"), "# Notes\n").unwrap();
         fs::write(tmp.path().join("app.bin"), b"app").unwrap();
         let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
         let signer_path = signer_dir.path().join("signer.rid");
@@ -1428,6 +1522,7 @@ mod tests {
             &ReleaseCommand::Fetch {
                 target: "v1".into(),
                 required_signer: None,
+                offline: false,
             },
             Vec::new(),
         )
@@ -1491,6 +1586,45 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("Release manifest validated"));
         assert!(out.contains("Fetched app.bin"));
+    }
+
+    #[test]
+    fn offline_manifest_verification_checks_local_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        fs::write(tmp.path().join("app.bin"), b"app").unwrap();
+        let artifact_rsg = create_rsg(&signer, b"app", false, Vec::new()).unwrap();
+        let manifest = create_rsg(
+            &signer,
+            b"notes",
+            true,
+            vec![
+                ("name".into(), Value::Str("pkg".into())),
+                ("version".into(), Value::Str("v1".into())),
+                ("origin".into(), Value::Bin(vec![0x55; 16])),
+                ("path".into(), Value::Str("group/repo".into())),
+                (
+                    "artifacts".into(),
+                    Value::Array(vec![Value::Map(vec![
+                        (Value::Str("name".into()), Value::Str("app.bin".into())),
+                        (Value::Str("rsg".into()), Value::Bin(artifact_rsg)),
+                    ])]),
+                ),
+            ],
+        )
+        .unwrap();
+        let manifest_path = tmp.path().join("pkg_v1.rsm");
+        fs::write(&manifest_path, manifest).unwrap();
+        let required = crate::util::hex(signer.hash());
+        let mut out = Vec::new();
+
+        verify_release_manifest_offline(&manifest_path, "latest:all", Some(&required), &mut out)
+            .unwrap();
+
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("Release manifest validated"));
+        assert!(out.contains("File app.bin validated against manifest"));
+        assert!(out.contains("All files validated"));
     }
 
     #[test]
