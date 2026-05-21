@@ -429,6 +429,21 @@ fn m_escape_line_start_controls(value: &str) -> String {
     }
 }
 
+fn format_commit_message(value: &str) -> String {
+    value
+        .split('\n')
+        .map(|line| {
+            let escaped = m_escape(line);
+            if line.starts_with('-') {
+                format!("\\{escaped}")
+            } else {
+                escaped
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn join_git_path(parent: &str, child: &str) -> String {
     if parent.is_empty() {
         child.to_string()
@@ -903,7 +918,7 @@ fn render_commit_page(
         format_unix_time(commit.timestamp)
     );
     if !commit.body.is_empty() {
-        out.push_str(&format!("\n{}\n", m_escape(&commit.body)));
+        out.push_str(&format!("\n{}\n", format_commit_message(&commit.body)));
     }
     out.push_str("\n>Files changed\n\n");
     for file in commit.files {
@@ -3101,6 +3116,16 @@ mod tests {
 
         assert!(start.elapsed() < Duration::from_secs(1));
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn commit_message_formatter_escapes_leading_dash_lines() {
+        let formatted = format_commit_message("subject\n- rendered literally\npath\\with`tick`");
+
+        assert_eq!(
+            formatted,
+            "subject\n\\- rendered literally\npath\\\\with\\`tick\\`"
+        );
     }
 
     #[test]
