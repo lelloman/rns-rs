@@ -21,8 +21,11 @@ where
     I: IntoIterator<Item = String>,
 {
     let options = ReleaseOptions::parse(args)?;
-    let rngit_dir = options.config_dir.unwrap_or_else(default_rngit_dir);
-    let rns_dir = options.rns_config_dir.or_else(default_reticulum_dir);
+    let rngit_dir = options.config_dir.clone().unwrap_or_else(default_rngit_dir);
+    let rns_dir = options
+        .rns_config_dir
+        .clone()
+        .or_else(default_reticulum_dir);
     let (config, created) = ClientConfig::load_or_create(rngit_dir, rns_dir)?;
     logging::init_file_logger(&config.dir.join("client_log"), config.log_level)?;
     if created {
@@ -31,8 +34,8 @@ where
             config.dir.join("client_config").display()
         )));
     }
-    let (dest_hash, repository) =
-        parse_rns_url_with_aliases(&options.remote, &config.destination_aliases)?;
+    let remote = resolved_release_remote(&options)?;
+    let (dest_hash, repository) = parse_rns_url_with_aliases(&remote, &config.destination_aliases)?;
 
     let default_signer_path = config.identity_path.clone();
     let default_package_name = repository
@@ -41,16 +44,31 @@ where
         .filter(|name| !name.is_empty())
         .unwrap_or(&repository)
         .to_string();
-    let client = SyncClient::connect(config, dest_hash)?;
-    let mut transport = NetReleaseTransport { client, repository };
-    run_release_command_with_defaults(
-        &mut transport,
-        &options.command,
-        Some(default_signer_path.as_path()),
-        Some(default_package_name.as_str()),
-        Some(&dest_hash),
-        io::stdout(),
-    )
+    if matches!(&options.command, ReleaseCommand::Create { local: true, .. }) {
+        let mut transport = LocalReleaseTransport;
+        run_release_command_with_defaults(
+            &mut transport,
+            &options.command,
+            Some(default_signer_path.as_path()),
+            Some(default_package_name.as_str()),
+            Some(&dest_hash),
+            Some(repository.as_str()),
+            io::stdout(),
+        )
+    } else {
+        let origin_path = repository.clone();
+        let client = SyncClient::connect(config, dest_hash)?;
+        let mut transport = NetReleaseTransport { client, repository };
+        run_release_command_with_defaults(
+            &mut transport,
+            &options.command,
+            Some(default_signer_path.as_path()),
+            Some(default_package_name.as_str()),
+            Some(&dest_hash),
+            Some(origin_path.as_str()),
+            io::stdout(),
+        )
+    }
 }
 
 trait ReleaseTransport {
@@ -90,6 +108,16 @@ impl ReleaseTransport for NetReleaseTransport {
     }
 }
 
+struct LocalReleaseTransport;
+
+impl ReleaseTransport for LocalReleaseTransport {
+    fn request(&mut self, _data: Vec<u8>) -> Result<Vec<u8>> {
+        Err(Error::msg(
+            "local release mode does not use network requests",
+        ))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReleaseOptions {
     config_dir: Option<PathBuf>,
@@ -114,6 +142,7 @@ enum ReleaseCommand {
         notes_path: Option<PathBuf>,
         signer_path: Option<PathBuf>,
         package_name: Option<String>,
+        local: bool,
     },
     Delete {
         tag: String,
@@ -135,6 +164,7 @@ impl ReleaseOptions {
         let mut notes_path = None;
         let mut signer_path = None;
         let mut package_name = None;
+        let mut local = false;
         let mut yes = false;
         let mut positional = Vec::new();
         let mut args = args.into_iter();
@@ -170,6 +200,7 @@ impl ReleaseOptions {
                             .ok_or_else(|| Error::msg("missing package name"))?,
                     );
                 }
+                "-L" | "--local" => local = true,
                 "-y" | "--yes" => yes = true,
                 "-h" | "--help" => return Err(Error::msg(usage())),
                 other => positional.push(other.to_string()),
@@ -200,9 +231,13 @@ impl ReleaseOptions {
                     .ok_or_else(|| Error::msg("release fetch requires a target"))?,
                 required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
             },
-            "create" => {
-                parse_create_target(&positional[2..], notes_path, signer_path, package_name)?
-            }
+            "create" => parse_create_target(
+                &positional[2..],
+                notes_path,
+                signer_path,
+                package_name,
+                local,
+            )?,
             "delete" => ReleaseCommand::Delete {
                 tag: positional
                     .get(2)
@@ -233,6 +268,7 @@ fn parse_create_target(
     notes_path: Option<PathBuf>,
     signer_path: Option<PathBuf>,
     package_name: Option<String>,
+    local: bool,
 ) -> Result<ReleaseCommand> {
     let first = args
         .first()
@@ -254,6 +290,7 @@ fn parse_create_target(
         notes_path,
         signer_path,
         package_name,
+        local,
     })
 }
 
@@ -263,7 +300,7 @@ fn run_release_command(
     command: &ReleaseCommand,
     output: impl Write,
 ) -> Result<()> {
-    run_release_command_with_defaults(transport, command, None, None, None, output)
+    run_release_command_with_defaults(transport, command, None, None, None, None, output)
 }
 
 fn run_release_command_with_defaults(
@@ -272,6 +309,7 @@ fn run_release_command_with_defaults(
     default_signer_path: Option<&Path>,
     default_package_name: Option<&str>,
     origin_hash: Option<&[u8; 16]>,
+    origin_path: Option<&str>,
     mut output: impl Write,
 ) -> Result<()> {
     match command {
@@ -303,6 +341,7 @@ fn run_release_command_with_defaults(
             notes_path,
             signer_path,
             package_name,
+            local,
         } => create_release(
             transport,
             tag,
@@ -311,6 +350,8 @@ fn run_release_command_with_defaults(
             signer_path.as_deref().or(default_signer_path),
             package_name.as_deref().or(default_package_name),
             origin_hash,
+            origin_path,
+            *local,
             &mut output,
         ),
         ReleaseCommand::Delete { tag, yes } => {
@@ -340,6 +381,8 @@ fn create_release(
     signer_path: Option<&Path>,
     package_name: Option<&str>,
     origin_hash: Option<&[u8; 16]>,
+    origin_path: Option<&str>,
+    local: bool,
     mut output: impl Write,
 ) -> Result<()> {
     if !artifacts_dir.is_dir() {
@@ -350,6 +393,11 @@ fn create_release(
     }
     let notes = load_notes(artifacts_dir, notes_path)?;
     let mut artifacts = artifact_files(artifacts_dir)?;
+    if local && signer_path.is_none() {
+        return Err(Error::msg(
+            "local release creation requires a signer identity",
+        ));
+    }
     if let Some(signer_path) = signer_path {
         sign_release_artifacts(
             artifacts_dir,
@@ -359,8 +407,18 @@ fn create_release(
             signer_path,
             package_name,
             origin_hash,
+            origin_path,
         )?;
         artifacts = artifact_files(artifacts_dir)?;
+    }
+    if local {
+        let package_name = release_package_name(artifacts_dir, package_name);
+        writeln!(
+            output,
+            "Local release {package_name}:{tag} generated successfully in {}",
+            artifacts_dir.display()
+        )?;
+        return Ok(());
     }
     writeln!(output, "Initializing release {tag}")?;
     transport.request(request(
@@ -409,6 +467,17 @@ fn create_release(
     Ok(())
 }
 
+fn release_package_name(artifacts_dir: &Path, package_name: Option<&str>) -> String {
+    package_name
+        .map(str::to_string)
+        .or_else(|| {
+            artifacts_dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "release".into())
+}
+
 fn sign_release_artifacts(
     artifacts_dir: &Path,
     artifacts: &[ArtifactFile],
@@ -417,6 +486,7 @@ fn sign_release_artifacts(
     signer_path: &Path,
     package_name: Option<&str>,
     origin_hash: Option<&[u8; 16]>,
+    origin_path: Option<&str>,
 ) -> Result<()> {
     let signer = rns_net::storage::load_identity(signer_path).map_err(|e| {
         Error::msg(format!(
@@ -445,14 +515,7 @@ fn sign_release_artifacts(
         ]));
     }
 
-    let package_name = package_name
-        .map(str::to_string)
-        .or_else(|| {
-            artifacts_dir
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "release".into());
+    let package_name = release_package_name(artifacts_dir, package_name);
     let mut manifest_meta = vec![
         ("name".into(), Value::Str(package_name)),
         ("version".into(), Value::Str(tag.to_string())),
@@ -463,6 +526,9 @@ fn sign_release_artifacts(
     ];
     if let Some(origin_hash) = origin_hash {
         manifest_meta.push(("origin".into(), Value::Bin(origin_hash.to_vec())));
+    }
+    if let Some(origin_path) = origin_path {
+        manifest_meta.push(("path".into(), Value::Str(origin_path.to_string())));
     }
     let manifest = create_rsg(&signer, notes.as_bytes(), true, manifest_meta)?;
     fs::write(artifacts_dir.join("manifest.rsm"), manifest)?;
@@ -486,6 +552,7 @@ fn fetch_release_into(
         ],
     ))?;
     let manifest = validate_embedded_manifest(&manifest_bytes, required_signer)?;
+    validate_release_rsm_structure(&manifest.envelope)?;
     writeln!(
         output,
         "Release manifest validated, signed by {}",
@@ -530,6 +597,35 @@ fn fetch_release_into(
         writeln!(output, "Fetched {}", artifact.name)?;
     }
     Ok(())
+}
+
+fn resolved_release_remote(options: &ReleaseOptions) -> Result<String> {
+    if let ReleaseCommand::Fetch {
+        required_signer, ..
+    } = &options.command
+    {
+        if let Some(path) = local_manifest_path(&options.remote) {
+            return release_remote_from_manifest_file(&path, required_signer.as_deref());
+        }
+    }
+    Ok(options.remote.clone())
+}
+
+fn local_manifest_path(remote: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(remote);
+    (path.extension().and_then(|ext| ext.to_str()) == Some("rsm") && path.is_file()).then_some(path)
+}
+
+fn release_remote_from_manifest_file(path: &Path, required_signer: Option<&str>) -> Result<String> {
+    let required_signer = required_signer.map(parse_hex_16).transpose()?;
+    let manifest_bytes = fs::read(path)?;
+    let manifest = validate_embedded_manifest(&manifest_bytes, required_signer)?;
+    let info = validate_release_rsm_structure(&manifest.envelope)?;
+    Ok(format!(
+        "rns://{}/{}",
+        crate::util::hex(&info.origin),
+        info.path
+    ))
 }
 
 fn parse_fetch_target(target: &str) -> Result<(String, String)> {
@@ -651,7 +747,15 @@ fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
         })
 }
 
-fn manifest_output_name(manifest: &Value) -> Result<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReleaseManifestInfo {
+    name: String,
+    version: String,
+    origin: [u8; 16],
+    path: String,
+}
+
+fn validate_release_rsm_structure(manifest: &Value) -> Result<ReleaseManifestInfo> {
     let meta = manifest
         .map_get("meta")
         .ok_or_else(|| Error::msg("No release metadata in manifest"))?;
@@ -659,13 +763,37 @@ fn manifest_output_name(manifest: &Value) -> Result<String> {
         .map_get("name")
         .and_then(Value::as_str)
         .and_then(sanitize_manifest_component)
-        .ok_or_else(|| Error::msg("Incomplete release data in manifest"))?;
+        .ok_or_else(|| Error::msg("Incomplete package data in manifest"))?;
     let version = meta
         .map_get("version")
         .and_then(Value::as_str)
         .and_then(sanitize_manifest_component)
-        .ok_or_else(|| Error::msg("Incomplete release data in manifest"))?;
-    Ok(format!("{name}_{version}.rsm"))
+        .ok_or_else(|| Error::msg("Incomplete package data in manifest"))?;
+    let origin = meta
+        .map_get("origin")
+        .ok_or_else(|| Error::msg("Incomplete release origin data in manifest"))?;
+    let origin = origin
+        .as_bin()
+        .ok_or_else(|| Error::msg("Invalid origin hash in manifest"))?;
+    let origin: [u8; 16] = origin
+        .try_into()
+        .map_err(|_| Error::msg("Invalid origin hash length in manifest"))?;
+    let path = meta
+        .map_get("path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| Error::msg("Incomplete release origin data in manifest"))?;
+    Ok(ReleaseManifestInfo {
+        name,
+        version,
+        origin,
+        path: path.to_string(),
+    })
+}
+
+fn manifest_output_name(manifest: &Value) -> Result<String> {
+    let info = validate_release_rsm_structure(manifest)?;
+    Ok(format!("{}_{}.rsm", info.name, info.version))
 }
 
 fn sanitize_manifest_component(value: &str) -> Option<String> {
@@ -832,7 +960,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-y|--yes] <rns://destination/repo> <list|view|fetch|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-L|--local] [-y|--yes] <rns://destination/repo|manifest.rsm> <list|view|fetch|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -1018,6 +1146,7 @@ mod tests {
                 notes_path: Some(PathBuf::from("NOTES.md")),
                 signer_path: None,
                 package_name: None,
+                local: false,
             }
         );
 
@@ -1040,8 +1169,21 @@ mod tests {
                 notes_path: None,
                 signer_path: Some(PathBuf::from("signer.rid")),
                 package_name: Some("pkg".into()),
+                local: false,
             }
         );
+
+        let local_create = ReleaseOptions::parse([
+            "--local".into(),
+            "rns://00112233445566778899aabbccddeeff/group/repo".into(),
+            "create".into(),
+            "v3:dist".into(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            local_create.command,
+            ReleaseCommand::Create { local: true, .. }
+        ));
 
         let fetch = ReleaseOptions::parse([
             "rns://00112233445566778899aabbccddeeff/group/repo".into(),
@@ -1109,6 +1251,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             &mut out,
         )
         .unwrap();
@@ -1176,6 +1320,8 @@ mod tests {
             Some(&signer_path),
             Some("pkg"),
             Some(&[0x11; 16]),
+            Some("group/repo"),
+            false,
             &mut out,
         )
         .unwrap();
@@ -1198,6 +1344,10 @@ mod tests {
             meta.map_get("origin").and_then(Value::as_bin),
             Some(&[0x11; 16][..])
         );
+        assert_eq!(
+            meta.map_get("path").and_then(Value::as_str),
+            Some("group/repo")
+        );
         assert!(meta.map_get("commit").is_some_and(Value::is_nil));
         let artifacts = meta.map_get("artifacts").and_then(Value::as_array).unwrap();
         assert_eq!(artifacts.len(), 1);
@@ -1215,6 +1365,54 @@ mod tests {
             .map_get("timestamp")
             .and_then(Value::as_integer)
             .is_some());
+    }
+
+    #[test]
+    fn local_create_signs_release_without_uploading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer_dir = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("RELEASE.md"),
+            "# Notes
+",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("app.bin"), b"app").unwrap();
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let signer_path = signer_dir.path().join("signer.rid");
+        rns_net::storage::save_identity(&signer, &signer_path).unwrap();
+        let mut fake = FakeTransport::default();
+        let mut out = Vec::new();
+
+        create_release(
+            &mut fake,
+            "v1",
+            tmp.path(),
+            None,
+            Some(&signer_path),
+            Some("pkg"),
+            Some(&[0x22; 16]),
+            Some("group/repo"),
+            true,
+            &mut out,
+        )
+        .unwrap();
+
+        assert!(tmp.path().join("app.bin.rsg").exists());
+        assert!(tmp.path().join("manifest.rsm").exists());
+        assert!(fake.requests.is_empty());
+        let manifest = rsg_envelope(&tmp.path().join("manifest.rsm"));
+        let meta = manifest.map_get("meta").unwrap();
+        assert_eq!(
+            meta.map_get("origin").and_then(Value::as_bin),
+            Some(&[0x22; 16][..])
+        );
+        assert_eq!(
+            meta.map_get("path").and_then(Value::as_str),
+            Some("group/repo")
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("Local release pkg:v1 generated successfully"));
     }
 
     fn rsg_envelope(path: &Path) -> Value {
@@ -1250,6 +1448,8 @@ mod tests {
             vec![
                 ("name".into(), Value::Str("pkg".into())),
                 ("version".into(), Value::Str("v1".into())),
+                ("origin".into(), Value::Bin(vec![0x33; 16])),
+                ("path".into(), Value::Str("group/repo".into())),
                 (
                     "artifacts".into(),
                     Value::Array(vec![Value::Map(vec![
@@ -1291,6 +1491,32 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("Release manifest validated"));
         assert!(out.contains("Fetched app.bin"));
+    }
+
+    #[test]
+    fn local_manifest_path_resolves_remote_from_signed_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let manifest = create_rsg(
+            &signer,
+            b"notes",
+            true,
+            vec![
+                ("name".into(), Value::Str("pkg".into())),
+                ("version".into(), Value::Str("v1".into())),
+                ("origin".into(), Value::Bin(vec![0x44; 16])),
+                ("path".into(), Value::Str("group/repo".into())),
+                ("artifacts".into(), Value::Array(Vec::new())),
+            ],
+        )
+        .unwrap();
+        let manifest_path = tmp.path().join("pkg_v1.rsm");
+        fs::write(&manifest_path, manifest).unwrap();
+        let required = crate::util::hex(signer.hash());
+
+        let remote = release_remote_from_manifest_file(&manifest_path, Some(&required)).unwrap();
+
+        assert_eq!(remote, "rns://44444444444444444444444444444444/group/repo");
     }
 
     #[test]

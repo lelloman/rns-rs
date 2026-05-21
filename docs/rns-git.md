@@ -179,6 +179,9 @@ rngit release rns://<destination_hash>/<repository> list
 rngit release rns://<destination_hash>/<repository> view v1.0.0
 rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --notes ./RELEASE.md
 rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --signer ./release_identity --name package-name
+rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --local
+rngit release rns://<destination_hash>/<repository> fetch v1.0.0:artifact.tar.gz --signer <identity_hash>
+rngit release package_v1.0.0.rsm fetch v1.0.0:all --signer <identity_hash>
 rngit release rns://<destination_hash>/<repository> delete v1.0.0 --yes
 ```
 
@@ -191,8 +194,15 @@ each artifact with the client identity, or with `--signer PATH` when supplied,
 writes local `<artifact>.rsg` files plus `manifest.rsm` into the artifact
 directory, and uploads those generated signature and manifest files with the
 release. Use `--name NAME` when the package name should differ from the
-repository name. Artifact uploads print per-file progress as each artifact is
-sent.
+repository name. Use `--local` to generate the signed local files without
+connecting to the remote or uploading the release. Artifact uploads print
+per-file progress as each artifact is sent.
+
+`release fetch` first validates `manifest.rsm`, saves it locally as
+`<name>_<version>.rsm`, then validates each downloaded artifact against the
+embedded RSG. The remote argument can also be a saved `.rsm` manifest; in that
+case `rngit` validates the local manifest and uses its embedded origin metadata
+to contact the release repository.
 
 ## Work Documents
 
