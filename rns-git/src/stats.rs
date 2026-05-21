@@ -179,7 +179,7 @@ fn record_repository_counter(
     remote: Option<&[u8; 16]>,
     counter: Counter,
 ) {
-    if !should_record(config, remote) || group.is_empty() || repo.is_empty() {
+    if !should_record_counter(config, remote, counter) || group.is_empty() || repo.is_empty() {
         return;
     }
     let repository = format!("{group}/{repo}");
@@ -310,12 +310,25 @@ fn actual_days(counters: &RepositoryCounters, today_index: i64, lookback_days: u
 }
 
 fn should_record(config: &ServerConfig, remote: Option<&[u8; 16]>) -> bool {
+    should_record_counter(config, remote, Counter::View)
+}
+
+fn should_record_counter(
+    config: &ServerConfig,
+    remote: Option<&[u8; 16]>,
+    counter: Counter,
+) -> bool {
     config.record_stats
         && !remote.is_some_and(|remote| {
             config
                 .stats_ignore_identities
                 .iter()
                 .any(|ignored| ignored == remote)
+                || (matches!(counter, Counter::Push)
+                    && config
+                        .stats_push_ignore_identities
+                        .iter()
+                        .any(|ignored| ignored == remote))
         })
 }
 
@@ -679,6 +692,8 @@ mod tests {
             unicode_icons: false,
             record_stats: true,
             stats_ignore_identities: Vec::new(),
+            stats_push_ignore_identities: Vec::new(),
+            blocked_identities: Vec::new(),
             identity_aliases: std::collections::BTreeMap::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],

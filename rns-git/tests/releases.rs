@@ -735,6 +735,8 @@ fn cfg(root: &Path) -> ServerConfig {
         unicode_icons: false,
         record_stats: false,
         stats_ignore_identities: Vec::new(),
+        stats_push_ignore_identities: Vec::new(),
+        blocked_identities: Vec::new(),
         identity_aliases: std::collections::BTreeMap::new(),
         allow_read: vec!["all".into()],
         allow_write: vec!["all".into()],

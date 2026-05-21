@@ -385,6 +385,50 @@ fn ignored_identities_and_disabled_recording_do_not_mutate_stats() {
     assert!(ignored_beta.contains("Pushes`f    :     0  total"));
 
     let tmp = tempfile::tempdir().unwrap();
+    let mut push_ignored = cfg(tmp.path());
+    push_ignored.stats_push_ignore_identities = vec![REMOTE];
+    create_repo(
+        push_ignored.repositories_dir.join("public/alpha"),
+        "README.md",
+        "# Alpha\n",
+    );
+    let push_ignored_access = access(&push_ignored);
+    pages::render_page(
+        pages::PATH_REPO,
+        &push_ignored,
+        &push_ignored_access,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    let push = server::handle_push(
+        &push_ignored,
+        &push_ignored_access,
+        &protocol::push_request("public/gamma", Vec::new(), Vec::new()),
+        Some(&(REMOTE, REMOTE_SIG)),
+    )
+    .unwrap();
+    assert_eq!(push[0], protocol::RES_OK);
+    let push_ignored_alpha = pages::render_page(
+        pages::PATH_STATS,
+        &push_ignored,
+        &push_ignored_access,
+        &page_request(&[("var_g", "public"), ("var_r", "alpha")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(push_ignored_alpha.contains("Views`f     :     1  total"));
+    let push_ignored_gamma = pages::render_page(
+        pages::PATH_STATS,
+        &push_ignored,
+        &push_ignored_access,
+        &page_request(&[("var_g", "public"), ("var_r", "gamma")]),
+        Some(&REMOTE),
+    )
+    .unwrap();
+    assert!(push_ignored_gamma.contains("Pushes`f    :     0  total"));
+
+    let tmp = tempfile::tempdir().unwrap();
     let mut disabled = cfg(tmp.path());
     disabled.record_stats = false;
     create_repo(
@@ -429,6 +473,8 @@ fn cfg(root: &Path) -> ServerConfig {
         unicode_icons: false,
         record_stats: true,
         stats_ignore_identities: Vec::new(),
+        stats_push_ignore_identities: Vec::new(),
+        blocked_identities: Vec::new(),
         identity_aliases: std::collections::BTreeMap::new(),
         allow_read: vec!["all".into()],
         allow_write: vec!["all".into()],

@@ -20,6 +20,8 @@ pub struct ServerConfig {
     pub unicode_icons: bool,
     pub record_stats: bool,
     pub stats_ignore_identities: Vec<[u8; 16]>,
+    pub stats_push_ignore_identities: Vec<[u8; 16]>,
+    pub blocked_identities: Vec<[u8; 16]>,
     pub identity_aliases: BTreeMap<String, [u8; 16]>,
     pub allow_read: Vec<String>,
     pub allow_write: Vec<String>,
@@ -71,13 +73,16 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "rngit", "record_stats") {
             cfg.record_stats = parse_bool(v, cfg.record_stats);
         }
-        if let Some(v) = get(&ini, "rngit", "stats_ignore_identities") {
-            cfg.stats_ignore_identities = split_list(v)
-                .into_iter()
-                .filter_map(|value| parse_hex_16(&value).ok())
-                .collect();
-        }
         cfg.identity_aliases = parse_aliases(&ini, "aliases");
+        if let Some(v) = get(&ini, "rngit", "stats_ignore_identities") {
+            cfg.stats_ignore_identities = parse_identity_list(v, &cfg.identity_aliases);
+        }
+        if let Some(v) = get(&ini, "rngit", "stats_push_ignore_identities") {
+            cfg.stats_push_ignore_identities = parse_identity_list(v, &cfg.identity_aliases);
+        }
+        if let Some(v) = get(&ini, "rngit", "blocked_identities") {
+            cfg.blocked_identities = parse_identity_list(v, &cfg.identity_aliases);
+        }
         if let Some(v) = get(&ini, "pages", "serve_nomadnet") {
             cfg.serve_nomadnet = parse_bool(v, cfg.serve_nomadnet);
         }
@@ -115,6 +120,8 @@ impl ServerConfig {
             unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
+            stats_push_ignore_identities: Vec::new(),
+            blocked_identities: Vec::new(),
             identity_aliases: BTreeMap::new(),
             allow_read: vec!["all".to_string()],
             allow_write: vec!["none".to_string()],
@@ -195,6 +202,18 @@ fn get<'a>(ini: &'a Ini, section: &str, key: &str) -> Option<&'a str> {
     ini.get(section)?.get(key).map(String::as_str)
 }
 
+fn parse_identity_list(value: &str, aliases: &BTreeMap<String, [u8; 16]>) -> Vec<[u8; 16]> {
+    split_list(value)
+        .into_iter()
+        .filter_map(|value| {
+            aliases
+                .get(&value)
+                .copied()
+                .or_else(|| parse_hex_16(&value).ok())
+        })
+        .collect()
+}
+
 fn parse_aliases(ini: &Ini, section: &str) -> BTreeMap<String, [u8; 16]> {
     ini.get(section)
         .into_iter()
@@ -246,7 +265,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -308,7 +327,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("server_config"),
-            "[rngit]\nrecord_stats = yes\nstats_ignore_identities = 00112233445566778899aabbccddeeff\n[access]\nstats = all, 0102030405060708090a0b0c0d0e0f10\n",
+            "[rngit]\nrecord_stats = yes\nstats_ignore_identities = alice\nstats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\nblocked_identities = alice\n[aliases]\nalice = 00112233445566778899aabbccddeeff\n[access]\nstats = all, 0102030405060708090a0b0c0d0e0f10\n",
         )
         .unwrap();
 
@@ -322,6 +341,14 @@ mod tests {
                 0xee, 0xff
             ]]
         );
+        assert_eq!(
+            cfg.stats_push_ignore_identities,
+            vec![[
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+                0x0f, 0x10
+            ]]
+        );
+        assert_eq!(cfg.blocked_identities, cfg.stats_ignore_identities);
         assert_eq!(
             cfg.allow_stats,
             vec![

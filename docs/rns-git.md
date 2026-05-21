@@ -69,8 +69,11 @@ Important config paths:
   to persist front/group/repository page views plus successful fetch and push
   counters in the server config directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
-  collection. Repository pages include a persistent Thanks counter stored next
-  to the bare repository as `<repo>.thanks`.
+  all collection, or `stats_push_ignore_identities` to suppress only push
+  counters for automation identities. Set `blocked_identities` to deny listed
+  identities all repository, page, and management operations. Repository pages
+  include a persistent Thanks counter stored next to the bare repository as
+  `<repo>.thanks`.
   Release metadata is stored next to the bare repository as
   `<repo>.releases/<tag>/`. Published releases appear on `/page/releases.mu`
   and `/page/release.mu`, support Markdown or Micron release notes, expose

@@ -29,6 +29,7 @@ pub struct Access {
     propose: Rule,
     admin: Rule,
     aliases: BTreeMap<String, [u8; 16]>,
+    blocked: Vec<[u8; 16]>,
     repositories_dir: PathBuf,
 }
 
@@ -84,6 +85,7 @@ impl Access {
             propose: Rule::None,
             admin: Rule::parse(admin, &aliases)?,
             aliases,
+            blocked: Vec::new(),
             repositories_dir,
         })
     }
@@ -93,6 +95,11 @@ impl Access {
         Ok(self)
     }
 
+    pub fn with_blocked_identities(mut self, blocked: Vec<[u8; 16]>) -> Self {
+        self.blocked = blocked;
+        self
+    }
+
     pub fn allows(
         &self,
         op: Operation,
@@ -100,6 +107,9 @@ impl Access {
         identity: Option<&[u8; 16]>,
     ) -> Result<bool> {
         validate_repo_name(repository)?;
+        if identity.is_some_and(|identity| self.blocked.iter().any(|blocked| blocked == identity)) {
+            return Ok(false);
+        }
         if op != Operation::Admin
             && (self.repo_allowed(Operation::Admin, repository, identity)?
                 || self.admin.allows(identity))
@@ -368,6 +378,34 @@ mod tests {
         assert!(access
             .allows(Operation::Read, "group/repo", Some(&alice))
             .unwrap());
+    }
+
+    #[test]
+    fn blocked_identities_override_global_and_admin_permissions() {
+        let blocked = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        let access = Access::new(
+            &["all".into()],
+            &["all".into()],
+            &["all".into()],
+            &["all".into()],
+            &["all".into()],
+            &["all".into()],
+            &["all".into()],
+            PathBuf::from("."),
+        )
+        .unwrap()
+        .with_blocked_identities(vec![blocked]);
+
+        assert!(!access
+            .allows(Operation::Read, "group/repo", Some(&blocked))
+            .unwrap());
+        assert!(!access
+            .allows(Operation::Admin, "group/repo", Some(&blocked))
+            .unwrap());
+        assert!(access.allows(Operation::Read, "group/repo", None).unwrap());
     }
 
     #[test]

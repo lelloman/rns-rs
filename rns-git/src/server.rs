@@ -111,7 +111,8 @@ pub fn register_repository_destination(
         config.repositories_dir.clone(),
         config.identity_aliases.clone(),
     )?
-    .with_propose(&config.allow_propose)?;
+    .with_propose(&config.allow_propose)?
+    .with_blocked_identities(config.blocked_identities.clone());
     let destination = Destination::single_in(
         protocol::APP_NAME,
         &[protocol::ASPECT_REPOSITORIES],
@@ -1417,6 +1418,8 @@ mod tests {
             unicode_icons: false,
             record_stats: false,
             stats_ignore_identities: Vec::new(),
+            stats_push_ignore_identities: Vec::new(),
+            blocked_identities: Vec::new(),
             identity_aliases: std::collections::BTreeMap::new(),
             allow_read: vec!["all".into()],
             allow_write: vec!["all".into()],
