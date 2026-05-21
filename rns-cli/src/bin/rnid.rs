@@ -743,7 +743,9 @@ fn print_rsm_metadata(meta: &Value) {
     if let Some(entries) = meta.as_map() {
         for (key, value) in entries {
             let key = rsm_meta_key(key);
-            print_rsm_metadata_entry(value, &key, 0);
+            if should_print_rsm_meta_entry(&key, value) {
+                print_rsm_metadata_entry(value, &key, 0);
+            }
         }
     } else {
         print_rsm_metadata_entry(meta, "meta", 0);
@@ -756,7 +758,9 @@ fn print_rsm_metadata_entry(value: &Value, key: &str, level: usize) {
         println!("d{}{}:", indent, key);
         for (child_key, child_value) in entries {
             let child_key = rsm_meta_key(child_key);
-            print_rsm_metadata_entry(child_value, &child_key, level + 1);
+            if should_print_rsm_meta_entry(&child_key, child_value) {
+                print_rsm_metadata_entry(child_value, &child_key, level + 1);
+            }
         }
         return;
     }
@@ -768,6 +772,10 @@ fn print_rsm_metadata_entry(value: &Value, key: &str, level: usize) {
         key,
         rsm_meta_value(value)
     );
+}
+
+fn should_print_rsm_meta_entry(key: &str, value: &Value) -> bool {
+    !(key == "note" && matches!(value, Value::Nil))
 }
 
 fn rsm_meta_key(value: &Value) -> String {
@@ -1716,6 +1724,16 @@ mod tests {
         assert!(meta.map_get("signer").is_some());
         assert!(meta.map_get("pubkey").is_some());
         assert!(meta.map_get("note").is_none());
+    }
+
+    #[test]
+    fn rsm_metadata_output_hides_legacy_nil_note() {
+        assert!(!should_print_rsm_meta_entry("note", &Value::Nil));
+        assert!(should_print_rsm_meta_entry(
+            "note",
+            &Value::Str("kept".into())
+        ));
+        assert!(should_print_rsm_meta_entry("other", &Value::Nil));
     }
 
     #[test]
