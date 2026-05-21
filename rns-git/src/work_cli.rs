@@ -25,14 +25,8 @@ where
     let options = WorkOptions::parse(args)?;
     let rngit_dir = options.config_dir.unwrap_or_else(default_rngit_dir);
     let rns_dir = options.rns_config_dir.or_else(default_reticulum_dir);
-    let (config, created) = ClientConfig::load_or_create(rngit_dir, rns_dir)?;
+    let config = ClientConfig::load_or_create_for_run(rngit_dir, rns_dir)?;
     logging::init_file_logger(&config.dir.join("client_log"), config.log_level)?;
-    if created {
-        return Err(Error::msg(format!(
-            "created default config at {}; edit it and run again",
-            config.dir.join("client_config").display()
-        )));
-    }
     let (dest_hash, repository) =
         parse_rns_url_with_aliases(&options.remote, &config.destination_aliases)?;
 

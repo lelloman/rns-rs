@@ -28,14 +28,8 @@ where
 
     let rngit_dir = options.config_dir.unwrap_or_else(default_rngit_dir);
     let rns_dir = options.rns_config_dir.or_else(default_reticulum_dir);
-    let (config, created) = ServerConfig::load_or_create(rngit_dir, rns_dir)?;
+    let config = ServerConfig::load_or_create_for_run(rngit_dir, rns_dir)?;
     logging::init_file_logger(&config.dir.join("server_log"), config.log_level)?;
-    if created {
-        return Err(Error::msg(format!(
-            "created default config at {}; edit it and run rngit again",
-            config.dir.join("server_config").display()
-        )));
-    }
 
     let identity = load_or_create_identity(&config.identity_path)?;
     if options.print_identity {

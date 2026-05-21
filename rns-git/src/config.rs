@@ -46,6 +46,11 @@ pub struct ClientConfig {
 }
 
 impl ServerConfig {
+    pub fn load_or_create_for_run(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<Self> {
+        let (config, _created) = Self::load_or_create(dir, reticulum_dir)?;
+        Ok(config)
+    }
+
     pub fn load_or_create(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<(Self, bool)> {
         fs::create_dir_all(&dir)?;
         let path = dir.join("server_config");
@@ -137,6 +142,11 @@ impl ServerConfig {
 }
 
 impl ClientConfig {
+    pub fn load_or_create_for_run(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<Self> {
+        let (config, _created) = Self::load_or_create(dir, reticulum_dir)?;
+        Ok(config)
+    }
+
     pub fn load_or_create(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<(Self, bool)> {
         fs::create_dir_all(&dir)?;
         let path = dir.join("client_config");
@@ -295,6 +305,26 @@ mod tests {
         let (cfg, created) = ClientConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
         assert!(!created);
         assert_eq!(cfg.log_level, 7);
+    }
+
+    #[test]
+    fn client_run_config_continues_after_creating_default_config() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let cfg = ClientConfig::load_or_create_for_run(tmp.path().to_path_buf(), None).unwrap();
+
+        assert_eq!(cfg.dir, tmp.path());
+        assert!(tmp.path().join("client_config").exists());
+    }
+
+    #[test]
+    fn server_run_config_continues_after_creating_default_config() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let cfg = ServerConfig::load_or_create_for_run(tmp.path().to_path_buf(), None).unwrap();
+
+        assert_eq!(cfg.dir, tmp.path());
+        assert!(tmp.path().join("server_config").exists());
     }
 
     #[test]
