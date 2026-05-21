@@ -310,6 +310,11 @@ impl TransportEngine {
     // =========================================================================
 
     /// Add an identity hash to the blackhole list.
+    ///
+    /// `identity_hash` is the 16-byte identity hash to blackhole. `now` is the
+    /// current Unix timestamp. If `duration_hours` is `Some` and greater than
+    /// zero, the entry expires after that many hours; otherwise it does not
+    /// expire. `reason` is optional descriptive text retained with the entry.
     pub fn blackhole_identity(
         &mut self,
         identity_hash: [u8; 16],
@@ -332,6 +337,9 @@ impl TransportEngine {
     }
 
     /// Remove an identity hash from the blackhole list.
+    ///
+    /// Returns `true` if an entry was removed, or `false` if the identity was
+    /// not blackholed.
     pub fn unblackhole_identity(&mut self, identity_hash: &[u8; 16]) -> bool {
         self.blackholed_identities.remove(identity_hash).is_some()
     }
