@@ -46,6 +46,7 @@ where
         &options.command,
         Some(default_signer_path.as_path()),
         Some(default_package_name.as_str()),
+        Some(&dest_hash),
         io::stdout(),
     )
 }
@@ -83,6 +84,9 @@ enum ReleaseCommand {
     List,
     View {
         tag: String,
+    },
+    Fetch {
+        target: String,
     },
     Create {
         tag: String,
@@ -169,6 +173,12 @@ impl ReleaseOptions {
                     .cloned()
                     .ok_or_else(|| Error::msg("release view requires a tag"))?,
             },
+            "fetch" => ReleaseCommand::Fetch {
+                target: positional
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| Error::msg("release fetch requires a target"))?,
+            },
             "create" => {
                 parse_create_target(&positional[2..], notes_path, signer_path, package_name)?
             }
@@ -232,7 +242,7 @@ fn run_release_command(
     command: &ReleaseCommand,
     output: impl Write,
 ) -> Result<()> {
-    run_release_command_with_defaults(transport, command, None, None, output)
+    run_release_command_with_defaults(transport, command, None, None, None, output)
 }
 
 fn run_release_command_with_defaults(
@@ -240,6 +250,7 @@ fn run_release_command_with_defaults(
     command: &ReleaseCommand,
     default_signer_path: Option<&Path>,
     default_package_name: Option<&str>,
+    origin_hash: Option<&[u8; 16]>,
     mut output: impl Write,
 ) -> Result<()> {
     match command {
@@ -255,6 +266,7 @@ fn run_release_command_with_defaults(
                 .map_err(|e| Error::msg(format!("invalid release view: {e}")))?;
             print_release_view(&release, &mut output)
         }
+        ReleaseCommand::Fetch { target } => fetch_release(target),
         ReleaseCommand::Create {
             tag,
             artifacts_dir,
@@ -268,6 +280,7 @@ fn run_release_command_with_defaults(
             notes_path.as_deref(),
             signer_path.as_deref().or(default_signer_path),
             package_name.as_deref().or(default_package_name),
+            origin_hash,
             &mut output,
         ),
         ReleaseCommand::Delete { tag, yes } => {
@@ -296,6 +309,7 @@ fn create_release(
     notes_path: Option<&Path>,
     signer_path: Option<&Path>,
     package_name: Option<&str>,
+    origin_hash: Option<&[u8; 16]>,
     mut output: impl Write,
 ) -> Result<()> {
     if !artifacts_dir.is_dir() {
@@ -314,6 +328,7 @@ fn create_release(
             &notes.content,
             signer_path,
             package_name,
+            origin_hash,
         )?;
     }
     writeln!(output, "Initializing release {tag}")?;
@@ -370,6 +385,7 @@ fn sign_release_artifacts(
     notes: &str,
     signer_path: &Path,
     package_name: Option<&str>,
+    origin_hash: Option<&[u8; 16]>,
 ) -> Result<()> {
     let signer = rns_net::storage::load_identity(signer_path).map_err(|e| {
         Error::msg(format!(
@@ -406,15 +422,29 @@ fn sign_release_artifacts(
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "release".into());
-    let manifest_meta = vec![
+    let mut manifest_meta = vec![
         ("name".into(), Value::Str(package_name)),
         ("version".into(), Value::Str(tag.to_string())),
         ("released".into(), Value::Str(unix_timestamp_iso(timestamp))),
         ("timestamp".into(), Value::UInt(timestamp)),
+        ("commit".into(), Value::Nil),
         ("artifacts".into(), Value::Array(manifest_artifacts)),
     ];
+    if let Some(origin_hash) = origin_hash {
+        manifest_meta.push(("origin".into(), Value::Bin(origin_hash.to_vec())));
+    }
     let manifest = create_rsg(&signer, notes.as_bytes(), true, manifest_meta)?;
     fs::write(artifacts_dir.join("manifest.rsm"), manifest)?;
+    Ok(())
+}
+
+fn fetch_release(target: &str) -> Result<()> {
+    let (tag, artifact) = target
+        .split_once(':')
+        .ok_or_else(|| Error::msg("Invalid release specification"))?;
+    if tag.is_empty() || artifact.is_empty() {
+        return Err(Error::msg("Invalid release specification"));
+    }
     Ok(())
 }
 
@@ -530,7 +560,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-y|--yes] <rns://destination/repo> <list|view|fetch|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -735,6 +765,19 @@ mod tests {
             }
         );
 
+        let fetch = ReleaseOptions::parse([
+            "rns://00112233445566778899aabbccddeeff/group/repo".into(),
+            "fetch".into(),
+            "v1:app.bin".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            fetch.command,
+            ReleaseCommand::Fetch {
+                target: "v1:app.bin".into(),
+            }
+        );
+
         let delete = ReleaseOptions::parse([
             "-y".into(),
             "rns://00112233445566778899aabbccddeeff/group/repo".into(),
@@ -778,7 +821,17 @@ mod tests {
         };
         let mut out = Vec::new();
 
-        create_release(&mut fake, "v1", tmp.path(), None, None, None, &mut out).unwrap();
+        create_release(
+            &mut fake,
+            "v1",
+            tmp.path(),
+            None,
+            None,
+            None,
+            None,
+            &mut out,
+        )
+        .unwrap();
 
         assert_eq!(fake.requests.len(), 4);
         assert_eq!(
@@ -841,6 +894,7 @@ mod tests {
             None,
             Some(&signer_path),
             Some("pkg"),
+            Some(&[0x11; 16]),
             &mut out,
         )
         .unwrap();
@@ -860,6 +914,11 @@ mod tests {
         assert_eq!(meta.map_get("name").and_then(Value::as_str), Some("pkg"));
         assert_eq!(meta.map_get("version").and_then(Value::as_str), Some("v1"));
         assert!(meta.map_get("released").and_then(Value::as_str).is_some());
+        assert_eq!(
+            meta.map_get("origin").and_then(Value::as_bin),
+            Some(&[0x11; 16][..])
+        );
+        assert!(meta.map_get("commit").is_some_and(Value::is_nil));
         let artifacts = meta.map_get("artifacts").and_then(Value::as_array).unwrap();
         assert_eq!(artifacts.len(), 1);
         let artifact = &artifacts[0];
@@ -881,6 +940,30 @@ mod tests {
     fn rsg_envelope(path: &Path) -> Value {
         let data = fs::read(path).unwrap();
         msgpack::unpack_exact(&data[64..]).unwrap()
+    }
+
+    #[test]
+    fn fetch_validates_release_target_without_requesting_yet() {
+        let mut fake = FakeTransport::default();
+        run_release_command(
+            &mut fake,
+            &ReleaseCommand::Fetch {
+                target: "v1:app.bin".into(),
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(fake.requests.is_empty());
+
+        let err = run_release_command(
+            &mut fake,
+            &ReleaseCommand::Fetch {
+                target: "v1".into(),
+            },
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Invalid release specification"));
     }
 
     #[test]
