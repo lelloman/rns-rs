@@ -72,6 +72,7 @@ enum ReleaseCommand {
         tag: String,
         artifacts_dir: PathBuf,
         notes_path: Option<PathBuf>,
+        signer_path: Option<PathBuf>,
     },
     Delete {
         tag: String,
@@ -91,6 +92,7 @@ impl ReleaseOptions {
         let mut config_dir = None;
         let mut rns_config_dir = None;
         let mut notes_path = None;
+        let mut signer_path = None;
         let mut yes = false;
         let mut positional = Vec::new();
         let mut args = args.into_iter();
@@ -112,6 +114,12 @@ impl ReleaseOptions {
                     notes_path = Some(PathBuf::from(
                         args.next()
                             .ok_or_else(|| Error::msg("missing notes path"))?,
+                    ));
+                }
+                "-s" | "--signer" => {
+                    signer_path = Some(PathBuf::from(
+                        args.next()
+                            .ok_or_else(|| Error::msg("missing signer identity path"))?,
                     ));
                 }
                 "-y" | "--yes" => yes = true,
@@ -137,7 +145,7 @@ impl ReleaseOptions {
                     .cloned()
                     .ok_or_else(|| Error::msg("release view requires a tag"))?,
             },
-            "create" => parse_create_target(&positional[2..], notes_path)?,
+            "create" => parse_create_target(&positional[2..], notes_path, signer_path)?,
             "delete" => ReleaseCommand::Delete {
                 tag: positional
                     .get(2)
@@ -163,7 +171,11 @@ impl ReleaseOptions {
     }
 }
 
-fn parse_create_target(args: &[String], notes_path: Option<PathBuf>) -> Result<ReleaseCommand> {
+fn parse_create_target(
+    args: &[String],
+    notes_path: Option<PathBuf>,
+    signer_path: Option<PathBuf>,
+) -> Result<ReleaseCommand> {
     let first = args
         .first()
         .ok_or_else(|| Error::msg("release create requires <tag>:<artifacts-dir>"))?;
@@ -182,6 +194,7 @@ fn parse_create_target(args: &[String], notes_path: Option<PathBuf>) -> Result<R
         tag,
         artifacts_dir,
         notes_path,
+        signer_path,
     })
 }
 
@@ -207,11 +220,13 @@ fn run_release_command(
             tag,
             artifacts_dir,
             notes_path,
+            signer_path,
         } => create_release(
             transport,
             tag,
             artifacts_dir,
             notes_path.as_deref(),
+            signer_path.as_deref(),
             &mut output,
         ),
         ReleaseCommand::Delete { tag, yes } => {
@@ -238,6 +253,7 @@ fn create_release(
     tag: &str,
     artifacts_dir: &Path,
     notes_path: Option<&Path>,
+    _signer_path: Option<&Path>,
     mut output: impl Write,
 ) -> Result<()> {
     if !artifacts_dir.is_dir() {
@@ -329,7 +345,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-y|--yes] <rns://destination/repo> <list|view|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -507,6 +523,26 @@ mod tests {
                 tag: "v1".into(),
                 artifacts_dir: PathBuf::from("dist"),
                 notes_path: Some(PathBuf::from("NOTES.md")),
+                signer_path: None,
+            }
+        );
+
+        let signed_create = ReleaseOptions::parse([
+            "--signer".into(),
+            "signer.rid".into(),
+            "rns://00112233445566778899aabbccddeeff/group/repo".into(),
+            "create".into(),
+            "v2".into(),
+            "dist".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            signed_create.command,
+            ReleaseCommand::Create {
+                tag: "v2".into(),
+                artifacts_dir: PathBuf::from("dist"),
+                notes_path: None,
+                signer_path: Some(PathBuf::from("signer.rid")),
             }
         );
 
@@ -553,7 +589,7 @@ mod tests {
         };
         let mut out = Vec::new();
 
-        create_release(&mut fake, "v1", tmp.path(), None, &mut out).unwrap();
+        create_release(&mut fake, "v1", tmp.path(), None, None, &mut out).unwrap();
 
         assert_eq!(fake.requests.len(), 4);
         assert_eq!(
