@@ -349,7 +349,7 @@ fn create_release(
         )));
     }
     let notes = load_notes(artifacts_dir, notes_path)?;
-    let artifacts = artifact_files(artifacts_dir)?;
+    let mut artifacts = artifact_files(artifacts_dir)?;
     if let Some(signer_path) = signer_path {
         sign_release_artifacts(
             artifacts_dir,
@@ -360,6 +360,7 @@ fn create_release(
             package_name,
             origin_hash,
         )?;
+        artifacts = artifact_files(artifacts_dir)?;
     }
     writeln!(output, "Initializing release {tag}")?;
     transport.request(request(
@@ -1133,7 +1134,7 @@ mod tests {
         let signer_path = signer_dir.path().join("signer.rid");
         rns_net::storage::save_identity(&signer, &signer_path).unwrap();
         let mut fake = FakeTransport {
-            responses: vec![Vec::new(), Vec::new(), Vec::new()],
+            responses: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             resource_responses: Vec::new(),
             requests: Vec::new(),
         };
@@ -1153,13 +1154,12 @@ mod tests {
 
         assert!(tmp.path().join("app.bin.rsg").exists());
         assert!(tmp.path().join("manifest.rsm").exists());
-        assert_eq!(fake.requests.len(), 3);
-        assert_eq!(
-            fake.requests[1]
-                .map_get("artifact_name")
-                .and_then(Value::as_str),
-            Some("app.bin")
-        );
+        assert_eq!(fake.requests.len(), 5);
+        let uploaded = fake.requests[1..4]
+            .iter()
+            .filter_map(|request| request.map_get("artifact_name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(uploaded, vec!["app.bin", "app.bin.rsg", "manifest.rsm"]);
 
         let manifest = rsg_envelope(&tmp.path().join("manifest.rsm"));
         let meta = manifest.map_get("meta").unwrap();

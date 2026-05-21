@@ -188,8 +188,9 @@ except `RELEASE.md` and `RELEASE.mu`, then finalizes it as published. If no
 `--notes` path is provided, `rngit release create` uses `RELEASE.mu` or
 `RELEASE.md` from the artifact directory when present. Release creation signs
 each artifact with the client identity, or with `--signer PATH` when supplied,
-and writes local `<artifact>.rsg` files plus `manifest.rsm` into the artifact
-directory. Use `--name NAME` when the package name should differ from the
+writes local `<artifact>.rsg` files plus `manifest.rsm` into the artifact
+directory, and uploads those generated signature and manifest files with the
+release. Use `--name NAME` when the package name should differ from the
 repository name. Artifact uploads print per-file progress as each artifact is
 sent.
 
