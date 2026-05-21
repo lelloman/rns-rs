@@ -1,5 +1,6 @@
 //! rnid - Reticulum identity, encryption and signature utility.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -826,34 +827,44 @@ fn validate_signatures(
 }
 
 fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>, String> {
-    create_rsg_with_embed(identity, message, false)
+    create_rsg_with_embed_and_meta(identity, message, false, None)
 }
 
-fn create_rsg_with_embed(
+fn create_rsg_with_embed_and_meta(
     identity: &Identity,
     message: &[u8],
     embed_message: bool,
+    extra_meta: Option<Vec<(String, Value)>>,
 ) -> Result<Vec<u8>, String> {
     let public_key = identity
         .get_public_key()
         .ok_or_else(|| "Identity does not hold a public key".to_string())?;
+    let mut meta_items = vec![
+        (
+            Value::Str("signer".into()),
+            Value::Bin(identity.hash().to_vec()),
+        ),
+        (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
+        (Value::Str("note".into()), Value::Nil),
+    ];
+    if let Some(extra_meta) = extra_meta {
+        for (key, value) in extra_meta {
+            if !meta_items
+                .iter()
+                .any(|(existing, _)| matches!(existing, Value::Str(existing) if existing == &key))
+            {
+                meta_items.push((Value::Str(key), value));
+            }
+        }
+    }
+
     let mut envelope_items = vec![
         (Value::Str("hashtype".into()), Value::Str("sha256".into())),
         (
             Value::Str("hash".into()),
             Value::Bin(sha256(message).to_vec()),
         ),
-        (
-            Value::Str("meta".into()),
-            Value::Map(vec![
-                (
-                    Value::Str("signer".into()),
-                    Value::Bin(identity.hash().to_vec()),
-                ),
-                (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
-                (Value::Str("note".into()), Value::Nil),
-            ]),
-        ),
+        (Value::Str("meta".into()), Value::Map(meta_items)),
     ];
     if embed_message {
         envelope_items.push((Value::Str("message".into()), Value::Bin(message.to_vec())));
@@ -867,6 +878,242 @@ fn create_rsg_with_embed(
     rsg.extend_from_slice(&signature);
     rsg.extend_from_slice(&envelope);
     Ok(rsg)
+}
+
+#[derive(Debug, Clone)]
+enum MetaNode {
+    Scalar(String),
+    Section(BTreeMap<String, MetaNode>),
+}
+
+fn sign_message_metadata(args: &Args) -> Result<Option<Vec<(String, Value)>>, String> {
+    let Some(meta_path) = args.get("E").or_else(|| args.get("embed-meta")) else {
+        return Ok(None);
+    };
+    if meta_path == "true" {
+        return Err("No metadata path specified".into());
+    }
+    let mut meta = parse_configobj_file(meta_path)?;
+    let spec_path = args
+        .get("meta-spec")
+        .filter(|path| *path != "true")
+        .map(str::to_string)
+        .or_else(|| {
+            let candidate = format!("{meta_path}.spec");
+            Path::new(&candidate).is_file().then_some(candidate)
+        });
+    if let Some(spec_path) = spec_path {
+        let spec = parse_configobj_file(&spec_path)?;
+        validate_metadata_spec(&mut meta, &spec)?;
+    }
+    Ok(Some(meta_nodes_to_values(meta)))
+}
+
+fn parse_configobj_file(path: &str) -> Result<BTreeMap<String, MetaNode>, String> {
+    let input = fs::read_to_string(path).map_err(|e| format!("Error reading {path}: {e}"))?;
+    parse_configobj(&input)
+}
+
+fn parse_configobj(input: &str) -> Result<BTreeMap<String, MetaNode>, String> {
+    let mut root = BTreeMap::new();
+    let mut section: Option<String> = None;
+    for (index, raw) in input.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let name = line.trim_matches(&['[', ']'][..]).trim();
+            if name.is_empty() {
+                return Err(format!("Invalid empty section on line {}", index + 1));
+            }
+            section = Some(name.to_string());
+            root.entry(name.to_string())
+                .or_insert_with(|| MetaNode::Section(BTreeMap::new()));
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!("Invalid metadata line {}", index + 1));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(format!("Invalid empty key on line {}", index + 1));
+        }
+        let value = MetaNode::Scalar(unquote_config_value(value.trim()).to_string());
+        if let Some(section) = section.as_ref() {
+            let entry = root
+                .entry(section.clone())
+                .or_insert_with(|| MetaNode::Section(BTreeMap::new()));
+            let MetaNode::Section(entries) = entry else {
+                return Err(format!("Section {section} conflicts with scalar value"));
+            };
+            entries.insert(key.to_string(), value);
+        } else {
+            root.insert(key.to_string(), value);
+        }
+    }
+    Ok(root)
+}
+
+fn unquote_config_value(value: &str) -> &str {
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if matches!(
+            (bytes[0], bytes[value.len() - 1]),
+            (b'\'', b'\'') | (b'"', b'"')
+        ) {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
+}
+
+fn validate_metadata_spec(
+    meta: &mut BTreeMap<String, MetaNode>,
+    spec: &BTreeMap<String, MetaNode>,
+) -> Result<(), String> {
+    for (key, spec_node) in spec {
+        let Some(meta_node) = meta.get_mut(key) else {
+            return Err(format!(
+                "Metadata did not pass spec validation: missing {key}"
+            ));
+        };
+        validate_metadata_node(key, meta_node, spec_node)?;
+    }
+    Ok(())
+}
+
+fn validate_metadata_node(key: &str, meta: &mut MetaNode, spec: &MetaNode) -> Result<(), String> {
+    match (meta, spec) {
+        (MetaNode::Scalar(value), MetaNode::Scalar(check)) => {
+            let converted = validate_metadata_scalar(key, value, check)?;
+            *value = converted;
+            Ok(())
+        }
+        (MetaNode::Section(meta_entries), MetaNode::Section(spec_entries)) => {
+            validate_metadata_spec(meta_entries, spec_entries)
+        }
+        _ => Err(format!(
+            "Metadata did not pass spec validation: type mismatch for {key}"
+        )),
+    }
+}
+
+fn validate_metadata_scalar(key: &str, value: &str, check: &str) -> Result<String, String> {
+    let (name, params) = parse_spec_check(check);
+    match name.as_str() {
+        "string" | "str" => {
+            let len = value.chars().count() as i64;
+            validate_len_or_range(key, len, params.get("min"), params.get("max"))?;
+            Ok(value.to_string())
+        }
+        "integer" | "int" => {
+            let parsed = value.parse::<i64>().map_err(|_| {
+                format!("Metadata did not pass spec validation: {key} is not an integer")
+            })?;
+            validate_len_or_range(key, parsed, params.get("min"), params.get("max"))?;
+            Ok(parsed.to_string())
+        }
+        "float" => {
+            let parsed = value.parse::<f64>().map_err(|_| {
+                format!("Metadata did not pass spec validation: {key} is not a float")
+            })?;
+            if let Some(min) = params.get("min").and_then(|v| v.parse::<f64>().ok()) {
+                if parsed < min {
+                    return Err(format!(
+                        "Metadata did not pass spec validation: {key} is too small"
+                    ));
+                }
+            }
+            if let Some(max) = params.get("max").and_then(|v| v.parse::<f64>().ok()) {
+                if parsed > max {
+                    return Err(format!(
+                        "Metadata did not pass spec validation: {key} is too big"
+                    ));
+                }
+            }
+            Ok(parsed.to_string())
+        }
+        "boolean" | "bool" => parse_config_bool(value)
+            .map(|v| v.to_string())
+            .ok_or_else(|| {
+                format!("Metadata did not pass spec validation: {key} is not a boolean")
+            }),
+        "" | "pass" => Ok(value.to_string()),
+        _ => Err(format!(
+            "Metadata did not pass spec validation: unknown check {name} for {key}"
+        )),
+    }
+}
+
+fn parse_spec_check(check: &str) -> (String, BTreeMap<String, String>) {
+    let trimmed = check.trim();
+    let Some(open) = trimmed.find('(') else {
+        return (trimmed.to_string(), BTreeMap::new());
+    };
+    let name = trimmed[..open].trim().to_string();
+    let close = trimmed.rfind(')').unwrap_or(trimmed.len());
+    let mut params = BTreeMap::new();
+    for part in trimmed[open + 1..close].split(',') {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            params.insert(
+                key.trim().to_string(),
+                unquote_config_value(value.trim()).to_string(),
+            );
+        }
+    }
+    (name, params)
+}
+
+fn validate_len_or_range(
+    key: &str,
+    value: i64,
+    min: Option<&String>,
+    max: Option<&String>,
+) -> Result<(), String> {
+    if let Some(min) = min.and_then(|v| v.parse::<i64>().ok()) {
+        if value < min {
+            return Err(format!(
+                "Metadata did not pass spec validation: {key} is too small"
+            ));
+        }
+    }
+    if let Some(max) = max.and_then(|v| v.parse::<i64>().ok()) {
+        if value > max {
+            return Err(format!(
+                "Metadata did not pass spec validation: {key} is too big"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_config_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn meta_nodes_to_values(nodes: BTreeMap<String, MetaNode>) -> Vec<(String, Value)> {
+    nodes
+        .into_iter()
+        .map(|(key, node)| (key, meta_node_to_value(node)))
+        .collect()
+}
+
+fn meta_node_to_value(node: MetaNode) -> Value {
+    match node {
+        MetaNode::Scalar(value) => Value::Str(value),
+        MetaNode::Section(entries) => Value::Map(
+            entries
+                .into_iter()
+                .map(|(key, node)| (Value::Str(key), meta_node_to_value(node)))
+                .collect(),
+        ),
+    }
 }
 
 fn sign_message_read_path(args: &Args) -> Option<&str> {
@@ -902,7 +1149,8 @@ fn sign_message(identity: &Identity, args: &Args) -> Result<(), String> {
     }
 
     let output_format = rsg_output_format(args);
-    let rsg = create_rsg_with_embed(identity, &message, true)?;
+    let extra_meta = sign_message_metadata(args)?;
+    let rsg = create_rsg_with_embed_and_meta(identity, &message, true, extra_meta)?;
     if matches!(output_format, RsgOutputFormat::Binary) {
         let Some(output) = args.get("w").or_else(|| args.get("write")) else {
             return Err("No write path specified".into());
@@ -1396,6 +1644,7 @@ fn print_usage() {
     println!("  -d FILE.rfe...     Decrypt one or more files");
     println!("  -s FILE...         Sign one or more files to .rsg");
     println!("  -S MESSAGE         Create embedded signed message");
+    println!("  -E, --embed-meta FILE  Embed ConfigObj metadata in signed message");
     println!("  -r, --read FILE    Read embedded signed message content from file");
     println!("  -V FILE[.rsg]...   Validate one or more signatures");
     println!("  --raw              Create legacy raw 64-byte signature");
@@ -1411,6 +1660,7 @@ fn print_usage() {
     println!("  --stdin            Read operation input from stdin");
     println!("  --stdout           Write operation output to stdout");
     println!("  --meta             Show RSM metadata when validating signed messages");
+    println!("  --meta-spec FILE   Validate embedded metadata with a ConfigObj-style spec");
     println!("  --version          Print version and exit");
     println!("  --help, -h         Print this help");
 }

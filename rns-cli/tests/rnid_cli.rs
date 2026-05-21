@@ -350,6 +350,73 @@ fn embedded_message_validation_can_print_metadata() {
 }
 
 #[test]
+fn embedded_message_can_embed_metadata_from_file() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let meta = dir.path().join("message.meta");
+    let output = dir.path().join("signed-with-meta");
+    let rid_s = path_str(&rid);
+    let meta_s = path_str(&meta);
+    let output_s = path_str(&output);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(
+        &meta,
+        "project = rns-rs\ncount = 7\n[origin]\nrepo = alpha\n",
+    )
+    .unwrap();
+
+    assert_success(rnid(&[
+        "-i",
+        &rid_s,
+        "-S",
+        "message with metadata",
+        "-E",
+        &meta_s,
+        "-w",
+        &output_s,
+    ]));
+    let message_file = dir.path().join("signed-with-meta.rsm");
+
+    let validated = assert_success(rnid(&["--meta", "-V", &path_str(&message_file)]));
+    assert!(validated.contains("sproject=rns-rs"));
+    assert!(validated.contains("scount=7"));
+    assert!(validated.contains("dorigin:"));
+    assert!(validated.contains("s  repo=alpha"));
+    assert!(validated.contains("message with metadata"));
+}
+
+#[test]
+fn embedded_message_metadata_spec_rejects_invalid_values() {
+    let dir = tempdir();
+    let rid = dir.path().join("alice.rid");
+    let meta = dir.path().join("message.meta");
+    let spec = dir.path().join("message.spec");
+    let rid_s = path_str(&rid);
+    let meta_s = path_str(&meta);
+    let spec_s = path_str(&spec);
+    assert_success(rnid(&["-g", &rid_s]));
+    fs::write(&meta, "project = rns-rs\ncount = nope\n").unwrap();
+    fs::write(
+        &spec,
+        "project = string()\ncount = integer(min=1, max=10)\n",
+    )
+    .unwrap();
+
+    let failure = assert_failure(rnid(&[
+        "-i",
+        &rid_s,
+        "-S",
+        "bad metadata",
+        "-E",
+        &meta_s,
+        "--meta-spec",
+        &spec_s,
+        "--hex",
+    ]));
+    assert!(failure.contains("Metadata did not pass spec validation"));
+}
+
+#[test]
 fn embedded_message_rejects_file_and_cli_message_together() {
     let dir = tempdir();
     let rid = dir.path().join("alice.rid");
