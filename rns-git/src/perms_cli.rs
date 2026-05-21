@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rns_core::msgpack::{self, Value};
 
@@ -10,6 +11,8 @@ use crate::logging;
 use crate::protocol;
 use crate::util::{default_reticulum_dir, default_rngit_dir, parse_rns_url_with_aliases};
 use crate::{Error, Result};
+
+const PERMS_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub fn main<I>(args: I) -> Result<()>
 where
@@ -46,6 +49,11 @@ where
 
 trait PermsTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>>;
+
+    fn request_with_timeout(&mut self, data: Vec<u8>, _timeout: Duration) -> Result<Vec<u8>> {
+        self.request(data)
+    }
+
     fn target_path(&self) -> &str;
 }
 
@@ -56,7 +64,13 @@ struct NetPermsTransport {
 
 impl PermsTransport for NetPermsTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        let response = self.client.request(protocol::PATH_PERMS, data)?;
+        self.request_with_timeout(data, PERMS_TIMEOUT)
+    }
+
+    fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        let response = self
+            .client
+            .request_with_timeout(protocol::PATH_PERMS, data, timeout)?;
         let bytes = protocol::response_bin(&response.data)?;
         decode_status(bytes)
     }
@@ -130,7 +144,8 @@ fn run_perms_command(
     match content_path {
         Some(path) => {
             let content = fs::read_to_string(path)?;
-            transport.request(request(&target, "set", Some(&content)))?;
+            transport
+                .request_with_timeout(request(&target, "set", Some(&content)), PERMS_TIMEOUT)?;
             writeln!(
                 output,
                 "Permissions updated for {}",
@@ -139,7 +154,8 @@ fn run_perms_command(
             Ok(())
         }
         None => {
-            let body = transport.request(request(&target, "get", None))?;
+            let body =
+                transport.request_with_timeout(request(&target, "get", None), PERMS_TIMEOUT)?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|err| Error::msg(format!("invalid permissions response: {err}")))?;
             let content = value
@@ -205,11 +221,17 @@ mod tests {
         target_path: String,
         responses: Vec<Vec<u8>>,
         requests: Vec<Value>,
+        timeouts: Vec<Duration>,
     }
 
     impl PermsTransport for FakeTransport {
         fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+            self.request_with_timeout(data, PERMS_TIMEOUT)
+        }
+
+        fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
+            self.timeouts.push(timeout);
             Ok(self.responses.remove(0))
         }
 
@@ -259,12 +281,14 @@ mod tests {
                 Value::Str("read = all\n".into()),
             )]))],
             requests: Vec::new(),
+            timeouts: Vec::new(),
         };
         let mut out = Vec::new();
 
         run_perms_command(&mut fake, None, &mut out).unwrap();
 
         assert_eq!(String::from_utf8(out).unwrap(), "read = all\n");
+        assert_eq!(fake.timeouts, vec![PERMS_TIMEOUT]);
         assert_eq!(
             fake.requests[0]
                 .map_get("operation")
@@ -286,6 +310,7 @@ mod tests {
             target_path: "group/repo".into(),
             responses: vec![Vec::new()],
             requests: Vec::new(),
+            timeouts: Vec::new(),
         };
         let mut out = Vec::new();
 

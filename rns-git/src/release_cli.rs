@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
@@ -15,6 +16,10 @@ use crate::util::{
     default_reticulum_dir, default_rngit_dir, parse_hex_16, parse_rns_url_with_aliases,
 };
 use crate::{Error, Result};
+
+const RELEASE_TIMEOUT_SHORT: Duration = Duration::from_secs(120);
+const RELEASE_TIMEOUT_MEDIUM: Duration = Duration::from_secs(300);
+const RELEASE_TIMEOUT_LONG: Duration = Duration::from_secs(7200);
 
 pub fn main<I>(args: I) -> Result<()>
 where
@@ -90,8 +95,16 @@ where
 trait ReleaseTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>>;
 
-    fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+    fn request_with_timeout(&mut self, data: Vec<u8>, _timeout: Duration) -> Result<Vec<u8>> {
         self.request(data)
+    }
+
+    fn request_resource_with_timeout(
+        &mut self,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        self.request_with_timeout(data, timeout)
     }
 }
 
@@ -102,18 +115,28 @@ struct NetReleaseTransport {
 
 impl ReleaseTransport for NetReleaseTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        let response = self.client.request(
+        self.request_with_timeout(data, RELEASE_TIMEOUT_MEDIUM)
+    }
+
+    fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        let response = self.client.request_with_timeout(
             protocol::PATH_RELEASE,
             request_with_repository(data, &self.repository)?,
+            timeout,
         )?;
         let bytes = protocol::response_bin(&response.data)?;
         decode_status(bytes)
     }
 
-    fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        let response = self.client.request(
+    fn request_resource_with_timeout(
+        &mut self,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        let response = self.client.request_with_timeout(
             protocol::PATH_RELEASE,
             request_with_repository(data, &self.repository)?,
+            timeout,
         )?;
         if let Some(metadata) = response.metadata {
             crate::client::ensure_metadata_ok(&metadata)?;
@@ -334,13 +357,17 @@ fn run_release_command_with_defaults(
 ) -> Result<()> {
     match command {
         ReleaseCommand::List => {
-            let body = transport.request(request("list", &[]))?;
+            let body =
+                transport.request_with_timeout(request("list", &[]), RELEASE_TIMEOUT_SHORT)?;
             let releases = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid release list: {e}")))?;
             print_release_list(&releases, &mut output)
         }
         ReleaseCommand::View { tag } => {
-            let body = transport.request(request("view", &[("tag", Value::Str(tag.clone()))]))?;
+            let body = transport.request_with_timeout(
+                request("view", &[("tag", Value::Str(tag.clone()))]),
+                RELEASE_TIMEOUT_MEDIUM,
+            )?;
             let release = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid release view: {e}")))?;
             print_release_view(&release, &mut output)
@@ -379,7 +406,10 @@ fn run_release_command_with_defaults(
             if !yes {
                 return Err(Error::msg("release delete requires --yes"));
             }
-            transport.request(request("delete", &[("tag", Value::Str(tag.clone()))]))?;
+            transport.request_with_timeout(
+                request("delete", &[("tag", Value::Str(tag.clone()))]),
+                RELEASE_TIMEOUT_SHORT,
+            )?;
             writeln!(output, "Deleted release {tag}")?;
             Ok(())
         }
@@ -387,7 +417,10 @@ fn run_release_command_with_defaults(
             if !yes {
                 return Err(Error::msg("release latest requires --yes"));
             }
-            transport.request(request("latest", &[("tag", Value::Str(tag.clone()))]))?;
+            transport.request_with_timeout(
+                request("latest", &[("tag", Value::Str(tag.clone()))]),
+                RELEASE_TIMEOUT_SHORT,
+            )?;
             writeln!(output, "Release {tag} set as latest")?;
             Ok(())
         }
@@ -442,15 +475,18 @@ fn create_release(
         return Ok(());
     }
     writeln!(output, "Initializing release {tag}")?;
-    transport.request(request(
-        "create",
-        &[
-            ("step", Value::Str("init".into())),
-            ("tag", Value::Str(tag.to_string())),
-            ("notes", Value::Str(notes.content)),
-            ("notes_format", Value::Str(notes.format)),
-        ],
-    ))?;
+    transport.request_with_timeout(
+        request(
+            "create",
+            &[
+                ("step", Value::Str("init".into())),
+                ("tag", Value::Str(tag.to_string())),
+                ("notes", Value::Str(notes.content)),
+                ("notes_format", Value::Str(notes.format)),
+            ],
+        ),
+        RELEASE_TIMEOUT_SHORT,
+    )?;
 
     for (index, artifact) in artifacts.iter().enumerate() {
         let data = fs::read(&artifact.path)?;
@@ -462,24 +498,30 @@ fn create_release(
             artifacts.len(),
             data.len()
         )?;
-        transport.request(request(
-            "create",
-            &[
-                ("step", Value::Str("artifact".into())),
-                ("tag", Value::Str(tag.to_string())),
-                ("artifact_name", Value::Str(artifact.name.clone())),
-                ("artifact_data", Value::Bin(data)),
-            ],
-        ))?;
+        transport.request_with_timeout(
+            request(
+                "create",
+                &[
+                    ("step", Value::Str("artifact".into())),
+                    ("tag", Value::Str(tag.to_string())),
+                    ("artifact_name", Value::Str(artifact.name.clone())),
+                    ("artifact_data", Value::Bin(data)),
+                ],
+            ),
+            RELEASE_TIMEOUT_LONG,
+        )?;
     }
     writeln!(output, "Finalizing release {tag}")?;
-    transport.request(request(
-        "create",
-        &[
-            ("step", Value::Str("finalize".into())),
-            ("tag", Value::Str(tag.to_string())),
-        ],
-    ))?;
+    transport.request_with_timeout(
+        request(
+            "create",
+            &[
+                ("step", Value::Str("finalize".into())),
+                ("tag", Value::Str(tag.to_string())),
+            ],
+        ),
+        RELEASE_TIMEOUT_MEDIUM,
+    )?;
     writeln!(
         output,
         "Created release {tag} with {} artifact(s)",
@@ -565,13 +607,16 @@ fn fetch_release_into(
 ) -> Result<()> {
     let (tag, requested_artifact) = parse_fetch_target(target)?;
     let required_signer = required_signer.map(parse_hex_16).transpose()?;
-    let manifest_bytes = transport.request_resource(request(
-        "fetch",
-        &[
-            ("tag", Value::Str(tag.clone())),
-            ("artifact", Value::Str("manifest.rsm".into())),
-        ],
-    ))?;
+    let manifest_bytes = transport.request_resource_with_timeout(
+        request(
+            "fetch",
+            &[
+                ("tag", Value::Str(tag.clone())),
+                ("artifact", Value::Str("manifest.rsm".into())),
+            ],
+        ),
+        RELEASE_TIMEOUT_LONG,
+    )?;
     let manifest = validate_embedded_manifest(&manifest_bytes, required_signer)?;
     validate_release_rsm_structure(&manifest.envelope)?;
     writeln!(
@@ -606,13 +651,16 @@ fn fetch_release_into(
                 artifact.name
             )?;
         }
-        let data = transport.request_resource(request(
-            "fetch",
-            &[
-                ("tag", Value::Str(tag.clone())),
-                ("artifact", Value::Str(artifact.name.clone())),
-            ],
-        ))?;
+        let data = transport.request_resource_with_timeout(
+            request(
+                "fetch",
+                &[
+                    ("tag", Value::Str(tag.clone())),
+                    ("artifact", Value::Str(artifact.name.clone())),
+                ],
+            ),
+            RELEASE_TIMEOUT_LONG,
+        )?;
         validate_rsg(&artifact.rsg, &data, required_signer)?;
         fs::write(&output_path, data)?;
         writeln!(output, "Fetched {}", artifact.name)?;
@@ -1193,16 +1241,28 @@ mod tests {
         responses: Vec<Vec<u8>>,
         resource_responses: Vec<Vec<u8>>,
         requests: Vec<Value>,
+        timeouts: Vec<Duration>,
+        resource_timeouts: Vec<Duration>,
     }
 
     impl ReleaseTransport for FakeTransport {
         fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+            self.request_with_timeout(data, RELEASE_TIMEOUT_MEDIUM)
+        }
+
+        fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
+            self.timeouts.push(timeout);
             Ok(self.responses.remove(0))
         }
 
-        fn request_resource(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+        fn request_resource_with_timeout(
+            &mut self,
+            data: Vec<u8>,
+            timeout: Duration,
+        ) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
+            self.resource_timeouts.push(timeout);
             Ok(self.resource_responses.remove(0))
         }
     }
@@ -1339,6 +1399,8 @@ mod tests {
             responses: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             resource_responses: Vec::new(),
             requests: Vec::new(),
+            timeouts: Vec::new(),
+            resource_timeouts: Vec::new(),
         };
         let mut out = Vec::new();
 
@@ -1357,6 +1419,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(fake.requests.len(), 4);
+        assert_eq!(
+            fake.timeouts,
+            vec![
+                RELEASE_TIMEOUT_SHORT,
+                RELEASE_TIMEOUT_LONG,
+                RELEASE_TIMEOUT_LONG,
+                RELEASE_TIMEOUT_MEDIUM
+            ]
+        );
         assert_eq!(
             fake.requests[0]
                 .map_get("operation")
@@ -1408,6 +1479,8 @@ mod tests {
             responses: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             resource_responses: Vec::new(),
             requests: Vec::new(),
+            timeouts: Vec::new(),
+            resource_timeouts: Vec::new(),
         };
         let mut out = Vec::new();
 
@@ -1560,6 +1633,8 @@ mod tests {
             responses: Vec::new(),
             resource_responses: vec![manifest, b"app".to_vec()],
             requests: Vec::new(),
+            timeouts: Vec::new(),
+            resource_timeouts: Vec::new(),
         };
         let mut out = Vec::new();
 
@@ -1575,6 +1650,10 @@ mod tests {
         assert_eq!(fs::read(tmp.path().join("app.bin")).unwrap(), b"app");
         assert!(tmp.path().join("pkg_v1.rsm").exists());
         assert_eq!(fake.requests.len(), 2);
+        assert_eq!(
+            fake.resource_timeouts,
+            vec![RELEASE_TIMEOUT_LONG, RELEASE_TIMEOUT_LONG]
+        );
         assert_eq!(
             fake.requests[0].map_get("artifact").and_then(Value::as_str),
             Some("manifest.rsm")
@@ -1724,6 +1803,8 @@ mod tests {
             responses: vec![Vec::new()],
             resource_responses: Vec::new(),
             requests: Vec::new(),
+            timeouts: Vec::new(),
+            resource_timeouts: Vec::new(),
         };
         let mut out = Vec::new();
         run_release_command(
@@ -1769,6 +1850,8 @@ mod tests {
             responses: vec![Vec::new()],
             resource_responses: Vec::new(),
             requests: Vec::new(),
+            timeouts: Vec::new(),
+            resource_timeouts: Vec::new(),
         };
         let mut out = Vec::new();
         run_release_command(

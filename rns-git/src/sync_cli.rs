@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::client::{decode_status, SyncClient};
 use crate::config::ClientConfig;
@@ -29,9 +30,10 @@ where
     }
 
     let client = SyncClient::connect(config, dest_hash)?;
-    let response = client.request(
+    let response = client.request_with_timeout(
         protocol::PATH_SYNC,
         protocol::repository_request(&repository),
+        Duration::from_secs(7200),
     )?;
     let bytes = protocol::response_bin(&response.data)?;
     decode_status(bytes)?;

@@ -308,6 +308,15 @@ impl SyncClient {
     }
 
     pub(crate) fn request(&self, path: &str, data: Vec<u8>) -> Result<Response> {
+        self.request_with_timeout(path, data, self.request_timeout)
+    }
+
+    pub(crate) fn request_with_timeout(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Response> {
         {
             let (lock, _) = &*self.state;
             let mut state = lock.lock().unwrap();
@@ -317,7 +326,7 @@ impl SyncClient {
         self.node
             .send_request(self.link_id, path, &data)
             .map_err(|_| Error::msg("failed to send request"))?;
-        let deadline = Instant::now() + self.request_timeout;
+        let deadline = Instant::now() + timeout;
         let (lock, cv) = &*self.state;
         let mut state = lock.lock().unwrap();
         loop {

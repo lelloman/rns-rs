@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::client::{decode_status, SyncClient};
 use crate::config::ClientConfig;
@@ -54,9 +55,10 @@ where
 
     let source = resolve_rns_url_aliases(&options.source, &config.destination_aliases)?;
     let client = SyncClient::connect(config, dest_hash)?;
-    let response = client.request(
+    let response = client.request_with_timeout(
         command.path(),
         protocol::remote_clone_request(&repository, &source),
+        Duration::from_secs(7200),
     )?;
     let bytes = protocol::response_bin(&response.data)?;
     decode_status(bytes)?;

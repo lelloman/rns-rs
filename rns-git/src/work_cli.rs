@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
@@ -13,6 +14,9 @@ use crate::util::{
     default_reticulum_dir, default_rngit_dir, load_or_create_identity, parse_rns_url_with_aliases,
 };
 use crate::{Error, Result};
+
+const WORK_TIMEOUT_SHORT: Duration = Duration::from_secs(120);
+const WORK_TIMEOUT_MEDIUM: Duration = Duration::from_secs(600);
 
 pub fn main<I>(args: I) -> Result<()>
 where
@@ -44,6 +48,11 @@ where
 
 trait WorkTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>>;
+
+    fn request_with_timeout(&mut self, data: Vec<u8>, _timeout: Duration) -> Result<Vec<u8>> {
+        self.request(data)
+    }
+
     fn sign(&self, content: &str) -> Result<Vec<u8>>;
 }
 
@@ -55,9 +64,14 @@ struct NetWorkTransport {
 
 impl WorkTransport for NetWorkTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        let response = self.client.request(
+        self.request_with_timeout(data, WORK_TIMEOUT_SHORT)
+    }
+
+    fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        let response = self.client.request_with_timeout(
             protocol::PATH_WORK,
             request_with_repository(data, &self.repository)?,
+            timeout,
         )?;
         let bytes = protocol::response_bin(&response.data)?;
         decode_status(bytes)
@@ -243,20 +257,25 @@ fn run_work_command(
 ) -> Result<()> {
     match command {
         WorkCommand::List { scope } => {
-            let body =
-                transport.request(request("list", &[("scope", Value::Str(scope.clone()))]))?;
+            let body = transport.request_with_timeout(
+                request("list", &[("scope", Value::Str(scope.clone()))]),
+                WORK_TIMEOUT_SHORT,
+            )?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid work list: {e}")))?;
             print_work_list(&value, &mut output)
         }
         WorkCommand::View { scope, id } => {
-            let body = transport.request(request(
-                "view",
-                &[
-                    ("scope", Value::Str(scope.clone())),
-                    ("doc_id", Value::UInt(*id)),
-                ],
-            ))?;
+            let body = transport.request_with_timeout(
+                request(
+                    "view",
+                    &[
+                        ("scope", Value::Str(scope.clone())),
+                        ("doc_id", Value::UInt(*id)),
+                    ],
+                ),
+                WORK_TIMEOUT_SHORT,
+            )?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid work document: {e}")))?;
             print_work_document(&value, &mut output)
@@ -267,15 +286,18 @@ fn run_work_command(
         } => {
             let content = fs::read_to_string(content_path)?;
             let signature = transport.sign(&content)?;
-            let body = transport.request(request(
-                "create",
-                &[
-                    ("title", Value::Str(title.clone())),
-                    ("content", Value::Str(content)),
-                    ("format", Value::Str(format_for_path(content_path))),
-                    ("signature", Value::Bin(signature)),
-                ],
-            ))?;
+            let body = transport.request_with_timeout(
+                request(
+                    "create",
+                    &[
+                        ("title", Value::Str(title.clone())),
+                        ("content", Value::Str(content)),
+                        ("format", Value::Str(format_for_path(content_path))),
+                        ("signature", Value::Bin(signature)),
+                    ],
+                ),
+                WORK_TIMEOUT_MEDIUM,
+            )?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid create response: {e}")))?;
             writeln!(
@@ -295,15 +317,18 @@ fn run_work_command(
         } => {
             let content = fs::read_to_string(content_path)?;
             let signature = transport.sign(&content)?;
-            let body = transport.request(request(
-                "propose",
-                &[
-                    ("title", Value::Str(title.clone())),
-                    ("content", Value::Str(content)),
-                    ("format", Value::Str(format_for_path(content_path))),
-                    ("signature", Value::Bin(signature)),
-                ],
-            ))?;
+            let body = transport.request_with_timeout(
+                request(
+                    "propose",
+                    &[
+                        ("title", Value::Str(title.clone())),
+                        ("content", Value::Str(content)),
+                        ("format", Value::Str(format_for_path(content_path))),
+                        ("signature", Value::Bin(signature)),
+                    ],
+                ),
+                WORK_TIMEOUT_MEDIUM,
+            )?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid propose response: {e}")))?;
             writeln!(
@@ -336,7 +361,7 @@ fn run_work_command(
                 fields.push(("content", Value::Str(content)));
                 fields.push(("signature", Value::Bin(signature)));
             }
-            transport.request(request("edit", &fields))?;
+            transport.request_with_timeout(request("edit", &fields), WORK_TIMEOUT_MEDIUM)?;
             writeln!(output, "Updated work document {scope} #{id}")?;
             Ok(())
         }
@@ -344,13 +369,16 @@ fn run_work_command(
             if !yes {
                 return Err(Error::msg("work delete requires --yes"));
             }
-            transport.request(request(
-                "delete",
-                &[
-                    ("scope", Value::Str(scope.clone())),
-                    ("doc_id", Value::UInt(*id)),
-                ],
-            ))?;
+            transport.request_with_timeout(
+                request(
+                    "delete",
+                    &[
+                        ("scope", Value::Str(scope.clone())),
+                        ("doc_id", Value::UInt(*id)),
+                    ],
+                ),
+                WORK_TIMEOUT_SHORT,
+            )?;
             writeln!(output, "Deleted work document {scope} #{id}")?;
             Ok(())
         }
@@ -359,15 +387,18 @@ fn run_work_command(
             id,
             content_path,
         } => {
-            let body = transport.request(request(
-                "comment",
-                &[
-                    ("scope", Value::Str(scope.clone())),
-                    ("doc_id", Value::UInt(*id)),
-                    ("content", Value::Str(fs::read_to_string(content_path)?)),
-                    ("format", Value::Str(format_for_path(content_path))),
-                ],
-            ))?;
+            let body = transport.request_with_timeout(
+                request(
+                    "comment",
+                    &[
+                        ("scope", Value::Str(scope.clone())),
+                        ("doc_id", Value::UInt(*id)),
+                        ("content", Value::Str(fs::read_to_string(content_path)?)),
+                        ("format", Value::Str(format_for_path(content_path))),
+                    ],
+                ),
+                WORK_TIMEOUT_MEDIUM,
+            )?;
             let value = msgpack::unpack_exact(&body)
                 .map_err(|e| Error::msg(format!("invalid comment response: {e}")))?;
             writeln!(
@@ -379,23 +410,29 @@ fn run_work_command(
         }
         WorkCommand::Perms { id, content_path } => {
             if let Some(path) = content_path {
-                transport.request(request(
-                    "perms",
-                    &[
-                        ("doc_id", Value::UInt(*id)),
-                        ("step", Value::Str("set".into())),
-                        ("content", Value::Str(fs::read_to_string(path)?)),
-                    ],
-                ))?;
+                transport.request_with_timeout(
+                    request(
+                        "perms",
+                        &[
+                            ("doc_id", Value::UInt(*id)),
+                            ("step", Value::Str("set".into())),
+                            ("content", Value::Str(fs::read_to_string(path)?)),
+                        ],
+                    ),
+                    WORK_TIMEOUT_SHORT,
+                )?;
                 writeln!(output, "Updated permissions for work document #{id}")?;
             } else {
-                let body = transport.request(request(
-                    "perms",
-                    &[
-                        ("doc_id", Value::UInt(*id)),
-                        ("step", Value::Str("get".into())),
-                    ],
-                ))?;
+                let body = transport.request_with_timeout(
+                    request(
+                        "perms",
+                        &[
+                            ("doc_id", Value::UInt(*id)),
+                            ("step", Value::Str("get".into())),
+                        ],
+                    ),
+                    WORK_TIMEOUT_SHORT,
+                )?;
                 let value = msgpack::unpack_exact(&body)
                     .map_err(|e| Error::msg(format!("invalid permissions response: {e}")))?;
                 write!(
@@ -410,12 +447,18 @@ fn run_work_command(
             Ok(())
         }
         WorkCommand::Complete { id } => {
-            transport.request(request("complete", &[("doc_id", Value::UInt(*id))]))?;
+            transport.request_with_timeout(
+                request("complete", &[("doc_id", Value::UInt(*id))]),
+                WORK_TIMEOUT_SHORT,
+            )?;
             writeln!(output, "Completed work document #{id}")?;
             Ok(())
         }
         WorkCommand::Activate { id } => {
-            transport.request(request("activate", &[("doc_id", Value::UInt(*id))]))?;
+            transport.request_with_timeout(
+                request("activate", &[("doc_id", Value::UInt(*id))]),
+                WORK_TIMEOUT_SHORT,
+            )?;
             writeln!(output, "Activated work document #{id}")?;
             Ok(())
         }
@@ -603,11 +646,17 @@ mod tests {
     struct FakeTransport {
         requests: Vec<Value>,
         responses: Vec<Vec<u8>>,
+        timeouts: Vec<Duration>,
     }
 
     impl WorkTransport for FakeTransport {
         fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+            self.request_with_timeout(data, WORK_TIMEOUT_SHORT)
+        }
+
+        fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
             self.requests.push(msgpack::unpack_exact(&data).unwrap());
+            self.timeouts.push(timeout);
             Ok(self.responses.remove(0))
         }
 
@@ -675,6 +724,7 @@ mod tests {
         fs::write(&content, "# Body\n").unwrap();
         let mut transport = FakeTransport {
             requests: Vec::new(),
+            timeouts: Vec::new(),
             responses: vec![msgpack::pack(&Value::Map(vec![
                 (Value::Str("id".into()), Value::UInt(3)),
                 (Value::Str("scope".into()), Value::Str("active".into())),
@@ -691,6 +741,7 @@ mod tests {
         )
         .unwrap();
         assert!(String::from_utf8(output).unwrap().contains("active #3"));
+        assert_eq!(transport.timeouts, vec![WORK_TIMEOUT_MEDIUM]);
         assert_eq!(
             transport.requests[0]
                 .map_get("operation")
@@ -716,6 +767,7 @@ mod tests {
     fn list_and_view_format_responses() {
         let mut transport = FakeTransport {
             requests: Vec::new(),
+            timeouts: Vec::new(),
             responses: vec![
                 msgpack::pack(&Value::Map(vec![(
                     Value::Str("active".into()),
@@ -777,6 +829,7 @@ mod tests {
         fs::write(&comment_path, "Update").unwrap();
         let mut transport = FakeTransport {
             requests: Vec::new(),
+            timeouts: Vec::new(),
             responses: vec![
                 msgpack::pack(&Value::Map(vec![(Value::Str("id".into()), Value::UInt(1))])),
                 Vec::new(),
@@ -831,6 +884,7 @@ mod tests {
         fs::write(&content, "Edited body\n").unwrap();
         let mut transport = FakeTransport {
             requests: Vec::new(),
+            timeouts: Vec::new(),
             responses: vec![Vec::new()],
         };
 
@@ -875,6 +929,7 @@ mod tests {
         fs::write(&permissions, "interact = all\n").unwrap();
         let mut transport = FakeTransport {
             requests: Vec::new(),
+            timeouts: Vec::new(),
             responses: vec![
                 msgpack::pack(&Value::Map(vec![(
                     Value::Str("content".into()),
