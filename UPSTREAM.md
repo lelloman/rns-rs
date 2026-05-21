@@ -7,17 +7,17 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.2.9`
-- Tag: `1.2.9`
-- Commit: `6c989eb38ea731c7381668969c1cfdaf2b08ce67`
-- Commit date: `2026-05-19 01:08:42 +0200`
-- Subject: `Prepare release`
+- Version: `1.3.0`
+- Tag: none fetched (`git describe`: `1.2.9-27-gaaadff54`)
+- Commit: `aaadff547ddc544075c59482b3e0a21f31fed85d`
+- Commit date: `2026-05-21 21:22:09 +0200`
+- Subject: `Updated documentation`
 
-The previous recorded baseline was Reticulum `1.2.5`, with release commit
-`e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The earlier upstream
-`1.2.4..1.2.5` range was reviewed and the relevant path-request control,
-`rnstatus`, `rnpath`, `rnid`, discovery, transport, and `rngit` changes were
-ported or explicitly audited with the following local commits:
+Earlier baseline history includes Reticulum `1.2.5`, with release commit
+`e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
+range was reviewed and the relevant path-request control, `rnstatus`, `rnpath`,
+`rnid`, discovery, transport, and `rngit` changes were ported or explicitly
+audited with the following local commits:
 
 - `3bb19d7` Add path request control core
 - `12a250d` Gate recursive path requests
@@ -41,6 +41,39 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+
+## Completed 1.2.9..1.3.0 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was inspected at upstream
+`aaadff547ddc544075c59482b3e0a21f31fed85d` on 2026-05-21. Upstream
+`RNS/_version.py` reports `1.3.0` at this commit, but no local `1.3.0` tag was
+fetched; `git describe` reports `1.2.9-27-gaaadff54`. This baseline therefore
+tracks the exact upstream commit rather than a release tag.
+
+This range covered known-destination iteration safety, channel send failure
+semantics, `rnsh` timeout defaults, and a focused set of `rngit` fixes around
+release artifact selection, operation-specific timeouts, work-document
+not-found behavior, commit rendering, stats breadcrumbs, first-run config
+startup, and documentation. Rust-applicable behavior was ported or confirmed
+already covered; generated upstream manuals and upstream changelog text were
+not vendored.
+
+Key local commits for this range include:
+
+- `33424cb` Cancel failed channel sends
+- `0d10f11` Escape dash-leading commit messages
+- `4231afe` Add stats page breadcrumb label
+- `421b99d` Use operation-specific rngit timeouts
+- `e01fa49` Document blackhole API semantics
+- `56cf16f` Return not found for missing work docs
+- `611a390` Cover missing release artifacts
+- `937a781` Support wildcard release artifact fetches
+- `96e27fa` Continue rngit after default config creation
+
+No Cargo crate versions were bumped for upstream Python `RNS/_version.py`
+release markers. The detailed per-commit audit is recorded in the untracked
+working document `docs/reticulum-upstream-commit-analysis-2026-05-21.md`.
 
 ## Completed 1.2.7..1.2.9 Porting Queue
 
