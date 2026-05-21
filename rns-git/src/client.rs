@@ -310,7 +310,9 @@ impl SyncClient {
     pub(crate) fn request(&self, path: &str, data: Vec<u8>) -> Result<Response> {
         {
             let (lock, _) = &*self.state;
-            lock.lock().unwrap().responses.clear();
+            let mut state = lock.lock().unwrap();
+            state.responses.clear();
+            state.progress = ProgressState::default();
         }
         self.node
             .send_request(self.link_id, path, &data)
