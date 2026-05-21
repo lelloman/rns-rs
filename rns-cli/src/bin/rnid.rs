@@ -845,7 +845,6 @@ fn create_rsg_with_embed_and_meta(
             Value::Bin(identity.hash().to_vec()),
         ),
         (Value::Str("pubkey".into()), Value::Bin(public_key.to_vec())),
-        (Value::Str("note".into()), Value::Nil),
     ];
     if let Some(extra_meta) = extra_meta {
         for (key, value) in extra_meta {
@@ -1706,6 +1705,17 @@ mod tests {
             validate_rsg(&rsg, b"message", Some(*other.hash())).unwrap(),
             RsgValidation::WrongSigner { .. }
         ));
+    }
+
+    #[test]
+    fn created_rsg_metadata_omits_legacy_note_field() {
+        let identity = test_identity(5);
+        let rsg = create_rsg(&identity, b"message").unwrap();
+        let envelope = rsg_envelope(&rsg).unwrap().unwrap();
+        let meta = envelope.map_get("meta").unwrap();
+        assert!(meta.map_get("signer").is_some());
+        assert!(meta.map_get("pubkey").is_some());
+        assert!(meta.map_get("note").is_none());
     }
 
     #[test]

@@ -344,6 +344,7 @@ fn embedded_message_validation_can_print_metadata() {
     assert!(validated.contains("RSM Metadata"));
     assert!(validated.contains("bsigner="));
     assert!(validated.contains("bpubkey="));
+    assert!(!validated.contains("nnote="));
     assert!(validated.contains("Validation"));
     assert!(validated.contains("Message"));
     assert!(validated.contains("metadata message"));
