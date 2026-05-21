@@ -1035,8 +1035,13 @@ pub fn handle_work(
             let doc_id = request
                 .doc_id
                 .ok_or_else(|| Error::msg("no document ID specified"))?;
-            let scope = work_scope(request.scope.as_deref())?;
-            crate::work::view_response(&work_path, scope, doc_id)
+            match work_scope_for_document(&work_path, request.scope.as_deref(), doc_id)? {
+                Some(scope) => crate::work::view_response(&work_path, scope, doc_id),
+                None => Ok(protocol::status_bytes(
+                    protocol::RES_NOT_FOUND,
+                    b"not found",
+                )),
+            }
         }
         "create" => {
             let content = request.content.unwrap_or_default();
@@ -1091,7 +1096,6 @@ pub fn handle_work(
             let doc_id = request
                 .doc_id
                 .ok_or_else(|| Error::msg("no document ID specified"))?;
-            let scope = work_scope(request.scope.as_deref())?;
             let signature = request.signature;
             let identity = if let Some(content) = request.content.as_deref() {
                 match validate_work_signature(content, signature.as_deref(), remote_pubkey) {
@@ -1101,21 +1105,27 @@ pub fn handle_work(
             } else {
                 None
             };
-            work_status_result(
-                crate::work::edit_document(
-                    &work_path,
-                    scope,
-                    doc_id,
-                    remote_hash,
-                    crate::work::WorkEdit {
-                        title: request.title,
-                        content: request.content,
-                        signature,
-                        identity,
-                    },
-                )
-                .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
-            )
+            match work_scope_for_document(&work_path, request.scope.as_deref(), doc_id)? {
+                Some(scope) => work_status_result(
+                    crate::work::edit_document(
+                        &work_path,
+                        scope,
+                        doc_id,
+                        remote_hash,
+                        crate::work::WorkEdit {
+                            title: request.title,
+                            content: request.content,
+                            signature,
+                            identity,
+                        },
+                    )
+                    .map(|_| protocol::status_bytes(protocol::RES_OK, b"")),
+                ),
+                None => Ok(protocol::status_bytes(
+                    protocol::RES_NOT_FOUND,
+                    b"not found",
+                )),
+            }
         }
         "delete" => {
             let doc_id = request
@@ -1252,6 +1262,19 @@ fn work_scope(scope: Option<&str>) -> Result<crate::work::WorkScope> {
         .map(crate::work::WorkScope::parse)
         .unwrap_or(Some(crate::work::WorkScope::Active))
         .ok_or_else(|| Error::msg("invalid scope"))
+}
+
+fn work_scope_for_document(
+    work_path: &std::path::Path,
+    scope: Option<&str>,
+    doc_id: u64,
+) -> Result<Option<crate::work::WorkScope>> {
+    match scope.unwrap_or("active") {
+        "all" => crate::work::find_document_scope(work_path, doc_id),
+        value => crate::work::WorkScope::parse(value)
+            .map(Some)
+            .ok_or_else(|| Error::msg("invalid scope")),
+    }
 }
 
 fn work_status_result(result: Result<Vec<u8>>) -> Result<Vec<u8>> {
@@ -2364,6 +2387,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(delete, vec![protocol::RES_OK]);
+    }
+
+    #[test]
+    fn work_view_and_edit_scope_all_return_not_found_for_missing_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.allow_write = vec!["all".into()];
+        config.allow_interact = vec!["all".into()];
+        git::ensure_bare_repository(&config.repositories_dir.join("group/repo")).unwrap();
+        let access = make_access(&config);
+
+        let view = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("view")),
+                ("scope", strv("all")),
+                ("doc_id", uintv(99)),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(view[0], protocol::RES_NOT_FOUND);
+
+        let edit = handle_work(
+            &config,
+            &access,
+            &work_request(&[
+                ("repository", strv("group/repo")),
+                ("operation", strv("edit")),
+                ("scope", strv("all")),
+                ("doc_id", uintv(99)),
+                ("title", strv("Missing")),
+            ]),
+            Some(&(REMOTE, REMOTE_SIG)),
+        )
+        .unwrap();
+        assert_eq!(edit[0], protocol::RES_NOT_FOUND);
     }
 
     #[test]

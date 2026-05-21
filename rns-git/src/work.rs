@@ -605,14 +605,19 @@ fn permissions_path(work_path: &Path, doc_id: u64) -> PathBuf {
     work_path.join(format!("{doc_id}.allowed"))
 }
 
-fn find_document_dir(work_path: &Path, doc_id: u64) -> Result<Option<PathBuf>> {
+pub fn find_document_scope(work_path: &Path, doc_id: u64) -> Result<Option<WorkScope>> {
     for scope in [WorkScope::Active, WorkScope::Completed, WorkScope::Proposed] {
         let doc_dir = scope_dir(work_path, scope).join(doc_id.to_string());
         if doc_dir.join("root").is_file() {
-            return Ok(Some(doc_dir));
+            return Ok(Some(scope));
         }
     }
     Ok(None)
+}
+
+fn find_document_dir(work_path: &Path, doc_id: u64) -> Result<Option<PathBuf>> {
+    Ok(find_document_scope(work_path, doc_id)?
+        .map(|scope| scope_dir(work_path, scope).join(doc_id.to_string())))
 }
 
 impl WorkScope {
