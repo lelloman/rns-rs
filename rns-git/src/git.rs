@@ -114,7 +114,7 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
             .arg("config")
             .arg("repository.rngit.upstream.source")
             .arg(source))?;
-        if repository_type == "mirror" {
+        if matches!(repository_type, "fork" | "mirror") {
             run(Command::new("git")
                 .arg("--git-dir")
                 .arg(&temp)
@@ -165,7 +165,7 @@ pub fn sync_upstream(path: &Path) -> Result<String> {
         .arg("fetch")
         .arg(&source)
         .arg("+refs/*:refs/*"))?;
-    if repository_type == "mirror" {
+    if matches!(repository_type.as_str(), "fork" | "mirror") {
         run(Command::new("git")
             .arg("--git-dir")
             .arg(path)

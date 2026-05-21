@@ -1800,6 +1800,9 @@ mod tests {
             git_config(&target, "repository.rngit.upstream.source"),
             source.to_string_lossy()
         );
+        assert!(git_config(&target, "repository.rngit.upstream.sync")
+            .parse::<u64>()
+            .is_ok());
         assert_eq!(
             std::fs::read_to_string(config.repositories_dir.join("group/forked.allowed")).unwrap(),
             "adm:22222222222222222222222222222222\n"
@@ -1889,6 +1892,12 @@ mod tests {
             git_rev_parse(&config.repositories_dir.join("group/forked"), "HEAD"),
             updated_sha
         );
+        assert!(git_config(
+            &config.repositories_dir.join("group/forked"),
+            "repository.rngit.upstream.sync"
+        )
+        .parse::<u64>()
+        .is_ok());
     }
 
     #[test]

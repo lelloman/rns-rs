@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
@@ -548,10 +548,17 @@ fn render_repo_page(
     );
     if let Some(origin) = origin {
         out.push_str(&format!(
-            "`F666{} from {}`f\n",
+            "`F666{} from {}`f",
             origin.label(),
             m_escape(&origin.source)
         ));
+        if let Some(synced_at) = origin.synced_at {
+            out.push_str(&format!(
+                " `*`F666synced {} ago`f`*",
+                format_sync_age(synced_at)
+            ));
+        }
+        out.push('\n');
     }
     out.push('\n');
     if !description.is_empty() {
@@ -1959,6 +1966,7 @@ fn repository_description(repo: &Path) -> Result<String> {
 struct RepositoryOrigin {
     kind: RepositoryOriginKind,
     source: String,
+    synced_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2012,7 +2020,46 @@ fn repository_origin(repo: &Path) -> Result<Option<RepositoryOrigin>> {
     if source.is_empty() {
         return Ok(None);
     }
-    Ok(Some(RepositoryOrigin { kind, source }))
+    let synced_at = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("config")
+            .arg("--get")
+            .arg("repository.rngit.upstream.sync"),
+        GIT_COMMAND_TIMEOUT,
+    )
+    .ok()
+    .and_then(|output| output.status.success().then_some(output))
+    .and_then(|output| {
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()
+    });
+
+    Ok(Some(RepositoryOrigin {
+        kind,
+        source,
+        synced_at,
+    }))
+}
+
+fn format_sync_age(synced_at: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let seconds = now.saturating_sub(synced_at);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
 }
 
 fn repository_thanks(repo: &Path, add: bool) -> Result<u64> {
@@ -3118,6 +3165,11 @@ mod tests {
             "repository.rngit.upstream.source",
             "rns://00112233445566778899aabbccddeeff/source/repo",
         ]));
+        run_git(Command::new("git").arg("--git-dir").arg(&fork).args([
+            "config",
+            "repository.rngit.upstream.sync",
+            "1",
+        ]));
         run_git(Command::new("git").arg("--git-dir").arg(&mirror).args([
             "config",
             "repository.rngit.type",
@@ -3127,6 +3179,11 @@ mod tests {
             "config",
             "repository.rngit.upstream.source",
             "https://example.invalid/upstream.git",
+        ]));
+        run_git(Command::new("git").arg("--git-dir").arg(&mirror).args([
+            "config",
+            "repository.rngit.upstream.sync",
+            "1",
         ]));
         let access = access(&config);
 
@@ -3140,6 +3197,8 @@ mod tests {
         .unwrap();
         assert!(fork_page.contains("Forked from"));
         assert!(fork_page.contains("rns://00112233445566778899aabbccddeeff/source/repo"));
+        assert!(fork_page.contains("synced"));
+        assert!(fork_page.contains("ago"));
 
         let mirror_page = render_page(
             PATH_REPO,
@@ -3151,6 +3210,8 @@ mod tests {
         .unwrap();
         assert!(mirror_page.contains("Mirrored from"));
         assert!(mirror_page.contains("https://example.invalid/upstream.git"));
+        assert!(mirror_page.contains("synced"));
+        assert!(mirror_page.contains("ago"));
     }
 
     #[test]
