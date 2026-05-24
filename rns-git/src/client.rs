@@ -16,6 +16,8 @@ use crate::util::{
 };
 use crate::{git, Error, Result};
 
+const LINK_IDENTIFY_SETTLE_DELAY: Duration = Duration::from_millis(750);
+
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,
@@ -284,8 +286,13 @@ impl SyncClient {
         let private_key = client_identity
             .get_private_key()
             .ok_or_else(|| Error::msg("client identity has no private key"))?;
+        // Python Reticulum can receive early LINKIDENTIFY/request packets before
+        // the responder side has fully activated the new link. Give both the
+        // link and the remote identity callback a short settle window.
+        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
         node.identify_on_link(link_id, private_key)
             .map_err(|_| Error::msg("failed to identify on RNS link"))?;
+        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
 
         wait_for_link(
             &state,
