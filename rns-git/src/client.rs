@@ -574,6 +574,9 @@ fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::mpsc;
 
     #[test]
     fn parses_fetch_command() {
@@ -671,4 +674,237 @@ mod tests {
 
         assert_eq!(exclusions, vec!["aaaa"]);
     }
+
+    #[test]
+    fn sync_client_identifies_before_first_python_request() {
+        if !python_rns_available() {
+            eprintln!("Skipping: Python RNS not available");
+            return;
+        }
+
+        let mut python = PythonRngitPeer::spawn();
+        let ready = python.wait_for_ready();
+        let tmp = tempfile::tempdir().unwrap();
+        let rns_dir = tmp.path().join("client-rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        std::fs::write(rns_dir.join("config"), client_rns_config(ready.port)).unwrap();
+
+        let client = SyncClient::connect(
+            ClientConfig {
+                dir: tmp.path().join("rngit"),
+                reticulum_dir: Some(rns_dir),
+                identity_path: tmp.path().join("client_identity"),
+                connect_timeout_secs: 10,
+                request_timeout_secs: 10,
+                destination_aliases: Default::default(),
+                log_level: crate::logging::DEFAULT_LOG_LEVEL,
+            },
+            parse_hex_16(&ready.dest_hash),
+        )
+        .expect("Rust client should connect to Python Reticulum peer");
+
+        let response = client
+            .request(
+                protocol::PATH_LIST,
+                protocol::repository_request("group/repo"),
+            )
+            .expect("Python peer should answer the first request");
+        let response = protocol::response_bin(&response.data).unwrap();
+        let refs = String::from_utf8(decode_status(response).unwrap()).unwrap();
+        assert_eq!(
+            refs,
+            "1111111111111111111111111111111111111111 refs/heads/main\n"
+        );
+
+        let request = python.wait_for_event("REQUEST");
+        let remote = request
+            .split_whitespace()
+            .nth(2)
+            .expect("REQUEST event should include remote identity hash");
+        assert_ne!(remote, "none", "Python saw an unidentified first request");
+    }
+
+    struct PythonReady {
+        port: u16,
+        dest_hash: String,
+    }
+
+    struct PythonRngitPeer {
+        child: Child,
+        events: mpsc::Receiver<String>,
+    }
+
+    impl PythonRngitPeer {
+        fn spawn() -> Self {
+            let mut child = Command::new("python3")
+                .args(["-c", PYTHON_RNGIT_PEER_SCRIPT])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("failed to start Python RNS process");
+
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
+                    let _ = tx.send(line);
+                }
+            });
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(|line| line.ok()) {
+                    eprintln!("python stderr: {line}");
+                }
+            });
+
+            Self { child, events: rx }
+        }
+
+        fn wait_for_ready(&mut self) -> PythonReady {
+            let event = self.wait_for_event("READY");
+            let mut parts = event.split_whitespace();
+            assert_eq!(parts.next(), Some("READY"));
+            let port = parts.next().unwrap().parse().unwrap();
+            let dest_hash = parts.next().unwrap().to_string();
+            PythonReady { port, dest_hash }
+        }
+
+        fn wait_for_event(&mut self, prefix: &str) -> String {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .expect("timed out waiting for Python event");
+                let event = self
+                    .events
+                    .recv_timeout(remaining)
+                    .expect("timed out waiting for Python event");
+                if event.starts_with(prefix) {
+                    return event;
+                }
+            }
+        }
+    }
+
+    impl Drop for PythonRngitPeer {
+        fn drop(&mut self) {
+            if let Some(stdin) = self.child.stdin.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(stdin, "stop");
+                let _ = stdin.flush();
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn python_rns_available() -> bool {
+        Command::new("python3")
+            .args(["-c", "import RNS; print('ok')"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn parse_hex_16(input: &str) -> [u8; 16] {
+        assert_eq!(input.len(), 32, "expected 16-byte hex string");
+        let mut out = [0u8; 16];
+        for i in 0..16 {
+            out[i] = u8::from_str_radix(&input[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        out
+    }
+
+    fn client_rns_config(port: u16) -> String {
+        format!(
+            r#"[reticulum]
+  enable_transport = No
+  share_instance = No
+  panic_on_interface_error = Yes
+
+[interfaces]
+  [[Python RNGit Test TCP]]
+    type = TCPClientInterface
+    target_host = 127.0.0.1
+    target_port = {port}
+    mode = full
+"#
+        )
+    }
+
+    const PYTHON_RNGIT_PEER_SCRIPT: &str = r#"
+import os
+import signal
+import socket
+import sys
+import tempfile
+import threading
+import time
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(("127.0.0.1", 0))
+port = sock.getsockname()[1]
+sock.close()
+
+config_dir = tempfile.mkdtemp()
+with open(os.path.join(config_dir, "config"), "w") as f:
+    f.write(f"""[reticulum]
+  enable_transport = false
+  share_instance = no
+
+[interfaces]
+  [[TCP Server Interface]]
+    type = TCPServerInterface
+    interface_enabled = true
+    listen_ip = 127.0.0.1
+    listen_port = {port}
+    mode = full
+""")
+
+import RNS
+
+running = True
+reticulum = RNS.Reticulum(configdir=config_dir)
+identity = RNS.Identity()
+destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "git", "repositories")
+
+def emit(*parts):
+    print(" ".join(str(part) for part in parts), flush=True)
+
+def list_refs(path, data, request_id, link_id, remote_identity, requested_at):
+    remote = remote_identity.hash.hex() if remote_identity is not None else "none"
+    emit("REQUEST", path, remote)
+    if remote_identity is None:
+        return b"\x01not identified"
+    return b"\x001111111111111111111111111111111111111111 refs/heads/main\n"
+
+def identified(link, remote_identity):
+    emit("IDENTIFIED", remote_identity.hash.hex())
+
+def link_established(link):
+    emit("LINK_ESTABLISHED")
+    link.set_remote_identified_callback(identified)
+
+destination.register_request_handler("/git/list", response_generator=list_refs, allow=RNS.Destination.ALLOW_ALL)
+destination.set_link_established_callback(link_established)
+
+def announce_loop():
+    while running:
+        destination.announce()
+        time.sleep(0.25)
+
+threading.Thread(target=announce_loop, daemon=True).start()
+emit("READY", port, destination.hash.hex())
+
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+try:
+    for line in sys.stdin:
+        if line.strip() == "stop":
+            break
+finally:
+    running = False
+"#;
 }
