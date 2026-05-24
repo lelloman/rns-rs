@@ -154,6 +154,23 @@ for host in vps-eu vps-us; do
 done
 ```
 
+### Manual Backbone Smoke Test
+
+After deploying routing, path discovery or backbone config changes, run the live
+manual smoke test from a workstation:
+
+```bash
+cargo build --release --bin rns-server --features rns-hooks-native
+scripts/manual-backbone-smoke.sh
+```
+
+The script starts two disposable local `rns-server` nodes, connects one only to
+`vps-eu` and the other only to `vps-us`, then verifies announce propagation,
+identity recall, bidirectional packets, link establishment and channel messages
+through the live backbone fabric. See
+[docs/manual-backbone-smoke.md](manual-backbone-smoke.md) for options and
+failure interpretation.
+
 Daily VPS snapshots should also be captured per host. The shared daily report
 database lives on `vps-eu` at `/var/lib/rns-node/vps_daily_reports.db`, with a
 working copy at `data/vps_daily_reports.db` on whichever workstation is running
