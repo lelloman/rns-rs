@@ -107,7 +107,7 @@ struct TickCtx<'a> {
 }
 
 struct PathRequestCtx<'a> {
-    data: &'a [u8],
+    tag: &'a [u8],
     interface_id: InterfaceId,
     now: f64,
     destination_hash: [u8; 16],
@@ -3679,6 +3679,38 @@ mod tests {
         data
     }
 
+    fn make_transport_path_request_data(
+        dest_hash: &[u8; 16],
+        requestor_transport_id: &[u8; 16],
+        tag: &[u8],
+    ) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(dest_hash);
+        data.extend_from_slice(requestor_transport_id);
+        data.extend_from_slice(tag);
+        data
+    }
+
+    fn assert_recursive_path_request_packet(raw: &[u8], dest: &[u8; 16], tag: &[u8]) {
+        let packet = RawPacket::unpack(raw).expect("recursive path request packet");
+        let path_request_dest =
+            crate::destination::destination_hash("rnstransport", &["path", "request"], None);
+
+        assert_eq!(packet.flags.header_type, constants::HEADER_1);
+        assert_eq!(packet.flags.transport_type, constants::TRANSPORT_BROADCAST);
+        assert_eq!(packet.flags.destination_type, constants::DESTINATION_PLAIN);
+        assert_eq!(packet.flags.packet_type, constants::PACKET_TYPE_DATA);
+        assert_eq!(packet.hops, 0);
+        assert_eq!(packet.context, constants::CONTEXT_NONE);
+        assert_eq!(packet.destination_hash, path_request_dest);
+
+        let mut expected_data = Vec::new();
+        expected_data.extend_from_slice(dest);
+        expected_data.extend_from_slice(&[0x42; 16]);
+        expected_data.extend_from_slice(tag);
+        assert_eq!(packet.data, expected_data);
+    }
+
     #[test]
     fn test_path_request_forwarded_on_ap() {
         let mut engine = TransportEngine::new(make_config(true));
@@ -3700,6 +3732,30 @@ mod tests {
             _ => panic!("Expected SendOnInterface for forwarded path request"),
         }
         // Should have stored a discovery path request
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn test_recursive_path_request_rebuilds_transport_payload() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xD8; 16];
+        let original_requestor_transport_id = [0x99; 16];
+        let tag = [0x08; 16];
+        let data = make_transport_path_request_data(&dest, &original_requestor_transport_id, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, InterfaceId(2));
+                assert_recursive_path_request_packet(raw.as_ref(), &dest, &tag);
+            }
+            _ => panic!("expected SendOnInterface for recursive path request"),
+        }
         assert!(engine.discovery_path_requests.contains_key(&dest));
     }
 
@@ -4137,7 +4193,7 @@ mod tests {
         match &actions[0] {
             TransportAction::SendOnInterface { interface, raw } => {
                 assert_eq!(*interface, InterfaceId(2));
-                assert_eq!(raw.as_ref(), data.as_slice());
+                assert_recursive_path_request_packet(raw.as_ref(), &dest, &tag);
             }
             _ => panic!("expected SendOnInterface for recursive path request"),
         }

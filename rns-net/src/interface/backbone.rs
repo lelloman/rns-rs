@@ -42,6 +42,7 @@ pub struct BackboneConfig {
     pub listen_ip: String,
     pub listen_port: u16,
     pub interface_id: InterfaceId,
+    pub mode: u8,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
@@ -98,6 +99,7 @@ impl Default for BackboneConfig {
             listen_ip: "0.0.0.0".into(),
             listen_port: 0,
             interface_id: InterfaceId(0),
+            mode: constants::MODE_FULL,
             max_connections: None,
             idle_timeout: None,
             write_stall_timeout: None,
@@ -249,6 +251,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let runtime = Arc::clone(&config.runtime);
     let peer_state = Arc::clone(&config.peer_state);
     let ingress_control = config.ingress_control;
+    let accepted_peer_mode = config.mode;
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
@@ -261,6 +264,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
                 runtime,
                 peer_state,
                 ingress_control,
+                accepted_peer_mode,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -415,6 +419,7 @@ fn poll_loop(
     runtime: Arc<Mutex<BackboneServerRuntime>>,
     peer_state: Arc<Mutex<BackbonePeerMonitor>>,
     ingress_control: IngressControlConfig,
+    accepted_peer_mode: u8,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -554,7 +559,7 @@ fn poll_loop(
                             let info = InterfaceInfo {
                                 id: client_id,
                                 name: format!("BackboneInterface/{}", client_id.0),
-                                mode: constants::MODE_FULL,
+                                mode: accepted_peer_mode,
                                 out_capable: true,
                                 in_capable: true,
                                 bitrate: Some(1_000_000_000), // 1 Gbps guess
@@ -1170,6 +1175,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 listen_ip,
                 listen_port,
                 interface_id: id,
+                mode: constants::MODE_FULL,
                 max_connections,
                 idle_timeout,
                 write_stall_timeout,
@@ -1238,6 +1244,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             }
             BackboneMode::Server(mut cfg) => {
                 cfg.ingress_control = ctx.ingress_control;
+                cfg.mode = ctx.mode;
                 start(cfg, ctx.tx, ctx.next_dynamic_id)?;
                 Ok(StartResult::Listener { control: None })
             }
@@ -1343,6 +1350,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(interface_id),
+            mode: constants::MODE_FULL,
             max_connections,
             idle_timeout,
             write_stall_timeout,
@@ -1385,6 +1393,30 @@ mod tests {
                 assert!(info.in_capable);
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn backbone_accepted_connection_inherits_server_mode() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(8050));
+
+        let mut config =
+            make_server_config(port, 85, None, None, None, BackboneAbuseConfig::default());
+        config.mode = constants::MODE_GATEWAY;
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        match event {
+            Event::InterfaceUp(_, _, Some(info)) => {
+                assert_eq!(info.mode, constants::MODE_GATEWAY);
+            }
+            other => panic!("expected InterfaceUp with info, got {:?}", other),
         }
     }
 

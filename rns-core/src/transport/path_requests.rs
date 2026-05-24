@@ -52,7 +52,7 @@ impl TransportEngine {
         }
 
         Some(PathRequestCtx {
-            data,
+            tag: &tag_bytes[..tag_len],
             interface_id,
             now,
             destination_hash,
@@ -158,6 +158,14 @@ impl TransportEngine {
             })
             .collect();
 
+        let Some((path_request_raw, path_request_len)) = build_path_request_packet(
+            &ctx.destination_hash,
+            self.config.identity_hash.as_ref(),
+            ctx.tag,
+        ) else {
+            return Vec::new();
+        };
+
         let mut actions = Vec::new();
         for (id, ingress_control, op_freq, op_samples, bitrate, airtime_profile, announce_cap) in
             egress_candidates
@@ -176,7 +184,7 @@ impl TransportEngine {
 
             self.announce_queues.reserve_recursive_path_request(
                 id,
-                ctx.data.len() + constants::HEADER_MINSIZE,
+                path_request_len + constants::HEADER_MINSIZE,
                 ctx.now,
                 bitrate,
                 airtime_profile,
@@ -184,7 +192,7 @@ impl TransportEngine {
             );
             actions.push(TransportAction::SendOnInterface {
                 interface: id,
-                raw: ctx.data.to_vec().into(),
+                raw: path_request_raw.clone().into(),
             });
         }
 
@@ -200,4 +208,39 @@ impl TransportEngine {
 
         actions
     }
+}
+
+fn build_path_request_packet(
+    destination_hash: &[u8; 16],
+    transport_identity_hash: Option<&[u8; 16]>,
+    tag: &[u8],
+) -> Option<(Vec<u8>, usize)> {
+    let mut data = Vec::with_capacity(16 + transport_identity_hash.map_or(0, |_| 16) + tag.len());
+    data.extend_from_slice(destination_hash);
+    if let Some(identity_hash) = transport_identity_hash {
+        data.extend_from_slice(identity_hash);
+    }
+    data.extend_from_slice(tag);
+
+    let flags = crate::packet::PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let path_request_dest =
+        crate::destination::destination_hash("rnstransport", &["path", "request"], None);
+
+    let data_len = data.len();
+    RawPacket::pack(
+        flags,
+        0,
+        &path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &data,
+    )
+    .ok()
+    .map(|packet| (packet.raw, data_len))
 }
