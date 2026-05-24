@@ -4104,9 +4104,9 @@ mod tests {
     }
 
     #[test]
-    fn test_path_request_skips_when_no_announce_raw() {
+    fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
         let mut engine = TransportEngine::new(make_config(true));
-        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
         engine.register_interface(make_interface(2, constants::MODE_FULL));
 
         let dest = [0xD6; 16];
@@ -4132,9 +4132,16 @@ mod tests {
         let data = make_path_request_data(&dest, &tag);
         let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
 
-        // Should NOT create an announce entry without raw data
-        assert!(actions.is_empty());
         assert!(!engine.announce_table.contains_key(&dest));
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, InterfaceId(2));
+                assert_eq!(raw.as_ref(), data.as_slice());
+            }
+            _ => panic!("expected SendOnInterface for recursive path request"),
+        }
+        assert!(engine.discovery_path_requests.contains_key(&dest));
     }
 
     #[test]

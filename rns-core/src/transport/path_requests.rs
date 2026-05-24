@@ -13,8 +13,7 @@ impl TransportEngine {
         if self.local_destinations.contains_key(&ctx.destination_hash) {
             return Vec::new();
         }
-        if self.config.transport_enabled && self.has_path(&ctx.destination_hash) {
-            self.handle_known_path_request(&ctx);
+        if self.config.transport_enabled && self.handle_known_path_request(&ctx) {
             return Vec::new();
         }
         if self.config.transport_enabled {
@@ -60,26 +59,26 @@ impl TransportEngine {
         })
     }
 
-    fn handle_known_path_request(&mut self, ctx: &PathRequestCtx<'_>) {
+    fn handle_known_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> bool {
         let Some(path) = self
             .path_table
             .get(&ctx.destination_hash)
             .and_then(|ps| ps.primary())
             .cloned()
         else {
-            return;
+            return false;
         };
 
         if let Some(recv_info) = self.interfaces.get(&ctx.interface_id) {
             if recv_info.mode == constants::MODE_ROAMING
                 && path.receiving_interface == ctx.interface_id
             {
-                return;
+                return true;
             }
         }
 
         let Some(raw) = path.announce_raw.as_ref() else {
-            return;
+            return false;
         };
         if let Some(existing) = self.announce_table.remove(&ctx.destination_hash) {
             self.insert_held_announce(ctx.destination_hash, existing, ctx.now);
@@ -96,7 +95,7 @@ impl TransportEngine {
         };
 
         let Ok(parsed) = RawPacket::unpack(raw) else {
-            return;
+            return false;
         };
 
         let entry = AnnounceEntry {
@@ -115,6 +114,7 @@ impl TransportEngine {
         };
 
         self.insert_announce_entry(ctx.destination_hash, entry, ctx.now);
+        true
     }
 
     fn handle_discovery_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> Vec<TransportAction> {
