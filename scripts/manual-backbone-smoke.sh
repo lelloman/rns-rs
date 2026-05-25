@@ -13,8 +13,13 @@ DEFAULT_BIN="${ROOT_DIR}/target/release/rns-server"
 if [[ ! -x "$DEFAULT_BIN" ]]; then
   DEFAULT_BIN="$(command -v rns-server || true)"
 fi
+DEFAULT_CTL="${ROOT_DIR}/target/release/rns-ctl"
+if [[ ! -x "$DEFAULT_CTL" ]]; then
+  DEFAULT_CTL="$(command -v rns-ctl || true)"
+fi
 
 BIN="${RNS_SERVER_BIN:-$DEFAULT_BIN}"
+CTL_BIN="${RNS_CTL_BIN:-$DEFAULT_CTL}"
 A_NAME="${RNS_SMOKE_A_NAME:-vps-eu}"
 A_HOST="${RNS_SMOKE_A_HOST:-82.165.77.75}"
 A_PORT="${RNS_SMOKE_A_PORT:-4242}"
@@ -24,6 +29,7 @@ B_HOST="${RNS_SMOKE_B_HOST:-74.208.55.138}"
 B_PORT="${RNS_SMOKE_B_PORT:-4242}"
 B_TRANSPORT_ID="${RNS_SMOKE_B_TRANSPORT_ID:-}"
 TIMEOUT="${RNS_SMOKE_TIMEOUT:-120}"
+CURL_TIMEOUT="${RNS_SMOKE_CURL_TIMEOUT:-5}"
 WORKDIR=""
 KEEP=false
 HTTP_A=""
@@ -43,6 +49,7 @@ Defaults target the VPS experiment endpoints:
 
 Options:
   --bin PATH                 rns-server binary to run
+  --ctl-bin PATH             rns-ctl binary to use for daemon status checks
   --a-name NAME              Label for backbone A
   --a-host HOST              Backbone A host/IP
   --a-port PORT              Backbone A port
@@ -52,6 +59,7 @@ Options:
   --b-port PORT              Backbone B port
   --b-transport-id HEX       Optional expected transport identity for B
   --timeout SECONDS          Per-step polling timeout (default: 120)
+  --curl-timeout SECONDS     Per-request HTTP timeout (default: 5)
   --http-a PORT              Local HTTP port for node A (default: random)
   --http-b PORT              Local HTTP port for node B (default: random)
   --workdir DIR              Keep all temp state under DIR
@@ -66,6 +74,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bin) BIN="$2"; shift 2 ;;
+    --ctl-bin) CTL_BIN="$2"; shift 2 ;;
     --a-name) A_NAME="$2"; shift 2 ;;
     --a-host) A_HOST="$2"; shift 2 ;;
     --a-port) A_PORT="$2"; shift 2 ;;
@@ -75,6 +84,7 @@ while [[ $# -gt 0 ]]; do
     --b-port) B_PORT="$2"; shift 2 ;;
     --b-transport-id) B_TRANSPORT_ID="$2"; shift 2 ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
+    --curl-timeout) CURL_TIMEOUT="$2"; shift 2 ;;
     --http-a) HTTP_A="$2"; shift 2 ;;
     --http-b) HTTP_B="$2"; shift 2 ;;
     --workdir) WORKDIR="$2"; shift 2 ;;
@@ -98,6 +108,10 @@ need_cmd base64
 
 if [[ -z "$BIN" || ! -x "$BIN" ]]; then
   echo "ERROR: rns-server binary not found. Build it first or pass --bin PATH." >&2
+  exit 2
+fi
+if [[ -z "$CTL_BIN" || ! -x "$CTL_BIN" ]]; then
+  echo "ERROR: rns-ctl binary not found. Build it first or pass --ctl-bin PATH." >&2
   exit 2
 fi
 
@@ -149,9 +163,23 @@ trap cleanup EXIT INT TERM
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
+
+dump_debug_state() {
+  local label="$1" port="$2" dir="$3"
+  [[ -n "$port" ]] || return 0
+  printf '\n--- %s packets ---\n' "$label" >&2
+  api_get "$port" "/api/packets" 2>/dev/null | jq . >&2 || true
+  printf '\n--- %s control-plane paths ---\n' "$label" >&2
+  api_get "$port" "/api/paths" 2>/dev/null | jq . >&2 || true
+  printf '\n--- %s daemon paths ---\n' "$label" >&2
+  "$CTL_BIN" path --config "$dir" -t -j >&2 2>/dev/null || true
+}
+
 fail() {
   KEEP=true
   printf 'FAIL: %s\n' "$*" >&2
+  dump_debug_state node-a "$HTTP_A" "$WORKDIR/node-a"
+  dump_debug_state node-b "$HTTP_B" "$WORKDIR/node-b"
   printf '\n--- node-a log tail ---\n' >&2
   tail -n 80 "$WORKDIR/node-a/rns-server.log" >&2 2>/dev/null || true
   printf '\n--- node-b log tail ---\n' >&2
@@ -166,7 +194,7 @@ write_config() {
   mkdir -p "$dir"
   cat >"$dir/config" <<EOF
 [reticulum]
-enable_transport = No
+enable_transport = Yes
 share_instance = Yes
 instance_name = ${instance_name}
 shared_instance_port = ${shared_port}
@@ -207,12 +235,12 @@ start_node() {
 
 api_get() {
   local port="$1" path="$2"
-  curl -fsS "http://127.0.0.1:${port}${path}"
+  curl -fsS --connect-timeout 2 --max-time "$CURL_TIMEOUT" "http://127.0.0.1:${port}${path}"
 }
 
 api_post() {
   local port="$1" path="$2" body="$3"
-  curl -fsS -H 'Content-Type: application/json' -d "$body" "http://127.0.0.1:${port}${path}"
+  curl -fsS --connect-timeout 2 --max-time "$CURL_TIMEOUT" -H 'Content-Type: application/json' -d "$body" "http://127.0.0.1:${port}${path}"
 }
 
 poll_json() {
@@ -238,6 +266,30 @@ wait_health() {
   poll_json "$port" "/api/processes" '[.processes[] | select(.ready == true)] | length | tostring' 3 90 \
     || fail "$name supervised processes did not become ready"
   pass "$name started on HTTP port $port"
+}
+
+wait_backbone_interface() {
+  local dir="$1" name="$2" label="$3"
+  local deadline=$((SECONDS + TIMEOUT))
+  local stable=0
+  local status=""
+  while (( SECONDS < deadline )); do
+    status="$("$CTL_BIN" --config "$dir" status -j 2>/dev/null || true)"
+    if jq -e --arg name "Backbone smoke via ${name}" \
+      '.interfaces[]? | select(.name == $name and .status == true)' \
+      >/dev/null 2>&1 <<<"$status"; then
+      stable=$((stable + 1))
+      if (( stable >= 3 )); then
+        pass "$label backbone interface is up"
+        return 0
+      fi
+    else
+      stable=0
+    fi
+    sleep 1
+  done
+  printf 'last status for %s:\n%s\n' "$label" "${status:-<empty>}" >&2
+  fail "$label backbone interface did not stay up"
 }
 
 create_destination() {
@@ -292,11 +344,9 @@ send_packet() {
 }
 
 wait_packet() {
-  local port="$1" packet_hash="$2" payload="$3" label="$4"
-  local payload_b64
-  payload_b64="$(b64 "$payload")"
-  poll_json "$port" "/api/packets" ".packets[] | select(.packet_hash == \"${packet_hash}\") | .data_base64" "$payload_b64" "$TIMEOUT" \
-    || fail "$label did not receive packet $packet_hash"
+  local port="$1" packet_hash="$2" dest_hash="$3" label="$4"
+  poll_json "$port" "/api/packets" ".packets[] | select(.packet_hash == \"${packet_hash}\" and .dest_hash == \"${dest_hash}\") | .packet_hash" "$packet_hash" "$TIMEOUT" \
+    || fail "$label did not receive packet $packet_hash for $dest_hash"
   pass "$label received packet $packet_hash"
 }
 
@@ -346,6 +396,8 @@ PID_A="$(start_node node-a "$WORKDIR/node-a" "$HTTP_A")"
 PID_B="$(start_node node-b "$WORKDIR/node-b" "$HTTP_B")"
 wait_health "$HTTP_A" node-a
 wait_health "$HTTP_B" node-b
+wait_backbone_interface "$WORKDIR/node-a" "$A_NAME" node-a
+wait_backbone_interface "$WORKDIR/node-b" "$B_NAME" node-b
 
 SMOKE_ID="$(date +%Y%m%d%H%M%S)-$$"
 ASPECT_A="a"
@@ -368,8 +420,8 @@ OUT_A_TO_B="$(create_outbound_destination "$HTTP_A" "$ASPECT_B" "$DEST_B")"
 OUT_B_TO_A="$(create_outbound_destination "$HTTP_B" "$ASPECT_A" "$DEST_A")"
 PACKET_A_TO_B="$(send_packet "$HTTP_A" "$OUT_A_TO_B" "manual smoke packet a-to-b ${SMOKE_ID}")"
 PACKET_B_TO_A="$(send_packet "$HTTP_B" "$OUT_B_TO_A" "manual smoke packet b-to-a ${SMOKE_ID}")"
-wait_packet "$HTTP_B" "$PACKET_A_TO_B" "manual smoke packet a-to-b ${SMOKE_ID}" node-b
-wait_packet "$HTTP_A" "$PACKET_B_TO_A" "manual smoke packet b-to-a ${SMOKE_ID}" node-a
+wait_packet "$HTTP_B" "$PACKET_A_TO_B" "$DEST_B" node-b
+wait_packet "$HTTP_A" "$PACKET_B_TO_A" "$DEST_A" node-a
 
 log "Checking link establishment and channel delivery through ${A_NAME} <-> ${B_NAME}"
 LINK_B_TO_A="$(create_link "$HTTP_B" "$DEST_A")"

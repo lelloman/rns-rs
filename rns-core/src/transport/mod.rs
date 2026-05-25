@@ -664,6 +664,17 @@ impl TransportEngine {
         if ctx.packet.transport_id.is_none()
             || ctx.packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
         {
+            if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
+                log::debug!(
+                    "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. not transport-addressed header={} iface={}",
+                    ctx.packet.destination_hash[0],
+                    ctx.packet.destination_hash[1],
+                    ctx.packet.destination_hash[2],
+                    ctx.packet.destination_hash[3],
+                    ctx.packet.flags.header_type,
+                    ctx.iface.0
+                );
+            }
             return;
         }
 
@@ -671,6 +682,18 @@ impl TransportEngine {
             return;
         };
         if ctx.packet.transport_id != Some(identity_hash) {
+            if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
+                log::debug!(
+                    "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. transport mismatch got={:02x?} own={:02x?} iface={}",
+                    ctx.packet.destination_hash[0],
+                    ctx.packet.destination_hash[1],
+                    ctx.packet.destination_hash[2],
+                    ctx.packet.destination_hash[3],
+                    ctx.packet.transport_id.as_ref().map(|id| &id[..4]),
+                    &identity_hash[..4],
+                    ctx.iface.0
+                );
+            }
             return;
         }
 
@@ -679,12 +702,34 @@ impl TransportEngine {
             .get(&ctx.packet.destination_hash)
             .and_then(|ps| ps.primary())
         else {
+            if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
+                log::debug!(
+                    "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. addressed to us but no path iface={}",
+                    ctx.packet.destination_hash[0],
+                    ctx.packet.destination_hash[1],
+                    ctx.packet.destination_hash[2],
+                    ctx.packet.destination_hash[3],
+                    ctx.iface.0
+                );
+            }
             return;
         };
 
         let next_hop = path_entry.next_hop;
         let remaining_hops = path_entry.hops;
         let outbound_interface = path_entry.receiving_interface;
+        if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
+            log::debug!(
+                "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. remaining_hops={} out_iface={} next_hop={:02x?}",
+                ctx.packet.destination_hash[0],
+                ctx.packet.destination_hash[1],
+                ctx.packet.destination_hash[2],
+                ctx.packet.destination_hash[3],
+                remaining_hops,
+                outbound_interface.0,
+                &next_hop[..4]
+            );
+        }
         let new_raw =
             forward_transport_packet(&ctx.packet, next_hop, remaining_hops, outbound_interface);
 
@@ -875,6 +920,35 @@ impl TransportEngine {
             rng,
             actions,
         );
+    }
+
+    fn announce_raw_for_local_clients(&self, packet: &RawPacket) -> PacketBytes {
+        let Some(identity_hash) = self.config.identity_hash else {
+            return PacketBytes::from(packet.raw.clone());
+        };
+
+        if packet.raw.len() < 2 {
+            return PacketBytes::from(packet.raw.clone());
+        }
+
+        let payload_start = if packet.flags.header_type == constants::HEADER_2 {
+            18usize
+        } else {
+            2usize
+        };
+        if packet.raw.len() < payload_start {
+            return PacketBytes::from(packet.raw.clone());
+        }
+
+        let flags = (constants::HEADER_2 << 6)
+            | (constants::TRANSPORT_TRANSPORT << 4)
+            | (packet.raw[0] & 0x0F);
+        let mut raw = Vec::with_capacity(18 + packet.raw.len() - payload_start);
+        raw.push(flags);
+        raw.push(packet.hops);
+        raw.extend_from_slice(&identity_hash);
+        raw.extend_from_slice(&packet.raw[payload_start..]);
+        PacketBytes::from(raw)
     }
 
     fn announce_sig_cache_key(destination_hash: [u8; 16], signature: &[u8; 64]) -> [u8; 32] {
@@ -1287,7 +1361,7 @@ impl TransportEngine {
         // Forward announce to local clients if any are connected
         if self.has_local_clients() {
             actions.push(TransportAction::ForwardToLocalClients {
-                raw: PacketBytes::from(ctx.packet.raw.clone()),
+                raw: self.announce_raw_for_local_clients(ctx.packet),
                 exclude: Some(ctx.iface),
             });
         }
@@ -3132,7 +3206,7 @@ mod tests {
         use crate::announce::AnnounceData;
         use crate::destination::{destination_hash, name_hash};
 
-        let mut engine = TransportEngine::new(make_config(false));
+        let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_interface(1, constants::MODE_FULL));
         engine.register_interface(make_local_client_interface(2));
 
@@ -3187,8 +3261,12 @@ mod tests {
 
         // The exclude should be the receiving interface
         match forward.unwrap() {
-            TransportAction::ForwardToLocalClients { exclude, .. } => {
+            TransportAction::ForwardToLocalClients { exclude, raw } => {
                 assert_eq!(*exclude, Some(InterfaceId(1)));
+                let flags = PacketFlags::unpack(raw[0]);
+                assert_eq!(flags.header_type, constants::HEADER_2);
+                assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+                assert_eq!(&raw[2..18], &[0x42; 16]);
             }
             _ => unreachable!(),
         }

@@ -504,7 +504,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         announce_rate_grace: 0,
         announce_rate_penalty: 0.0,
         announce_cap: constants::ANNOUNCE_CAP,
-        is_local_client: false,
+        is_local_client: true,
         wants_tunnel: false,
         tunnel_id: None,
         mtu: 65535,
@@ -970,7 +970,10 @@ mod tests {
         // Get server-side InterfaceUp
         let event = server_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let mut server_writer = match event {
-            Event::InterfaceUp(_, Some(w), _) => w,
+            Event::InterfaceUp(_, Some(w), Some(info)) => {
+                assert!(info.is_local_client);
+                w
+            }
             other => panic!("expected InterfaceUp with writer, got {:?}", other),
         };
 

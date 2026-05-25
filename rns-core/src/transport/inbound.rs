@@ -16,32 +16,35 @@ pub fn forward_transport_packet(
     remaining_hops: u8,
     _outbound_interface: InterfaceId,
 ) -> Vec<u8> {
-    if remaining_hops > 1 {
-        // Replace transport_id with next_hop, update hops
+    if remaining_hops > 1 || (remaining_hops == 1 && next_hop != packet.destination_hash) {
+        // Replace transport_id with next_hop, update hops. A one-hop path can
+        // still point at a final transport node for destinations behind it.
         let mut new_raw = Vec::new();
         new_raw.push(packet.raw[0]); // flags unchanged
         new_raw.push(packet.hops); // updated hop count
-        new_raw.extend_from_slice(&next_hop); // new transport_id
+        new_raw.extend_from_slice(&next_hop); // transport_id = next hop
                                               // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
         new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
         new_raw
     } else if remaining_hops == 1 {
-        // Strip transport headers: convert H2→H1
+        // Direct final hop: strip transport headers and deliver as H1.
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
             | (packet.raw[0] & 0x0F);
         let mut new_raw = Vec::new();
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
-        // Skip transport_id, keep dest_hash + context + data
         new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
         new_raw
     } else {
-        // remaining_hops == 0: just update hop count
+        // remaining_hops == 0: final local delivery, strip transport header.
+        let new_flags = (constants::HEADER_1 << 6)
+            | (constants::TRANSPORT_BROADCAST << 4)
+            | (packet.raw[0] & 0x0F);
         let mut new_raw = Vec::new();
-        new_raw.push(packet.raw[0]);
+        new_raw.push(new_flags);
         new_raw.push(packet.hops);
-        new_raw.extend_from_slice(&packet.raw[2..]);
+        new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
         new_raw
     }
 }
@@ -217,7 +220,7 @@ mod tests {
         let transport_id = [0x22; 16];
         let packet = make_h2_packet(&dest, &transport_id, 3);
 
-        let new_raw = forward_transport_packet(&packet, [0; 16], 1, InterfaceId(1));
+        let new_raw = forward_transport_packet(&packet, dest, 1, InterfaceId(1));
 
         // Should be HEADER_1 now
         let flags = crate::packet::PacketFlags::unpack(new_raw[0]);
@@ -226,6 +229,53 @@ mod tests {
         // No transport_id in HEADER_1
         // dest_hash starts at byte 2
         assert_eq!(&new_raw[2..18], &dest);
+    }
+
+    #[test]
+    fn test_forward_transport_one_hop_to_transport_keeps_header() {
+        let dest = [0x11; 16];
+        let transport_id = [0x22; 16];
+        let next_transport = [0x33; 16];
+        let packet = make_h2_packet(&dest, &transport_id, 3);
+
+        let new_raw = forward_transport_packet(&packet, next_transport, 1, InterfaceId(1));
+
+        let flags = crate::packet::PacketFlags::unpack(new_raw[0]);
+        assert_eq!(flags.header_type, constants::HEADER_2);
+        assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+        assert_eq!(&new_raw[2..18], &next_transport);
+        assert_eq!(&new_raw[18..34], &dest);
+    }
+
+    #[test]
+    fn forward_transport_packet_strips_header_for_final_local_hop() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let daemon_id = [0x42; 16];
+        let dest_hash = [0x99; 16];
+        let mut raw = Vec::new();
+        raw.push(flags.pack());
+        raw.push(0);
+        raw.extend_from_slice(&daemon_id);
+        raw.extend_from_slice(&dest_hash);
+        raw.push(constants::CONTEXT_NONE);
+        raw.extend_from_slice(b"hello");
+        let packet = RawPacket::unpack(&raw).unwrap();
+
+        let forwarded = forward_transport_packet(&packet, dest_hash, 0, InterfaceId(2));
+        let forwarded_flags = PacketFlags::unpack(forwarded[0]);
+        assert_eq!(forwarded_flags.header_type, constants::HEADER_1);
+        assert_eq!(
+            forwarded_flags.transport_type,
+            constants::TRANSPORT_BROADCAST
+        );
+        assert_eq!(&forwarded[2..18], &dest_hash);
+        assert_eq!(&forwarded[19..], b"hello");
     }
 
     #[test]

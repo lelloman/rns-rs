@@ -17,6 +17,8 @@ instances with fresh identities and isolated config directories:
 - `node-a` connects only to backbone endpoint A, by default `vps-eu`.
 - `node-b` connects only to backbone endpoint B, by default `vps-us`.
 
+The disposable nodes run with transport enabled because `rns-server` serves the HTTP API from a shared local client; transport mode allows the local-client announce and request traffic to be forwarded onto the backbone interface.
+
 The script then verifies:
 
 1. both local servers and their supervised child processes start;
@@ -140,7 +142,9 @@ If identity recall fails, the likely fault is announce propagation or path
 request forwarding between the two backbone entry points.
 
 If identity recall works but packets fail, focus on path table selection and
-packet forwarding.
+packet forwarding. Raw single-packet delivery is validated by packet hash and
+destination hash because the HTTP packet list stores the raw wire packet bytes,
+not the original plaintext payload.
 
 If packets work but links fail, focus on link request routing, retained path
 state and link packet forwarding.

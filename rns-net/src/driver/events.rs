@@ -579,6 +579,16 @@ impl Driver {
                     );
                 }
                 if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                    log::debug!(
+                        "SendOutbound: DATA dest={:02x}{:02x}{:02x}{:02x}.. header={} transport={:02x?} attached={:?}",
+                        packet.destination_hash[0],
+                        packet.destination_hash[1],
+                        packet.destination_hash[2],
+                        packet.destination_hash[3],
+                        packet.flags.header_type,
+                        packet.transport_id.as_ref().map(|id| &id[..4]),
+                        attached_interface
+                    );
                     self.sent_packets
                         .insert(packet.packet_hash, (packet.destination_hash, time::now()));
                 }
@@ -588,6 +598,22 @@ impl Driver {
                     attached_interface,
                     time::now(),
                 );
+                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
+                    log::debug!(
+                        "SendOutbound: DATA routed to {} actions: {:?}",
+                        actions.len(),
+                        actions
+                            .iter()
+                            .map(|a| match a {
+                                TransportAction::SendOnInterface { interface, raw } =>
+                                    format!("SendOn({};{}b)", interface.0, raw.len()),
+                                TransportAction::BroadcastOnAllInterfaces { raw, .. } =>
+                                    format!("BroadcastAll({}b)", raw.len()),
+                                _ => "other".to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                }
                 if is_announce {
                     log::debug!(
                         "SendOutbound: announce routed to {} actions: {:?}",
