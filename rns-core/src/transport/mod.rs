@@ -718,6 +718,16 @@ impl TransportEngine {
         let next_hop = path_entry.next_hop;
         let remaining_hops = path_entry.hops;
         let outbound_interface = path_entry.receiving_interface;
+        let outbound_is_local_client = self
+            .interfaces
+            .get(&outbound_interface)
+            .map(|info| info.is_local_client)
+            .unwrap_or(false);
+        let forwarded_remaining_hops = if outbound_is_local_client {
+            0
+        } else {
+            remaining_hops
+        };
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA {
             log::debug!(
                 "TransportForward: DATA dest={:02x}{:02x}{:02x}{:02x}.. remaining_hops={} out_iface={} next_hop={:02x?}",
@@ -730,8 +740,12 @@ impl TransportEngine {
                 &next_hop[..4]
             );
         }
-        let new_raw =
-            forward_transport_packet(&ctx.packet, next_hop, remaining_hops, outbound_interface);
+        let new_raw = forward_transport_packet(
+            &ctx.packet,
+            next_hop,
+            forwarded_remaining_hops,
+            outbound_interface,
+        );
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
             let proof_timeout = ctx.now
@@ -4523,6 +4537,63 @@ mod tests {
         let flags = PacketFlags::unpack(raw[0]);
         assert_eq!(flags.header_type, constants::HEADER_2);
         assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+    }
+
+    #[test]
+    fn test_issue4_external_data_to_shared_client_strips_transport_header() {
+        let daemon_id = [0x42; 16];
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_local_client_interface(2));
+
+        let dest_hash = [0x99; 16];
+        engine.upsert_path_destination(
+            dest_hash,
+            make_path_entry(1000.0, 1, InterfaceId(2), daemon_id),
+            1000.0,
+        );
+
+        let h2_flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let mut h2_raw = Vec::new();
+        h2_raw.push(h2_flags.pack());
+        h2_raw.push(0);
+        h2_raw.extend_from_slice(&daemon_id);
+        h2_raw.extend_from_slice(&dest_hash);
+        h2_raw.push(constants::CONTEXT_NONE);
+        h2_raw.extend_from_slice(b"hello shared client");
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x22; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &h2_raw,
+                iface: InterfaceId(1),
+                now: 1001.0,
+                rx: RxMetadata {
+                    rssi: None,
+                    snr: None,
+                },
+            },
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|a| match a {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("daemon should forward external DATA to shared client");
+        let flags = PacketFlags::unpack(raw[0]);
+        assert_eq!(flags.header_type, constants::HEADER_1);
+        assert_eq!(flags.transport_type, constants::TRANSPORT_BROADCAST);
+        assert_eq!(&raw[2..18], &dest_hash);
+        assert_eq!(&raw[19..], b"hello shared client");
     }
 
     #[test]

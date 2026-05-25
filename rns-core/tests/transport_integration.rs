@@ -492,16 +492,19 @@ fn test_transport_routing_interop() {
             }
             "h2_to_h1_strip_last_hop" => {
                 // Test forward_transport_packet strips H2→H1 on last hop
+                let dest_hash_bytes = hex_to_bytes(v["destination_hash"].as_str().unwrap());
                 let original_raw = hex_to_bytes(v["original_raw"].as_str().unwrap());
                 let expected_flags = v["stripped_flags"].as_u64().unwrap() as u8;
                 let expected_raw = hex_to_bytes(v["stripped_raw"].as_str().unwrap());
 
+                let mut dest_hash = [0u8; 16];
+                dest_hash.copy_from_slice(&dest_hash_bytes);
                 let packet = RawPacket::unpack(&original_raw).unwrap();
 
                 let result = rns_core::transport::inbound::forward_transport_packet(
                     &packet,
-                    [0; 16], // next_hop doesn't matter for last hop
-                    1,       // remaining_hops == 1 → strip
+                    dest_hash, // direct final hop strips H2 to H1
+                    1,         // remaining_hops == 1 and next_hop == destination
                     InterfaceId(1),
                 );
 
