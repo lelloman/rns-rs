@@ -154,6 +154,31 @@ for host in vps-eu vps-us; do
 done
 ```
 
+### VPS Binary Deployment
+
+Build clean release binaries from the commit you want to deploy:
+
+```bash
+cargo build --release -p rns-server -p rns-ctl --features rns-hooks-native
+target/release/rns-server --version
+target/release/rns-ctl --version
+```
+
+Install the binaries on both VPS experiment nodes and restart the service:
+
+```bash
+for host in vps-eu vps-us; do
+  echo "== $host =="
+  scp target/release/rns-server target/release/rns-ctl "root@$host:/tmp/"
+  ssh "root@$host" 'install -m 0755 /tmp/rns-server /usr/local/bin/rns-server'
+  ssh "root@$host" 'install -m 0755 /tmp/rns-ctl /usr/local/bin/rns-ctl'
+  ssh "root@$host" 'systemctl restart rns-server'
+  ssh "root@$host" '/usr/local/bin/rns-server --version; /usr/local/bin/rns-ctl --version; systemctl is-active rns-server'
+done
+```
+
+After deploying, run the manual backbone smoke test below.
+
 ### Manual Backbone Smoke Test
 
 After deploying routing, path discovery or backbone config changes, run the live
