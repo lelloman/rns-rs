@@ -1256,6 +1256,7 @@ fn print_release_list(value: &Value, mut output: impl Write) -> Result<()> {
             .map_get("preview")
             .and_then(Value::as_str)
             .unwrap_or("");
+        let preview = preview.lines().next().unwrap_or("");
         writeln!(
             output,
             "{tag:<16} {status:<10} {artifacts:>3} artifact(s) {preview}"
@@ -1866,7 +1867,10 @@ mod tests {
             (Value::Str("tag".into()), Value::Str("v1".into())),
             (Value::Str("status".into()), Value::Str("published".into())),
             (Value::Str("artifacts".into()), Value::UInt(2)),
-            (Value::Str("preview".into()), Value::Str("First".into())),
+            (
+                Value::Str("preview".into()),
+                Value::Str("First\nSecond line should be hidden".into()),
+            ),
         ]);
         let list_body = Value::Map(vec![
             (
@@ -1881,6 +1885,7 @@ mod tests {
         assert!(list.contains("v1"));
         assert!(list.contains("published"));
         assert!(list.contains("First"));
+        assert!(!list.contains("Second line should be hidden"));
         assert!(list.contains("The latest release is: v1"));
 
         let mut out = Vec::new();
