@@ -229,16 +229,17 @@ fn verify_message_signature_inner(
             });
         }
     }
-    let author = extract_commit_author(message).ok_or_else(|| Error::msg("could not determine author"))?;
-    if author != crate::util::hex(&signer_hash) {
+    let (required_signer, object_kind) = signature_required_signer(message)
+        .ok_or_else(|| Error::msg("could not determine object signer"))?;
+    if required_signer != crate::util::hex(&signer_hash) {
         return Ok(SignatureStatus {
             signed: true,
             valid: true,
             signer_hash: Some(signer_hash),
             author_match: false,
             message: format!(
-                "commit not signed by author <{}> (actual signer <{}>)",
-                author,
+                "{object_kind} not signed by expected identity <{}> (actual signer <{}>)",
+                required_signer,
                 crate::util::hex(&signer_hash)
             ),
         });
@@ -253,6 +254,15 @@ fn verify_message_signature_inner(
             crate::util::hex(&signer_hash)
         ),
     })
+}
+
+fn signature_required_signer(message: &[u8]) -> Option<(String, &'static str)> {
+    let (tagger, is_tag) = extract_tag_tagger(message);
+    if is_tag {
+        tagger.map(|tagger| (tagger, "tag"))
+    } else {
+        extract_commit_author(message).map(|author| (author, "commit"))
+    }
 }
 
 pub fn extract_commit_author(message: &[u8]) -> Option<String> {
@@ -273,6 +283,38 @@ pub fn extract_commit_author(message: &[u8]) -> Option<String> {
             .map(str::to_string);
     }
     None
+}
+
+pub fn extract_tag_tagger(message: &[u8]) -> (Option<String>, bool) {
+    let mut is_tag = false;
+    for line in message.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            break;
+        }
+        if line.starts_with(b"tag ") {
+            is_tag = true;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix(b"tagger ") else {
+            continue;
+        };
+        let Some(start) = rest.iter().position(|b| *b == b'<') else {
+            return (None, is_tag);
+        };
+        let Some(end) = rest.iter().position(|b| *b == b'>') else {
+            return (None, is_tag);
+        };
+        if end <= start {
+            return (None, is_tag);
+        }
+        return (
+            std::str::from_utf8(&rest[start + 1..end])
+                .ok()
+                .map(str::to_string),
+            is_tag,
+        );
+    }
+    (None, is_tag)
 }
 
 fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>> {
@@ -574,6 +616,13 @@ mod tests {
         .into_bytes()
     }
 
+    fn tag_message(tagger: &str) -> Vec<u8> {
+        format!(
+            "object 0123456789012345678901234567890123456789\ntype commit\ntag v1\ntagger Tester <{tagger}> 0 +0000\n\nmessage\n"
+        )
+        .into_bytes()
+    }
+
     #[test]
     fn sign_find_principal_and_verify_commit() {
         let identity = Identity::new(&mut OsRng);
@@ -588,6 +637,19 @@ mod tests {
         assert!(status.valid);
         assert!(status.author_match);
         assert_eq!(status.signer_hash, Some(*identity.hash()));
+    }
+
+    #[test]
+    fn verify_tag_uses_tagger_identity() {
+        let identity = Identity::new(&mut OsRng);
+        let tagger = crate::util::hex(identity.hash());
+        let message = tag_message(&tagger);
+        let armored = sign_message(&identity, &message).unwrap();
+
+        let status = verify_message_signature(&armored, &message, Some(&tagger));
+        assert!(status.valid);
+        assert!(status.author_match);
+        assert_eq!(extract_tag_tagger(&message), (Some(tagger), true));
     }
 
     #[test]
