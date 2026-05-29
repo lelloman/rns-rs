@@ -29,3 +29,7 @@ path = "src/bin/rngit.rs"
 [[bin]]
 name = "git-remote-rns"
 path = "src/bin/git-remote-rns.rs"
+
+[[bin]]
+name = "rngcs"
+path = "src/bin/rngcs.rs"

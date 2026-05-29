@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod client;
 pub mod clone_cli;
+pub mod commitsigs;
 pub mod config;
 pub mod create_cli;
 pub mod git;
