@@ -899,6 +899,7 @@ fn render_commit_page(
     let hash = required_var(vars, "h")?;
     validate_refish(hash)?;
     let commit = commit_info(&repository, hash)?;
+    let signature = commit_signature_status(&repository, hash)?;
     let commits_link = m_link(
         "commits",
         PATH_COMMITS,
@@ -917,6 +918,9 @@ fn render_commit_page(
         m_escape(&commit.email),
         format_unix_time(commit.timestamp)
     );
+    if let Some(signature) = signature {
+        out.push_str(&format!("Signature: {}\n", m_escape(&signature)));
+    }
     if !commit.body.is_empty() {
         out.push_str(&format!("\n{}\n", format_commit_message(&commit.body)));
     }
@@ -925,6 +929,22 @@ fn render_commit_page(
         out.push_str(&format!("{} {}\n", file.status, m_escape(&file.path)));
     }
     Ok(out)
+}
+
+fn commit_signature_status(repo: &Path, hash: &str) -> Result<Option<String>> {
+    let commit = raw_commit_object(repo, hash)?;
+    let (Some(signature), signed_content) = crate::commitsigs::split_commit_signature(&commit)
+    else {
+        return Ok(None);
+    };
+    let status = crate::commitsigs::verify_message_signature(&signature, &signed_content, None);
+    if status.valid && status.author_match {
+        Ok(Some("Valid, signed by author".into()))
+    } else if status.valid {
+        Ok(Some(status.message))
+    } else {
+        Ok(Some(format!("Invalid signature: {}", status.message)))
+    }
 }
 
 fn render_refs_page(
@@ -3044,6 +3064,23 @@ fn commit_info(repo: &Path, hash: &str) -> Result<CommitInfo> {
     })
 }
 
+fn raw_commit_object(repo: &Path, hash: &str) -> Result<Vec<u8>> {
+    validate_refish(hash)?;
+    let output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo)
+            .arg("cat-file")
+            .arg("-p")
+            .arg(hash),
+        GIT_COMMAND_TIMEOUT,
+    )?;
+    if !output.status.success() {
+        return Err(Error::msg(String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(output.stdout)
+}
+
 fn run_git(cmd: &mut Command) -> Result<String> {
     let output = run_git_output(cmd, GIT_COMMAND_TIMEOUT)?;
     if !output.status.success() {
@@ -3365,6 +3402,7 @@ mod tests {
         assert!(commit.contains("initial"));
         assert!(commit.contains("src/lib.rs"));
         assert!(commit.contains("/page/commits.mu`g=public|r=alpha|ref=feature"));
+        assert!(!commit.contains("Signature:"));
 
         let refs = render_page(
             PATH_REFS,
@@ -3376,6 +3414,77 @@ mod tests {
         .unwrap();
         assert!(refs.contains("main"));
         assert!(refs.contains("v1"));
+    }
+
+    #[test]
+    fn commit_page_shows_valid_reticulum_signature_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        let repo = create_repo(
+            config.repositories_dir.join("public/alpha"),
+            "src/lib.rs",
+            "pub fn answer() -> u8 { 42 }\n",
+        );
+        let access = access(&config);
+        let tree = run_git(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(&repo)
+                .args(["rev-parse", "refs/heads/main^{tree}"]),
+        );
+        let identity = Identity::new(&mut OsRng);
+        let author = crate::util::hex(identity.hash());
+        let signed_content = format!(
+            "tree {}\nauthor RNS Page Test <{}> 0 +0000\ncommitter RNS Page Test <{}> 0 +0000\n\nsigned commit\n",
+            tree.trim(),
+            author,
+            author
+        );
+        let armored =
+            crate::commitsigs::sign_message(&identity, signed_content.as_bytes()).unwrap();
+        let (headers, rest) = signed_content.split_once("\n\n").unwrap();
+        let mut raw_commit = format!("{headers}\n");
+        let mut sig_lines = armored.lines();
+        raw_commit.push_str("gpgsig ");
+        raw_commit.push_str(sig_lines.next().unwrap());
+        raw_commit.push('\n');
+        for line in sig_lines {
+            raw_commit.push(' ');
+            raw_commit.push_str(line);
+            raw_commit.push('\n');
+        }
+        raw_commit.push('\n');
+        raw_commit.push_str(rest);
+        let commit_file = tmp.path().join("signed-commit");
+        fs::write(&commit_file, raw_commit).unwrap();
+        let commit_hash = run_git(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(&repo)
+                .args(["hash-object", "-t", "commit", "-w"])
+                .arg(&commit_file),
+        );
+        run_git(Command::new("git").arg("--git-dir").arg(&repo).args([
+            "update-ref",
+            "refs/heads/main",
+            commit_hash.trim(),
+        ]));
+
+        let page = render_page(
+            PATH_COMMIT,
+            &config,
+            &access,
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "alpha"),
+                ("var_h", commit_hash.trim()),
+            ]),
+            None,
+        )
+        .unwrap();
+
+        assert!(page.contains("signed commit"));
+        assert!(page.contains("Signature: Valid, signed by author"));
     }
 
     #[test]

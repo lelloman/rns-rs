@@ -46,7 +46,10 @@ where
                 .ok_or_else(|| Error::msg("missing identity file"))?;
             let identity = rns_net::storage::load_identity(keyfile)?;
             let (message, output_path) = if let Some(file) = options.file.as_deref() {
-                (fs::read(file)?, Some(PathBuf::from(format!("{}.sig", file.display()))))
+                (
+                    fs::read(file)?,
+                    Some(PathBuf::from(format!("{}.sig", file.display()))),
+                )
             } else {
                 let mut message = Vec::new();
                 io::stdin().read_to_end(&mut message)?;
@@ -75,7 +78,9 @@ where
                 .ok_or_else(|| Error::msg("missing signature file"))?;
             let armored = fs::read_to_string(sigfile)?;
             if !check_novalidate(&armored) {
-                return Err(Error::msg("signature is not a valid Reticulum Git signature"));
+                return Err(Error::msg(
+                    "signature is not a valid Reticulum Git signature",
+                ));
             }
         }
         Some("verify") => {
@@ -114,9 +119,7 @@ where
         match arg.as_str() {
             "-Y" => options.op = iter.next(),
             "-n" => {
-                options.namespace = iter
-                    .next()
-                    .ok_or_else(|| Error::msg("missing namespace"))?;
+                options.namespace = iter.next().ok_or_else(|| Error::msg("missing namespace"))?;
             }
             "-f" => {
                 options.keyfile = Some(PathBuf::from(
@@ -131,10 +134,8 @@ where
                 ));
             }
             "-I" => {
-                options.principal = Some(
-                    iter.next()
-                        .ok_or_else(|| Error::msg("missing principal"))?,
-                );
+                options.principal =
+                    Some(iter.next().ok_or_else(|| Error::msg("missing principal"))?);
             }
             "-O" => {
                 let _ = iter.next();
@@ -323,7 +324,10 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>> {
         .ok_or_else(|| Error::msg("identity does not hold a public key"))?;
     let envelope = Value::Map(vec![
         (Value::Str("hashtype".into()), Value::Str("sha256".into())),
-        (Value::Str("hash".into()), Value::Bin(sha256(message).to_vec())),
+        (
+            Value::Str("hash".into()),
+            Value::Bin(sha256(message).to_vec()),
+        ),
         (
             Value::Str("meta".into()),
             Value::Map(vec![
@@ -441,7 +445,9 @@ fn parse_ssh_signature(blob: &[u8]) -> Result<ParsedSshSignature> {
     offset += SSHSIG_MAGIC.len();
     let version = read_u32(blob, &mut offset)?;
     if version != SSHSIG_VERSION {
-        return Err(Error::msg(format!("unsupported SSH signature version {version}")));
+        return Err(Error::msg(format!(
+            "unsupported SSH signature version {version}"
+        )));
     }
     let _public_key = read_ssh_string(blob, &mut offset)?;
     let namespace = read_ssh_string(blob, &mut offset)?;
@@ -519,8 +525,16 @@ fn base64_encode(data: &[u8]) -> String {
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as u32
+        } else {
+            0
+        };
         let triple = (b0 << 16) | (b1 << 8) | b2;
         result.push(CHARS[((triple >> 18) & 0x3f) as usize] as char);
         result.push(CHARS[((triple >> 12) & 0x3f) as usize] as char);
@@ -587,21 +601,43 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn extract_signature_from_commit_object(commit: &[u8]) -> Option<String> {
-    let text = std::str::from_utf8(commit).ok()?;
-    let mut out = Vec::new();
+pub fn split_commit_signature(commit: &[u8]) -> (Option<String>, Vec<u8>) {
+    let Ok(text) = std::str::from_utf8(commit) else {
+        return (None, commit.to_vec());
+    };
+
+    let mut signature = Vec::new();
+    let mut signed = String::new();
     let mut in_signature = false;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("gpgsig ") {
+    for line in text.split_inclusive('\n') {
+        let line_without_lf = line.strip_suffix('\n').unwrap_or(line);
+        if let Some(rest) = line_without_lf
+            .strip_prefix("gpgsig ")
+            .or_else(|| line_without_lf.strip_prefix("gpgsig-sha256 "))
+        {
             in_signature = true;
-            out.push(rest.to_string());
-        } else if in_signature && line.starts_with(' ') {
-            out.push(line[1..].to_string());
-        } else if in_signature {
-            break;
+            signature.push(rest.to_string());
+            continue;
         }
+        if in_signature {
+            if let Some(rest) = line_without_lf.strip_prefix(' ') {
+                signature.push(rest.to_string());
+                continue;
+            }
+            in_signature = false;
+        }
+        signed.push_str(line);
     }
-    (!out.is_empty()).then(|| out.join("\n"))
+
+    (
+        (!signature.is_empty()).then(|| signature.join("\n")),
+        signed.into_bytes(),
+    )
+}
+
+pub fn extract_signature_from_commit_object(commit: &[u8]) -> Option<String> {
+    let (signature, _) = split_commit_signature(commit);
+    signature
 }
 
 #[cfg(test)]
@@ -676,10 +712,12 @@ mod tests {
 
     #[test]
     fn extracts_multiline_gpgsig_from_commit_object() {
+        let signed = b"tree abc\nauthor A <a> 0 +0000\n\nmsg\n";
         let commit = b"tree abc\ngpgsig -----BEGIN SSH SIGNATURE-----\n line1\n line2\n -----END SSH SIGNATURE-----\nauthor A <a> 0 +0000\n\nmsg\n";
         let sig = extract_signature_from_commit_object(commit).unwrap();
         assert!(sig.contains("BEGIN SSH SIGNATURE"));
         assert!(sig.contains("line1"));
         assert!(sig.contains("END SSH SIGNATURE"));
+        assert_eq!(split_commit_signature(commit).1, signed);
     }
 }
