@@ -73,6 +73,7 @@ pub fn main_entry_from(args: Args) {
 
     let service_mode = args.has("s");
     let config_path = args.config_path().map(|s| s.to_string());
+    let log_timestamps = configured_log_timestamps(config_path.as_deref());
 
     let log_level = match args.verbosity {
         0 => log::LevelFilter::Info,
@@ -98,11 +99,12 @@ pub fn main_entry_from(args: Args) {
             .open(&logfile_path)
         {
             Ok(file) => {
-                env_logger::Builder::new()
+                let mut builder = env_logger::Builder::new();
+                builder
                     .filter_level(log_level)
-                    .format_timestamp_secs()
-                    .target(env_logger::Target::Pipe(Box::new(file)))
-                    .init();
+                    .target(env_logger::Target::Pipe(Box::new(file)));
+                apply_log_timestamp_format(&mut builder, log_timestamps);
+                builder.init();
             }
             Err(e) => {
                 eprintln!("Could not open logfile {}: {}", logfile_path.display(), e);
@@ -110,10 +112,10 @@ pub fn main_entry_from(args: Args) {
             }
         }
     } else {
-        env_logger::Builder::new()
-            .filter_level(log_level)
-            .format_timestamp_secs()
-            .init();
+        let mut builder = env_logger::Builder::new();
+        builder.filter_level(log_level);
+        apply_log_timestamp_format(&mut builder, log_timestamps);
+        builder.init();
     }
 
     log::info!("Starting rnsd {}", VERSION);
@@ -162,6 +164,34 @@ pub fn main_entry_from(args: Args) {
     log::info!("Shutting down...");
     node.shutdown();
     log::info!("rnsd stopped");
+}
+
+fn configured_log_timestamps(config_path: Option<&str>) -> bool {
+    let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
+    let config_file = config_dir.join("config");
+    if !config_file.exists() {
+        return true;
+    }
+
+    match rns_net::config::parse_file(&config_file) {
+        Ok(config) => config.logging.logtimestamps,
+        Err(err) => {
+            eprintln!(
+                "Could not parse logging config {}: {}",
+                config_file.display(),
+                err
+            );
+            true
+        }
+    }
+}
+
+fn apply_log_timestamp_format(builder: &mut env_logger::Builder, include_timestamps: bool) {
+    if include_timestamps {
+        builder.format_timestamp_secs();
+    } else {
+        builder.format_timestamp(None);
+    }
 }
 
 #[cfg(any(feature = "rns-hooks-native", feature = "rns-hooks-builtin"))]
@@ -226,6 +256,10 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
 
 [logging]
   loglevel = 4
+
+  # Disable timestamp inclusion when an external logging tool
+  # provides its own timestamps or formatting.
+  # logtimestamps = no
 
 # ─── Interface examples ──────────────────────────────────────────────
 
@@ -302,3 +336,27 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
 #   listen_port = 4243
 #   peers = 10.0.0.1:4243, 10.0.0.2:4243
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_log_timestamps_defaults_to_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(configured_log_timestamps(Some(
+            dir.path().to_str().unwrap()
+        )));
+    }
+
+    #[test]
+    fn configured_log_timestamps_reads_logging_section() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config"), "[logging]\nlogtimestamps = no\n").unwrap();
+
+        assert!(!configured_log_timestamps(Some(
+            dir.path().to_str().unwrap()
+        )));
+    }
+}

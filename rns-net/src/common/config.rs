@@ -226,11 +226,15 @@ impl Default for ReticulumSection {
 #[derive(Debug, Clone)]
 pub struct LoggingSection {
     pub loglevel: u8,
+    pub logtimestamps: bool,
 }
 
 impl Default for LoggingSection {
     fn default() -> Self {
-        LoggingSection { loglevel: 4 }
+        LoggingSection {
+            loglevel: 4,
+            logtimestamps: true,
+        }
     }
 }
 
@@ -1044,6 +1048,12 @@ fn build_logging_section(kvs: &HashMap<String, String>) -> Result<LoggingSection
             value: v.clone(),
         })?;
     }
+    if let Some(v) = kvs.get("logtimestamps") {
+        section.logtimestamps = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "logtimestamps".into(),
+            value: v.clone(),
+        })?;
+    }
 
     Ok(section)
 }
@@ -1059,6 +1069,7 @@ mod tests {
         assert!(config.reticulum.share_instance);
         assert_eq!(config.reticulum.instance_name, "default");
         assert_eq!(config.logging.loglevel, 4);
+        assert!(config.logging.logtimestamps);
         assert!(config.interfaces.is_empty());
         assert_eq!(
             config.reticulum.packet_hashlist_max_entries,
@@ -1478,9 +1489,19 @@ destination_timeout_secs = 777
 
     #[test]
     fn parse_logging_section() {
-        let input = "[logging]\nloglevel = 6\n";
+        let input = "[logging]\nloglevel = 6\nlogtimestamps = no\n";
         let config = parse(input).unwrap();
         assert_eq!(config.logging.loglevel, 6);
+        assert!(!config.logging.logtimestamps);
+    }
+
+    #[test]
+    fn parse_logging_rejects_invalid_logtimestamps() {
+        let err = parse("[logging]\nlogtimestamps = maybe\n").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue { key, .. } if key == "logtimestamps"
+        ));
     }
 
     #[test]
