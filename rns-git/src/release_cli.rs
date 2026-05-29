@@ -269,6 +269,14 @@ impl ReleaseOptions {
                 required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
                 offline,
             },
+            "verify" => ReleaseCommand::Fetch {
+                target: positional
+                    .get(2)
+                    .cloned()
+                    .unwrap_or_else(|| "latest:all".into()),
+                required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
+                offline: true,
+            },
             "create" => parse_create_target(
                 &positional[2..],
                 notes_path,
@@ -1210,7 +1218,7 @@ fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
 }
 
 fn usage() -> &'static str {
-    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-L|--local] [-o|--offline] [-y|--yes] <rns://destination/repo|manifest.rsm> <list|view|fetch|create|delete|latest> [target]"
+    "usage: rngit release [--config DIR] [--rnsconfig DIR] [--notes PATH] [-s|--signer PATH] [-n|--name NAME] [-L|--local] [-o|--offline] [-y|--yes] <rns://destination/repo|manifest.rsm> <list|view|fetch|verify|create|delete|latest> [target]"
 }
 
 struct Notes {
@@ -1471,6 +1479,23 @@ mod tests {
             ReleaseCommand::Fetch {
                 target: "latest:all".into(),
                 required_signer: None,
+                offline: true,
+            }
+        );
+
+        let verify = ReleaseOptions::parse([
+            "--signer".into(),
+            "00112233445566778899aabbccddeeff".into(),
+            "pkg_v1.rsm".into(),
+            "verify".into(),
+            "v1:app.bin".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            verify.command,
+            ReleaseCommand::Fetch {
+                target: "v1:app.bin".into(),
+                required_signer: Some("00112233445566778899aabbccddeeff".into()),
                 offline: true,
             }
         );
