@@ -366,13 +366,21 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let temp_path = parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce));
-    match fs::write(&temp_path, data).and_then(|_| fs::rename(&temp_path, path)) {
+    match fs::write(&temp_path, data).and_then(|_| replace_file(&temp_path, path)) {
         Ok(()) => Ok(()),
         Err(err) => {
             let _ = fs::remove_file(&temp_path);
             Err(err)
         }
     }
+}
+
+fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temp_path, path)
 }
 
 /// Load known destinations from a msgpack file.
