@@ -3,10 +3,10 @@
 //! Implements Python `multiprocessing.connection` wire protocol:
 //! - 4-byte big-endian signed i32 length prefix + payload
 //! - HMAC-SHA256 challenge-response authentication
-//! - Pickle serialization for request/response dictionaries
+//! - msgpack serialization for request/response dictionaries
 //!
-//! Server translates pickle dicts into [`QueryRequest`] events, sends
-//! them through the driver event channel, and returns pickle responses.
+//! Server translates RPC dicts into [`QueryRequest`] events, sends
+//! them through the driver event channel, and returns RPC responses.
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
@@ -18,6 +18,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use rns_core::msgpack::{self, Value as MsgpackValue};
 use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
@@ -35,6 +36,12 @@ const CHALLENGE_PREFIX: &[u8] = b"#CHALLENGE#";
 const WELCOME: &[u8] = b"#WELCOME#";
 const FAILURE: &[u8] = b"#FAILURE#";
 const CHALLENGE_LEN: usize = 40;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RpcCodec {
+    Msgpack,
+    Pickle,
+}
 
 /// RPC address types.
 #[derive(Debug, Clone)]
@@ -133,19 +140,77 @@ fn handle_connection(
     // Authentication: send challenge, verify response
     server_auth(&mut stream, auth_key)?;
 
-    // Read request (pickle dict)
+    // Read request.
     let request_bytes = recv_bytes(&mut stream)?;
-    let request = pickle::decode(&request_bytes)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let (request, codec) = decode_rpc_payload(&request_bytes)?;
 
-    // Translate pickle dict to query, send to driver, get response
+    // Translate request dict to query, send to driver, get response.
     let response = handle_rpc_request(&request, event_tx)?;
 
     // Encode response and send
-    let response_bytes = pickle::encode(&response);
+    let response_bytes = encode_rpc_payload(&response, codec);
     send_bytes(&mut stream, &response_bytes)?;
 
     Ok(())
+}
+
+fn decode_rpc_payload(data: &[u8]) -> io::Result<(PickleValue, RpcCodec)> {
+    if let Ok(value) = msgpack::unpack_exact(data) {
+        return Ok((msgpack_to_pickle(&value), RpcCodec::Msgpack));
+    }
+    pickle::decode(data)
+        .map(|value| (value, RpcCodec::Pickle))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+}
+
+fn encode_rpc_payload(value: &PickleValue, codec: RpcCodec) -> Vec<u8> {
+    match codec {
+        RpcCodec::Msgpack => msgpack::pack(&pickle_to_msgpack(value)),
+        RpcCodec::Pickle => pickle::encode(value),
+    }
+}
+
+fn pickle_to_msgpack(value: &PickleValue) -> MsgpackValue {
+    match value {
+        PickleValue::None => MsgpackValue::Nil,
+        PickleValue::Bool(v) => MsgpackValue::Bool(*v),
+        PickleValue::Int(v) if *v >= 0 => MsgpackValue::UInt(*v as u64),
+        PickleValue::Int(v) => MsgpackValue::Int(*v),
+        PickleValue::Float(v) => MsgpackValue::Float(*v),
+        PickleValue::String(v) => MsgpackValue::Str(v.clone()),
+        PickleValue::Bytes(v) => MsgpackValue::Bin(v.clone()),
+        PickleValue::List(values) => {
+            MsgpackValue::Array(values.iter().map(pickle_to_msgpack).collect())
+        }
+        PickleValue::Dict(values) => MsgpackValue::Map(
+            values
+                .iter()
+                .map(|(key, value)| (pickle_to_msgpack(key), pickle_to_msgpack(value)))
+                .collect(),
+        ),
+    }
+}
+
+fn msgpack_to_pickle(value: &MsgpackValue) -> PickleValue {
+    match value {
+        MsgpackValue::Nil => PickleValue::None,
+        MsgpackValue::Bool(v) => PickleValue::Bool(*v),
+        MsgpackValue::UInt(v) if *v <= i64::MAX as u64 => PickleValue::Int(*v as i64),
+        MsgpackValue::UInt(v) => PickleValue::Float(*v as f64),
+        MsgpackValue::Int(v) => PickleValue::Int(*v),
+        MsgpackValue::Float(v) => PickleValue::Float(*v),
+        MsgpackValue::Bin(v) => PickleValue::Bytes(v.clone()),
+        MsgpackValue::Str(v) => PickleValue::String(v.clone()),
+        MsgpackValue::Array(values) => {
+            PickleValue::List(values.iter().map(msgpack_to_pickle).collect())
+        }
+        MsgpackValue::Map(values) => PickleValue::Dict(
+            values
+                .iter()
+                .map(|(key, value)| (msgpack_to_pickle(key), msgpack_to_pickle(value)))
+                .collect(),
+        ),
+    }
 }
 
 /// Server-side authentication: challenge-response.
@@ -261,7 +326,7 @@ fn recv_bytes(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     }
 }
 
-/// Translate a pickle request dict to a query event and get response.
+/// Translate an RPC request dict to a query event and get response.
 fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Result<PickleValue> {
     // Handle "get" requests
     if let Some(get_val) = request.get("get") {
@@ -900,7 +965,7 @@ fn send_query(event_tx: &EventSender, request: QueryRequest) -> io::Result<Query
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "query timed out"))
 }
 
-/// Extract a 16-byte destination hash from a pickle dict field.
+/// Extract a 16-byte destination hash from an RPC dict field.
 fn extract_dest_hash(request: &PickleValue, key: &str) -> io::Result<[u8; 16]> {
     let bytes = request
         .get(key)
@@ -1983,14 +2048,13 @@ impl RpcClient {
         Ok(RpcClient { stream })
     }
 
-    /// Send a pickle request and receive a pickle response.
+    /// Send an RPC request and receive a response.
     pub fn call(&mut self, request: &PickleValue) -> io::Result<PickleValue> {
-        let request_bytes = pickle::encode(request);
+        let request_bytes = encode_rpc_payload(request, RpcCodec::Msgpack);
         send_bytes(&mut self.stream, &request_bytes)?;
 
         let response_bytes = recv_bytes(&mut self.stream)?;
-        pickle::decode(&response_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        decode_rpc_payload(&response_bytes).map(|(value, _)| value)
     }
 
     pub fn list_hooks(&mut self) -> io::Result<Vec<HookInfo>> {
@@ -2531,6 +2595,27 @@ mod tests {
         assert!(constant_time_eq(b"hello", b"hello"));
         assert!(!constant_time_eq(b"hello", b"world"));
         assert!(!constant_time_eq(b"hello", b"hell"));
+    }
+
+    #[test]
+    fn rpc_payload_accepts_msgpack_and_legacy_pickle() {
+        let request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("link_count".into()),
+            ),
+            (PickleValue::String("max_hops".into()), PickleValue::Int(3)),
+        ]);
+
+        let msgpack_bytes = encode_rpc_payload(&request, RpcCodec::Msgpack);
+        let (decoded_msgpack, msgpack_codec) = decode_rpc_payload(&msgpack_bytes).unwrap();
+        assert_eq!(decoded_msgpack, request);
+        assert_eq!(msgpack_codec, RpcCodec::Msgpack);
+
+        let pickle_bytes = encode_rpc_payload(&request, RpcCodec::Pickle);
+        let (decoded_pickle, pickle_codec) = decode_rpc_payload(&pickle_bytes).unwrap();
+        assert_eq!(decoded_pickle, request);
+        assert_eq!(pickle_codec, RpcCodec::Pickle);
     }
 
     #[test]
