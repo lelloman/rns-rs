@@ -7,11 +7,11 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.0`
-- Tag: none fetched (`git describe`: `1.2.9-27-gaaadff54`)
-- Commit: `aaadff547ddc544075c59482b3e0a21f31fed85d`
-- Commit date: `2026-05-21 21:22:09 +0200`
-- Subject: `Updated documentation`
+- Version: `1.3.3`
+- Tag: none fetched (`git describe`: `1.3.3-11-g20b1bfd0`)
+- Commit: `20b1bfd01e4985d25b5b11fe605260195cd4bf05`
+- Commit date: `2026-05-29 09:29:40 +0200`
+- Subject: `Prepare release`
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -41,6 +41,40 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.0..1.3.3 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was inspected at upstream
+`20b1bfd01e4985d25b5b11fe605260195cd4bf05` on 2026-05-29. Upstream
+`RNS/_version.py` reports `1.3.3`; no local `1.3.3` tag was fetched, and
+`git describe` reports `1.3.3-11-g20b1bfd0`. This baseline therefore tracks the
+exact upstream commit rather than a release tag.
+
+This range covered `rngit` release-list formatting, release manifest commit
+hashes, commit/tag signing and validation, commit-page signature status,
+offline release verification shorthand, blackholed identity link teardown,
+optional timestamp-free daemon logging, Windows-safe known-destination
+replacement, and shared-instance RPC msgpack serialization. Rust-applicable
+behavior was ported or confirmed already covered; generated upstream manuals,
+Python version metadata, changelog text, and Python-only changes were not
+vendored.
+
+Key local commits for this range include:
+
+- `74e4a2c` Show first release preview line
+- `1921c60` Close links from blackholed identities
+- `633f902` Record release manifest commit hash
+- `25734c4` Add rngit commit signature helper
+- `f4c4ad5` Validate rngit tag signatures
+- `fb5d063` Show rngit commit signature status
+- `fd97178` Allow disabling rnsd log timestamps
+- `e2e2e18` Add release verify shorthand
+- `be47d43` Replace known destinations safely on Windows
+- `109c2ca` Use msgpack for shared instance RPC
+
+No Cargo crate versions were bumped for upstream Python `RNS/_version.py`
+release markers. The detailed per-commit audit is recorded in the untracked
+working document `docs/reticulum-upstream-gap-2026-05-29.md`.
 
 
 ## Completed 1.2.9..1.3.0 Porting Queue
