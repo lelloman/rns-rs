@@ -1212,6 +1212,16 @@ impl Driver {
                     identity_hash,
                     public_key,
                 } => {
+                    if self.engine.is_blackholed(&identity_hash, time::now()) {
+                        log::debug!(
+                            "Terminating link {:02x?} from blackholed identity {:02x?}",
+                            &link_id[..4],
+                            &identity_hash[..4],
+                        );
+                        let teardown_actions = self.link_manager.teardown_link(&link_id);
+                        self.dispatch_link_actions(teardown_actions);
+                        continue;
+                    }
                     log::debug!(
                         "Remote identified on link {:02x?}: {:02x?}",
                         &link_id[..4],

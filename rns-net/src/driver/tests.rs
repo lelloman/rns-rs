@@ -286,6 +286,41 @@ fn dispatch_announce_received_persists_ratchet() {
     assert_eq!(remembered[0].1.ratchet, ratchet);
 }
 
+#[test]
+fn dispatch_remote_identified_closes_blackholed_link() {
+    let transport_config = make_transport_config(false);
+    let (callbacks, _established, closed, identified) = MockCallbacks::with_link_tracking();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(transport_config, rx, tx, Box::new(callbacks));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+
+    let mut rng = rns_crypto::OsRng;
+    let dest_hash = [0xDD; 16];
+    let (link_id, _) = driver.link_manager.create_link(
+        &dest_hash,
+        &[0xAA; 32],
+        1,
+        constants::MTU as u32,
+        &mut rng,
+    );
+    let identity_hash = [0x42; 16];
+    driver
+        .engine
+        .blackhole_identity(identity_hash, time::now(), None, Some("test".into()));
+
+    driver.dispatch_link_actions(vec![LinkManagerAction::RemoteIdentified {
+        link_id,
+        identity_hash,
+        public_key: [0x99; 64],
+    }]);
+
+    assert!(
+        identified.lock().unwrap().is_empty(),
+        "blackholed identity must not trigger remote-identified callback"
+    );
+    assert_eq!(closed.lock().unwrap().as_slice(), &[TypedLinkId(link_id)]);
+}
+
 fn make_known_destination_state(
     dest_hash: [u8; 16],
     received_at: f64,
