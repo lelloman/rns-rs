@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -545,6 +546,31 @@ fn sign_release_artifacts(
     origin_hash: Option<&[u8; 16]>,
     origin_path: Option<&str>,
 ) -> Result<()> {
+    sign_release_artifacts_in_repo(
+        artifacts_dir,
+        artifacts,
+        tag,
+        notes,
+        signer_path,
+        package_name,
+        origin_hash,
+        origin_path,
+        Path::new("."),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_release_artifacts_in_repo(
+    artifacts_dir: &Path,
+    artifacts: &[ArtifactFile],
+    tag: &str,
+    notes: &str,
+    signer_path: &Path,
+    package_name: Option<&str>,
+    origin_hash: Option<&[u8; 16]>,
+    origin_path: Option<&str>,
+    repo_path: &Path,
+) -> Result<()> {
     let signer = rns_net::storage::load_identity(signer_path).map_err(|e| {
         Error::msg(format!(
             "could not load signer identity {}: {e}",
@@ -552,6 +578,7 @@ fn sign_release_artifacts(
         ))
     })?;
     let timestamp = current_unix_timestamp()?;
+    let commit_hash = resolve_tag_commit_hash(repo_path, tag)?;
     let mut manifest_artifacts = Vec::new();
 
     for artifact in artifacts {
@@ -578,7 +605,10 @@ fn sign_release_artifacts(
         ("version".into(), Value::Str(tag.to_string())),
         ("released".into(), Value::Str(unix_timestamp_iso(timestamp))),
         ("timestamp".into(), Value::UInt(timestamp)),
-        ("commit".into(), Value::Nil),
+        (
+            "commit".into(),
+            commit_hash.map(Value::Str).unwrap_or(Value::Nil),
+        ),
         ("artifacts".into(), Value::Array(manifest_artifacts)),
     ];
     if let Some(origin_hash) = origin_hash {
@@ -590,6 +620,22 @@ fn sign_release_artifacts(
     let manifest = create_rsg(&signer, notes.as_bytes(), true, manifest_meta)?;
     fs::write(artifacts_dir.join("manifest.rsm"), manifest)?;
     Ok(())
+}
+
+fn resolve_tag_commit_hash(repo_path: &Path, tag: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("rev-list")
+        .arg("-n")
+        .arg("1")
+        .arg(tag)
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| Error::msg(format!("could not run git to resolve tag {tag}: {e}")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!commit.is_empty()).then_some(commit))
 }
 
 fn fetch_release_into(
@@ -1611,6 +1657,57 @@ mod tests {
     }
 
     #[test]
+    fn signed_release_manifest_records_tag_commit_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let signer_dir = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("app.bin"), b"app").unwrap();
+        fs::write(repo.path().join("tracked.txt"), b"tracked").unwrap();
+        run_git(repo.path(), &["init"]);
+        run_git(repo.path(), &["add", "tracked.txt"]);
+        run_git(
+            repo.path(),
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        run_git(repo.path(), &["tag", "v1"]);
+        let commit = run_git(repo.path(), &["rev-parse", "HEAD"]);
+
+        let signer = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
+        let signer_path = signer_dir.path().join("signer.rid");
+        rns_net::storage::save_identity(&signer, &signer_path).unwrap();
+        sign_release_artifacts_in_repo(
+            tmp.path(),
+            &[ArtifactFile {
+                name: "app.bin".into(),
+                path: tmp.path().join("app.bin"),
+            }],
+            "v1",
+            "# Notes\n",
+            &signer_path,
+            Some("pkg"),
+            Some(&[0x11; 16]),
+            Some("group/repo"),
+            repo.path(),
+        )
+        .unwrap();
+
+        let manifest = rsg_envelope(&tmp.path().join("manifest.rsm"));
+        let meta = manifest.map_get("meta").unwrap();
+        assert_eq!(
+            meta.map_get("commit").and_then(Value::as_str),
+            Some(commit.trim())
+        );
+    }
+
+    #[test]
     fn local_create_signs_release_without_uploading() {
         let tmp = tempfile::tempdir().unwrap();
         let signer_dir = tempfile::tempdir().unwrap();
@@ -2012,5 +2109,20 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "Release v1 set as latest\n"
         );
+    }
+
+    fn run_git(repo_path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
     }
 }
