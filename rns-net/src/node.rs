@@ -1024,6 +1024,7 @@ impl RnsNode {
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
         driver.ratchet_store = config.ratchet_store.clone();
+        driver.ratchet_expiry_secs = config.ratchet_expiry.as_secs_f64();
         driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
         driver.set_announce_rate_defaults(config.announce_rate_defaults);
         driver.set_ingress_control_defaults(config.ingress_control_defaults);

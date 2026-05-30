@@ -230,6 +230,7 @@ fn make_announced_identity(
 #[derive(Default)]
 struct TestRatchetStore {
     remembered: Mutex<Vec<([u8; 16], crate::storage::RatchetEntry)>>,
+    cleanup_calls: Mutex<Vec<HashSet<[u8; 16]>>>,
 }
 
 impl crate::storage::RatchetStore for TestRatchetStore {
@@ -249,10 +250,14 @@ impl crate::storage::RatchetStore for TestRatchetStore {
 
     fn cleanup(
         &self,
-        _known_destinations: &HashSet<[u8; 16]>,
+        known_destinations: &HashSet<[u8; 16]>,
         _now: f64,
         _expiry_secs: f64,
     ) -> io::Result<crate::storage::RatchetCleanupStats> {
+        self.cleanup_calls
+            .lock()
+            .unwrap()
+            .push(known_destinations.clone());
         Ok(Default::default())
     }
 }
@@ -5749,6 +5754,60 @@ fn known_destinations_cleanup_respects_ttl() {
 
     assert!(!driver.known_destinations.contains_key(&stale_dest));
     assert!(driver.known_destinations.contains_key(&fresh_dest));
+}
+
+#[test]
+fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx.clone(),
+        Box::new(cbs),
+    );
+
+    let store = Arc::new(TestRatchetStore::default());
+    driver.ratchet_store = Some(store.clone());
+    driver.known_destinations_ttl = 10.0;
+    driver.cache_cleanup_counter = 3599;
+
+    let stale_dest = [0x31; 16];
+    let fresh_dest = [0x32; 16];
+    driver.known_destinations.insert(
+        stale_dest,
+        make_known_destination_state(stale_dest, time::now() - 20.0, InterfaceId(1)),
+    );
+    driver.known_destinations.insert(
+        fresh_dest,
+        make_known_destination_state(fresh_dest, time::now() - 5.0, InterfaceId(1)),
+    );
+
+    tx.send(Event::Tick).unwrap();
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    let cleanup_calls = store.cleanup_calls.lock().unwrap();
+    assert_eq!(cleanup_calls.len(), 1);
+    assert!(!cleanup_calls[0].contains(&stale_dest));
+    assert!(cleanup_calls[0].contains(&fresh_dest));
 }
 
 #[test]

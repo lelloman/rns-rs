@@ -607,6 +607,8 @@ pub struct Driver {
     pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
+    /// TTL for received ratchets, in seconds.
+    pub(crate) ratchet_expiry_secs: f64,
     /// TTL for known destinations without an active path, in seconds.
     pub(crate) known_destinations_ttl: f64,
     /// Maximum number of retained known destinations.
@@ -813,6 +815,7 @@ impl Driver {
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
             ratchet_store: None,
+            ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
             known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,

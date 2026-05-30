@@ -283,11 +283,19 @@ impl Driver {
             let rl_removed =
                 self.engine
                     .cull_rate_limiter(&active_dests, now, self.rate_limiter_ttl_secs);
+            let mut ratchets_removed = 0;
+            if let Some(store) = &self.ratchet_store {
+                let known_destination_hashes = self.known_destinations.keys().copied().collect();
+                match store.cleanup(&known_destination_hashes, now, self.ratchet_expiry_secs) {
+                    Ok(stats) => ratchets_removed = stats.removed,
+                    Err(err) => log::warn!("failed to clean ratchets: {}", err),
+                }
+            }
 
-            if kd_removed > 0 || kd_evicted > 0 || rl_removed > 0 {
+            if kd_removed > 0 || kd_evicted > 0 || rl_removed > 0 || ratchets_removed > 0 {
                 log::info!(
-                    "Memory cleanup: removed {} known_destinations, evicted {} known_destinations, {} rate_limiter entries",
-                    kd_removed, kd_evicted, rl_removed
+                    "Memory cleanup: removed {} known_destinations, evicted {} known_destinations, {} rate_limiter entries, {} ratchets",
+                    kd_removed, kd_evicted, rl_removed, ratchets_removed
                 );
             }
         }
