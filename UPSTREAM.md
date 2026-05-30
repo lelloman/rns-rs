@@ -7,8 +7,8 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.3`
-- Tag: none fetched (`git describe`: `1.3.3-11-g20b1bfd0`)
+- Version: `1.3.4`
+- Tag: `1.3.4` advertised by rgit; GitHub `ls-remote --tags` still stopped at `1.3.3` when checked
 - Commit: `20b1bfd01e4985d25b5b11fe605260195cd4bf05`
 - Commit date: `2026-05-29 09:29:40 +0200`
 - Subject: `Prepare release`
@@ -41,6 +41,33 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.3..1.3.4 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was inspected at upstream
+`20b1bfd01e4985d25b5b11fe605260195cd4bf05` on 2026-05-30. GitHub and rgit
+reported the same `master` commit. rgit advertised tag `1.3.4` at tag object
+`be936e7c6cd16652c3e026e2d29de8574abf97ef`; GitHub did not advertise that
+tag during the check. Upstream `RNS/_version.py` reports `1.3.4` at this
+commit.
+
+This range covered shared-instance RPC MessagePack serialization, stale
+known-destination ratchet cleanup, duplicate inbound announce path selection,
+path-state cleanup for newly discovered destinations, shared-instance TCP
+configuration conflict handling, and release/documentation/packaging churn.
+Rust-applicable behavior was ported or confirmed covered; generated upstream
+manuals, upstream changelog text, Python package version metadata, and
+Python-only packaging/configuration details were not vendored.
+
+Key local commits for this range include:
+
+- `7a9f4b3` Use msgpack for shared instance RPC
+- `20080dc` Clean stale destination ratchets
+- `dcdddaa` Cover duplicate announce path selection
+
+The detailed per-commit audit is recorded in the untracked working document
+`docs/reticulum-upstream-1.3.4-analysis-2026-05-30.md`.
+
 
 ## Completed 1.3.0..1.3.3 Porting Queue
 
