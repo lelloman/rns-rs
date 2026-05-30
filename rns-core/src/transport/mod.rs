@@ -2073,6 +2073,84 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_announce_from_second_interface_uses_existing_path() {
+        use crate::announce::AnnounceData;
+        use crate::destination::{destination_hash, name_hash};
+
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x63; 32]));
+        let dest_hash = destination_hash("dedup", &["announce"], Some(identity.hash()));
+        let name_h = name_hash("dedup", &["announce"]);
+        let random_hash = [0x25u8; 10];
+
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x64; 32]);
+        let first_actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata::default(),
+            },
+            &mut rng,
+        );
+        assert!(first_actions.iter().any(|action| matches!(
+            action,
+            TransportAction::PathUpdated {
+                destination_hash,
+                interface,
+                ..
+            } if *destination_hash == dest_hash && *interface == InterfaceId(1)
+        )));
+
+        let second_actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(2),
+                now: 1000.1,
+                rx: RxMetadata::default(),
+            },
+            &mut rng,
+        );
+
+        assert!(!second_actions.iter().any(|action| matches!(
+            action,
+            TransportAction::PathUpdated {
+                destination_hash,
+                interface,
+                ..
+            } if *destination_hash == dest_hash && *interface == InterfaceId(2)
+        )));
+        let path = engine
+            .path_table
+            .get(&dest_hash)
+            .and_then(|set| set.primary())
+            .expect("first announce should install a path");
+        assert_eq!(path.receiving_interface, InterfaceId(1));
+    }
+
+    #[test]
     fn test_boundary_exempts_unresponsive() {
         let mut engine = TransportEngine::new(make_config(false));
         engine.register_interface(make_interface(1, constants::MODE_BOUNDARY));
