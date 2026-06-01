@@ -403,32 +403,39 @@ fn reconcile_auto_workers<F>(
 ) where
     F: FnMut(&AutoWorkerKey) -> io::Result<RunningAutoWorker>,
 {
-    let actions = reconcile_worker_keys(workers.keys().cloned(), desired);
+    let mut desired_keys = desired.into_iter().collect::<HashSet<_>>();
+    let active_keys = workers.keys().cloned().collect::<Vec<_>>();
 
-    for action in actions {
-        match action {
-            WorkerReconcileAction::Remove(key) => {
-                if let Some(worker) = workers.remove(&key) {
-                    worker.stop();
-                }
-            }
-            WorkerReconcileAction::Add(key) => {
-                let entry = match start_worker(&key) {
-                    Ok(worker) => AutoWorkerEntry::Running(worker),
-                    Err(e) => {
-                        log::warn!(
-                            "AutoInterface worker {} failed to start on {}%{}: {}",
-                            key.ifname,
-                            key.link_local_addr,
-                            key.if_index,
-                            e
-                        );
-                        AutoWorkerEntry::Pending
-                    }
-                };
-                workers.insert(key, entry);
+    for key in active_keys {
+        if !desired_keys.contains(&key) {
+            if let Some(worker) = workers.remove(&key) {
+                worker.stop();
             }
         }
+    }
+
+    let mut desired = desired_keys.drain().collect::<Vec<_>>();
+    desired.sort_by(|a, b| a.ifname.cmp(&b.ifname).then(a.if_index.cmp(&b.if_index)));
+
+    for key in desired {
+        if matches!(workers.get(&key), Some(AutoWorkerEntry::Running(_))) {
+            continue;
+        }
+
+        let entry = match start_worker(&key) {
+            Ok(worker) => AutoWorkerEntry::Running(worker),
+            Err(e) => {
+                log::warn!(
+                    "AutoInterface worker {} failed to start on {}%{}: {}",
+                    key.ifname,
+                    key.link_local_addr,
+                    key.if_index,
+                    e
+                );
+                AutoWorkerEntry::Pending
+            }
+        };
+        workers.insert(key, entry);
     }
 }
 
@@ -1676,6 +1683,52 @@ mod tests {
         });
 
         assert!(matches!(workers.get(&key), Some(AutoWorkerEntry::Pending)));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_retries_pending_worker() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let running = Arc::new(AtomicBool::new(true));
+        let mut workers = HashMap::from([(key.clone(), AutoWorkerEntry::Pending)]);
+        let mut starts = 0;
+
+        reconcile_auto_workers(&mut workers, vec![key.clone()], |_| {
+            starts += 1;
+            Ok(RunningAutoWorker {
+                running: running.clone(),
+            })
+        });
+
+        assert_eq!(starts, 1);
+        assert!(matches!(
+            workers.get(&key),
+            Some(AutoWorkerEntry::Running(_))
+        ));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_keeps_pending_worker_on_retry_failure() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let mut workers = HashMap::from([(key.clone(), AutoWorkerEntry::Pending)]);
+        let mut starts = 0;
+
+        reconcile_auto_workers(&mut workers, vec![key.clone()], |_| {
+            starts += 1;
+            Err(io::Error::new(io::ErrorKind::AddrInUse, "busy"))
+        });
+
+        assert_eq!(starts, 1);
+        assert!(matches!(workers.get(&key), Some(AutoWorkerEntry::Pending)));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_removes_pending_worker() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let mut workers = HashMap::from([(key.clone(), AutoWorkerEntry::Pending)]);
+
+        reconcile_auto_workers(&mut workers, Vec::new(), |_| unreachable!());
+
+        assert!(!workers.contains_key(&key));
     }
 
     #[test]
