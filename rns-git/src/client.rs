@@ -17,6 +17,8 @@ use crate::util::{
 use crate::{git, Error, Result};
 
 const LINK_IDENTIFY_SETTLE_DELAY: Duration = Duration::from_millis(750);
+const NOT_IDENTIFIED_RETRY_DELAY: Duration = Duration::from_millis(750);
+const NOT_IDENTIFIED_RETRIES: usize = 5;
 
 pub fn main<I>(args: I) -> Result<()>
 where
@@ -70,6 +72,7 @@ impl RemoteHelper {
             }
             let command = line.trim_end();
             if command.is_empty() {
+                let completed_batch = !fetch_refs.is_empty() || !push_specs.is_empty();
                 if !fetch_refs.is_empty() {
                     self.fetch(&repository, &fetch_refs)?;
                     fetch_refs.clear();
@@ -83,6 +86,9 @@ impl RemoteHelper {
                     }
                     writeln!(output)?;
                     output.flush()?;
+                }
+                if completed_batch {
+                    break;
                 }
                 continue;
             }
@@ -113,7 +119,7 @@ impl RemoteHelper {
     }
 
     fn list(&self, repository: &str) -> Result<Vec<u8>> {
-        let response = self.client.request(
+        let response = self.request_with_ident_retry(
             protocol::PATH_LIST,
             protocol::repository_request(repository),
         )?;
@@ -125,9 +131,13 @@ impl RemoteHelper {
 
     fn fetch(&self, repository: &str, refs: &[FetchRef]) -> Result<()> {
         let have = self.fetch_have_set(refs);
-        let response = self.client.request(
+        let requested_refs = refs
+            .iter()
+            .map(|r| (r.sha.clone(), r.name.clone()))
+            .collect::<Vec<_>>();
+        let response = self.request_with_ident_retry(
             protocol::PATH_FETCH,
-            protocol::fetch_request(repository, &have),
+            protocol::fetch_request_for_refs(repository, &have, &requested_refs),
         )?;
         if let Some(metadata) = response.metadata {
             ensure_metadata_ok(&metadata)?;
@@ -147,6 +157,22 @@ impl RemoteHelper {
             )?;
         }
         Ok(())
+    }
+
+    fn request_with_ident_retry(&self, path: &str, data: Vec<u8>) -> Result<Response> {
+        for attempt in 0..=NOT_IDENTIFIED_RETRIES {
+            let response = self.client.request(path, data.clone())?;
+            if response.metadata.is_none() {
+                if let Ok(bytes) = protocol::response_bin(&response.data) {
+                    if is_not_identified_status(&bytes) && attempt < NOT_IDENTIFIED_RETRIES {
+                        std::thread::sleep(NOT_IDENTIFIED_RETRY_DELAY);
+                        continue;
+                    }
+                }
+            }
+            return Ok(response);
+        }
+        unreachable!("not-identified retry loop always returns")
     }
 
     fn push(&self, repository: &str, spec: &PushSpec) -> Result<()> {
@@ -283,23 +309,23 @@ impl SyncClient {
             .create_link(dest_hash, sig_pub)
             .map_err(|_| Error::msg("failed to create RNS link"))?;
         eprintln!("Establishing link...");
-        let private_key = client_identity
-            .get_private_key()
-            .ok_or_else(|| Error::msg("client identity has no private key"))?;
-        // Python Reticulum can receive early LINKIDENTIFY/request packets before
-        // the responder side has fully activated the new link. Give both the
-        // link and the remote identity callback a short settle window.
-        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
-        node.identify_on_link(link_id, private_key)
-            .map_err(|_| Error::msg("failed to identify on RNS link"))?;
-        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
-
         wait_for_link(
             &state,
             link_id,
             Duration::from_secs(config.connect_timeout_secs),
         )?;
         eprintln!("Link established.");
+
+        let private_key = client_identity
+            .get_private_key()
+            .ok_or_else(|| Error::msg("client identity has no private key"))?;
+        // Python rngit registers its remote-identified callback from the link
+        // established callback. Wait briefly after establishment before sending
+        // LINKIDENTIFY so the server records this link in active_links.
+        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
+        node.identify_on_link(link_id, private_key)
+            .map_err(|_| Error::msg("failed to identify on RNS link"))?;
+        std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
         Ok(Self {
             node,
             link_id,
@@ -448,6 +474,13 @@ fn wait_for_link(
             .unwrap();
         state = next;
     }
+}
+
+fn is_not_identified_status(bytes: &[u8]) -> bool {
+    matches!(
+        bytes.split_first(),
+        Some((&protocol::RES_DISALLOWED, body)) if body == b"Not identified"
+    )
 }
 
 pub(crate) fn decode_status(bytes: Vec<u8>) -> Result<Vec<u8>> {

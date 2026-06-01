@@ -104,6 +104,14 @@ pub fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
 }
 
 pub fn fetch_request(repository: &str, have: &[String]) -> Vec<u8> {
+    fetch_request_for_refs(repository, have, &[])
+}
+
+pub fn fetch_request_for_refs(
+    repository: &str,
+    have: &[String],
+    refs: &[(String, String)],
+) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![
         (
             Value::UInt(IDX_REPOSITORY),
@@ -112,6 +120,19 @@ pub fn fetch_request(repository: &str, have: &[String]) -> Vec<u8> {
         (
             Value::Str("have".to_string()),
             Value::Array(have.iter().map(|v| Value::Str(v.clone())).collect()),
+        ),
+        (
+            Value::Str("refs".to_string()),
+            Value::Array(
+                refs.iter()
+                    .map(|(sha, refname)| {
+                        Value::Map(vec![
+                            (Value::Str("sha".to_string()), Value::Str(sha.clone())),
+                            (Value::Str("ref".to_string()), Value::Str(refname.clone())),
+                        ])
+                    })
+                    .collect(),
+            ),
         ),
     ]))
 }

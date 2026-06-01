@@ -535,6 +535,11 @@ impl LinkManager {
                 // LRPROOF: dest_hash is the link_id
                 self.handle_lrproof(&dest_hash, &packet, receiving_interface, rng)
             }
+            constants::PACKET_TYPE_PROOF if packet.context == constants::CONTEXT_RESOURCE_PRF => {
+                // Resource proofs are PROOF packets with raw proof data, not
+                // encrypted DATA packets.
+                self.handle_resource_prf(&dest_hash, &packet.data, rng)
+            }
             constants::PACKET_TYPE_PROOF => self.handle_link_proof(&dest_hash, &packet, rng),
             constants::PACKET_TYPE_DATA => {
                 self.handle_link_data(&dest_hash, &packet, packet_hash, receiving_interface, rng)
@@ -1259,7 +1264,7 @@ impl LinkManager {
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Unpack msgpack response: [Bin(request_id), response_value]
-                actions.extend(self.handle_response(&link_id, &plaintext, None));
+                actions.extend(self.handle_response(&link_id, &plaintext, None, None));
             }
             LinkDataResult::Generic {
                 link_id,
@@ -1584,7 +1589,7 @@ impl LinkManager {
     /// Returns actions (the encrypted request packet). The response will arrive
     /// later via handle_local_delivery with CONTEXT_RESPONSE.
     pub fn send_request(
-        &self,
+        &mut self,
         link_id: &LinkId,
         path: &str,
         data: &[u8],
@@ -1592,7 +1597,7 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
 
-        let link = match self.links.get(link_id) {
+        let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
         };
@@ -1614,6 +1619,30 @@ impl LinkManager {
         ]);
         let plaintext = msgpack::pack(&request_array);
 
+        if plaintext.len() > link.engine.mdu() {
+            let request_id = rns_core::hash::truncated_hash(&plaintext);
+            let now = time::now();
+            let senders = match Self::build_resource_senders(
+                link,
+                &plaintext,
+                None,
+                true,
+                false,
+                Some(request_id.to_vec()),
+                rng,
+                now,
+            ) {
+                Ok(senders) => senders,
+                Err(e) => {
+                    log::debug!("Failed to create request ResourceSender: {}", e);
+                    return Vec::new();
+                }
+            };
+            let adv_actions = Self::start_resource_senders(link, senders, now);
+            let _ = link;
+            return self.process_resource_actions(link_id, adv_actions, rng);
+        }
+
         let encrypted = match link.engine.encrypt(&plaintext, rng) {
             Ok(e) => e,
             Err(_) => return Vec::new(),
@@ -1628,13 +1657,15 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
+        let max_mtu = link.engine.mtu() as usize;
+        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
             flags,
             0,
             link_id,
             None,
             constants::CONTEXT_REQUEST,
             &encrypted,
+            max_mtu,
         ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw,
@@ -1787,23 +1818,41 @@ impl LinkManager {
         link_id: &LinkId,
         plaintext: &[u8],
         metadata: Option<Vec<u8>>,
+        resource_request_id: Option<[u8; 16]>,
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack;
 
-        // Python-compatible response: msgpack([Bin(request_id), response_value])
-        let arr = match msgpack::unpack_exact(plaintext) {
-            Ok(msgpack::Value::Array(arr)) if arr.len() >= 2 => arr,
-            _ => return Vec::new(),
-        };
+        // Python-compatible packet response: msgpack([Bin(request_id), response_value]).
+        let packet_response = msgpack::unpack_exact(plaintext).ok().and_then(|value| {
+            let msgpack::Value::Array(arr) = value else {
+                return None;
+            };
+            if arr.len() < 2 {
+                return None;
+            }
+            let msgpack::Value::Bin(request_id_bytes) = &arr[0] else {
+                return None;
+            };
+            if request_id_bytes.len() != 16 {
+                return None;
+            }
+            let mut request_id = [0u8; 16];
+            request_id.copy_from_slice(request_id_bytes);
+            Some((request_id, msgpack::pack(&arr[1])))
+        });
 
-        let request_id_bytes = match &arr[0] {
-            msgpack::Value::Bin(b) if b.len() == 16 => b,
-            _ => return Vec::new(),
+        let (request_id, response_data) = match packet_response {
+            Some(response) => response,
+            None => {
+                let Some(request_id) = resource_request_id else {
+                    return Vec::new();
+                };
+                (
+                    request_id,
+                    msgpack::pack(&msgpack::Value::Bin(plaintext.to_vec())),
+                )
+            }
         };
-        let mut request_id = [0u8; 16];
-        request_id.copy_from_slice(request_id_bytes);
-
-        let response_data = msgpack::pack(&arr[1]);
 
         vec![LinkManagerAction::ResponseReceived {
             link_id: *link_id,
@@ -1811,6 +1860,16 @@ impl LinkManager {
             data: response_data,
             metadata,
         }]
+    }
+
+    fn response_request_id(request_id: &Option<Vec<u8>>) -> Option<[u8; 16]> {
+        let bytes = request_id.as_deref()?;
+        if bytes.len() != 16 {
+            return None;
+        }
+        let mut out = [0u8; 16];
+        out.copy_from_slice(bytes);
+        Some(out)
     }
 
     fn build_resource_senders(
@@ -2247,6 +2306,7 @@ impl LinkManager {
         let mut all_actions = Vec::new();
         let mut assemble_idx = None;
         let mut assembled_is_response = false;
+        let mut response_request_id = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
             if receiver.status >= rns_core::resource::ResourceStatus::Complete {
@@ -2299,6 +2359,8 @@ impl LinkManager {
             let split_segment_total = link.incoming_resources[idx].total_segments;
             let split_segment_parts = link.incoming_resources[idx].total_parts;
             let split_is_response = link.incoming_resources[idx].flags.is_response;
+            response_request_id =
+                Self::response_request_id(&link.incoming_resources[idx].request_id);
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 link.engine.decrypt(ciphertext).map_err(|_| ())
             };
@@ -2353,12 +2415,17 @@ impl LinkManager {
         let _ = link;
         let mut out = self.process_resource_actions(link_id, all_actions, rng);
 
-        if assembled_is_response {
+        if assembled_is_response || response_request_id.is_some() {
             let mut converted = Vec::new();
             for action in out {
                 match action {
                     LinkManagerAction::ResourceReceived { data, metadata, .. } => {
-                        converted.extend(self.handle_response(link_id, &data, metadata));
+                        converted.extend(self.handle_response(
+                            link_id,
+                            &data,
+                            metadata,
+                            response_request_id,
+                        ));
                     }
                     LinkManagerAction::ResourceAcceptQuery { .. } => {
                         // Response resources bypass application acceptance
@@ -2587,16 +2654,26 @@ impl LinkManager {
                     }
                 }
                 ResourceAction::SendProof(data) => {
-                    let encrypted = self
-                        .links
-                        .get(link_id)
-                        .and_then(|link| link.engine.encrypt(&data, rng).ok());
-                    if let Some(encrypted) = encrypted {
-                        result.extend(self.build_link_packet(
-                            link_id,
-                            constants::CONTEXT_RESOURCE_PRF,
-                            &encrypted,
-                        ));
+                    let flags = PacketFlags {
+                        header_type: constants::HEADER_1,
+                        context_flag: constants::FLAG_UNSET,
+                        transport_type: constants::TRANSPORT_BROADCAST,
+                        destination_type: constants::DESTINATION_LINK,
+                        packet_type: constants::PACKET_TYPE_PROOF,
+                    };
+                    if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
+                        flags,
+                        0,
+                        link_id,
+                        None,
+                        constants::CONTEXT_RESOURCE_PRF,
+                        &data,
+                    ) {
+                        result.push(LinkManagerAction::SendPacket {
+                            raw,
+                            dest_type: constants::DESTINATION_LINK,
+                            attached_interface: None,
+                        });
                     }
                 }
                 ResourceAction::SendCancelInitiator(data) => {
@@ -3573,7 +3650,7 @@ mod tests {
     fn test_send_request_wraps_invalid_msgpack_data_as_bin() {
         use std::sync::{Arc, Mutex};
 
-        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
 
         let invalid = vec![0xC1];
@@ -3990,6 +4067,28 @@ mod tests {
             has_send,
             "send_resource should emit advertisement SendPacket"
         );
+    }
+
+    #[test]
+    fn test_large_send_request_uses_request_resource() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let data = vec![0xAB; 2048];
+        let actions = init_mgr.send_request(&link_id, "/large", &data, &mut rng);
+
+        let adv = first_resource_advertisement(&init_mgr, &link_id, &actions);
+        assert!(adv.is_request());
+        assert!(!adv.is_response());
+        assert_eq!(adv.request_id.as_ref().map(Vec::len), Some(16));
+
+        let has_request_packet = actions.iter().any(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                .map(|pkt| pkt.context == constants::CONTEXT_REQUEST)
+                .unwrap_or(false),
+            _ => false,
+        });
+        assert!(!has_request_packet);
     }
 
     fn first_resource_advertisement(
@@ -4751,7 +4850,6 @@ mod tests {
             ResourceAction::SendAdvertisement(vec![1, 2, 3]),
             ResourceAction::SendRequest(vec![4, 5, 6]),
             ResourceAction::SendHmu(vec![7, 8, 9]),
-            ResourceAction::SendProof(vec![10, 11, 12]),
             ResourceAction::SendCancelInitiator(vec![13, 14, 15]),
             ResourceAction::SendCancelReceiver(vec![16, 17, 18]),
         ];
@@ -4763,6 +4861,25 @@ mod tests {
                 "encrypt failure should suppress packet emission"
             );
         }
+    }
+
+    #[test]
+    fn test_resource_proof_is_raw_proof_packet() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let proof = vec![0x22; 64];
+
+        let out = init_mgr.process_resource_actions(
+            &link_id,
+            vec![ResourceAction::SendProof(proof.clone())],
+            &mut rng,
+        );
+        let raw = extract_any_send_packet(&out);
+        let pkt = RawPacket::unpack(&raw).unwrap();
+
+        assert_eq!(pkt.flags.packet_type, constants::PACKET_TYPE_PROOF);
+        assert_eq!(pkt.context, constants::CONTEXT_RESOURCE_PRF);
+        assert_eq!(pkt.data, proof);
     }
 
     // ====================================================================
@@ -5050,7 +5167,7 @@ mod tests {
 
     #[test]
     fn test_large_response_uses_resource_fallback() {
-        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
 
         // Register handler on responder with payload that cannot fit a direct
