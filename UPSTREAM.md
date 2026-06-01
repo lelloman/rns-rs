@@ -7,11 +7,11 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.4`
-- Tag: `1.3.4` advertised by rgit; GitHub `ls-remote --tags` still stopped at `1.3.3` when checked
-- Commit: `20b1bfd01e4985d25b5b11fe605260195cd4bf05`
-- Commit date: `2026-05-29 09:29:40 +0200`
-- Subject: `Prepare release`
+- Version: `1.3.5`
+- Tag: no local `1.3.5` tag was fetched; rgit `master` carries the release version
+- Commit: `50c0a354c959fc24d0910db660972d7b6179a167`
+- Commit date: `2026-06-01 00:34:49 +0200`
+- Subject: `Cleanup`
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -41,6 +41,33 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.4..1.3.5 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was advanced from rgit to upstream
+`50c0a354c959fc24d0910db660972d7b6179a167` on 2026-06-01. The local
+`rgit/master` tracking ref reported this commit, while the local GitHub
+`origin/master` tracking ref still reported
+`41790ca707723a96b0fd3fdacca5d99069f25ba3`.
+No local `1.3.5` tag was fetched, but upstream `RNS/_version.py` reports
+`1.3.5` at this commit.
+
+This range contains the AutoInterface UDP listener replacement fix for fast
+roaming between physical interfaces or WiFi APs, the Python version bump, and
+release/generated-documentation cleanup. The Rust-applicable behavior was
+ported as a dynamic AutoInterface supervisor: rns-rs now rescans link-local
+interfaces, starts and stops per-interface workers, retries pending worker
+bind/start failures, scopes peers and UDP writer targets by worker interface,
+and emits `InterfaceDown` for peers owned by removed workers. Generated upstream
+manuals, changelog text, Python package version metadata, and release artifacts
+were not vendored.
+
+Key local commits for this range include:
+
+- `9e51447` test auto interface worker reconciliation
+- `29cf11c` add polling auto interface supervisor
+- `617904c` retry pending auto interface workers
+- `64ada51` scope auto interface peers by worker
 
 ## Completed 1.3.3..1.3.4 Porting Queue
 
