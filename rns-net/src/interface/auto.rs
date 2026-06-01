@@ -322,7 +322,55 @@ pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<Local
     result
 }
 
-// ── Peer tracking ──────────────────────────────────────────────────────────
+// ── Peer and worker tracking ───────────────────────────────────────────────
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AutoWorkerKey {
+    ifname: String,
+    if_index: u32,
+    link_local_addr: String,
+}
+
+#[allow(dead_code)]
+impl AutoWorkerKey {
+    fn from_local_interface(local: &LocalInterface) -> Self {
+        Self {
+            ifname: local.name.clone(),
+            if_index: local.index,
+            link_local_addr: local.link_local_addr.clone(),
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkerReconcileAction {
+    Add(AutoWorkerKey),
+    Remove(AutoWorkerKey),
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn reconcile_worker_keys(
+    active: impl IntoIterator<Item = AutoWorkerKey>,
+    desired: impl IntoIterator<Item = AutoWorkerKey>,
+) -> Vec<WorkerReconcileAction> {
+    let active = active.into_iter().collect::<std::collections::HashSet<_>>();
+    let desired = desired
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut actions = Vec::new();
+
+    for key in active.difference(&desired) {
+        actions.push(WorkerReconcileAction::Remove(key.clone()));
+    }
+    for key in desired.difference(&active) {
+        actions.push(WorkerReconcileAction::Add(key.clone()));
+    }
+
+    actions.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    actions
+}
 
 /// A discovered peer.
 struct AutoPeer {
@@ -1395,6 +1443,52 @@ mod tests {
         // Only allow an interface that doesn't exist
         let interfaces = enumerate_interfaces(&["nonexistent_if_12345".to_string()], &[]);
         assert!(interfaces.is_empty());
+    }
+
+    fn worker_key(name: &str, index: u32, addr: &str) -> AutoWorkerKey {
+        AutoWorkerKey {
+            ifname: name.to_string(),
+            if_index: index,
+            link_local_addr: addr.to_string(),
+        }
+    }
+
+    #[test]
+    fn reconcile_worker_keys_adds_new_interface() {
+        let desired = vec![worker_key("wlan0", 4, "fe80::1")];
+
+        assert_eq!(
+            reconcile_worker_keys(Vec::new(), desired.clone()),
+            vec![WorkerReconcileAction::Add(desired[0].clone())]
+        );
+    }
+
+    #[test]
+    fn reconcile_worker_keys_keeps_unchanged_interface() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+
+        assert!(reconcile_worker_keys(vec![key.clone()], vec![key]).is_empty());
+    }
+
+    #[test]
+    fn reconcile_worker_keys_removes_missing_interface() {
+        let active = vec![worker_key("wlan0", 4, "fe80::1")];
+
+        assert_eq!(
+            reconcile_worker_keys(active.clone(), Vec::new()),
+            vec![WorkerReconcileAction::Remove(active[0].clone())]
+        );
+    }
+
+    #[test]
+    fn reconcile_worker_keys_replaces_changed_interface_identity() {
+        let old = worker_key("wlan0", 4, "fe80::1");
+        let new = worker_key("wlan0", 9, "fe80::2");
+        let actions = reconcile_worker_keys(vec![old.clone()], vec![new.clone()]);
+
+        assert!(actions.contains(&WorkerReconcileAction::Remove(old)));
+        assert!(actions.contains(&WorkerReconcileAction::Add(new)));
+        assert_eq!(actions.len(), 2);
     }
 
     #[test]
