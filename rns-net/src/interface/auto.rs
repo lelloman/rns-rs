@@ -439,6 +439,12 @@ fn reconcile_auto_workers<F>(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PeerKey {
+    link_local_addr: String,
+    if_index: u32,
+}
+
 /// A discovered peer.
 struct AutoPeer {
     interface_id: InterfaceId,
@@ -446,6 +452,8 @@ struct AutoPeer {
     link_local_addr: String,
     #[allow(dead_code)]
     ifname: String,
+    #[allow(dead_code)]
+    if_index: u32,
     last_heard: f64,
 }
 
@@ -464,10 +472,10 @@ impl Writer for UdpWriter {
 
 /// Shared state for the AutoInterface across all threads.
 struct SharedState {
-    /// Known peers: link_local_addr → AutoPeer
-    peers: HashMap<String, AutoPeer>,
-    /// Our own link-local addresses (for echo detection)
-    link_local_addresses: Vec<String>,
+    /// Known peers, scoped by link-local address and interface index.
+    peers: HashMap<PeerKey, AutoPeer>,
+    /// Our own scoped link-local addresses (for echo detection).
+    link_local_addresses: HashSet<PeerKey>,
     /// Deduplication deque: (hash, timestamp)
     dedup_deque: VecDeque<([u8; 32], f64)>,
     /// Flag set when final_init is done
@@ -480,7 +488,7 @@ impl SharedState {
     fn new(next_id: Arc<AtomicU64>) -> Self {
         SharedState {
             peers: HashMap::new(),
-            link_local_addresses: Vec::new(),
+            link_local_addresses: HashSet::new(),
             dedup_deque: VecDeque::new(),
             online: false,
             next_id,
@@ -506,10 +514,61 @@ impl SharedState {
     }
 
     /// Refresh a peer's last_heard timestamp.
-    fn refresh_peer(&mut self, addr: &str, now: f64) {
-        if let Some(peer) = self.peers.get_mut(addr) {
+    fn refresh_peer(&mut self, key: &PeerKey, now: f64) {
+        if let Some(peer) = self.peers.get_mut(key) {
             peer.last_heard = now;
         }
+    }
+}
+
+fn peer_key_from_src(src_addr: &SocketAddrV6, fallback_if_index: u32) -> PeerKey {
+    let if_index = match src_addr.scope_id() {
+        0 => fallback_if_index,
+        scope_id => scope_id,
+    };
+
+    PeerKey {
+        link_local_addr: src_addr.ip().to_string(),
+        if_index,
+    }
+}
+
+fn peer_target_addr(peer_key: &PeerKey, data_port: u16) -> io::Result<SocketAddrV6> {
+    let peer_ip = peer_key.link_local_addr.parse::<Ipv6Addr>().map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidInput, format!("bad peer IPv6: {}", e))
+    })?;
+
+    Ok(SocketAddrV6::new(peer_ip, data_port, 0, peer_key.if_index))
+}
+
+fn remove_peers_for_worker(
+    shared: &Arc<Mutex<SharedState>>,
+    tx: &EventSender,
+    key: &AutoWorkerKey,
+) {
+    let removed = {
+        let mut state = lock_or_recover(shared, "auto shared state");
+        let removed = state
+            .peers
+            .iter()
+            .filter_map(|(peer_key, peer)| {
+                if peer.if_index == key.if_index && peer.ifname == key.ifname {
+                    Some((peer_key.clone(), peer.interface_id))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (peer_key, _) in &removed {
+            state.peers.remove(peer_key);
+        }
+
+        removed
+    };
+
+    for (_, iface_id) in removed {
+        let _ = tx.send(Event::InterfaceDown(iface_id));
     }
 }
 
@@ -639,8 +698,22 @@ fn auto_supervisor_loop(
             let mut state = lock_or_recover(&context.shared, "auto shared state");
             state.link_local_addresses = desired
                 .iter()
-                .map(|key| key.link_local_addr.clone())
+                .map(|key| PeerKey {
+                    link_local_addr: key.link_local_addr.clone(),
+                    if_index: key.if_index,
+                })
                 .collect();
+        }
+
+        let removed_workers = reconcile_worker_keys(workers.keys().cloned(), desired.clone())
+            .into_iter()
+            .filter_map(|action| match action {
+                WorkerReconcileAction::Remove(key) => Some(key),
+                WorkerReconcileAction::Add(_) => None,
+            })
+            .collect::<Vec<_>>();
+        for key in &removed_workers {
+            remove_peers_for_worker(&context.shared, &context.tx, key);
         }
 
         if desired.is_empty() && workers.is_empty() {
@@ -654,7 +727,8 @@ fn auto_supervisor_loop(
         thread::sleep(Duration::from_secs_f64(AUTO_RESCAN_INTERVAL));
     }
 
-    for worker in workers.into_values() {
+    for (key, worker) in workers {
+        remove_peers_for_worker(&context.shared, &context.tx, &key);
         worker.stop();
     }
 }
@@ -706,6 +780,8 @@ fn start_auto_worker(
         let tx = context.tx.clone();
         let running = worker_running.clone();
         let name = context.name.clone();
+        let ifname = key.ifname.clone();
+        let if_index = key.if_index;
         let runtime = context.runtime.clone();
         let data_port = context.data_port;
         let configured_bitrate = context.configured_bitrate;
@@ -720,6 +796,8 @@ fn start_auto_worker(
                     tx,
                     &running,
                     &name,
+                    &ifname,
+                    if_index,
                     data_port,
                     configured_bitrate,
                     ingress_control,
@@ -734,6 +812,8 @@ fn start_auto_worker(
         let tx = context.tx.clone();
         let running = worker_running.clone();
         let name = context.name.clone();
+        let ifname = key.ifname.clone();
+        let if_index = key.if_index;
         let runtime = context.runtime.clone();
         let data_port = context.data_port;
         let configured_bitrate = context.configured_bitrate;
@@ -748,6 +828,8 @@ fn start_auto_worker(
                     tx,
                     &running,
                     &name,
+                    &ifname,
+                    if_index,
                     data_port,
                     configured_bitrate,
                     ingress_control,
@@ -761,10 +843,11 @@ fn start_auto_worker(
         let tx = context.tx.clone();
         let running = worker_running.clone();
         let name = context.name.clone();
+        let if_index = key.if_index;
         thread::Builder::new()
             .name(format!("auto-data-rx-{}", key.ifname))
             .spawn(move || {
-                data_receiver_loop(data_socket, shared, tx, &running, &name);
+                data_receiver_loop(data_socket, shared, tx, &running, &name, if_index);
             })?;
     }
 
@@ -912,6 +995,8 @@ fn discovery_receiver_loop(
     tx: EventSender,
     running: &AtomicBool,
     name: &str,
+    ifname: &str,
+    if_index: u32,
     data_port: u16,
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
@@ -931,7 +1016,8 @@ fn discovery_receiver_loop(
                     std::net::SocketAddr::V6(v6) => v6,
                     _ => continue,
                 };
-                let src_ip = format!("{}", src_addr.ip());
+                let peer_key = peer_key_from_src(&src_addr, if_index);
+                let src_ip = peer_key.link_local_addr.clone();
 
                 let peering_hash = &buf[..32];
                 let expected = compute_discovery_token(group_id, &src_ip);
@@ -949,18 +1035,18 @@ fn discovery_receiver_loop(
                 }
 
                 // Check if it's our own echo
-                if state.link_local_addresses.contains(&src_ip) {
+                if state.link_local_addresses.contains(&peer_key) {
                     // Multicast echo from ourselves — just record it
                     drop(state);
                     continue;
                 }
 
                 // Check if already known
-                if state.peers.contains_key(&src_ip) {
+                if state.peers.contains_key(&peer_key) {
                     let now = crate::time::now();
                     drop(state);
                     let mut state = lock_or_recover(&shared, "auto shared state");
-                    state.refresh_peer(&src_ip, now);
+                    state.refresh_peer(&peer_key, now);
                     continue;
                 }
                 drop(state);
@@ -969,9 +1055,10 @@ fn discovery_receiver_loop(
                 add_peer(
                     &shared,
                     &tx,
-                    &src_ip,
+                    &peer_key,
                     data_port,
                     name,
+                    ifname,
                     configured_bitrate,
                     ingress_control,
                     &runtime,
@@ -998,18 +1085,14 @@ fn discovery_receiver_loop(
 fn add_peer(
     shared: &Arc<Mutex<SharedState>>,
     tx: &EventSender,
-    peer_addr: &str,
+    peer_key: &PeerKey,
     data_port: u16,
     name: &str,
+    ifname: &str,
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     _runtime: &Arc<Mutex<AutoRuntime>>,
 ) {
-    let peer_ip: Ipv6Addr = match peer_addr.parse() {
-        Ok(ip) => ip,
-        Err(_) => return,
-    };
-
     // Create UDP writer to send data to this peer
     let send_socket = match UdpSocket::bind("[::]:0") {
         Ok(s) => s,
@@ -1017,20 +1100,32 @@ fn add_peer(
             log::warn!(
                 "[{}] failed to create writer for peer {}: {}",
                 name,
-                peer_addr,
+                peer_key.link_local_addr,
                 e
             );
             return;
         }
     };
 
-    let target = SocketAddrV6::new(peer_ip, data_port, 0, 0);
+    let target = match peer_target_addr(peer_key, data_port) {
+        Ok(target) => target,
+        Err(e) => {
+            log::warn!(
+                "[{}] failed to create target for peer {}%{}: {}",
+                name,
+                peer_key.link_local_addr,
+                peer_key.if_index,
+                e
+            );
+            return;
+        }
+    };
 
     let mut state = lock_or_recover(shared, "auto shared state");
 
     // Double-check not already added (race)
-    if state.peers.contains_key(peer_addr) {
-        state.refresh_peer(peer_addr, crate::time::now());
+    if state.peers.contains_key(peer_key) {
+        state.refresh_peer(peer_key, crate::time::now());
         return;
     }
 
@@ -1044,7 +1139,10 @@ fn add_peer(
 
     let peer_info = rns_core::transport::types::InterfaceInfo {
         id: peer_id,
-        name: format!("{}:{}", name, peer_addr),
+        name: format!(
+            "{}:{}%{}",
+            name, peer_key.link_local_addr, peer_key.if_index
+        ),
         mode: rns_core::constants::MODE_FULL,
         out_capable: true,
         in_capable: true,
@@ -1068,11 +1166,12 @@ fn add_peer(
 
     let now = crate::time::now();
     state.peers.insert(
-        peer_addr.to_string(),
+        peer_key.clone(),
         AutoPeer {
             interface_id: peer_id,
-            link_local_addr: peer_addr.to_string(),
-            ifname: String::new(),
+            link_local_addr: peer_key.link_local_addr.clone(),
+            ifname: ifname.to_string(),
+            if_index: peer_key.if_index,
             last_heard: now,
         },
     );
@@ -1080,7 +1179,7 @@ fn add_peer(
     log::info!(
         "[{}] Peer discovered: {} (id={})",
         name,
-        peer_addr,
+        peer_key.link_local_addr,
         peer_id.0
     );
 
@@ -1099,6 +1198,7 @@ fn data_receiver_loop(
     tx: EventSender,
     running: &AtomicBool,
     name: &str,
+    if_index: u32,
 ) {
     let mut buf = [0u8; HW_MTU + 64]; // a bit extra
 
@@ -1113,7 +1213,7 @@ fn data_receiver_loop(
                     std::net::SocketAddr::V6(v6) => v6,
                     _ => continue,
                 };
-                let src_ip = format!("{}", src_addr.ip());
+                let peer_key = peer_key_from_src(&src_addr, if_index);
                 let data = &buf[..n];
 
                 let now = crate::time::now();
@@ -1132,10 +1232,10 @@ fn data_receiver_loop(
                 state.add_dedup(data_hash, now);
 
                 // Refresh peer
-                state.refresh_peer(&src_ip, now);
+                state.refresh_peer(&peer_key, now);
 
                 // Find the interface ID for this peer
-                let iface_id = match state.peers.get(&src_ip) {
+                let iface_id = match state.peers.get(&peer_key) {
                     Some(peer) => peer.interface_id,
                     None => {
                         // Unknown peer, skip
@@ -1195,17 +1295,22 @@ fn peer_jobs_loop(
 
         {
             let state = lock_or_recover(&shared, "auto shared state");
-            for (addr, peer) in &state.peers {
+            for (peer_key, peer) in &state.peers {
                 if now > peer.last_heard + peer_timeout_secs {
-                    timed_out.push((addr.clone(), peer.interface_id));
+                    timed_out.push((peer_key.clone(), peer.interface_id));
                 }
             }
         }
 
-        for (addr, iface_id) in &timed_out {
-            log::info!("[{}] Peer timed out: {}", name, addr);
+        for (peer_key, iface_id) in &timed_out {
+            log::info!(
+                "[{}] Peer timed out: {}%{}",
+                name,
+                peer_key.link_local_addr,
+                peer_key.if_index
+            );
             let mut state = lock_or_recover(&shared, "auto shared state");
-            state.peers.remove(addr.as_str());
+            state.peers.remove(peer_key);
             let _ = tx.send(Event::InterfaceDown(*iface_id));
         }
     }
@@ -1502,19 +1607,21 @@ mod tests {
     fn peer_refresh() {
         let next_id = Arc::new(AtomicU64::new(100));
         let mut state = SharedState::new(next_id);
+        let key = peer_key("fe80::1", 2);
 
         state.peers.insert(
-            "fe80::1".to_string(),
+            key.clone(),
             AutoPeer {
                 interface_id: InterfaceId(100),
-                link_local_addr: "fe80::1".to_string(),
+                link_local_addr: key.link_local_addr.clone(),
                 ifname: "eth0".to_string(),
+                if_index: key.if_index,
                 last_heard: 1000.0,
             },
         );
 
-        state.refresh_peer("fe80::1", 2000.0);
-        assert_eq!(state.peers["fe80::1"].last_heard, 2000.0);
+        state.refresh_peer(&key, 2000.0);
+        assert_eq!(state.peers[&key].last_heard, 2000.0);
     }
 
     #[test]
@@ -1522,7 +1629,102 @@ mod tests {
         let next_id = Arc::new(AtomicU64::new(100));
         let mut state = SharedState::new(next_id);
         // Should not panic
-        state.refresh_peer("fe80::999", 1000.0);
+        state.refresh_peer(&peer_key("fe80::999", 4), 1000.0);
+    }
+
+    fn peer_key(addr: &str, if_index: u32) -> PeerKey {
+        PeerKey {
+            link_local_addr: addr.to_string(),
+            if_index,
+        }
+    }
+
+    #[test]
+    fn peer_key_distinguishes_same_link_local_on_different_interfaces() {
+        let next_id = Arc::new(AtomicU64::new(100));
+        let mut state = SharedState::new(next_id);
+        let eth = peer_key("fe80::1", 2);
+        let wlan = peer_key("fe80::1", 4);
+
+        state.peers.insert(
+            eth.clone(),
+            AutoPeer {
+                interface_id: InterfaceId(100),
+                link_local_addr: eth.link_local_addr.clone(),
+                ifname: "eth0".to_string(),
+                if_index: eth.if_index,
+                last_heard: 1000.0,
+            },
+        );
+        state.peers.insert(
+            wlan.clone(),
+            AutoPeer {
+                interface_id: InterfaceId(101),
+                link_local_addr: wlan.link_local_addr.clone(),
+                ifname: "wlan0".to_string(),
+                if_index: wlan.if_index,
+                last_heard: 1000.0,
+            },
+        );
+
+        assert_eq!(state.peers.len(), 2);
+        assert_eq!(state.peers[&eth].interface_id, InterfaceId(100));
+        assert_eq!(state.peers[&wlan].interface_id, InterfaceId(101));
+    }
+
+    #[test]
+    fn peer_target_addr_uses_scope_id() {
+        let target = peer_target_addr(&peer_key("fe80::1", 7), 42671).unwrap();
+
+        assert_eq!(target.port(), 42671);
+        assert_eq!(target.scope_id(), 7);
+    }
+
+    #[test]
+    fn remove_peers_for_worker_emits_interface_down() {
+        let next_id = Arc::new(AtomicU64::new(100));
+        let shared = Arc::new(Mutex::new(SharedState::new(next_id)));
+        let worker = worker_key("wlan0", 4, "fe80::abcd");
+        let removed = peer_key("fe80::1", 4);
+        let kept = peer_key("fe80::1", 5);
+        let (tx, rx) = crate::event::channel_with_capacity(4);
+
+        {
+            let mut state = lock_or_recover(&shared, "test auto shared state");
+            state.peers.insert(
+                removed.clone(),
+                AutoPeer {
+                    interface_id: InterfaceId(100),
+                    link_local_addr: removed.link_local_addr.clone(),
+                    ifname: "wlan0".to_string(),
+                    if_index: removed.if_index,
+                    last_heard: 1000.0,
+                },
+            );
+            state.peers.insert(
+                kept.clone(),
+                AutoPeer {
+                    interface_id: InterfaceId(101),
+                    link_local_addr: kept.link_local_addr.clone(),
+                    ifname: "wlan1".to_string(),
+                    if_index: kept.if_index,
+                    last_heard: 1000.0,
+                },
+            );
+        }
+
+        remove_peers_for_worker(&shared, &tx, &worker);
+
+        let state = lock_or_recover(&shared, "test auto shared state");
+        assert!(!state.peers.contains_key(&removed));
+        assert!(state.peers.contains_key(&kept));
+        drop(state);
+
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            Event::InterfaceDown(InterfaceId(100))
+        ));
+        assert!(rx.try_recv().is_err());
     }
 
     // ── Network interface enumeration ────────────────────────────────
