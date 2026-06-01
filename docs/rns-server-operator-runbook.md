@@ -196,19 +196,22 @@ through the live backbone fabric. See
 [docs/manual-backbone-smoke.md](manual-backbone-smoke.md) for options and
 failure interpretation.
 
-Daily VPS snapshots should also be captured per host. The shared daily report
-database lives on `vps-eu` at `/var/lib/rns-node/vps_daily_reports.db`, with a
-working copy at `data/vps_daily_reports.db` on whichever workstation is running
-the report. Pull the shared database first, collect both host snapshots locally,
-then push the updated database back to `vps-eu` so the next workstation starts
-from the latest history.
+Daily VPS checks include both per-host stats snapshots and the live manual
+backbone smoke test. The shared daily report database lives on `vps-eu` at
+`/var/lib/rns-node/vps_daily_reports.db`, with a working copy at
+`data/vps_daily_reports.db` on whichever workstation is running the report.
+Pull the shared database first, collect both host snapshots locally, run the
+smoke test from the same workstation, then push the updated database back to
+`vps-eu` so the next workstation starts from the latest history.
 
 Refresh the local refs first when an internet connection is available; the
 version check compares the remote binaries against the local `origin/master` and
-`origin/dev` refs by default:
+`origin/dev` refs by default. Build the local smoke-test binary before running
+the live fabric check:
 
 ```bash
 git fetch origin
+cargo build --release --bin rns-server --features rns-hooks-native
 
 mkdir -p data
 if ssh root@vps-eu 'test -f /var/lib/rns-node/vps_daily_reports.db'; then
@@ -218,8 +221,15 @@ fi
 python3 scripts/vps_daily_report.py --host vps-eu --ssh-target root@vps-eu --stdout-summary
 python3 scripts/vps_daily_report.py --host vps-us --ssh-target root@vps-us --stdout-summary
 
+scripts/manual-backbone-smoke.sh
+
 scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 ```
+
+Treat the daily VPS check as incomplete if the smoke test fails, even when both
+SQLite snapshots were collected successfully. On smoke failure, rerun with
+`scripts/manual-backbone-smoke.sh --keep` to preserve the disposable local node
+configs and logs for debugging.
 
 The snapshot records `/usr/local/bin/rns-server --version` and
 `/usr/local/bin/rns-ctl --version`, then reconstructs the expected binary
