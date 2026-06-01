@@ -11,7 +11,7 @@
 //! Additionally one shared thread:
 //!   - Peer jobs: periodically culls timed-out peers
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddrV6, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -80,6 +80,9 @@ pub const MULTI_IF_DEQUE_TTL: f64 = 0.75;
 
 /// Reverse peering interval multiplier (announce_interval * 3.25).
 pub const REVERSE_PEERING_MULTIPLIER: f64 = 3.25;
+
+/// How often AutoInterface rescans local link-local interfaces.
+pub const AUTO_RESCAN_INTERVAL: f64 = 1.25;
 
 /// Interfaces always ignored.
 pub const ALL_IGNORE_IFS: &[&str] = &["lo0"];
@@ -355,10 +358,8 @@ fn reconcile_worker_keys(
     active: impl IntoIterator<Item = AutoWorkerKey>,
     desired: impl IntoIterator<Item = AutoWorkerKey>,
 ) -> Vec<WorkerReconcileAction> {
-    let active = active.into_iter().collect::<std::collections::HashSet<_>>();
-    let desired = desired
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
+    let active = active.into_iter().collect::<HashSet<_>>();
+    let desired = desired.into_iter().collect::<HashSet<_>>();
     let mut actions = Vec::new();
 
     for key in active.difference(&desired) {
@@ -370,6 +371,65 @@ fn reconcile_worker_keys(
 
     actions.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
     actions
+}
+
+struct RunningAutoWorker {
+    running: Arc<AtomicBool>,
+}
+
+impl RunningAutoWorker {
+    fn stop(&self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+enum AutoWorkerEntry {
+    Running(RunningAutoWorker),
+    Pending,
+}
+
+impl AutoWorkerEntry {
+    fn stop(&self) {
+        if let AutoWorkerEntry::Running(worker) = self {
+            worker.stop();
+        }
+    }
+}
+
+fn reconcile_auto_workers<F>(
+    workers: &mut HashMap<AutoWorkerKey, AutoWorkerEntry>,
+    desired: Vec<AutoWorkerKey>,
+    mut start_worker: F,
+) where
+    F: FnMut(&AutoWorkerKey) -> io::Result<RunningAutoWorker>,
+{
+    let actions = reconcile_worker_keys(workers.keys().cloned(), desired);
+
+    for action in actions {
+        match action {
+            WorkerReconcileAction::Remove(key) => {
+                if let Some(worker) = workers.remove(&key) {
+                    worker.stop();
+                }
+            }
+            WorkerReconcileAction::Add(key) => {
+                let entry = match start_worker(&key) {
+                    Ok(worker) => AutoWorkerEntry::Running(worker),
+                    Err(e) => {
+                        log::warn!(
+                            "AutoInterface worker {} failed to start on {}%{}: {}",
+                            key.ifname,
+                            key.link_local_addr,
+                            key.if_index,
+                            e
+                        );
+                        AutoWorkerEntry::Pending
+                    }
+                };
+                workers.insert(key, entry);
+            }
+        }
+    }
 }
 
 /// A discovered peer.
@@ -448,6 +508,21 @@ impl SharedState {
 
 // ── Start function ─────────────────────────────────────────────────────────
 
+#[derive(Clone)]
+struct AutoWorkerContext {
+    group_id: Vec<u8>,
+    mcast_ip: Ipv6Addr,
+    discovery_port: u16,
+    unicast_discovery_port: u16,
+    data_port: u16,
+    name: String,
+    configured_bitrate: u64,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
+    runtime: Arc<Mutex<AutoRuntime>>,
+    shared: Arc<Mutex<SharedState>>,
+    tx: EventSender,
+}
+
 /// Start an AutoInterface. Discovers local IPv6 link-local interfaces,
 /// sets up multicast discovery, and creates UDP data servers.
 ///
@@ -458,16 +533,6 @@ pub fn start(
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
 ) -> io::Result<()> {
-    let interfaces = enumerate_interfaces(&config.allowed_interfaces, &config.ignored_interfaces);
-
-    if interfaces.is_empty() {
-        log::warn!(
-            "[{}] No suitable IPv6 link-local interfaces found",
-            config.name,
-        );
-        return Ok(());
-    }
-
     let group_id = config.group_id.clone();
     let mcast_addr_str = derive_multicast_address(
         &group_id,
@@ -485,154 +550,45 @@ pub fn start(
         }
     };
 
-    let discovery_port = config.discovery_port;
-    let unicast_discovery_port = config.discovery_port + 1;
-    let data_port = config.data_port;
-    let name = config.name.clone();
-    let configured_bitrate = config.configured_bitrate;
-    let ingress_control = config.ingress_control;
     {
         let startup = AutoRuntime::from_config(&config);
         *lock_or_recover(&config.runtime, "auto runtime") = startup;
     }
     let runtime = Arc::clone(&config.runtime);
-
     let shared = Arc::new(Mutex::new(SharedState::new(next_dynamic_id)));
     let running = Arc::new(AtomicBool::new(true));
 
-    // Record our own link-local addresses
+    let worker_context = AutoWorkerContext {
+        group_id,
+        mcast_ip,
+        discovery_port: config.discovery_port,
+        unicast_discovery_port: config.discovery_port + 1,
+        data_port: config.data_port,
+        name: config.name.clone(),
+        configured_bitrate: config.configured_bitrate,
+        ingress_control: config.ingress_control,
+        runtime: runtime.clone(),
+        shared: shared.clone(),
+        tx: tx.clone(),
+    };
+
     {
-        let mut state = lock_or_recover(&shared, "auto shared state");
-        for iface in &interfaces {
-            state
-                .link_local_addresses
-                .push(iface.link_local_addr.clone());
-        }
+        let allowed = config.allowed_interfaces.clone();
+        let ignored = config.ignored_interfaces.clone();
+        let running = running.clone();
+        let name = config.name.clone();
+        thread::Builder::new()
+            .name(format!("auto-supervisor-{}", name))
+            .spawn(move || {
+                auto_supervisor_loop(allowed, ignored, worker_context, running, &name);
+            })?;
     }
 
-    log::info!(
-        "[{}] AutoInterface starting with {} local interfaces, multicast {}",
-        name,
-        interfaces.len(),
-        mcast_addr_str,
-    );
-
-    // Per-interface: set up discovery sockets and threads
-    for local_iface in &interfaces {
-        let ifname = local_iface.name.clone();
-        let link_local = local_iface.link_local_addr.clone();
-        let if_index = local_iface.index;
-
-        // ─── Multicast discovery socket ───────────────────────────────
-        let mcast_socket = create_multicast_recv_socket(&mcast_ip, discovery_port, if_index)?;
-
-        // ─── Unicast discovery socket ─────────────────────────────────
-        let unicast_socket =
-            create_unicast_recv_socket(&link_local, unicast_discovery_port, if_index)?;
-
-        // ─── Discovery sender thread ──────────────────────────────────
-        {
-            let group_id = group_id.clone();
-            let link_local = link_local.clone();
-            let running = running.clone();
-            let name = name.clone();
-            let runtime = runtime.clone();
-
-            thread::Builder::new()
-                .name(format!("auto-disc-tx-{}", ifname))
-                .spawn(move || {
-                    discovery_sender_loop(
-                        &group_id,
-                        &link_local,
-                        &mcast_ip,
-                        discovery_port,
-                        if_index,
-                        runtime,
-                        &running,
-                        &name,
-                    );
-                })?;
-        }
-
-        // ─── Multicast discovery receiver thread ──────────────────────
-        {
-            let group_id = group_id.clone();
-            let shared = shared.clone();
-            let tx = tx.clone();
-            let running = running.clone();
-            let name = name.clone();
-            let runtime = runtime.clone();
-
-            thread::Builder::new()
-                .name(format!("auto-disc-rx-{}", ifname))
-                .spawn(move || {
-                    discovery_receiver_loop(
-                        mcast_socket,
-                        &group_id,
-                        shared,
-                        tx,
-                        &running,
-                        &name,
-                        data_port,
-                        configured_bitrate,
-                        ingress_control,
-                        runtime,
-                    );
-                })?;
-        }
-
-        // ─── Unicast discovery receiver thread ────────────────────────
-        {
-            let group_id = group_id.clone();
-            let shared = shared.clone();
-            let tx = tx.clone();
-            let running = running.clone();
-            let name = name.clone();
-            let runtime = runtime.clone();
-            let ingress_control = ingress_control;
-
-            thread::Builder::new()
-                .name(format!("auto-udisc-rx-{}", ifname))
-                .spawn(move || {
-                    discovery_receiver_loop(
-                        unicast_socket,
-                        &group_id,
-                        shared,
-                        tx,
-                        &running,
-                        &name,
-                        data_port,
-                        configured_bitrate,
-                        ingress_control,
-                        runtime,
-                    );
-                })?;
-        }
-
-        // ─── Data receiver thread ─────────────────────────────────────
-        {
-            let link_local = local_iface.link_local_addr.clone();
-            let shared = shared.clone();
-            let tx = tx.clone();
-            let running = running.clone();
-            let name = name.clone();
-
-            let data_socket = create_data_recv_socket(&link_local, data_port, if_index)?;
-
-            thread::Builder::new()
-                .name(format!("auto-data-rx-{}", local_iface.name))
-                .spawn(move || {
-                    data_receiver_loop(data_socket, shared, tx, &running, &name);
-                })?;
-        }
-    }
-
-    // ─── Peer jobs thread ─────────────────────────────────────────────
     {
         let shared = shared.clone();
         let tx = tx.clone();
         let running = running.clone();
-        let name = name.clone();
+        let name = config.name.clone();
         let runtime = runtime.clone();
 
         thread::Builder::new()
@@ -642,12 +598,10 @@ pub fn start(
             })?;
     }
 
-    // Wait for initial peering
     let announce_interval = lock_or_recover(&runtime, "auto runtime").announce_interval_secs;
     let peering_wait = Duration::from_secs_f64(announce_interval * 1.2);
     thread::sleep(peering_wait);
 
-    // Mark as online
     {
         let mut state = lock_or_recover(&shared, "auto shared state");
         state.online = true;
@@ -656,6 +610,168 @@ pub fn start(
     log::info!("[{}] AutoInterface online", config.name);
 
     Ok(())
+}
+
+fn auto_supervisor_loop(
+    allowed_interfaces: Vec<String>,
+    ignored_interfaces: Vec<String>,
+    context: AutoWorkerContext,
+    running: Arc<AtomicBool>,
+    name: &str,
+) {
+    let mut workers: HashMap<AutoWorkerKey, AutoWorkerEntry> = HashMap::new();
+
+    while running.load(Ordering::Relaxed) {
+        let interfaces = enumerate_interfaces(&allowed_interfaces, &ignored_interfaces);
+        let desired = interfaces
+            .iter()
+            .map(AutoWorkerKey::from_local_interface)
+            .collect::<Vec<_>>();
+
+        {
+            let mut state = lock_or_recover(&context.shared, "auto shared state");
+            state.link_local_addresses = desired
+                .iter()
+                .map(|key| key.link_local_addr.clone())
+                .collect();
+        }
+
+        if desired.is_empty() && workers.is_empty() {
+            log::warn!("[{}] No suitable IPv6 link-local interfaces found", name);
+        }
+
+        reconcile_auto_workers(&mut workers, desired, |key| {
+            start_auto_worker(key, &context)
+        });
+
+        thread::sleep(Duration::from_secs_f64(AUTO_RESCAN_INTERVAL));
+    }
+
+    for worker in workers.into_values() {
+        worker.stop();
+    }
+}
+
+fn start_auto_worker(
+    key: &AutoWorkerKey,
+    context: &AutoWorkerContext,
+) -> io::Result<RunningAutoWorker> {
+    let mcast_socket =
+        create_multicast_recv_socket(&context.mcast_ip, context.discovery_port, key.if_index)?;
+    let unicast_socket = create_unicast_recv_socket(
+        &key.link_local_addr,
+        context.unicast_discovery_port,
+        key.if_index,
+    )?;
+    let data_socket =
+        create_data_recv_socket(&key.link_local_addr, context.data_port, key.if_index)?;
+
+    let worker_running = Arc::new(AtomicBool::new(true));
+
+    {
+        let group_id = context.group_id.clone();
+        let link_local = key.link_local_addr.clone();
+        let running = worker_running.clone();
+        let name = context.name.clone();
+        let runtime = context.runtime.clone();
+        let mcast_ip = context.mcast_ip;
+        let discovery_port = context.discovery_port;
+        let if_index = key.if_index;
+        thread::Builder::new()
+            .name(format!("auto-disc-tx-{}", key.ifname))
+            .spawn(move || {
+                discovery_sender_loop(
+                    &group_id,
+                    &link_local,
+                    &mcast_ip,
+                    discovery_port,
+                    if_index,
+                    runtime,
+                    &running,
+                    &name,
+                );
+            })?;
+    }
+
+    {
+        let group_id = context.group_id.clone();
+        let shared = context.shared.clone();
+        let tx = context.tx.clone();
+        let running = worker_running.clone();
+        let name = context.name.clone();
+        let runtime = context.runtime.clone();
+        let data_port = context.data_port;
+        let configured_bitrate = context.configured_bitrate;
+        let ingress_control = context.ingress_control;
+        thread::Builder::new()
+            .name(format!("auto-disc-rx-{}", key.ifname))
+            .spawn(move || {
+                discovery_receiver_loop(
+                    mcast_socket,
+                    &group_id,
+                    shared,
+                    tx,
+                    &running,
+                    &name,
+                    data_port,
+                    configured_bitrate,
+                    ingress_control,
+                    runtime,
+                );
+            })?;
+    }
+
+    {
+        let group_id = context.group_id.clone();
+        let shared = context.shared.clone();
+        let tx = context.tx.clone();
+        let running = worker_running.clone();
+        let name = context.name.clone();
+        let runtime = context.runtime.clone();
+        let data_port = context.data_port;
+        let configured_bitrate = context.configured_bitrate;
+        let ingress_control = context.ingress_control;
+        thread::Builder::new()
+            .name(format!("auto-udisc-rx-{}", key.ifname))
+            .spawn(move || {
+                discovery_receiver_loop(
+                    unicast_socket,
+                    &group_id,
+                    shared,
+                    tx,
+                    &running,
+                    &name,
+                    data_port,
+                    configured_bitrate,
+                    ingress_control,
+                    runtime,
+                );
+            })?;
+    }
+
+    {
+        let shared = context.shared.clone();
+        let tx = context.tx.clone();
+        let running = worker_running.clone();
+        let name = context.name.clone();
+        thread::Builder::new()
+            .name(format!("auto-data-rx-{}", key.ifname))
+            .spawn(move || {
+                data_receiver_loop(data_socket, shared, tx, &running, &name);
+            })?;
+    }
+
+    log::info!(
+        "[{}] AutoInterface worker online on {} {}%{}",
+        context.name,
+        key.ifname,
+        key.link_local_addr,
+        key.if_index
+    );
+
+    Ok(RunningAutoWorker {
+        running: worker_running,
+    })
 }
 
 // ── Socket creation helpers ────────────────────────────────────────────────
@@ -1489,6 +1605,77 @@ mod tests {
         assert!(actions.contains(&WorkerReconcileAction::Remove(old)));
         assert!(actions.contains(&WorkerReconcileAction::Add(new)));
         assert_eq!(actions.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_auto_workers_starts_new_worker() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let mut workers = HashMap::new();
+        let mut starts = Vec::new();
+
+        reconcile_auto_workers(&mut workers, vec![key.clone()], |key| {
+            starts.push(key.clone());
+            Ok(RunningAutoWorker {
+                running: Arc::new(AtomicBool::new(true)),
+            })
+        });
+
+        assert_eq!(starts, vec![key.clone()]);
+        assert!(matches!(
+            workers.get(&key),
+            Some(AutoWorkerEntry::Running(_))
+        ));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_stops_removed_worker() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let running = Arc::new(AtomicBool::new(true));
+        let mut workers = HashMap::from([(
+            key.clone(),
+            AutoWorkerEntry::Running(RunningAutoWorker {
+                running: running.clone(),
+            }),
+        )]);
+
+        reconcile_auto_workers(&mut workers, Vec::new(), |_| unreachable!());
+
+        assert!(!running.load(Ordering::Relaxed));
+        assert!(!workers.contains_key(&key));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_leaves_unchanged_worker_running() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let running = Arc::new(AtomicBool::new(true));
+        let mut workers = HashMap::from([(
+            key.clone(),
+            AutoWorkerEntry::Running(RunningAutoWorker {
+                running: running.clone(),
+            }),
+        )]);
+        let mut starts = 0;
+
+        reconcile_auto_workers(&mut workers, vec![key.clone()], |_| {
+            starts += 1;
+            unreachable!()
+        });
+
+        assert_eq!(starts, 0);
+        assert!(running.load(Ordering::Relaxed));
+        assert!(workers.contains_key(&key));
+    }
+
+    #[test]
+    fn reconcile_auto_workers_records_pending_start_failure() {
+        let key = worker_key("wlan0", 4, "fe80::1");
+        let mut workers = HashMap::new();
+
+        reconcile_auto_workers(&mut workers, vec![key.clone()], |_| {
+            Err(io::Error::new(io::ErrorKind::AddrInUse, "busy"))
+        });
+
+        assert!(matches!(workers.get(&key), Some(AutoWorkerEntry::Pending)));
     }
 
     #[test]
