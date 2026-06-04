@@ -6,4 +6,5 @@ rns-hooks/target/
 __pycache__/
 *.pyc
 /data/
+/.local/
 dist/

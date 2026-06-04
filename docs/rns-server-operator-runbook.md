@@ -200,9 +200,25 @@ Daily VPS checks include both per-host stats snapshots and the live manual
 backbone smoke test. The shared daily report database lives on `vps-eu` at
 `/var/lib/rns-node/vps_daily_reports.db`, with a working copy at
 `data/vps_daily_reports.db` on whichever workstation is running the report.
-Pull the shared database first, collect both host snapshots locally, run the
-smoke test from the same workstation, then push the updated database back to
-`vps-eu` so the next workstation starts from the latest history.
+Pull the shared database first, check whether upstream Reticulum moved, collect
+both host snapshots locally, run the smoke test from the same workstation, then
+push the updated database back to `vps-eu` so the next workstation starts from
+the latest history.
+
+The upstream Reticulum checkout location is workstation-local. Store it in the
+gitignored file `.local/reticulum-upstream.path`; the first non-empty,
+non-comment line must be the absolute path to the local upstream Reticulum
+repository. For this workstation that file should contain:
+
+```text
+/home/lelloman/Reticulum
+```
+
+The upstream check treats the pointed checkout's current `HEAD` as the
+Reticulum baseline reviewed or integrated into `rns-rs`. Fetch both the GitHub
+remote and the Reticulum `rns-git` remote, then list commits present on either
+remote that are not in that local baseline. If either log prints commits, include
+that in the daily report as upstream Reticulum work not integrated yet:
 
 Refresh the local refs first when an internet connection is available; the
 version check compares the remote binaries against the local `origin/master` and
@@ -211,6 +227,15 @@ the live fabric check:
 
 ```bash
 git fetch origin
+RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
+test -n "$RETICULUM_UPSTREAM_DIR"
+test -d "$RETICULUM_UPSTREAM_DIR/.git"
+RETICULUM_GITHUB_REMOTE="${RETICULUM_GITHUB_REMOTE:-origin}"
+RETICULUM_RGIT_REMOTE="${RETICULUM_RGIT_REMOTE:-rgit}"
+git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_GITHUB_REMOTE"
+git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_RGIT_REMOTE"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "HEAD..$RETICULUM_GITHUB_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "HEAD..$RETICULUM_RGIT_REMOTE/master"
 cargo build --release --bin rns-server --features rns-hooks-native
 
 mkdir -p data
