@@ -281,8 +281,15 @@ pub fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
 }
 
 pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
+    create_bundle_for_refs(path, have, &[])
+}
+
+pub fn create_bundle_for_refs(path: &Path, have: &[String], refs: &[String]) -> Result<Vec<u8>> {
     require_repository(path)?;
     validate_shas(have)?;
+    for refname in refs {
+        validate_namespaced_ref(refname)?;
+    }
     if list_refs(path)?.is_empty() {
         return Ok(Vec::new());
     }
@@ -293,8 +300,12 @@ pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
         .arg(path)
         .arg("bundle")
         .arg("create")
-        .arg(&bundle_path)
-        .arg("--all");
+        .arg(&bundle_path);
+    if refs.is_empty() {
+        cmd.arg("--all");
+    } else {
+        cmd.args(refs);
+    }
     add_exclusions(&mut cmd, &exclusions);
     let result = run(&mut cmd);
     let bytes = match result {
@@ -715,6 +726,94 @@ mod tests {
         );
         assert!(!create_bundle(&target, &[]).unwrap().is_empty());
         assert!(create_bundle(&target, &[sha]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fetch_bundle_can_scope_to_requested_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let target = tmp.path().join("target.git");
+        fs::create_dir_all(&work).unwrap();
+
+        test_git(Command::new("git").arg("init").arg(&work));
+        fs::write(work.join("README.md"), "main\n").unwrap();
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("add")
+                .arg("README.md"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("-c")
+                .arg("user.name=RNS Test")
+                .arg("-c")
+                .arg("user.email=rns@example.invalid")
+                .arg("commit")
+                .arg("-m")
+                .arg("main"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("branch")
+                .arg("-M")
+                .arg("main"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("checkout")
+                .arg("-b")
+                .arg("side"),
+        );
+        fs::write(work.join("SIDE.md"), "side\n").unwrap();
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("add")
+                .arg("SIDE.md"),
+        );
+        test_git(
+            Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .arg("-c")
+                .arg("user.name=RNS Test")
+                .arg("-c")
+                .arg("user.email=rns@example.invalid")
+                .arg("commit")
+                .arg("-m")
+                .arg("side"),
+        );
+        ensure_bare_repository(&target).unwrap();
+        test_git(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(&target)
+                .arg("fetch")
+                .arg(&work)
+                .arg("+refs/heads/*:refs/heads/*"),
+        );
+
+        let bundle = create_bundle_for_refs(&target, &[], &["refs/heads/main".into()]).unwrap();
+        let bundle_path = tmp.path().join("fetch.bundle");
+        fs::write(&bundle_path, bundle).unwrap();
+        let heads = test_git(
+            Command::new("git")
+                .arg("bundle")
+                .arg("list-heads")
+                .arg(&bundle_path),
+        );
+
+        assert!(heads.contains("refs/heads/main"));
+        assert!(!heads.contains("refs/heads/side"));
     }
 
     #[test]

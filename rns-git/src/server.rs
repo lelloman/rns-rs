@@ -318,7 +318,15 @@ pub fn handle_fetch(
     data: &[u8],
     remote: Option<&([u8; 16], [u8; 64])>,
 ) -> Result<RequestResponse> {
-    let (repo, have) = protocol::parse_fetch_request(data)?;
+    let (repo, have, requested_refs) = protocol::parse_fetch_request(data)?;
+    let requested_refnames = requested_refs
+        .iter()
+        .map(|(_, refname)| refname.clone())
+        .collect::<Vec<_>>();
+    let requested_shas = requested_refs
+        .iter()
+        .map(|(sha, _)| sha.clone())
+        .collect::<Vec<_>>();
     let remote_hash = remote.map(|(hash, _)| hash);
     if !access.allows(Operation::Read, &repo, remote_hash)? {
         return Ok(RequestResponse::Bytes(protocol::status_bytes(
@@ -332,8 +340,22 @@ pub fn handle_fetch(
             err.to_string(),
         )));
     }
+    if let Err(err) = git::validate_shas(&requested_shas) {
+        return Ok(RequestResponse::Bytes(protocol::status_bytes(
+            protocol::RES_INVALID_REQ,
+            err.to_string(),
+        )));
+    }
+    for refname in &requested_refnames {
+        if let Err(err) = git::validate_namespaced_ref(refname) {
+            return Ok(RequestResponse::Bytes(protocol::status_bytes(
+                protocol::RES_INVALID_REQ,
+                err.to_string(),
+            )));
+        }
+    }
     let path = git::repository_path(&config.repositories_dir, &repo)?;
-    match git::create_bundle(&path, &have) {
+    match git::create_bundle_for_refs(&path, &have, &requested_refnames) {
         Ok(bundle) if bundle.is_empty() => {
             crate::stats::record_fetch(config, &repo, remote_hash);
             Ok(RequestResponse::Bytes(protocol::status_bytes(

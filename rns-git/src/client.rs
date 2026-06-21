@@ -165,6 +165,7 @@ impl RemoteHelper {
             if response.metadata.is_none() {
                 if let Ok(bytes) = protocol::response_bin(&response.data) {
                     if is_not_identified_status(&bytes) && attempt < NOT_IDENTIFIED_RETRIES {
+                        self.client.identify()?;
                         std::thread::sleep(NOT_IDENTIFIED_RETRY_DELAY);
                         continue;
                     }
@@ -214,9 +215,12 @@ impl RemoteHelper {
 
     fn fetch_have_set(&self, refs: &[FetchRef]) -> Vec<String> {
         let remote_refs = self.remote_refs.lock().unwrap();
-        build_fetch_have_set(&remote_refs, refs, |refname| {
-            git::local_ref_sha(refname).ok().flatten()
-        })
+        build_fetch_have_set(
+            &remote_refs,
+            refs,
+            |refname| git::local_ref_sha(refname).ok().flatten(),
+            git::object_exists_local,
+        )
     }
 
     fn push_exclusion_set(&self) -> Vec<String> {
@@ -241,6 +245,7 @@ fn build_fetch_have_set(
     remote_refs: &HashMap<String, String>,
     refs: &[FetchRef],
     resolve_local_ref: impl Fn(&str) -> Option<String>,
+    object_exists: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     let mut have = BTreeSet::new();
     for fetch_ref in refs {
@@ -251,6 +256,10 @@ fn build_fetch_have_set(
         }
     }
     for (refname, remote_sha) in remote_refs {
+        if object_exists(remote_sha) {
+            have.insert(remote_sha.clone());
+            continue;
+        }
         if let Some(local_sha) = resolve_local_ref(refname) {
             if &local_sha == remote_sha {
                 have.insert(local_sha);
@@ -276,6 +285,7 @@ fn build_push_exclusion_set(
 pub(crate) struct SyncClient {
     node: RnsNode,
     link_id: [u8; 16],
+    identity_private_key: [u8; 64],
     state: Arc<(Mutex<ClientState>, Condvar)>,
     request_timeout: Duration,
 }
@@ -323,15 +333,19 @@ impl SyncClient {
         // established callback. Wait briefly after establishment before sending
         // LINKIDENTIFY so the server records this link in active_links.
         std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
-        node.identify_on_link(link_id, private_key)
-            .map_err(|_| Error::msg("failed to identify on RNS link"))?;
+        identify_on_link(&node, link_id, private_key)?;
         std::thread::sleep(LINK_IDENTIFY_SETTLE_DELAY);
         Ok(Self {
             node,
             link_id,
+            identity_private_key: private_key,
             state,
             request_timeout: Duration::from_secs(config.request_timeout_secs),
         })
+    }
+
+    pub(crate) fn identify(&self) -> Result<()> {
+        identify_on_link(&self.node, self.link_id, self.identity_private_key)
     }
 
     pub(crate) fn request(&self, path: &str, data: Vec<u8>) -> Result<Response> {
@@ -369,6 +383,11 @@ impl SyncClient {
             state = next;
         }
     }
+}
+
+fn identify_on_link(node: &RnsNode, link_id: [u8; 16], private_key: [u8; 64]) -> Result<()> {
+    node.identify_on_link(link_id, private_key)
+        .map_err(|_| Error::msg("failed to identify on RNS link"))
 }
 
 #[derive(Default)]
@@ -679,20 +698,43 @@ mod tests {
             name: "refs/heads/feature".into(),
         }];
 
-        let have = build_fetch_have_set(&remote_refs, &fetch_refs, |name| match name {
-            "refs/heads/main" => Some("1111111111111111111111111111111111111111".into()),
-            "refs/tags/v1" => Some("not-remote".into()),
-            "refs/heads/feature" => Some("4444444444444444444444444444444444444444".into()),
-            _ => None,
-        });
+        let have = build_fetch_have_set(
+            &remote_refs,
+            &fetch_refs,
+            |name| match name {
+                "refs/heads/main" => Some("1111111111111111111111111111111111111111".into()),
+                "refs/tags/v1" => Some("not-remote".into()),
+                "refs/heads/feature" => Some("4444444444444444444444444444444444444444".into()),
+                _ => None,
+            },
+            |sha| sha == "2222222222222222222222222222222222222222",
+        );
 
         assert_eq!(
             have,
             vec![
                 "1111111111111111111111111111111111111111",
+                "2222222222222222222222222222222222222222",
                 "4444444444444444444444444444444444444444"
             ]
         );
+    }
+
+    #[test]
+    fn fetch_have_set_includes_existing_remote_objects_without_matching_refs() {
+        let remote_refs = HashMap::from([(
+            "refs/tags/v1".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        )]);
+
+        let have = build_fetch_have_set(
+            &remote_refs,
+            &[],
+            |_| None,
+            |sha| sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+
+        assert_eq!(have, vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     }
 
     #[test]
@@ -706,6 +748,63 @@ mod tests {
         let exclusions = build_push_exclusion_set(&remote_refs, |sha| sha == "aaaa");
 
         assert_eq!(exclusions, vec!["aaaa"]);
+    }
+
+    #[test]
+    fn sync_client_reidentifies_after_not_identified_response() {
+        if !python_rns_available() {
+            eprintln!("Skipping: Python RNS not available");
+            return;
+        }
+
+        let mut python = PythonRngitPeer::spawn_reidentify_required();
+        let ready = python.wait_for_ready();
+        let tmp = tempfile::tempdir().unwrap();
+        let rns_dir = tmp.path().join("client-rns");
+        std::fs::create_dir_all(&rns_dir).unwrap();
+        std::fs::write(rns_dir.join("config"), client_rns_config(ready.port)).unwrap();
+
+        let client = SyncClient::connect(
+            ClientConfig {
+                dir: tmp.path().join("rngit"),
+                reticulum_dir: Some(rns_dir),
+                identity_path: tmp.path().join("client_identity"),
+                connect_timeout_secs: 10,
+                request_timeout_secs: 10,
+                destination_aliases: Default::default(),
+                log_level: crate::logging::DEFAULT_LOG_LEVEL,
+            },
+            parse_hex_16(&ready.dest_hash),
+        )
+        .expect("Rust client should connect to Python Reticulum peer");
+        let helper = RemoteHelper {
+            client,
+            remote_refs: Mutex::new(HashMap::new()),
+        };
+
+        let response = helper
+            .request_with_ident_retry(
+                protocol::PATH_LIST,
+                protocol::repository_request("group/repo"),
+            )
+            .expect("Rust client should re-identify and retry the request");
+        let response = protocol::response_bin(&response.data).unwrap();
+        let refs = String::from_utf8(decode_status(response).unwrap()).unwrap();
+        assert_eq!(
+            refs,
+            "1111111111111111111111111111111111111111 refs/heads/main\n"
+        );
+
+        let first = python.wait_for_event("REQUEST");
+        assert!(
+            first.ends_with(" 1 1"),
+            "unexpected first request event: {first}"
+        );
+        let second = python.wait_for_event("REQUEST");
+        assert!(
+            second.ends_with(" 2 2"),
+            "retry happened without a second LINKIDENTIFY: {second}"
+        );
     }
 
     #[test]
@@ -769,8 +868,20 @@ mod tests {
 
     impl PythonRngitPeer {
         fn spawn() -> Self {
-            let mut child = Command::new("python3")
-                .args(["-c", PYTHON_RNGIT_PEER_SCRIPT])
+            Self::spawn_with_reidentify_required(false)
+        }
+
+        fn spawn_reidentify_required() -> Self {
+            Self::spawn_with_reidentify_required(true)
+        }
+
+        fn spawn_with_reidentify_required(reidentify_required: bool) -> Self {
+            let mut command = Command::new("python3");
+            command.args(["-c", PYTHON_RNGIT_PEER_SCRIPT]);
+            if reidentify_required {
+                command.env("RNGIT_TEST_REQUIRE_REIDENTIFY", "1");
+            }
+            let mut child = command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -900,6 +1011,9 @@ with open(os.path.join(config_dir, "config"), "w") as f:
 import RNS
 
 running = True
+require_reidentify = os.environ.get("RNGIT_TEST_REQUIRE_REIDENTIFY") == "1"
+identifications = 0
+requests = 0
 reticulum = RNS.Reticulum(configdir=config_dir)
 identity = RNS.Identity()
 destination = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, "git", "repositories")
@@ -908,14 +1022,20 @@ def emit(*parts):
     print(" ".join(str(part) for part in parts), flush=True)
 
 def list_refs(path, data, request_id, link_id, remote_identity, requested_at):
+    global requests
+    requests += 1
     remote = remote_identity.hash.hex() if remote_identity is not None else "none"
-    emit("REQUEST", path, remote)
+    emit("REQUEST", path, remote, requests, identifications)
     if remote_identity is None:
-        return b"\x01not identified"
+        return b"\x01Not identified"
+    if require_reidentify and identifications < 2:
+        return b"\x01Not identified"
     return b"\x001111111111111111111111111111111111111111 refs/heads/main\n"
 
 def identified(link, remote_identity):
-    emit("IDENTIFIED", remote_identity.hash.hex())
+    global identifications
+    identifications += 1
+    emit("IDENTIFIED", remote_identity.hash.hex(), identifications)
 
 def link_established(link):
     emit("LINK_ESTABLISHED")

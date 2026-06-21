@@ -137,7 +137,7 @@ pub fn fetch_request_for_refs(
     ]))
 }
 
-pub fn parse_fetch_request(data: &[u8]) -> Result<(String, Vec<String>)> {
+pub fn parse_fetch_request(data: &[u8]) -> Result<(String, Vec<String>, Vec<(String, String)>)> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -156,7 +156,20 @@ pub fn parse_fetch_request(data: &[u8]) -> Result<(String, Vec<String>)> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok((repo, have))
+    let refs = map_get_str(map, "refs")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let map = entry.as_map()?;
+                    let sha = map_get_str(map, "sha")?.as_str()?.to_owned();
+                    let refname = map_get_str(map, "ref")?.as_str()?.to_owned();
+                    Some((sha, refname))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((repo, have, refs))
 }
 
 pub fn push_request(repository: &str, bundle: Vec<u8>, updates: Vec<RefUpdate>) -> Vec<u8> {
@@ -468,6 +481,29 @@ mod tests {
         let (_, _, updates) = parse_push_request(&request).unwrap();
 
         assert_eq!(updates, vec![update]);
+    }
+
+    #[test]
+    fn fetch_roundtrip_preserves_requested_refs() {
+        let (repo, have, refs) = parse_fetch_request(&fetch_request_for_refs(
+            "repo",
+            &["0123456789abcdef0123456789abcdef01234567".into()],
+            &[(
+                "89abcdef0123456789abcdef0123456789abcdef".into(),
+                "refs/heads/main".into(),
+            )],
+        ))
+        .unwrap();
+
+        assert_eq!(repo, "repo");
+        assert_eq!(have, vec!["0123456789abcdef0123456789abcdef01234567"]);
+        assert_eq!(
+            refs,
+            vec![(
+                "89abcdef0123456789abcdef0123456789abcdef".into(),
+                "refs/heads/main".into()
+            )]
+        );
     }
 
     #[test]
