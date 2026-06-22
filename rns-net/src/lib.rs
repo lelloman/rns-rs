@@ -97,7 +97,8 @@ pub use storage::{
 
 // Re-export commonly used types from rns-core
 pub use rns_core::constants::{
-    MODE_ACCESS_POINT, MODE_BOUNDARY, MODE_FULL, MODE_GATEWAY, MODE_POINT_TO_POINT, MODE_ROAMING,
+    MODE_ACCESS_POINT, MODE_BOUNDARY, MODE_FULL, MODE_GATEWAY, MODE_INTERNAL, MODE_POINT_TO_POINT,
+    MODE_ROAMING,
 };
 pub use rns_core::link::TeardownReason;
 pub use rns_core::transport::types::InterfaceId;

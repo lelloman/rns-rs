@@ -31,6 +31,7 @@ MODE_NAMES = {
     4: "Roaming",
     5: "Boundary",
     6: "Gateway",
+    7: "Internal",
 }
 
 

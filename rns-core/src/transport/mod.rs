@@ -3933,6 +3933,29 @@ mod tests {
     }
 
     #[test]
+    fn test_path_request_forwarded_on_internal() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_INTERNAL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xDB; 16];
+        let tag = [0x0B; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, InterfaceId(2));
+                assert_recursive_path_request_packet(raw.as_ref(), &dest, &tag);
+            }
+            _ => panic!("expected SendOnInterface for recursive path request"),
+        }
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
     fn test_path_request_not_forwarded_on_full() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_interface(1, constants::MODE_FULL));

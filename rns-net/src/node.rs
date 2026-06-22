@@ -62,6 +62,7 @@ fn parse_interface_mode(mode: &str) -> u8 {
         "roaming" => rns_core::constants::MODE_ROAMING,
         "boundary" => rns_core::constants::MODE_BOUNDARY,
         "gateway" | "gw" => rns_core::constants::MODE_GATEWAY,
+        "internal" => rns_core::constants::MODE_INTERNAL,
         _ => rns_core::constants::MODE_FULL,
     }
 }
@@ -3599,6 +3600,8 @@ instance_control_port = {}
         assert_eq!(parse_interface_mode("boundary"), MODE_BOUNDARY);
         assert_eq!(parse_interface_mode("gateway"), MODE_GATEWAY);
         assert_eq!(parse_interface_mode("gw"), MODE_GATEWAY);
+        assert_eq!(parse_interface_mode("internal"), MODE_INTERNAL);
+        assert_eq!(parse_interface_mode("Internal"), MODE_INTERNAL);
         // Unknown defaults to FULL
         assert_eq!(parse_interface_mode("invalid"), MODE_FULL);
     }
@@ -3700,7 +3703,10 @@ enable_transport = True
         assert_eq!(parsed.interfaces[0].name, "Recursive Client");
         assert_eq!(parsed.interfaces[0].mode, "full");
         assert_eq!(
-            parsed.interfaces[0].params.get("recursive_prs").map(String::as_str),
+            parsed.interfaces[0]
+                .params
+                .get("recursive_prs")
+                .map(String::as_str),
             Some("yes")
         );
         assert_eq!(parsed.interfaces[1].name, "Default Client");

@@ -118,10 +118,8 @@ impl TransportEngine {
     }
 
     fn handle_discovery_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> Vec<TransportAction> {
-        let Some((mode, recursive_prs, ingress_control, ip_freq, started)) = self
-            .interfaces
-            .get(&ctx.interface_id)
-            .map(|info| {
+        let Some((mode, recursive_prs, ingress_control, ip_freq, started)) =
+            self.interfaces.get(&ctx.interface_id).map(|info| {
                 (
                     info.mode,
                     info.recursive_prs,

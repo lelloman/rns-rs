@@ -278,10 +278,12 @@ pub const MODE_ACCESS_POINT: u8 = 0x03;
 pub const MODE_ROAMING: u8 = 0x04;
 pub const MODE_BOUNDARY: u8 = 0x05;
 pub const MODE_GATEWAY: u8 = 0x06;
+pub const MODE_INTERNAL: u8 = 0x07;
 
 /// Interface modes that forward path requests for unknown destinations.
-/// Python: Interface.DISCOVER_PATHS_FOR = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING]
-pub const DISCOVER_PATHS_FOR: [u8; 3] = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING];
+/// Python: Interface.DISCOVER_PATHS_FOR = [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING, MODE_INTERNAL]
+pub const DISCOVER_PATHS_FOR: [u8; 4] =
+    [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING, MODE_INTERNAL];
 
 /// Discovery path request expiry (seconds) — requests older than this are culled.
 pub const DISCOVERY_PATH_REQUEST_TIMEOUT: f64 = 15.0;
@@ -571,6 +573,9 @@ mod tests {
 
         // ROAMING_PATH_TIME = 6 hours
         assert_eq!(ROAMING_PATH_TIME, 60.0 * 60.0 * 6.0);
+
+        assert_eq!(MODE_INTERNAL, 0x07);
+        assert!(DISCOVER_PATHS_FOR.contains(&MODE_INTERNAL));
 
         // LINK_STALE_TIME = 2 * 360
         assert_eq!(LINK_STALE_TIME, 720.0);

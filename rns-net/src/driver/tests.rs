@@ -5119,6 +5119,19 @@ fn runtime_config_sets_generic_interface_values() {
     };
     assert_eq!(entry.value, RuntimeConfigValue::String("gateway".into()));
 
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.mode".into(),
+        value: RuntimeConfigValue::String("internal".into()),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::String("internal".into()));
+    assert_eq!(
+        driver.engine.interface_info(&InterfaceId(1)).unwrap().mode,
+        constants::MODE_INTERNAL
+    );
+
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
         key: "interface.public.mode".into(),
     });

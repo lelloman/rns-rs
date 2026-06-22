@@ -745,6 +745,27 @@ Default path expiry:
 - normal interfaces: 7 days
 - access point mode: 1 day
 - roaming mode: 6 hours
+- internal mode: normal 7 day expiry
+
+Interface mode values:
+
+- full: `0x01`
+- point-to-point: `0x02`
+- access point: `0x03`
+- roaming: `0x04`
+- boundary: `0x05`
+- gateway: `0x06`
+- internal: `0x07`
+
+Transport nodes perform recursive path discovery for path requests received on
+access point, gateway, roaming and internal interfaces. The per-interface
+`recursive_prs` option can enable recursive path discovery regardless of the
+configured mode.
+
+For announce propagation, internal interfaces designate networks that belong to
+a network different from any marked as boundary. Announces from boundary or
+roaming interfaces do not propagate to internal interfaces, but announces from
+internal interfaces can propagate to boundary interfaces.
 
 ### 15.4 Retransmission
 

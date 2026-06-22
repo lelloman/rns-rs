@@ -3052,6 +3052,7 @@ impl Driver {
             rns_core::constants::MODE_ROAMING => "roaming".to_string(),
             rns_core::constants::MODE_BOUNDARY => "boundary".to_string(),
             rns_core::constants::MODE_GATEWAY => "gateway".to_string(),
+            rns_core::constants::MODE_INTERNAL => "internal".to_string(),
             _ => mode.to_string(),
         }
     }
@@ -3070,6 +3071,7 @@ impl Driver {
                 "roaming" => Some(rns_core::constants::MODE_ROAMING),
                 "boundary" => Some(rns_core::constants::MODE_BOUNDARY),
                 "gateway" | "gw" => Some(rns_core::constants::MODE_GATEWAY),
+                "internal" => Some(rns_core::constants::MODE_INTERNAL),
                 _ => None,
             },
             _ => None,

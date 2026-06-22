@@ -199,6 +199,15 @@ pub(crate) fn should_transmit_announce(
             // No path known — allow
             true
         }
+        constants::MODE_INTERNAL => {
+            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
+                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
+                    return from_iface.mode != constants::MODE_ROAMING
+                        && from_iface.mode != constants::MODE_BOUNDARY;
+                }
+            }
+            false
+        }
         _ => {
             // FULL, POINT_TO_POINT, GATEWAY — always allow
             true
@@ -725,6 +734,121 @@ mod tests {
         interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_BOUNDARY));
 
         // Path arrived via BOUNDARY interface (id=1)
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let boundary_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            boundary_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_internal_allows_announce_from_full() {
+        let dest = [0xB1; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_INTERNAL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let internal_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_internal_allows_announce_from_internal() {
+        let dest = [0xB2; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_INTERNAL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_INTERNAL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let internal_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_internal_blocks_announce_from_boundary() {
+        let dest = [0xB3; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_BOUNDARY));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_INTERNAL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let internal_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_internal_blocks_announce_from_roaming() {
+        let dest = [0xB4; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_ROAMING));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_INTERNAL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let internal_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_boundary_allows_announce_from_internal() {
+        let dest = [0xB5; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_INTERNAL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_BOUNDARY));
+
         let mut paths = BTreeMap::new();
         paths.insert(dest, make_path(2, 1));
 

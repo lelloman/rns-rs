@@ -319,6 +319,7 @@ fn print_status(
                 rns_net::MODE_ROAMING => "Roaming",
                 rns_net::MODE_BOUNDARY => "Boundary",
                 rns_net::MODE_GATEWAY => "Gateway",
+                rns_net::MODE_INTERNAL => "Internal",
                 _ => "Unknown",
             };
 
