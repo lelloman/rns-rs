@@ -139,6 +139,7 @@ pub struct InterfaceInfo {
     pub id: InterfaceId,
     pub name: String,
     pub mode: u8,
+    pub recursive_prs: bool,
     pub out_capable: bool,
     pub in_capable: bool,
     pub bitrate: Option<u64>,

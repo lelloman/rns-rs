@@ -496,6 +496,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         id,
         name: String::from("LocalInterface"),
         mode: constants::MODE_FULL,
+        recursive_prs: false,
         out_capable: true,
         in_capable: true,
         bitrate: Some(1_000_000_000), // 1 Gbps
@@ -793,6 +794,7 @@ impl InterfaceFactory for LocalClientFactory {
             id,
             name,
             mode: ctx.mode,
+            recursive_prs: ctx.recursive_prs,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000_000),

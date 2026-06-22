@@ -387,6 +387,7 @@ mod tests {
             id: InterfaceId(id),
             name: String::from("test"),
             mode: crate::constants::MODE_FULL,
+            recursive_prs: false,
             out_capable: true,
             in_capable: true,
             bitrate,

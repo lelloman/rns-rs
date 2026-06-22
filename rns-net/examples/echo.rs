@@ -133,6 +133,7 @@ fn main() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                recursive_prs: false,
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
@@ -211,6 +212,7 @@ fn main() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                recursive_prs: false,
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,

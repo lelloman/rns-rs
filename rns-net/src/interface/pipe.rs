@@ -295,6 +295,7 @@ impl InterfaceFactory for PipeFactory {
             id,
             name: pipe_config.name.clone(),
             mode: ctx.mode,
+            recursive_prs: ctx.recursive_prs,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000),

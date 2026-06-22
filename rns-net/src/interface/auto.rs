@@ -1144,6 +1144,7 @@ fn add_peer(
             name, peer_key.link_local_addr, peer_key.if_index
         ),
         mode: rns_core::constants::MODE_FULL,
+        recursive_prs: false,
         out_capable: true,
         in_capable: true,
         bitrate: Some(configured_bitrate),

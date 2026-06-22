@@ -230,6 +230,7 @@ impl InterfaceFactory for UdpFactory {
             id,
             name,
             mode: ctx.mode,
+            recursive_prs: ctx.recursive_prs,
             out_capable,
             in_capable,
             bitrate: Some(10_000_000),

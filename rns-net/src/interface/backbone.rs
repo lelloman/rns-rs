@@ -43,6 +43,7 @@ pub struct BackboneConfig {
     pub listen_port: u16,
     pub interface_id: InterfaceId,
     pub mode: u8,
+    pub recursive_prs: bool,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
@@ -100,6 +101,7 @@ impl Default for BackboneConfig {
             listen_port: 0,
             interface_id: InterfaceId(0),
             mode: constants::MODE_FULL,
+            recursive_prs: false,
             max_connections: None,
             idle_timeout: None,
             write_stall_timeout: None,
@@ -252,6 +254,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let peer_state = Arc::clone(&config.peer_state);
     let ingress_control = config.ingress_control;
     let accepted_peer_mode = config.mode;
+    let accepted_peer_recursive_prs = config.recursive_prs;
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
@@ -265,6 +268,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
                 peer_state,
                 ingress_control,
                 accepted_peer_mode,
+                accepted_peer_recursive_prs,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -420,6 +424,7 @@ fn poll_loop(
     peer_state: Arc<Mutex<BackbonePeerMonitor>>,
     ingress_control: IngressControlConfig,
     accepted_peer_mode: u8,
+    accepted_peer_recursive_prs: bool,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -560,6 +565,7 @@ fn poll_loop(
                                 id: client_id,
                                 name: format!("BackboneInterface/{}", client_id.0),
                                 mode: accepted_peer_mode,
+                                recursive_prs: accepted_peer_recursive_prs,
                                 out_capable: true,
                                 in_capable: true,
                                 bitrate: Some(1_000_000_000), // 1 Gbps guess
@@ -1176,6 +1182,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 listen_port,
                 interface_id: id,
                 mode: constants::MODE_FULL,
+                recursive_prs: false,
                 max_connections,
                 idle_timeout,
                 write_stall_timeout,
@@ -1215,6 +1222,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     id,
                     name,
                     mode: ctx.mode,
+                    recursive_prs: ctx.recursive_prs,
                     out_capable: true,
                     in_capable: true,
                     bitrate: Some(1_000_000_000),
@@ -1245,6 +1253,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             BackboneMode::Server(mut cfg) => {
                 cfg.ingress_control = ctx.ingress_control;
                 cfg.mode = ctx.mode;
+                cfg.recursive_prs = ctx.recursive_prs;
                 start(cfg, ctx.tx, ctx.next_dynamic_id)?;
                 Ok(StartResult::Listener { control: None })
             }
@@ -1351,6 +1360,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(interface_id),
             mode: constants::MODE_FULL,
+            recursive_prs: false,
             max_connections,
             idle_timeout,
             write_stall_timeout,

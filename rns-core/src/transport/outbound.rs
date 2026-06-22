@@ -217,6 +217,7 @@ mod tests {
             id: InterfaceId(id),
             name: String::from("test"),
             mode,
+            recursive_prs: false,
             out_capable: true,
             in_capable: true,
             bitrate: None,

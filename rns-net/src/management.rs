@@ -52,6 +52,7 @@ mod tests {
             id,
             name: "TestInterface".into(),
             mode: constants::MODE_FULL,
+            recursive_prs: false,
             out_capable: true,
             in_capable: true,
             bitrate: Some(115200),

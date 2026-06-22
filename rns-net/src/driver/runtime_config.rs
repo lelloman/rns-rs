@@ -492,6 +492,7 @@ impl Driver {
             config: BackbonePeerPoolCandidateConfig {
                 client,
                 mode,
+                recursive_prs: false,
                 ingress_control: self.ingress_control_defaults,
                 ifac_runtime,
                 ifac_enabled,
@@ -738,6 +739,7 @@ impl Driver {
         let id = client.interface_id;
         let name = client.name.clone();
         let mode = candidate.config.mode;
+        let recursive_prs = candidate.config.recursive_prs;
         let ingress_control = candidate.config.ingress_control;
         let ifac_runtime = candidate.config.ifac_runtime.clone();
         let ifac_enabled = candidate.config.ifac_enabled;
@@ -748,6 +750,7 @@ impl Driver {
             id,
             name: name.clone(),
             mode,
+            recursive_prs,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000_000),

@@ -228,6 +228,7 @@ fn start_transport_node(port: u16) -> RnsNode {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                recursive_prs: false,
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,
@@ -299,6 +300,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                recursive_prs: false,
                 ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
                 ifac: None,
                 discovery: None,

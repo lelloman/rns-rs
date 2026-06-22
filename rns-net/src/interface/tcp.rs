@@ -511,6 +511,7 @@ impl InterfaceFactory for TcpClientFactory {
             id,
             name,
             mode: ctx.mode,
+            recursive_prs: ctx.recursive_prs,
             out_capable: true,
             in_capable: true,
             bitrate: None,

@@ -198,6 +198,7 @@ fn listener_loop(
             id: client_id,
             name: format!("TCPServerInterface/Client-{}", client_id.0),
             mode: constants::MODE_FULL,
+            recursive_prs: false,
             out_capable: true,
             in_capable: true,
             bitrate: None,
