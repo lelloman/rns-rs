@@ -40,6 +40,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         id: InterfaceId(id),
         name: format!("bench-{id}"),
         mode,
+        recursive_prs: false,
         out_capable: true,
         in_capable: true,
         bitrate: None,
