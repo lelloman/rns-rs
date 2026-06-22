@@ -7,11 +7,11 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.5`
-- Tag: no local `1.3.5` tag was fetched; rgit `master` carries the release version
-- Commit: `50c0a354c959fc24d0910db660972d7b6179a167`
-- Commit date: `2026-06-01 00:34:49 +0200`
-- Subject: `Cleanup`
+- Version: `1.3.6`
+- Tag: no local `1.3.6` tag was fetched; rgit `master` carries the release version
+- Commit: `48d17a86166b357a82b344311219486d805819b4`
+- Commit date: `2026-06-19 23:55:50 +0200`
+- Subject: `Fixed typo`
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -41,6 +41,29 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.5..1.3.6 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
+`50c0a354c959fc24d0910db660972d7b6179a167` to
+`48d17a86166b357a82b344311219486d805819b4` on 2026-06-22. The local
+`rgit/master` tracking ref reported this commit, while the local GitHub
+`origin/master` tracking ref reported
+`422dc05549bf28f45e9b9c5172336a1ba4df0ec0`. No local `1.3.6` tag was
+fetched, but upstream `RNS/_version.py` reports `1.3.6` at this commit.
+
+This range added the per-interface `recursive_prs` option and the `internal`
+interface mode. The Rust-applicable behavior was ported with broader local
+coverage for recursive path request gating, internal-mode recursive path
+discovery, announce propagation from and to internal interfaces, config parsing,
+runtime config mutation and status display. Generated upstream manuals, image
+artifacts, upstream changelog text and Python package version metadata were not
+vendored. The concise local protocol documentation was updated instead.
+
+Key local commits for this range include:
+
+- `2205588` Add recursive path request interface option
+- `2643f30` Add internal interface mode
 
 ## Completed 1.3.4..1.3.5 Porting Queue
 
