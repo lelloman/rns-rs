@@ -537,39 +537,52 @@ echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /
             ssh_host,
             r"""
 set -euo pipefail
-echo "PROVIDER_DROPPED_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'provider bridge dropped' || true)"
-echo "PROVIDER_DISCONNECTED_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'provider bridge disconnected' || true)"
-echo "IDLE_TIMEOUT_24H=$(journalctl -u rns-server --since '24 hours ago' --no-pager | grep -c 'repeated idle timeouts' || true)"
+count_journal() {
+  local pattern="$1"
+  local output
+  if output=$(timeout 180s journalctl -u rns-server --since '24 hours ago' --no-pager --grep "$pattern" -q 2>/dev/null); then
+    if [ -n "$output" ]; then
+      printf '%s\n' "$output" | wc -l
+    else
+      printf '0\n'
+    fi
+  else
+    printf -- '-1\n'
+  fi
+}
+echo "PROVIDER_DROPPED_24H=$(count_journal 'provider bridge dropped')"
+echo "PROVIDER_DISCONNECTED_24H=$(count_journal 'provider bridge disconnected')"
+echo "IDLE_TIMEOUT_24H=$(count_journal 'repeated idle timeouts')"
 """,
         )
     )
     memstats = parse_memstats(
         run_ssh(
             ssh_host,
-            r"journalctl -u rns-server --since '1 hour ago' --no-pager | grep 'MEMSTATS' | tail -n 12 || true",
+            r"timeout 180s journalctl -u rns-server --since '1 hour ago' --no-pager --grep 'MEMSTATS' -q | tail -n 12 || true",
         )
     )
 
     stats_db = f"{config_dir.rstrip('/')}/stats.db"
     ann_rows = run_ssh(
         ssh_host,
-        f"""sqlite3 {shlex.quote(stats_db)} "
+        f"""timeout 180s sqlite3 {shlex.quote(stats_db)} "
 SELECT COUNT(*) FROM seen_announces;
 SELECT datetime(MAX(seen_at_ms)/1000, 'unixepoch') FROM seen_announces;
 SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-3600)*1000;
 SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-86400)*1000;
-" """,
+" || printf '%s\n' -1 '' -1 -1""",
     ).splitlines()
 
     packet_lines = run_ssh(
         ssh_host,
-        f"""sqlite3 {shlex.quote(stats_db)} "
+        f"""timeout 180s sqlite3 {shlex.quote(stats_db)} "
 SELECT packet_type || '|' || direction || '|' ||
        COALESCE(datetime(MAX(updated_at_ms)/1000, 'unixepoch'), '')
 FROM packet_counters
 GROUP BY packet_type, direction
 ORDER BY packet_type, direction;
-" """,
+" || true""",
     ).splitlines()
 
     capture_ts = basic["CAPTURE_TS"]
