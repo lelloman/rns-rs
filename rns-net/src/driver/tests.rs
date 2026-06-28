@@ -4304,6 +4304,83 @@ fn management_announces_emitted_after_delay() {
 }
 
 #[test]
+fn discovery_announcer_emits_local_synthetic_announce() {
+    let (tx, rx) = event::channel();
+    let (cbs, _announces, _, _, _, _) = MockCallbacks::new();
+    let identity = Identity::new(&mut OsRng);
+    let identity_hash = *identity.hash();
+    let mut driver = Driver::new(
+        TransportConfig {
+            transport_enabled: true,
+            identity_hash: Some(identity_hash),
+            local_hops_delta: 0,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
+            max_path_destinations: usize::MAX,
+            max_tunnel_destinations_total: usize::MAX,
+            destination_timeout_secs: rns_core::constants::DESTINATION_TIMEOUT,
+            announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
+            announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,
+            announce_sig_cache_enabled: true,
+            announce_sig_cache_max_entries: rns_core::constants::ANNOUNCE_SIG_CACHE_MAXSIZE,
+            announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
+            announce_queue_max_entries: 256,
+            announce_queue_max_interfaces: 1024,
+        },
+        rx,
+        tx,
+        Box::new(cbs),
+    );
+
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    driver.transport_identity = Some(identity);
+    driver.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
+        identity_hash,
+        vec![crate::discovery::DiscoverableInterface {
+            interface_name: "public".into(),
+            config: crate::discovery::DiscoveryConfig {
+                discovery_name: "Public Test".into(),
+                announce_interval: 1,
+                stamp_value: 0,
+                reachable_on: Some("127.0.0.1".into()),
+                interface_type: "TCPServerInterface".into(),
+                listen_port: Some(4242),
+                latitude: None,
+                longitude: None,
+                height: None,
+            },
+            transport_enabled: true,
+            ifac_netname: None,
+            ifac_netkey: None,
+        }],
+    ));
+
+    let now = time::now();
+    driver.tick_discovery_announcer(now);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sent.lock().unwrap().is_empty() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+        driver.tick_discovery_announcer(now + 1.0);
+    }
+
+    let sent_packets = sent.lock().unwrap();
+    assert!(
+        !sent_packets.is_empty(),
+        "discovery announce should be sent on a registered local synthetic destination"
+    );
+    let packet =
+        RawPacket::unpack(&sent_packets[0]).expect("sent discovery announce should unpack");
+    assert_eq!(packet.flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
+    assert_eq!(packet.flags.destination_type, constants::DESTINATION_SINGLE);
+}
+
+#[test]
 fn runtime_config_list_contains_global_keys() {
     let driver = new_test_driver();
     let response = driver.handle_query(QueryRequest::ListRuntimeConfig);

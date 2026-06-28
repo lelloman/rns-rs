@@ -752,6 +752,7 @@ mod tests {
 
     #[test]
     fn sync_client_reidentifies_after_not_identified_response() {
+        let _guard = python_rns_test_guard();
         if !python_rns_available() {
             eprintln!("Skipping: Python RNS not available");
             return;
@@ -809,6 +810,7 @@ mod tests {
 
     #[test]
     fn sync_client_identifies_before_first_python_request() {
+        let _guard = python_rns_test_guard();
         if !python_rns_available() {
             eprintln!("Skipping: Python RNS not available");
             return;
@@ -941,6 +943,16 @@ mod tests {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+    }
+
+    static PYTHON_RNS_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    fn python_rns_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        PYTHON_RNS_TEST_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
     }
 
     fn python_rns_available() -> bool {

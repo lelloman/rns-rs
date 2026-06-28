@@ -18,6 +18,7 @@ fn make_config(transport_enabled: bool) -> TransportConfig {
         } else {
             None
         },
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
         packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,

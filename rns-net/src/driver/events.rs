@@ -1807,6 +1807,10 @@ impl Driver {
             }
         };
 
+        self.engine.register_destination(
+            packet.destination_hash,
+            rns_core::constants::DESTINATION_SINGLE,
+        );
         let outbound_actions = self.engine.handle_outbound(
             &packet,
             rns_core::constants::DESTINATION_SINGLE,
@@ -2030,21 +2034,18 @@ impl Driver {
             None
         };
 
-        if let Some(raw) = mgmt_raw {
-            if let Ok(packet) = RawPacket::unpack(&raw) {
-                let actions = self.engine.handle_outbound(
-                    &packet,
-                    rns_core::constants::DESTINATION_SINGLE,
-                    None,
-                    now,
-                );
-                self.dispatch_all(actions);
-                log::debug!("Emitted management destination announce");
-            }
-        }
+        self.emit_local_management_announce(mgmt_raw, now, "management destination");
+        self.emit_local_management_announce(bh_raw, now, "blackhole info");
+        self.emit_local_management_announce(probe_raw, now, "probe responder");
+    }
 
-        if let Some(raw) = bh_raw {
+    fn emit_local_management_announce(&mut self, raw: Option<Vec<u8>>, now: f64, label: &str) {
+        if let Some(raw) = raw {
             if let Ok(packet) = RawPacket::unpack(&raw) {
+                self.engine.register_destination(
+                    packet.destination_hash,
+                    rns_core::constants::DESTINATION_SINGLE,
+                );
                 let actions = self.engine.handle_outbound(
                     &packet,
                     rns_core::constants::DESTINATION_SINGLE,
@@ -2052,20 +2053,7 @@ impl Driver {
                     now,
                 );
                 self.dispatch_all(actions);
-                log::debug!("Emitted blackhole info announce");
-            }
-        }
-
-        if let Some(raw) = probe_raw {
-            if let Ok(packet) = RawPacket::unpack(&raw) {
-                let actions = self.engine.handle_outbound(
-                    &packet,
-                    rns_core::constants::DESTINATION_SINGLE,
-                    None,
-                    now,
-                );
-                self.dispatch_all(actions);
-                log::debug!("Emitted probe responder announce");
+                log::debug!("Emitted {} announce", label);
             }
         }
     }

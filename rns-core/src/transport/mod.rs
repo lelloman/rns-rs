@@ -2487,6 +2487,7 @@ mod tests {
         engine.register_interface(make_interface(1, constants::MODE_FULL));
 
         let dest = [0x55; 16];
+        engine.register_destination(dest, constants::DESTINATION_SINGLE);
         engine.insert_announce_entry(
             dest,
             AnnounceEntry {
@@ -2529,6 +2530,7 @@ mod tests {
         engine.register_interface(make_interface(3, constants::MODE_ACCESS_POINT));
 
         let dest = [0x56; 16];
+        engine.register_destination(dest, constants::DESTINATION_SINGLE);
         let raw = make_announce_raw(&dest, &[0xAB; 32]);
         let actions = engine.gate_retransmit_actions(
             vec![TransportAction::BroadcastOnAllInterfaces {

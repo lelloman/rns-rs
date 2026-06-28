@@ -53,6 +53,8 @@ fn main() {
         NodeConfig {
             panic_on_interface_error: false,
             transport_enabled: false,
+            static_transport_identity: false,
+            local_hops_delta: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
                 name: String::new(),

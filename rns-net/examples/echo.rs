@@ -118,6 +118,8 @@ fn main() {
         NodeConfig {
             panic_on_interface_error: false,
             transport_enabled: false,
+            static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &server_identity.get_private_key().unwrap(),
             )),
@@ -202,6 +204,8 @@ fn main() {
         NodeConfig {
             panic_on_interface_error: false,
             transport_enabled: false,
+            static_transport_identity: false,
+            local_hops_delta: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
