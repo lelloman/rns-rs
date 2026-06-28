@@ -231,6 +231,7 @@ impl InterfaceFactory for UdpFactory {
             name,
             mode: ctx.mode,
             recursive_prs: ctx.recursive_prs,
+            announces_from_internal: ctx.announces_from_internal,
             out_capable,
             in_capable,
             bitrate: Some(10_000_000),

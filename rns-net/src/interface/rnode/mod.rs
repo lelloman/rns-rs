@@ -896,6 +896,7 @@ impl InterfaceFactory for RNodeFactory {
                 name: sub_name,
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
+                announces_from_internal: ctx.announces_from_internal,
                 out_capable: true,
                 in_capable: true,
                 bitrate: sub_bitrates.get(index).copied(),

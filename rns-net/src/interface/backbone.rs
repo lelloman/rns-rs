@@ -44,6 +44,7 @@ pub struct BackboneConfig {
     pub interface_id: InterfaceId,
     pub mode: u8,
     pub recursive_prs: bool,
+    pub announces_from_internal: bool,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
@@ -102,6 +103,7 @@ impl Default for BackboneConfig {
             interface_id: InterfaceId(0),
             mode: constants::MODE_FULL,
             recursive_prs: false,
+            announces_from_internal: true,
             max_connections: None,
             idle_timeout: None,
             write_stall_timeout: None,
@@ -255,6 +257,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let ingress_control = config.ingress_control;
     let accepted_peer_mode = config.mode;
     let accepted_peer_recursive_prs = config.recursive_prs;
+    let accepted_peer_announces_from_internal = config.announces_from_internal;
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
@@ -269,6 +272,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
                 ingress_control,
                 accepted_peer_mode,
                 accepted_peer_recursive_prs,
+                accepted_peer_announces_from_internal,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -425,6 +429,7 @@ fn poll_loop(
     ingress_control: IngressControlConfig,
     accepted_peer_mode: u8,
     accepted_peer_recursive_prs: bool,
+    accepted_peer_announces_from_internal: bool,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -566,6 +571,7 @@ fn poll_loop(
                                 name: format!("BackboneInterface/{}", client_id.0),
                                 mode: accepted_peer_mode,
                                 recursive_prs: accepted_peer_recursive_prs,
+                                announces_from_internal: accepted_peer_announces_from_internal,
                                 out_capable: true,
                                 in_capable: true,
                                 bitrate: Some(1_000_000_000), // 1 Gbps guess
@@ -1183,6 +1189,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 interface_id: id,
                 mode: constants::MODE_FULL,
                 recursive_prs: false,
+                announces_from_internal: true,
                 max_connections,
                 idle_timeout,
                 write_stall_timeout,
@@ -1223,6 +1230,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     name,
                     mode: ctx.mode,
                     recursive_prs: ctx.recursive_prs,
+                    announces_from_internal: ctx.announces_from_internal,
                     out_capable: true,
                     in_capable: true,
                     bitrate: Some(1_000_000_000),
@@ -1361,6 +1369,7 @@ mod tests {
             interface_id: InterfaceId(interface_id),
             mode: constants::MODE_FULL,
             recursive_prs: false,
+            announces_from_internal: true,
             max_connections,
             idle_timeout,
             write_stall_timeout,

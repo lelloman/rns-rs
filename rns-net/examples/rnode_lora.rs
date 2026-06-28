@@ -107,6 +107,7 @@ fn main() {
                 config_data: Box::new(rnode),
                 mode: MODE_FULL,
                 recursive_prs: false,
+                announces_from_internal: true,
                 ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
                 ifac: None,
                 discovery: None,

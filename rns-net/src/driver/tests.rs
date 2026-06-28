@@ -457,6 +457,7 @@ fn make_pool_candidate_with_priority(
         client,
         mode: constants::MODE_FULL,
         recursive_prs: false,
+        announces_from_internal: true,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         ifac_runtime: IfacRuntimeConfig {
             netname: None,
@@ -1389,6 +1390,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         name: format!("test-{}", id),
         mode: constants::MODE_FULL,
         recursive_prs: false,
+        announces_from_internal: true,
         out_capable: true,
         in_capable: true,
         bitrate: None,

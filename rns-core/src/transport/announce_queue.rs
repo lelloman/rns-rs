@@ -388,6 +388,7 @@ mod tests {
             name: String::from("test"),
             mode: crate::constants::MODE_FULL,
             recursive_prs: false,
+            announces_from_internal: true,
             out_capable: true,
             in_capable: true,
             bitrate,

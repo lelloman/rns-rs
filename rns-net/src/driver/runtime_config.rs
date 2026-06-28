@@ -493,6 +493,7 @@ impl Driver {
                 client,
                 mode,
                 recursive_prs: false,
+                announces_from_internal: true,
                 ingress_control: self.ingress_control_defaults,
                 ifac_runtime,
                 ifac_enabled,
@@ -740,6 +741,7 @@ impl Driver {
         let name = client.name.clone();
         let mode = candidate.config.mode;
         let recursive_prs = candidate.config.recursive_prs;
+        let announces_from_internal = candidate.config.announces_from_internal;
         let ingress_control = candidate.config.ingress_control;
         let ifac_runtime = candidate.config.ifac_runtime.clone();
         let ifac_enabled = candidate.config.ifac_enabled;
@@ -751,6 +753,7 @@ impl Driver {
             name: name.clone(),
             mode,
             recursive_prs,
+            announces_from_internal,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000_000),

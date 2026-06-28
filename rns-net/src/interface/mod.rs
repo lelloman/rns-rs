@@ -284,6 +284,7 @@ pub struct StartContext {
     pub next_dynamic_id: Arc<AtomicU64>,
     pub mode: u8,
     pub recursive_prs: bool,
+    pub announces_from_internal: bool,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
 }
 
@@ -377,6 +378,7 @@ mod tests {
                 name: String::new(),
                 mode: constants::MODE_FULL,
                 recursive_prs: false,
+                announces_from_internal: true,
                 out_capable: true,
                 in_capable: true,
                 bitrate: None,

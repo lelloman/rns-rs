@@ -272,6 +272,7 @@ pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) client: BackboneClientConfig,
     pub(crate) mode: u8,
     pub(crate) recursive_prs: bool,
+    pub(crate) announces_from_internal: bool,
     pub(crate) ingress_control: rns_core::transport::types::IngressControlConfig,
     pub(crate) ifac_runtime: IfacRuntimeConfig,
     pub(crate) ifac_enabled: bool,

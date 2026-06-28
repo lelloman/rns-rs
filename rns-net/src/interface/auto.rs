@@ -1145,6 +1145,7 @@ fn add_peer(
         ),
         mode: rns_core::constants::MODE_FULL,
         recursive_prs: false,
+        announces_from_internal: true,
         out_capable: true,
         in_capable: true,
         bitrate: Some(configured_bitrate),

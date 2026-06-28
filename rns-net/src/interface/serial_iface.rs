@@ -270,6 +270,7 @@ impl InterfaceFactory for SerialFactory {
             name,
             mode: ctx.mode,
             recursive_prs: ctx.recursive_prs,
+            announces_from_internal: ctx.announces_from_internal,
             out_capable: true,
             in_capable: true,
             bitrate,

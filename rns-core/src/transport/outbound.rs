@@ -158,6 +158,16 @@ pub(crate) fn should_transmit_announce(
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
 ) -> bool {
     let _ = hops;
+    if !iface.announces_from_internal {
+        if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
+            if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
+                if from_iface.mode == constants::MODE_INTERNAL {
+                    return false;
+                }
+            }
+        }
+    }
+
     match iface.mode {
         constants::MODE_ACCESS_POINT => {
             // Block announce broadcast on AP mode interfaces
@@ -227,6 +237,7 @@ mod tests {
             name: String::from("test"),
             mode,
             recursive_prs: false,
+            announces_from_internal: true,
             out_capable: true,
             in_capable: true,
             bitrate: None,
@@ -788,6 +799,79 @@ mod tests {
 
         assert!(should_transmit_announce(
             internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_full_allows_announce_from_internal_by_default() {
+        let dest = [0xB6; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_INTERNAL));
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_FULL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let full_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
+            full_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_full_blocks_announce_from_internal_when_disabled() {
+        let dest = [0xB7; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_INTERNAL));
+        let mut outbound = make_interface(2, constants::MODE_FULL);
+        outbound.announces_from_internal = false;
+        interfaces.insert(InterfaceId(2), outbound);
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let full_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            full_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_gateway_blocks_announce_from_internal_when_disabled() {
+        let dest = [0xB8; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_INTERNAL));
+        let mut outbound = make_interface(2, constants::MODE_GATEWAY);
+        outbound.announces_from_internal = false;
+        interfaces.insert(InterfaceId(2), outbound);
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let gateway_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(!should_transmit_announce(
+            gateway_iface,
             &dest,
             2,
             &local_dests,
