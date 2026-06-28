@@ -194,6 +194,9 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
 
 [reticulum]
   enable_transport = false
+  # When transport is disabled, the transport-facing identity is ephemeral by
+  # default. Set this to true to reuse the stored identity across restarts.
+  static_transport_identity = false
   share_instance = true
   shared_instance_port = 37428
   instance_control_port = 37429

@@ -148,7 +148,8 @@ fn inject_transport_header(packet: &RawPacket, next_hop: &[u8; 16]) -> Vec<u8> {
 /// - ACCESS_POINT: never re-broadcast announces (AP is a sink)
 /// - ROAMING: allow local announces; allow non-local unless source interface is ROAMING or BOUNDARY
 /// - BOUNDARY: allow local announces; allow non-local unless source interface is ROAMING
-/// - Others (FULL, PTP, GATEWAY): always allow
+/// - INTERNAL: allow local announces; allow non-local unless source interface is BOUNDARY
+/// - Others (FULL, PTP, GATEWAY): allow local and known-source announces
 pub(crate) fn should_transmit_announce(
     iface: &InterfaceInfo,
     dest_hash: &[u8; 16],
@@ -158,14 +159,21 @@ pub(crate) fn should_transmit_announce(
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
 ) -> bool {
     let _ = hops;
-    if !iface.announces_from_internal {
-        if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
-            if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
-                if from_iface.mode == constants::MODE_INTERNAL {
-                    return false;
-                }
-            }
-        }
+    let local_destination = local_destinations.contains_key(dest_hash);
+    let from_interface = path_table
+        .get(dest_hash)
+        .and_then(|ps| ps.primary())
+        .and_then(|path| interfaces.get(&path.receiving_interface));
+
+    if !local_destination && from_interface.is_none() {
+        return false;
+    }
+
+    if !local_destination
+        && !iface.announces_from_internal
+        && from_interface.is_some_and(|from_iface| from_iface.mode == constants::MODE_INTERNAL)
+    {
+        return false;
     }
 
     match iface.mode {
@@ -174,49 +182,25 @@ pub(crate) fn should_transmit_announce(
             false
         }
         constants::MODE_ROAMING => {
-            // Allow if destination is local
-            if local_destinations.contains_key(dest_hash) {
+            if local_destination {
                 return true;
             }
-            // Non-local: allow unless source interface is ROAMING or BOUNDARY
-            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
-                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
-                    if from_iface.mode == constants::MODE_ROAMING
-                        || from_iface.mode == constants::MODE_BOUNDARY
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            // No path known — allow (might be our own announce)
-            true
+            !from_interface.is_some_and(|from_iface| {
+                from_iface.mode == constants::MODE_ROAMING
+                    || from_iface.mode == constants::MODE_BOUNDARY
+            })
         }
         constants::MODE_BOUNDARY => {
-            // Allow if destination is local
-            if local_destinations.contains_key(dest_hash) {
+            if local_destination {
                 return true;
             }
-            // Non-local: allow unless source interface is ROAMING
-            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
-                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
-                    if from_iface.mode == constants::MODE_ROAMING {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            // No path known — allow
-            true
+            !from_interface.is_some_and(|from_iface| from_iface.mode == constants::MODE_ROAMING)
         }
         constants::MODE_INTERNAL => {
-            if let Some(path) = path_table.get(dest_hash).and_then(|ps| ps.primary()) {
-                if let Some(from_iface) = interfaces.get(&path.receiving_interface) {
-                    return from_iface.mode != constants::MODE_ROAMING
-                        && from_iface.mode != constants::MODE_BOUNDARY;
-                }
+            if local_destination {
+                return true;
             }
-            false
+            !from_interface.is_some_and(|from_iface| from_iface.mode == constants::MODE_BOUNDARY)
         }
         _ => {
             // FULL, POINT_TO_POINT, GATEWAY — always allow
@@ -762,6 +746,70 @@ mod tests {
     }
 
     #[test]
+    fn test_full_blocks_unknown_nonlocal_announce_without_source_path() {
+        let dest = [0xA7; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+
+        let paths = BTreeMap::new();
+        let local_dests = BTreeMap::new();
+        let full_iface = &interfaces[&InterfaceId(1)];
+
+        assert!(!should_transmit_announce(
+            full_iface,
+            &dest,
+            0,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_full_allows_local_announce_without_source_path() {
+        let dest = [0xA8; 16];
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+
+        let paths = BTreeMap::new();
+        let mut local_dests = BTreeMap::new();
+        local_dests.insert(dest, constants::DESTINATION_SINGLE);
+        let full_iface = &interfaces[&InterfaceId(1)];
+
+        assert!(should_transmit_announce(
+            full_iface,
+            &dest,
+            0,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_announces_from_internal_filter_allows_local_destination() {
+        let dest = [0xA9; 16];
+        let mut interfaces = BTreeMap::new();
+        let mut outbound = make_interface(1, constants::MODE_FULL);
+        outbound.announces_from_internal = false;
+        interfaces.insert(InterfaceId(1), outbound);
+
+        let paths = BTreeMap::new();
+        let mut local_dests = BTreeMap::new();
+        local_dests.insert(dest, constants::DESTINATION_SINGLE);
+        let full_iface = &interfaces[&InterfaceId(1)];
+
+        assert!(should_transmit_announce(
+            full_iface,
+            &dest,
+            0,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
     fn test_internal_allows_announce_from_full() {
         let dest = [0xB1; 16];
         let mut interfaces = BTreeMap::new();
@@ -904,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn test_internal_blocks_announce_from_roaming() {
+    fn test_internal_allows_announce_from_roaming() {
         let dest = [0xB4; 16];
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_ROAMING));
@@ -916,7 +964,7 @@ mod tests {
         let local_dests = BTreeMap::new();
         let internal_iface = &interfaces[&InterfaceId(2)];
 
-        assert!(!should_transmit_announce(
+        assert!(should_transmit_announce(
             internal_iface,
             &dest,
             2,

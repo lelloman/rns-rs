@@ -769,10 +769,16 @@ propagation; destinations behind internal-mode interfaces may still be resolved
 through path requests.
 
 For announce propagation, internal interfaces designate networks that belong to
-a network different from any marked as boundary. Announces from boundary or
-roaming interfaces do not propagate to internal interfaces, but announces from
+a network different from any marked as boundary. Announces from boundary
+interfaces do not propagate to internal interfaces, but announces from roaming
+and internal interfaces can propagate to internal interfaces. Announces from
 internal interfaces can propagate to boundary interfaces unless the outbound
 interface disables `announces_from_internal`.
+
+When transport is disabled, nodes use an ephemeral transport-facing identity by
+default while retaining the configured/stored identity for local state. The
+`static_transport_identity` option restores the older behavior of reusing the
+stored identity as the transport-facing identity for every instance start.
 
 ### 15.4 Retransmission
 

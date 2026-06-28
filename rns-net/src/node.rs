@@ -415,6 +415,7 @@ fn register_started_interface(
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
+    pub static_transport_identity: bool,
     pub identity: Option<Identity>,
     /// Interface configurations (parsed via registry factories).
     pub interfaces: Vec<InterfaceConfig>,
@@ -504,6 +505,7 @@ impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             transport_enabled: false,
+            static_transport_identity: false,
             identity: None,
             interfaces: Vec::new(),
             share_instance: false,
@@ -846,6 +848,7 @@ impl RnsNode {
 
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
+            static_transport_identity: rns_config.reticulum.static_transport_identity,
             identity: Some(identity),
             share_instance: rns_config.reticulum.share_instance,
             instance_name: rns_config.reticulum.instance_name.clone(),
@@ -1004,10 +1007,19 @@ impl RnsNode {
         announce_queue_overflow_policy: AnnounceQueueOverflowPolicy,
     ) -> io::Result<Self> {
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
+        let transport_identity = if config.transport_enabled || config.static_transport_identity {
+            Identity::from_private_key(
+                &identity
+                    .get_private_key()
+                    .expect("node identity must expose a private key"),
+            )
+        } else {
+            Identity::new(&mut OsRng)
+        };
 
         let transport_config = TransportConfig {
             transport_enabled: config.transport_enabled,
-            identity_hash: Some(*identity.hash()),
+            identity_hash: Some(*transport_identity.hash()),
             prefer_shorter_path: config.prefer_shorter_path,
             max_paths_per_destination: config.max_paths_per_destination,
             packet_hashlist_max_entries: config.packet_hashlist_max_entries,
@@ -1095,10 +1107,8 @@ impl RnsNode {
         // Store management config on driver for ACL enforcement
         driver.management_config = config.management.clone();
 
-        // Store transport identity for tunnel synthesis
-        if let Some(prv_key) = identity.get_private_key() {
-            driver.transport_identity = Some(Identity::from_private_key(&prv_key));
-        }
+        // Store transport identity for tunnel synthesis and management announces.
+        driver.transport_identity = Some(transport_identity);
 
         // Load hooks from config
         #[cfg(feature = "hooks")]
@@ -3046,6 +3056,7 @@ mod tests {
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -3270,6 +3281,7 @@ mod tests {
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: true,
+                static_transport_identity: false,
                 identity: Some(identity),
                 interfaces: vec![],
                 share_instance: false,
@@ -3331,6 +3343,7 @@ mod tests {
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -3765,6 +3778,70 @@ enable_transport = True
     }
 
     #[test]
+    fn config_parser_accepts_static_transport_identity_option() {
+        let config = r#"
+[reticulum]
+enable_transport = false
+static_transport_identity = yes
+"#;
+
+        let parsed = config::parse(config).unwrap();
+
+        assert!(!parsed.reticulum.enable_transport);
+        assert!(parsed.reticulum.static_transport_identity);
+    }
+
+    #[test]
+    fn non_transport_node_uses_ephemeral_transport_identity_by_default() {
+        let identity = Identity::new(&mut rns_crypto::FixedRng::new(&[0x41; 32]));
+        let stored_hash = *identity.hash();
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                static_transport_identity: false,
+                identity: Some(identity),
+                share_instance: false,
+                ..Default::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        let response = node.query(QueryRequest::TransportIdentity).unwrap();
+        let QueryResponse::TransportIdentity(Some(hash)) = response else {
+            panic!("transport identity query returned {response:?}");
+        };
+        assert_ne!(hash, stored_hash);
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn non_transport_node_can_use_static_transport_identity() {
+        let identity = Identity::new(&mut rns_crypto::FixedRng::new(&[0x42; 32]));
+        let stored_hash = *identity.hash();
+        let node = RnsNode::start(
+            NodeConfig {
+                transport_enabled: false,
+                static_transport_identity: true,
+                identity: Some(identity),
+                share_instance: false,
+                ..Default::default()
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        let response = node.query(QueryRequest::TransportIdentity).unwrap();
+        let QueryResponse::TransportIdentity(Some(hash)) = response else {
+            panic!("transport identity query returned {response:?}");
+        };
+        assert_eq!(hash, stored_hash);
+
+        node.shutdown();
+    }
+
+    #[test]
     fn test_extract_ifac_config() {
         use std::collections::HashMap;
 
@@ -3951,6 +4028,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4021,6 +4099,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4087,6 +4166,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4150,6 +4230,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4253,6 +4334,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4324,6 +4406,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4393,6 +4476,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4475,6 +4559,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4547,6 +4632,7 @@ enable_transport = False
             NodeConfig {
                 panic_on_interface_error: false,
                 transport_enabled: false,
+                static_transport_identity: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,

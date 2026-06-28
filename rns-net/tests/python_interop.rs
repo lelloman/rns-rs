@@ -272,6 +272,7 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
         NodeConfig {
             panic_on_interface_error: false,
             transport_enabled: false,
+            static_transport_identity: false,
             identity: None,
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
