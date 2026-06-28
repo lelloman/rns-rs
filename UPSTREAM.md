@@ -68,6 +68,11 @@ interfaces. `rns-rs` does not vendor those generated upstream manuals; the
 maintained local summary in `docs/protocol-spec.md` was updated with the
 corresponding behavior port.
 
+Upstream `c99ec922aa6df4187c80cc9f111d11502d4c432d` is a Python formatting
+cleanup for local/shared-interface helper predicates in `RNS/Transport.py`.
+`rns-rs` models this state with typed `InterfaceInfo::is_local_client` metadata,
+and no behavior or Rust style change is required.
+
 ## Completed 1.3.5..1.3.6 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
