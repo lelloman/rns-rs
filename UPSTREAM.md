@@ -56,6 +56,11 @@ cleanup in `RNS/Interfaces/Interface.py::optimise_mtu`. The threshold values
 and behavior are unchanged, and `rns-rs` does not share that Python control
 flow. No Rust port is required.
 
+Upstream `156ce9cd34420dd06985746bb530c8fff006316e` rephrases and reorders
+the same reference-implementation authority statement in the upstream Python
+README files. The local tracking policy remains this file plus focused local
+protocol notes, so no additional `rns-rs` README or runtime change is required.
+
 ## Completed 1.3.5..1.3.6 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
