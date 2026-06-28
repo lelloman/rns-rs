@@ -9,9 +9,9 @@ The current upstream reference baseline is:
 - Local checkout used: `/home/lelloman/Reticulum`
 - Version: `1.3.6`
 - Tag: no local `1.3.6` tag was fetched; rgit `master` carries the release version
-- Commit: `48d17a86166b357a82b344311219486d805819b4`
-- Commit date: `2026-06-19 23:55:50 +0200`
-- Subject: `Fixed typo`
+- Commit: `c0bc19d9985759d3d5733c4810715a4a3bc7e67d`
+- Commit date: `2026-06-27 21:59:34 +0200`
+- Subject: `Cleanup`
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -42,36 +42,41 @@ Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
 
-## In-Progress 1.3.6..rgit Porting Queue
+## Completed 1.3.6..rgit Porting Queue
 
-Upstream `5355a9bb20c20bbd890c2c22ceaa1fcf32dbd6d6` updates the Python
-Reticulum repository README files to state that the executable reference
-implementation is the authoritative specification. This Rust repository already
-tracks that reference implementation explicitly in this file and does not
-vendor upstream README.mu content. No protocol, runtime, CLI or local
-documentation change is required for this docs-only upstream commit.
+The `/home/lelloman/Reticulum` checkout was advanced from upstream baseline
+`48d17a86166b357a82b344311219486d805819b4` to rgit `master` commit
+`c0bc19d9985759d3d5733c4810715a4a3bc7e67d` on 2026-06-28. Upstream
+`RNS/_version.py` still reports `1.3.6` at this commit.
 
-Upstream `176092ebf961a365600fa90b0ea4d75dbd0073a5` is a Python formatting
-cleanup in `RNS/Interfaces/Interface.py::optimise_mtu`. The threshold values
-and behavior are unchanged, and `rns-rs` does not share that Python control
-flow. No Rust port is required.
+This range added the per-interface `announces_from_internal` option, refined
+announce propagation for local, roaming and internal sources, switched
+non-transport nodes to an ephemeral transport-facing identity by default, and
+added the `local_hops_delta` option for masking locally originated zero-hop
+traffic on external interfaces. Generated upstream manuals, images and README
+wording changes were not vendored; local protocol notes were updated instead.
 
-Upstream `156ce9cd34420dd06985746bb530c8fff006316e` rephrases and reorders
-the same reference-implementation authority statement in the upstream Python
-README files. The local tracking policy remains this file plus focused local
-protocol notes, so no additional `rns-rs` README or runtime change is required.
+Upstream-to-local handling for this queue:
 
-Upstream `0a6f76e41b81705391c2efc7a7ae1a411393f7d3` updates generated
-understanding/manual documentation and image assets for the announce matrix
-change that allows roaming-sourced announces to propagate to internal-mode
-interfaces. `rns-rs` does not vendor those generated upstream manuals; the
-maintained local summary in `docs/protocol-spec.md` was updated with the
-corresponding behavior port.
-
-Upstream `c99ec922aa6df4187c80cc9f111d11502d4c432d` is a Python formatting
-cleanup for local/shared-interface helper predicates in `RNS/Transport.py`.
-`rns-rs` models this state with typed `InterfaceInfo::is_local_client` metadata,
-and no behavior or Rust style change is required.
+- `5355a9bb20c20bbd890c2c22ceaa1fcf32dbd6d6`: README-only specification
+  note, audited by `3cc6c83` (`Audit upstream README specification note`).
+- `d1813e1f`: `announces_from_internal`, ported by `29daab8` (`Port
+  announces_from_internal option`).
+- `276b7bb9`: generated/docs note for internal announce propagation, covered
+  locally by `490e12e` (`Document internal announce propagation option`).
+- `98817e3f`: announce propagation matrix and ephemeral transport identity,
+  ported by `5b02bce` (`Port announce matrix and ephemeral transport identity`).
+- `176092ebf961a365600fa90b0ea4d75dbd0073a5`: Python formatting-only
+  interface cleanup, audited by `9be3f4d` (`Audit upstream interface cleanup`).
+- `156ce9cd34420dd06985746bb530c8fff006316e`: README-only rephrase, audited
+  by `e45d940` (`Audit upstream README rephrase`).
+- `0a6f76e41b81705391c2efc7a7ae1a411393f7d3`: generated announce-matrix
+  docs/images, audited by `f78213e` (`Audit upstream announce matrix docs`).
+- `c99ec922aa6df4187c80cc9f111d11502d4c432d`: Python formatting-only
+  transport cleanup, audited by `d8515ae` (`Audit upstream transport cleanup`).
+- `c0bc19d9985759d3d5733c4810715a4a3bc7e67d`: `local_hops_delta` and
+  related shared-instance forwarding behavior, ported by `71b05c2` (`Port local
+  hops delta option`).
 
 ## Completed 1.3.5..1.3.6 Porting Queue
 
