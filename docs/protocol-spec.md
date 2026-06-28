@@ -762,10 +762,17 @@ access point, gateway, roaming and internal interfaces. The per-interface
 `recursive_prs` option can enable recursive path discovery regardless of the
 configured mode.
 
+The per-interface `announces_from_internal` option controls whether announces
+received on an internal-mode interface may propagate out on the interface where
+the option is set. It defaults to enabled. Disabling it only affects announce
+propagation; destinations behind internal-mode interfaces may still be resolved
+through path requests.
+
 For announce propagation, internal interfaces designate networks that belong to
 a network different from any marked as boundary. Announces from boundary or
 roaming interfaces do not propagate to internal interfaces, but announces from
-internal interfaces can propagate to boundary interfaces.
+internal interfaces can propagate to boundary interfaces unless the outbound
+interface disables `announces_from_internal`.
 
 ### 15.4 Retransmission
 
