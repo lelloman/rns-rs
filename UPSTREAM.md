@@ -61,6 +61,13 @@ the same reference-implementation authority statement in the upstream Python
 README files. The local tracking policy remains this file plus focused local
 protocol notes, so no additional `rns-rs` README or runtime change is required.
 
+Upstream `0a6f76e41b81705391c2efc7a7ae1a411393f7d3` updates generated
+understanding/manual documentation and image assets for the announce matrix
+change that allows roaming-sourced announces to propagate to internal-mode
+interfaces. `rns-rs` does not vendor those generated upstream manuals; the
+maintained local summary in `docs/protocol-spec.md` was updated with the
+corresponding behavior port.
+
 ## Completed 1.3.5..1.3.6 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
