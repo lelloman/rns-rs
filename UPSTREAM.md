@@ -51,6 +51,11 @@ tracks that reference implementation explicitly in this file and does not
 vendor upstream README.mu content. No protocol, runtime, CLI or local
 documentation change is required for this docs-only upstream commit.
 
+Upstream `176092ebf961a365600fa90b0ea4d75dbd0073a5` is a Python formatting
+cleanup in `RNS/Interfaces/Interface.py::optimise_mtu`. The threshold values
+and behavior are unchanged, and `rns-rs` does not share that Python control
+flow. No Rust port is required.
+
 ## Completed 1.3.5..1.3.6 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
