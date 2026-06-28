@@ -276,6 +276,8 @@ pub struct BlackholeEntry {
 pub struct TransportConfig {
     pub transport_enabled: bool,
     pub identity_hash: Option<[u8; 16]>,
+    /// Non-zero hop byte used to mask local zero-hop origination.
+    pub local_hops_delta: u8,
     /// Accept an announce with strictly fewer hops even when the random_blob
     /// is a duplicate of the existing path entry.  Default `false` preserves
     /// Python-compatible anti-replay behaviour.
@@ -328,6 +330,7 @@ mod tests {
         let cfg = TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
@@ -345,6 +348,7 @@ mod tests {
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
+        assert_eq!(cfg.local_hops_delta, 0);
         assert!(!cfg.prefer_shorter_path);
         assert_eq!(cfg.max_paths_per_destination, 1);
         assert_eq!(

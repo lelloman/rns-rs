@@ -5,6 +5,12 @@ use super::types::{InterfaceId, InterfaceInfo, PacketBytes, TransportAction};
 use crate::constants;
 use crate::packet::RawPacket;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct OutboundRouteOptions {
+    pub identity_hash: Option<[u8; 16]>,
+    pub local_hops_delta: u8,
+}
+
 /// Route an outbound packet through the transport system.
 ///
 /// Follows Transport.py:939-1179:
@@ -20,7 +26,29 @@ pub fn route_outbound(
     packet: &RawPacket,
     dest_type: u8,
     attached_interface: Option<InterfaceId>,
+    now: f64,
+) -> Vec<TransportAction> {
+    route_outbound_with_options(
+        path_table,
+        interfaces,
+        local_destinations,
+        packet,
+        dest_type,
+        attached_interface,
+        now,
+        OutboundRouteOptions::default(),
+    )
+}
+
+pub(crate) fn route_outbound_with_options(
+    path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
+    local_destinations: &alloc::collections::BTreeMap<[u8; 16], u8>,
+    packet: &RawPacket,
+    dest_type: u8,
+    attached_interface: Option<InterfaceId>,
     _now: f64,
+    options: OutboundRouteOptions,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
     let shared_raw: PacketBytes = packet.raw.clone().into();
@@ -35,8 +63,8 @@ pub fn route_outbound(
             .get(&packet.destination_hash)
             .and_then(|ps| ps.primary())
         {
-            let is_shared_client = interfaces
-                .get(&path_entry.receiving_interface)
+            let outbound_info = interfaces.get(&path_entry.receiving_interface);
+            let is_shared_client = outbound_info
                 .map(|iface| iface.is_local_client)
                 .unwrap_or(false);
 
@@ -48,17 +76,24 @@ pub fn route_outbound(
                 || (path_entry.hops == 1 && is_shared_client)
             {
                 if packet.flags.header_type == constants::HEADER_1 {
+                    let hops = outbound_info
+                        .and_then(|iface| local_hops_delta(packet, dest_type, iface, options))
+                        .unwrap_or(packet.raw[1]);
                     actions.push(TransportAction::SendOnInterface {
                         interface: path_entry.receiving_interface,
-                        raw: inject_transport_header(packet, &path_entry.next_hop).into(),
+                        raw: inject_transport_header_with_hops(packet, &path_entry.next_hop, hops)
+                            .into(),
                     });
                 }
                 // If already HEADER_2, just forward (shouldn't normally happen for outbound)
             } else {
-                // Direct: hops <= 1, send as-is on path interface
+                // Direct: hops <= 1, send on path interface.
+                let raw = outbound_info
+                    .map(|iface| raw_for_interface(packet, dest_type, iface, options))
+                    .unwrap_or_else(|| shared_raw.clone());
                 actions.push(TransportAction::SendOnInterface {
                     interface: path_entry.receiving_interface,
-                    raw: shared_raw,
+                    raw,
                 });
             }
             return actions;
@@ -71,9 +106,13 @@ pub fn route_outbound(
     // where the responder doesn't know the originating interface).
     if dest_type == constants::DESTINATION_LINK {
         if let Some(iface) = attached_interface {
+            let raw = interfaces
+                .get(&iface)
+                .map(|iface_info| raw_for_interface(packet, dest_type, iface_info, options))
+                .unwrap_or_else(|| shared_raw.clone());
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
-                raw: shared_raw,
+                raw,
             });
             return actions;
         }
@@ -105,7 +144,7 @@ pub fn route_outbound(
             if should_transmit {
                 actions.push(TransportAction::SendOnInterface {
                     interface: iface_info.id,
-                    raw: shared_raw.clone(),
+                    raw: raw_for_interface(packet, dest_type, iface_info, options),
                 });
             }
         }
@@ -114,9 +153,13 @@ pub fn route_outbound(
         // Python Transport.py:1037-1038: if attached_interface is set,
         // only send on that specific interface, not broadcast on all.
         if let Some(iface) = attached_interface {
+            let raw = interfaces
+                .get(&iface)
+                .map(|iface_info| raw_for_interface(packet, dest_type, iface_info, options))
+                .unwrap_or_else(|| shared_raw.clone());
             actions.push(TransportAction::SendOnInterface {
                 interface: iface,
-                raw: shared_raw,
+                raw,
             });
         } else {
             actions.push(TransportAction::BroadcastOnAllInterfaces {
@@ -129,16 +172,63 @@ pub fn route_outbound(
     actions
 }
 
-fn inject_transport_header(packet: &RawPacket, next_hop: &[u8; 16]) -> Vec<u8> {
+fn inject_transport_header_with_hops(packet: &RawPacket, next_hop: &[u8; 16], hops: u8) -> Vec<u8> {
     let new_flags =
         (constants::HEADER_2 << 6) | (constants::TRANSPORT_TRANSPORT << 4) | (packet.raw[0] & 0x0F);
 
     let mut new_raw = Vec::new();
     new_raw.push(new_flags);
-    new_raw.push(packet.raw[1]); // hops
+    new_raw.push(hops);
     new_raw.extend_from_slice(next_hop); // transport_id = next hop
     new_raw.extend_from_slice(&packet.raw[2..]); // dest_hash + context + data
     new_raw
+}
+
+fn mangle_hops(raw: &[u8], hops: u8) -> PacketBytes {
+    let mut new_raw = raw.to_vec();
+    if new_raw.len() > 1 {
+        new_raw[1] = hops;
+    }
+    new_raw.into()
+}
+
+fn local_hops_delta(
+    packet: &RawPacket,
+    dest_type: u8,
+    iface: &InterfaceInfo,
+    options: OutboundRouteOptions,
+) -> Option<u8> {
+    if options.local_hops_delta == 0
+        || packet.hops != 0
+        || dest_type == constants::DESTINATION_PLAIN
+        || dest_type == constants::DESTINATION_GROUP
+        || iface.is_local_client
+    {
+        None
+    } else {
+        Some(options.local_hops_delta)
+    }
+}
+
+fn raw_for_interface(
+    packet: &RawPacket,
+    dest_type: u8,
+    iface: &InterfaceInfo,
+    options: OutboundRouteOptions,
+) -> PacketBytes {
+    let Some(hops) = local_hops_delta(packet, dest_type, iface, options) else {
+        return packet.raw.clone().into();
+    };
+
+    if packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE
+        && packet.flags.header_type == constants::HEADER_1
+    {
+        if let Some(identity_hash) = options.identity_hash {
+            return inject_transport_header_with_hops(packet, &identity_hash, hops).into();
+        }
+    }
+
+    mangle_hops(&packet.raw, hops)
 }
 
 /// Determine whether an announce should be transmitted on a given interface.
@@ -280,6 +370,175 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
         RawPacket::pack(flags, 0, dest_hash, None, constants::CONTEXT_NONE, b"hello").unwrap()
+    }
+
+    fn make_packet_with_dest_type(dest_hash: &[u8; 16], dest_type: u8) -> RawPacket {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: dest_type,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        RawPacket::pack(flags, 0, dest_hash, None, constants::CONTEXT_NONE, b"hello").unwrap()
+    }
+
+    fn make_announce_packet(dest_hash: &[u8; 16], hops: u8) -> RawPacket {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        };
+        RawPacket::pack(
+            flags,
+            hops,
+            dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &[0xAA; 64],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_local_hops_delta_rewrites_direct_outbound_hop_byte() {
+        let dest = [0xD1; 16];
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path_with_next_hop(1, 2, dest));
+
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_FULL));
+        let local_dests = BTreeMap::new();
+        let packet = make_data_packet(&dest);
+
+        let actions = route_outbound_with_options(
+            &paths,
+            &interfaces,
+            &local_dests,
+            &packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1000.0,
+            OutboundRouteOptions {
+                identity_hash: Some([0x42; 16]),
+                local_hops_delta: 5,
+            },
+        );
+
+        match &actions[..] {
+            [TransportAction::SendOnInterface { interface, raw }] => {
+                assert_eq!(*interface, InterfaceId(2));
+                let flags = PacketFlags::unpack(raw[0]);
+                assert_eq!(flags.header_type, constants::HEADER_1);
+                assert_eq!(raw[1], 5);
+            }
+            other => panic!("expected one direct send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_local_hops_delta_injects_transport_header_for_announce() {
+        let dest = [0xD2; 16];
+        let paths = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
+        let mut local_dests = BTreeMap::new();
+        local_dests.insert(dest, constants::DESTINATION_SINGLE);
+        let packet = make_announce_packet(&dest, 0);
+        let identity_hash = [0x42; 16];
+
+        let actions = route_outbound_with_options(
+            &paths,
+            &interfaces,
+            &local_dests,
+            &packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1000.0,
+            OutboundRouteOptions {
+                identity_hash: Some(identity_hash),
+                local_hops_delta: 4,
+            },
+        );
+
+        match &actions[..] {
+            [TransportAction::SendOnInterface { interface, raw }] => {
+                assert_eq!(*interface, InterfaceId(1));
+                let flags = PacketFlags::unpack(raw[0]);
+                assert_eq!(flags.header_type, constants::HEADER_2);
+                assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+                assert_eq!(raw[1], 4);
+                assert_eq!(&raw[2..18], &identity_hash);
+                assert_eq!(&raw[18..], &packet.raw[2..]);
+            }
+            other => panic!("expected one announce send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_local_hops_delta_skips_plain_and_group_destinations() {
+        for dest_type in [constants::DESTINATION_PLAIN, constants::DESTINATION_GROUP] {
+            let dest = [dest_type; 16];
+            let mut interfaces = BTreeMap::new();
+            interfaces.insert(InterfaceId(9), make_interface(9, constants::MODE_FULL));
+            let paths = BTreeMap::new();
+            let local_dests = BTreeMap::new();
+            let packet = make_packet_with_dest_type(&dest, dest_type);
+
+            let actions = route_outbound_with_options(
+                &paths,
+                &interfaces,
+                &local_dests,
+                &packet,
+                dest_type,
+                Some(InterfaceId(9)),
+                1000.0,
+                OutboundRouteOptions {
+                    identity_hash: Some([0x42; 16]),
+                    local_hops_delta: 6,
+                },
+            );
+
+            match &actions[..] {
+                [TransportAction::SendOnInterface { raw, .. }] => assert_eq!(raw[1], 0),
+                other => panic!("expected attached-interface send, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_local_hops_delta_skips_local_client_interface() {
+        let dest = [0xD3; 16];
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path_with_next_hop(1, 7, dest));
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(
+            InterfaceId(7),
+            make_local_client_interface(7, constants::MODE_FULL),
+        );
+        let local_dests = BTreeMap::new();
+        let packet = make_data_packet(&dest);
+
+        let actions = route_outbound_with_options(
+            &paths,
+            &interfaces,
+            &local_dests,
+            &packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1000.0,
+            OutboundRouteOptions {
+                identity_hash: Some([0x42; 16]),
+                local_hops_delta: 5,
+            },
+        );
+
+        match &actions[..] {
+            [TransportAction::SendOnInterface { raw, .. }] => assert_eq!(raw[1], 0),
+            other => panic!("expected one local-client send, got {other:?}"),
+        }
     }
 
     #[test]
@@ -488,7 +747,8 @@ mod tests {
             make_interface(2, constants::MODE_ACCESS_POINT),
         );
 
-        let local_dests = BTreeMap::new();
+        let mut local_dests = BTreeMap::new();
+        local_dests.insert(dest, constants::DESTINATION_SINGLE);
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -532,7 +792,8 @@ mod tests {
             make_interface(3, constants::MODE_ACCESS_POINT),
         );
 
-        let local_dests = BTreeMap::new();
+        let mut local_dests = BTreeMap::new();
+        local_dests.insert(dest, constants::DESTINATION_SINGLE);
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,

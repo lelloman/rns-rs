@@ -780,6 +780,12 @@ default while retaining the configured/stored identity for local state. The
 `static_transport_identity` option restores the older behavior of reusing the
 stored identity as the transport-facing identity for every instance start.
 
+The `local_hops_delta` option masks locally originated zero-hop SINGLE and LINK
+traffic by writing a random hop byte in the range 2 through 7 on external interfaces.
+PLAIN and GROUP traffic is not modified, and local-client interfaces continue to
+see ordinary zero-hop traffic. For zero-hop announces emitted as HEADER_1, the
+transport inserts its transport identity header before applying the delta.
+
 ### 15.4 Retransmission
 
 Validated announces may be queued for retransmission with:

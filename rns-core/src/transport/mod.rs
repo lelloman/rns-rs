@@ -36,7 +36,7 @@ use self::inbound::{
     route_via_link_table,
 };
 use self::ingress_control::IngressControl;
-use self::outbound::{route_outbound, should_transmit_announce};
+use self::outbound::{route_outbound_with_options, should_transmit_announce, OutboundRouteOptions};
 use self::pathfinder::{
     decide_announce_multipath, extract_random_blob, timebase_from_random_blob,
     timebase_from_random_blobs, MultiPathDecision,
@@ -740,12 +740,22 @@ impl TransportEngine {
                 &next_hop[..4]
             );
         }
-        let new_raw = forward_transport_packet(
+        let mut new_raw = forward_transport_packet(
             &ctx.packet,
             next_hop,
             forwarded_remaining_hops,
             outbound_interface,
         );
+        if self.config.local_hops_delta != 0
+            && ctx.from_local_client
+            && !outbound_is_local_client
+            && ctx.packet.hops == 0
+            && ctx.packet.flags.destination_type != constants::DESTINATION_PLAIN
+            && ctx.packet.flags.destination_type != constants::DESTINATION_GROUP
+            && new_raw.len() > 1
+        {
+            new_raw[1] = self.config.local_hops_delta;
+        }
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
             let proof_timeout = ctx.now
@@ -1494,7 +1504,7 @@ impl TransportEngine {
         attached_interface: Option<InterfaceId>,
         now: f64,
     ) -> Vec<TransportAction> {
-        let actions = route_outbound(
+        let actions = route_outbound_with_options(
             &self.path_table,
             &self.interfaces,
             &self.local_destinations,
@@ -1502,6 +1512,10 @@ impl TransportEngine {
             dest_type,
             attached_interface,
             now,
+            OutboundRouteOptions {
+                identity_hash: self.config.identity_hash,
+                local_hops_delta: self.config.local_hops_delta,
+            },
         );
 
         // Add to packet hashlist for outbound packets
@@ -1781,6 +1795,7 @@ mod tests {
             } else {
                 None
             },
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
@@ -4694,6 +4709,58 @@ mod tests {
     }
 
     #[test]
+    fn test_local_client_forward_to_external_applies_local_hops_delta() {
+        let daemon_id = [0x42; 16];
+        let mut config = make_config(true);
+        config.local_hops_delta = 5;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_local_client_interface(1));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest_hash = [0xB7; 16];
+        engine.upsert_path_destination(
+            dest_hash,
+            make_path_entry(1000.0, 1, InterfaceId(2), dest_hash),
+            1000.0,
+        );
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            Some(&daemon_id),
+            constants::CONTEXT_NONE,
+            b"from local client",
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x44; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("local-client DATA should be forwarded externally");
+        assert_eq!(raw[1], 5);
+        let forwarded_flags = PacketFlags::unpack(raw[0]);
+        assert_eq!(forwarded_flags.header_type, constants::HEADER_1);
+        assert_eq!(&raw[2..18], &dest_hash);
+    }
+
+    #[test]
     fn test_issue4_external_data_to_shared_client_strips_transport_header() {
         let daemon_id = [0x42; 16];
         let mut engine = TransportEngine::new(make_config(true));
@@ -4761,6 +4828,7 @@ mod tests {
         let mut engine = TransportEngine::new(TransportConfig {
             transport_enabled: true,
             identity_hash: Some(daemon_id),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,

@@ -416,6 +416,7 @@ fn register_started_interface(
 pub struct NodeConfig {
     pub transport_enabled: bool,
     pub static_transport_identity: bool,
+    pub local_hops_delta: bool,
     pub identity: Option<Identity>,
     /// Interface configurations (parsed via registry factories).
     pub interfaces: Vec<InterfaceConfig>,
@@ -506,6 +507,7 @@ impl Default for NodeConfig {
         Self {
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: None,
             interfaces: Vec::new(),
             share_instance: false,
@@ -849,6 +851,7 @@ impl RnsNode {
         let node_config = NodeConfig {
             transport_enabled: rns_config.reticulum.enable_transport,
             static_transport_identity: rns_config.reticulum.static_transport_identity,
+            local_hops_delta: rns_config.reticulum.local_hops_delta,
             identity: Some(identity),
             share_instance: rns_config.reticulum.share_instance,
             instance_name: rns_config.reticulum.instance_name.clone(),
@@ -1017,9 +1020,18 @@ impl RnsNode {
             Identity::new(&mut OsRng)
         };
 
+        let local_hops_delta = if config.local_hops_delta {
+            let mut byte = [0u8; 1];
+            OsRng.fill_bytes(&mut byte);
+            byte[0] % 6 + 2
+        } else {
+            0
+        };
+
         let transport_config = TransportConfig {
             transport_enabled: config.transport_enabled,
             identity_hash: Some(*transport_identity.hash()),
+            local_hops_delta,
             prefer_shorter_path: config.prefer_shorter_path,
             max_paths_per_destination: config.max_paths_per_destination,
             packet_hashlist_max_entries: config.packet_hashlist_max_entries,
@@ -2705,6 +2717,7 @@ mod tests {
         TransportConfig {
             transport_enabled,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3057,6 +3070,7 @@ mod tests {
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -3282,6 +3296,7 @@ mod tests {
                 panic_on_interface_error: false,
                 transport_enabled: true,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: Some(identity),
                 interfaces: vec![],
                 share_instance: false,
@@ -3344,6 +3359,7 @@ mod tests {
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -3778,6 +3794,16 @@ enable_transport = True
     }
 
     #[test]
+    fn config_parser_accepts_local_hops_delta_option() {
+        let cfg = r#"
+[reticulum]
+local_hops_delta = yes
+"#;
+        let parsed = config::parse(cfg).unwrap();
+        assert!(parsed.reticulum.local_hops_delta);
+    }
+
+    #[test]
     fn config_parser_accepts_static_transport_identity_option() {
         let config = r#"
 [reticulum]
@@ -3799,6 +3825,7 @@ static_transport_identity = yes
             NodeConfig {
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: Some(identity),
                 share_instance: false,
                 ..Default::default()
@@ -3824,6 +3851,7 @@ static_transport_identity = yes
             NodeConfig {
                 transport_enabled: false,
                 static_transport_identity: true,
+                local_hops_delta: false,
                 identity: Some(identity),
                 share_instance: false,
                 ..Default::default()
@@ -4029,6 +4057,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4100,6 +4129,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4167,6 +4197,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4231,6 +4262,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4335,6 +4367,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4407,6 +4440,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4477,6 +4511,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4560,6 +4595,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,
@@ -4633,6 +4669,7 @@ enable_transport = False
                 panic_on_interface_error: false,
                 transport_enabled: false,
                 static_transport_identity: false,
+                local_hops_delta: false,
                 identity: None,
                 interfaces: vec![],
                 share_instance: false,

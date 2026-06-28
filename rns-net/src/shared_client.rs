@@ -74,6 +74,7 @@ impl RnsNode {
         let transport_config = TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -327,6 +328,7 @@ pub fn bench_shared_client_replay_once(
     let transport_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,

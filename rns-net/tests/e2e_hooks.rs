@@ -218,6 +218,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
@@ -290,6 +291,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),

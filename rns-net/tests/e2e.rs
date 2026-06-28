@@ -624,6 +624,7 @@ fn start_transport_node_with_limits(
             panic_on_interface_error: true,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
@@ -723,6 +724,7 @@ fn start_client_node_with_packet_hashlist(
             panic_on_interface_error: true,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
@@ -1222,6 +1224,7 @@ fn test_direct_link_no_transport() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &bob_id.get_private_key().unwrap(),
             )),
@@ -1827,6 +1830,7 @@ fn test_plain_message_delivery() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
@@ -2065,6 +2069,7 @@ fn test_group_message_delivery() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
@@ -2185,6 +2190,7 @@ fn test_group_wrong_key_fails() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
@@ -3415,6 +3421,7 @@ fn test_udp_announce_and_message() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &alice_identity.get_private_key().unwrap(),
             )),
@@ -3490,6 +3497,7 @@ fn test_udp_announce_and_message() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
@@ -3660,6 +3668,7 @@ fn discovery_announce_received_by_client() {
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
@@ -3751,6 +3760,7 @@ fn discovery_announce_received_by_client() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &client_identity.get_private_key().unwrap(),
             )),
@@ -3874,6 +3884,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
@@ -3960,6 +3971,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
@@ -4101,6 +4113,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: Vec::new(),
             share_instance: false,
@@ -4281,6 +4294,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
@@ -4435,6 +4449,7 @@ fn discovery_announce_through_relay() {
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
@@ -4521,6 +4536,7 @@ fn discovery_announce_through_relay() {
             panic_on_interface_error: false,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![
                 InterfaceConfig {
@@ -4619,6 +4635,7 @@ fn discovery_announce_through_relay() {
             panic_on_interface_error: false,
             transport_enabled: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
@@ -4738,6 +4755,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
             panic_on_interface_error: true,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
@@ -4861,6 +4879,7 @@ fn start_managed_transport_client(
             panic_on_interface_error: true,
             transport_enabled: true,
             static_transport_identity: false,
+            local_hops_delta: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),

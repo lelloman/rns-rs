@@ -35,6 +35,7 @@ pub struct ParsedHook {
 pub struct ReticulumSection {
     pub enable_transport: bool,
     pub static_transport_identity: bool,
+    pub local_hops_delta: bool,
     pub share_instance: bool,
     pub instance_name: String,
     pub shared_instance_port: u16,
@@ -154,6 +155,7 @@ impl Default for ReticulumSection {
         ReticulumSection {
             enable_transport: false,
             static_transport_identity: false,
+            local_hops_delta: false,
             share_instance: true,
             instance_name: "default".into(),
             shared_instance_port: 37428,
@@ -585,6 +587,12 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
                 key: "static_transport_identity".into(),
                 value: v.clone(),
             })?;
+    }
+    if let Some(v) = kvs.get("local_hops_delta") {
+        section.local_hops_delta = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "local_hops_delta".into(),
+            value: v.clone(),
+        })?;
     }
     if let Some(v) = kvs.get("share_instance") {
         section.share_instance = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -1076,6 +1084,7 @@ mod tests {
         let config = parse("").unwrap();
         assert!(!config.reticulum.enable_transport);
         assert!(!config.reticulum.static_transport_identity);
+        assert!(!config.reticulum.local_hops_delta);
         assert!(config.reticulum.share_instance);
         assert_eq!(config.reticulum.instance_name, "default");
         assert_eq!(config.logging.loglevel, 4);

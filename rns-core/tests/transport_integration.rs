@@ -69,6 +69,7 @@ impl TestHarness {
             } else {
                 None
             },
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
@@ -95,6 +96,7 @@ impl TestHarness {
         let config = TransportConfig {
             transport_enabled: true,
             identity_hash: Some(identity_hash),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
@@ -121,6 +123,7 @@ impl TestHarness {
         let config = TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: max_paths,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,

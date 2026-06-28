@@ -183,6 +183,7 @@ fn make_transport_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {
         transport_enabled,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1504,6 +1505,7 @@ fn process_inbound_frame() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1555,6 +1557,7 @@ fn queued_startup_events_register_dynamic_interface_before_frame() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1612,6 +1615,7 @@ fn dispatch_send() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1655,6 +1659,7 @@ fn dispatch_broadcast() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1703,6 +1708,7 @@ fn dispatch_broadcast_exclude() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1751,6 +1757,7 @@ fn tick_event() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0x42; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1792,6 +1799,7 @@ fn shutdown_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1849,6 +1857,7 @@ fn begin_drain_updates_driver_status() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1892,6 +1901,7 @@ fn begin_drain_with_pending_link_reports_incomplete_status() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -1941,6 +1951,7 @@ fn begin_drain_with_queued_writer_frames_reports_incomplete_status() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2027,6 +2038,7 @@ fn enforce_drain_deadline_tears_down_remaining_links() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2075,6 +2087,7 @@ fn begin_drain_with_holepunch_session_reports_incomplete_status_and_deadline_abo
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2140,6 +2153,7 @@ fn begin_drain_event_is_processed_by_run_loop() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2186,6 +2200,7 @@ fn send_channel_message_returns_error_while_draining() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2236,6 +2251,7 @@ fn send_outbound_is_ignored_while_draining() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2288,6 +2304,7 @@ fn request_path_is_ignored_while_draining() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2336,6 +2353,7 @@ fn create_link_returns_zero_link_id_while_draining() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2381,6 +2399,7 @@ fn announce_callback() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2437,6 +2456,7 @@ fn dispatch_skips_offline_interface() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2492,6 +2512,7 @@ fn interface_up_refreshes_writer() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2779,6 +2800,7 @@ fn dynamic_interface_deregister() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2839,6 +2861,7 @@ fn send_wouldblock_is_backed_off_between_dispatches() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2891,6 +2914,7 @@ fn interface_callbacks_fire() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2942,6 +2966,7 @@ fn frame_updates_rx_stats() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -2995,6 +3020,7 @@ fn send_updates_tx_stats() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3039,6 +3065,7 @@ fn broadcast_updates_tx_stats() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3089,6 +3116,7 @@ fn query_interface_stats() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0x42; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3140,6 +3168,7 @@ fn query_path_table() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3204,6 +3233,7 @@ fn query_drop_path() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3267,6 +3297,7 @@ fn send_outbound_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3325,6 +3356,7 @@ fn register_destination_and_deliver() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3390,6 +3422,7 @@ fn query_transport_identity() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0xAA; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3432,6 +3465,7 @@ fn query_link_count() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3472,6 +3506,7 @@ fn query_rate_table() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3512,6 +3547,7 @@ fn query_next_hop() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3556,6 +3592,7 @@ fn query_next_hop_if_name() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3600,6 +3637,7 @@ fn query_drop_all_via() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3646,6 +3684,7 @@ fn query_drop_announce_queues() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3690,6 +3729,7 @@ fn register_link_dest_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3744,6 +3784,7 @@ fn create_link_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3804,6 +3845,7 @@ fn create_link_uses_known_destination_interface_without_path() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3877,6 +3919,7 @@ fn create_link_ignores_sentinel_known_destination_interface() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -3949,6 +3992,7 @@ fn deliver_local_routes_to_link_manager() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -4006,6 +4050,7 @@ fn shutdown_tears_down_pending_link() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -4059,6 +4104,7 @@ fn shutdown_tears_down_active_link() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -4107,6 +4153,7 @@ fn link_count_includes_link_manager() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -4161,6 +4208,7 @@ fn register_request_handler_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -4206,6 +4254,7 @@ fn management_announces_emitted_after_delay() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some(identity_hash),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5462,6 +5511,7 @@ fn disabled_interface_drops_ingress_and_egress() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5534,6 +5584,7 @@ fn management_announces_not_emitted_when_disabled() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some(identity_hash),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5587,6 +5638,7 @@ fn management_announces_not_emitted_before_delay() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some(identity_hash),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5639,6 +5691,7 @@ fn announce_received_populates_known_destinations() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5701,6 +5754,7 @@ fn known_destinations_cleanup_respects_ttl() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5781,6 +5835,7 @@ fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5931,6 +5986,7 @@ fn known_destinations_cleanup_enforces_cap() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -5999,6 +6055,7 @@ fn retained_known_destination_survives_cleanup() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6080,6 +6137,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6128,6 +6186,7 @@ fn query_has_path() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6205,6 +6264,7 @@ fn query_hops_to() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6265,6 +6325,7 @@ fn query_recall_identity() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6349,6 +6410,7 @@ fn request_path_sends_packet() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6406,6 +6468,7 @@ fn request_path_includes_transport_id() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0xBB; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6474,6 +6537,7 @@ fn path_request_dest_registered() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6514,6 +6578,7 @@ fn register_proof_strategy_event() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6561,6 +6626,7 @@ fn register_proof_strategy_prove_none_no_identity() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6605,6 +6671,7 @@ fn send_outbound_tracks_sent_packets() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6660,6 +6727,7 @@ fn prove_all_generates_proof_on_delivery() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6746,6 +6814,7 @@ fn prove_none_does_not_generate_proof() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6821,6 +6890,7 @@ fn no_proof_strategy_does_not_generate_proof() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -6910,6 +6980,7 @@ fn prove_app_calls_callback() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7015,6 +7086,7 @@ fn inbound_proof_fires_callback() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7119,6 +7191,7 @@ fn inbound_proof_for_unknown_packet_is_ignored() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7207,6 +7280,7 @@ fn inbound_implicit_proof_matches_truncated_destination() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7348,6 +7422,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7467,6 +7542,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7564,6 +7640,7 @@ fn proof_data_is_valid_explicit_proof() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7657,6 +7734,7 @@ fn query_local_destinations_empty() {
     let driver_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7699,6 +7777,7 @@ fn query_local_destinations_with_registered() {
     let driver_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7749,6 +7828,7 @@ fn query_local_destinations_tracks_link_dest() {
     let driver_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7801,6 +7881,7 @@ fn query_links_empty() {
     let driver_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7838,6 +7919,7 @@ fn query_resources_empty() {
     let driver_config = TransportConfig {
         transport_enabled: false,
         identity_hash: None,
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7908,6 +7990,7 @@ fn send_probe_unknown_dest_returns_none() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -7961,6 +8044,7 @@ fn send_probe_known_dest_returns_packet_hash() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8045,6 +8129,7 @@ fn check_proof_not_found_returns_none() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8090,6 +8175,7 @@ fn check_proof_found_returns_rtt() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8166,6 +8252,7 @@ fn inbound_proof_populates_completed_proofs() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8291,6 +8378,7 @@ fn inbound_proof_populates_completed_proofs() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8352,6 +8440,7 @@ fn interface_stats_includes_probe_responder() {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0x42; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8401,6 +8490,7 @@ fn interface_stats_probe_responder_none_when_disabled() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8484,6 +8574,7 @@ fn announce_stores_receiving_interface_in_known_destinations() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8542,6 +8633,7 @@ fn announce_on_different_interfaces_stores_correct_id() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8599,6 +8691,7 @@ fn inject_identity_stores_sentinel_interface() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8673,6 +8766,7 @@ fn inject_identity_overwrites_previous_entry() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
@@ -8756,6 +8850,7 @@ fn re_announce_updates_receiving_interface() {
         TransportConfig {
             transport_enabled: false,
             identity_hash: None,
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,

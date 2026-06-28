@@ -28,6 +28,7 @@ mod tests {
         TransportEngine::new(TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0xAA; 16]),
+            local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
