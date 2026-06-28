@@ -42,6 +42,15 @@ Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
 
+## In-Progress 1.3.6..rgit Porting Queue
+
+Upstream `5355a9bb20c20bbd890c2c22ceaa1fcf32dbd6d6` updates the Python
+Reticulum repository README files to state that the executable reference
+implementation is the authoritative specification. This Rust repository already
+tracks that reference implementation explicitly in this file and does not
+vendor upstream README.mu content. No protocol, runtime, CLI or local
+documentation change is required for this docs-only upstream commit.
+
 ## Completed 1.3.5..1.3.6 Porting Queue
 
 The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
