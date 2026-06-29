@@ -962,19 +962,6 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
-dependencies = [
- "humantime",
- "is-terminal",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
 version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c863f0904021b108aa8b2f55046443e6b1ebde8fd4a15c399893aae4fa069f"
@@ -1008,7 +995,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1346,12 +1333,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "humantime"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
-
-[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1426,7 +1407,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2030,7 +2011,7 @@ name = "rns-cli"
 version = "0.2.5"
 dependencies = [
  "anyhow",
- "env_logger 0.10.2",
+ "env_logger",
  "libc",
  "log",
  "rns-core",
@@ -2073,7 +2054,7 @@ dependencies = [
 name = "rns-ctl"
 version = "0.2.7"
 dependencies = [
- "env_logger 0.11.8",
+ "env_logger",
  "libc",
  "log",
  "rcgen",
@@ -2091,7 +2072,7 @@ dependencies = [
 name = "rns-git"
 version = "0.1.2"
 dependencies = [
- "env_logger 0.10.2",
+ "env_logger",
  "log",
  "rns-core",
  "rns-crypto",
@@ -2129,7 +2110,7 @@ dependencies = [
  "bzip2",
  "criterion",
  "ctrlc",
- "env_logger 0.11.8",
+ "env_logger",
  "libc",
  "log",
  "polling",
@@ -2157,7 +2138,7 @@ dependencies = [
 name = "rns-server"
 version = "0.1.4"
 dependencies = [
- "env_logger 0.11.8",
+ "env_logger",
  "libc",
  "log",
  "rns-cli",
@@ -2235,7 +2216,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2471,7 +2452,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3117,7 +3098,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
