@@ -1961,7 +1961,8 @@ mod tls_tests {
 
         // Build a root cert store with our self-signed cert
         let mut root_store = rustls::RootCertStore::empty();
-        let der_cert = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+        use rustls::pki_types::{pem::PemObject, CertificateDer};
+        let der_cert = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         for c in der_cert {

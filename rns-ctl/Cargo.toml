@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = []
-tls = ["rustls", "rustls-pemfile"]
+tls = ["rustls"]
 rns-hooks = ["rns-hooks-native"]
 rns-hooks-wasm = ["rns-net/rns-hooks-wasm"]
 rns-hooks-native = ["rns-net/rns-hooks-native"]
@@ -26,10 +26,8 @@ serde_json = "1"
 log = "0.4"
 env_logger = "0.11"
 rustls = { version = "0.23", optional = true }
-rustls-pemfile = { version = "2", optional = true }
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
 rns-hooks-crate = { package = "rns-hooks", version = "0.1.8", path = "../rns-hooks", default-features = false }
 rustls = "0.23"
-rustls-pemfile = "2"
