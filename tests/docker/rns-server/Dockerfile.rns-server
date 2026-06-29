@@ -1,4 +1,4 @@
-FROM rust:1.93.1-bookworm AS builder
+FROM rust:1.96.0-bookworm AS builder
 WORKDIR /build
 ARG RNS_SERVER_FEATURES=rns-hooks-wasm
 COPY Cargo.toml Cargo.lock ./
