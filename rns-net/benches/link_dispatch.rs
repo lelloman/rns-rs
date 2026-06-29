@@ -100,7 +100,7 @@ fn bench_send_on_link(c: &mut Criterion) {
     group.bench_function("send_on_link_256b", |b| {
         b.iter_batched(
             setup_active_link,
-            |(mut init_mgr, _resp_mgr, link_id)| {
+            |(init_mgr, _resp_mgr, link_id)| {
                 let mut rng = make_rng(0x41);
                 black_box(init_mgr.send_on_link(
                     &link_id,
