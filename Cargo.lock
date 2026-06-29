@@ -2119,7 +2119,6 @@ name = "rns-cli"
 version = "0.2.5"
 dependencies = [
  "anyhow",
- "bincode",
  "env_logger 0.10.2",
  "libc",
  "log",
@@ -2218,7 +2217,6 @@ dependencies = [
 name = "rns-net"
 version = "0.5.10"
 dependencies = [
- "bincode",
  "bzip2",
  "criterion",
  "ctrlc",
@@ -2226,6 +2224,7 @@ dependencies = [
  "libc",
  "log",
  "polling",
+ "postcard",
  "rayon",
  "rns-core",
  "rns-crypto",

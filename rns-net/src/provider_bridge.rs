@@ -85,6 +85,14 @@ pub struct HookProviderEventEnvelope {
     pub payload: Vec<u8>,
 }
 
+pub fn encode_provider_envelope(envelope: &ProviderEnvelope) -> Result<Vec<u8>, postcard::Error> {
+    postcard::to_allocvec(envelope)
+}
+
+pub fn decode_provider_envelope(buf: &[u8]) -> Result<ProviderEnvelope, postcard::Error> {
+    postcard::from_bytes(buf)
+}
+
 #[derive(Debug, Clone)]
 struct QueuedEnvelope {
     encoded: Vec<u8>,
@@ -223,7 +231,7 @@ impl ProviderBridge {
                     payload,
                 }),
             };
-            let encoded = match bincode::serialize(&envelope) {
+            let encoded = match encode_provider_envelope(&envelope) {
                 Ok(encoded) => encoded,
                 Err(err) => {
                     log::warn!("provider bridge failed to serialize event: {}", err);
@@ -566,7 +574,7 @@ fn next_consumer_frame(
             seq: take_seq(&mut bridge_state),
             message: ProviderMessage::DroppedEvents { count },
         };
-        return match bincode::serialize(&envelope) {
+        return match encode_provider_envelope(&envelope) {
             Ok(encoded) => Some(encoded),
             Err(err) => {
                 log::warn!("provider bridge failed to serialize dropped event: {}", err);
@@ -760,7 +768,7 @@ mod tests {
         let len = u32::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf).unwrap();
-        bincode::deserialize(&buf).unwrap()
+        decode_provider_envelope(&buf).unwrap()
     }
 
     fn wait_for_consumer(bridge: &ProviderBridge) {

@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use rns_hooks_abi::sentinel::{BackbonePeerPayload, BACKBONE_PEER_PAYLOAD_TYPE};
 use rns_net::config;
 use rns_net::pickle::PickleValue;
-use rns_net::provider_bridge::{HookProviderEventEnvelope, ProviderEnvelope, ProviderMessage};
+use rns_net::provider_bridge::{
+    decode_provider_envelope, HookProviderEventEnvelope, ProviderEnvelope, ProviderMessage,
+};
 use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
 use rns_net::{HookInfo, RpcAddr, RpcClient};
@@ -857,8 +859,8 @@ fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<Provider
     let len = u32::from_be_bytes(len_buf) as usize;
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf)?;
-    let envelope: ProviderEnvelope =
-        bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let envelope: ProviderEnvelope = decode_provider_envelope(&buf)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(Some(envelope))
 }
 
