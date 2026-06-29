@@ -24,6 +24,15 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
+# Upstream version splits that remain after direct dependency upgrades.
+skip = [
+    { name = "getrandom", version = "0.2.17" },      # wasmtime-internal-cache -> directories-next/redox_users
+    { name = "hashbrown", version = "0.16.1" },      # wasmtime/gimli while wasmparser and rusqlite use 0.17
+    { name = "thiserror", version = "1.0.69" },      # esp-idf-sys build tooling and wasmtime cache deps
+    { name = "thiserror-impl", version = "1.0.69" },
+    { name = "wasm-encoder", version = "0.251.0" },  # wasmtime 46 internal crates vs wat/wast 252
+    { name = "winnow", version = "0.7.14" },         # toml 0.9 internal parser split in wasmtime cache
+]
 
 [sources]
 unknown-registry = "deny"
