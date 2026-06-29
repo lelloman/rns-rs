@@ -3347,9 +3347,6 @@ mod tests {
         )
         .unwrap();
         assert!(blob.contains("answer"));
-        #[cfg(feature = "syntax-highlighting")]
-        assert!(blob.contains("`FT"));
-        #[cfg(not(feature = "syntax-highlighting"))]
         assert!(blob.contains("pub fn answer()"));
 
         let commits = render_page(
@@ -4019,69 +4016,10 @@ Unmatched * marker\n\
         );
         assert!(out.contains("not bold"));
         assert!(out.contains("\\`not inline\\`"));
-        #[cfg(feature = "syntax-highlighting")]
-        assert!(out.contains("`FT"));
-        #[cfg(not(feature = "syntax-highlighting"))]
         assert!(out.contains("`=\n**not bold** and \\`not inline\\`\n`=\n"));
         assert!(!out.contains("`!not bold`!"));
         assert!(out.contains("Unmatched * marker"));
         assert!(out.contains("1. numbered"));
-    }
-
-    #[cfg(feature = "syntax-highlighting")]
-    #[test]
-    fn rust_blob_page_uses_syntax_highlighting_and_escapes_source() {
-        let tmp = tempfile::tempdir().unwrap();
-        let config = cfg(tmp.path());
-        create_repo(
-            config.repositories_dir.join("public/highlighted"),
-            "src/lib.rs",
-            "pub fn `answer`() -> u8 { 42 }\n",
-        );
-        let access = access(&config);
-
-        let blob = render_page(
-            PATH_BLOB,
-            &config,
-            &access,
-            &page_request(&[
-                ("var_g", "public"),
-                ("var_r", "highlighted"),
-                ("var_path", "src/lib.rs"),
-            ]),
-            None,
-        )
-        .unwrap();
-
-        assert!(blob.contains("`FT"));
-        assert!(blob.contains("\\`"));
-        assert!(blob.contains("answer"));
-    }
-
-    #[cfg(feature = "syntax-highlighting")]
-    #[test]
-    fn markdown_readme_rust_fence_uses_syntax_highlighting() {
-        let tmp = tempfile::tempdir().unwrap();
-        let config = cfg(tmp.path());
-        create_repo(
-            config.repositories_dir.join("public/readme-code"),
-            "README.md",
-            "# Example\n\n```rust\npub fn `answer`() -> u8 { 42 }\n```\n",
-        );
-        let access = access(&config);
-
-        let page = render_page(
-            PATH_REPO,
-            &config,
-            &access,
-            &page_request(&[("var_g", "public"), ("var_r", "readme-code")]),
-            None,
-        )
-        .unwrap();
-
-        assert!(page.contains("`FT"));
-        assert!(page.contains("\\`"));
-        assert!(page.contains("answer"));
     }
 
     #[test]
@@ -4395,9 +4333,8 @@ Unmatched * marker\n\
         assert!(!oversized.contains("Displaying Rendered\n\n>"));
     }
 
-    #[cfg(not(feature = "syntax-highlighting"))]
     #[test]
-    fn feature_off_renders_plain_literal_blocks() {
+    fn code_blocks_render_plain_literal_blocks() {
         let blob = crate::highlight::literal_block("pub fn main() {}\n", Some("main.rs"), None);
         assert!(!blob.contains("`FT"));
         assert!(blob.contains("pub fn main() {}"));
