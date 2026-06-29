@@ -23,6 +23,7 @@ for entry in "${EXAMPLES[@]}"; do
     dir="${entry%%:*}"
     crate="${entry##*:}"
     echo "Building $dir..."
+    RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=--allow-undefined" \
     cargo build \
         --manifest-path "$SCRIPT_DIR/examples/$dir/Cargo.toml" \
         --target wasm32-unknown-unknown \
