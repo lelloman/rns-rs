@@ -4,6 +4,7 @@ description = "Sentinel hook used by rns-sentineld"
 version = "0.1.4"
 edition.workspace = true
 license-file.workspace = true
+publish.workspace = true
 repository.workspace = true
 authors.workspace = true
 

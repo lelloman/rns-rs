@@ -8,6 +8,7 @@ resolver = "2"
 version = "0.1.8"
 edition = "2021"
 license-file = "LICENSE"
+publish = false
 repository = "https://github.com/lelloman/rns-rs"
 authors = ["rns-rs contributors"]
 

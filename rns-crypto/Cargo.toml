@@ -4,6 +4,7 @@ description = "Cryptographic primitives for the Reticulum Network Stack"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
+publish.workspace = true
 repository.workspace = true
 authors.workspace = true
 
