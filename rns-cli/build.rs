@@ -38,6 +38,7 @@ fn embed_stats_hook() -> anyhow::Result<()> {
         .arg("wasm32-unknown-unknown")
         .arg("--target-dir")
         .arg(&target_root);
+    allow_undefined_wasm_imports(&mut cmd);
     if profile == "release" {
         cmd.arg("--release");
     }
@@ -111,6 +112,7 @@ fn embed_sentinel_hook() -> anyhow::Result<()> {
         .arg("wasm32-unknown-unknown")
         .arg("--target-dir")
         .arg(&target_root);
+    allow_undefined_wasm_imports(&mut cmd);
     if profile == "release" {
         cmd.arg("--release");
     }
@@ -163,4 +165,20 @@ fn resolve_sentinel_hook_manifest(manifest_dir: &Path, cargo: &str) -> anyhow::R
     });
 
     manifest.ok_or_else(|| anyhow::anyhow!("could not locate rns-sentinel-hook manifest"))
+}
+fn allow_undefined_wasm_imports(cmd: &mut Command) {
+    if let Ok(mut encoded_flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
+        if !encoded_flags.is_empty() {
+            encoded_flags.push('\x1f');
+            encoded_flags.push_str("-Clink-arg=--allow-undefined");
+            cmd.env("CARGO_ENCODED_RUSTFLAGS", encoded_flags);
+            return;
+        }
+    }
+
+    let rustflags = env::var("RUSTFLAGS")
+        .map(|flags| format!("{flags} -C link-arg=--allow-undefined"))
+        .unwrap_or_else(|_| "-C link-arg=--allow-undefined".to_string());
+    cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+    cmd.env("RUSTFLAGS", rustflags);
 }
