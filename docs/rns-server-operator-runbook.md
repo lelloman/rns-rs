@@ -205,6 +205,24 @@ both host snapshots locally, run the smoke test from the same workstation, then
 push the updated database back to `vps-eu` so the next workstation starts from
 the latest history.
 
+Run each per-host snapshot command to completion before starting another
+snapshot for the same host or the same local report database. The collector
+performs several remote SSH queries, including reads from the live
+`/var/lib/rns-node/stats.db`, and some of those remote queries can wait for up
+to 180 seconds before returning their fallback values. Starting a second
+collector while the first is still running can create duplicate rows for the
+same host and date. If a collector appears stuck, first check for an existing
+process with:
+
+```bash
+pgrep -af vps_daily_report.py
+pgrep -af "ssh root@vps-"
+```
+
+Wait for any existing collector to finish unless it is clearly wedged. If the
+operator intentionally stops a collector, inspect the local database before
+continuing and keep only the newest complete row per host in report summaries.
+
 The upstream Reticulum checkout location is workstation-local. Store it in the
 gitignored file `.local/reticulum-upstream.path`; the first non-empty,
 non-comment line must be the absolute path to the local upstream Reticulum
@@ -246,6 +264,23 @@ fi
 python3 scripts/vps_daily_report.py --host vps-eu --ssh-target root@vps-eu --stdout-summary
 python3 scripts/vps_daily_report.py --host vps-us --ssh-target root@vps-us --stdout-summary
 
+sqlite3 -header -column data/vps_daily_reports.db "
+WITH latest AS (
+  SELECT *,
+         ROW_NUMBER() OVER (PARTITION BY host ORDER BY capture_ts_utc DESC) AS rn
+  FROM daily_checks
+  WHERE report_date = date('now') AND host IN ('vps-eu', 'vps-us')
+)
+SELECT host,
+       capture_ts_utc,
+       health_state,
+       announce_24h,
+       idle_timeout_events_24h
+FROM latest
+WHERE rn = 1
+ORDER BY host;
+"
+
 scripts/manual-backbone-smoke.sh
 
 scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
@@ -255,6 +290,14 @@ Treat the daily VPS check as incomplete if the smoke test fails, even when both
 SQLite snapshots were collected successfully. On smoke failure, rerun with
 `scripts/manual-backbone-smoke.sh --keep` to preserve the disposable local node
 configs and logs for debugging.
+
+Treat a snapshot field value of `-1` as "remote query failed or timed out", not
+as a valid zero count. In particular, `announce_24h = -1` means the collector
+could not read the host's live `stats.db` announce counters within the remote
+timeout, so the daily report should call out that the host stats snapshot is
+incomplete even if the row was inserted. Do not push the shared DB until both
+host snapshots have been reviewed, the smoke test has passed, and any duplicate
+same-day rows are understood.
 
 The snapshot records `/usr/local/bin/rns-server --version` and
 `/usr/local/bin/rns-ctl --version`, then reconstructs the expected binary
