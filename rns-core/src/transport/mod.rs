@@ -33,7 +33,7 @@ use self::announce_verify_queue::{AnnounceVerifyKey, AnnounceVerifyQueue, Pendin
 use self::dedup::{AnnounceSignatureCache, PacketHashlist};
 use self::inbound::{
     create_link_entry, create_reverse_entry, forward_transport_packet, route_proof_via_reverse,
-    route_via_link_table,
+    route_via_link_table, LocalHopRewrite,
 };
 use self::ingress_control::IngressControl;
 use self::outbound::{route_outbound_with_options, should_transmit_announce, OutboundRouteOptions};
@@ -498,6 +498,13 @@ impl TransportEngine {
         self.interfaces.values().any(|i| i.is_local_client)
     }
 
+    fn interface_is_local_client(&self, iface: InterfaceId) -> bool {
+        self.interfaces
+            .get(&iface)
+            .map(|i| i.is_local_client)
+            .unwrap_or(false)
+    }
+
     /// Packet filter: dedup + basic validity.
     ///
     /// Transport.py:1187-1238
@@ -584,7 +591,7 @@ impl TransportEngine {
         self.handle_inbound_announce(&ctx, rng, announce_queue, &mut actions);
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_PROOF {
-            self.process_inbound_proof(&ctx.packet, ctx.iface, ctx.now, &mut actions);
+            self.process_inbound_proof(&ctx, &mut actions);
         }
 
         self.handle_inbound_local_delivery(&ctx, &mut actions);
@@ -813,9 +820,18 @@ impl TransportEngine {
         let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
             return;
         };
-        let Some((outbound_iface, new_raw)) =
-            route_via_link_table(&ctx.packet, &link_entry, ctx.iface)
-        else {
+        let instance_local_link = self.interface_is_local_client(link_entry.next_hop_interface)
+            && self.interface_is_local_client(link_entry.received_interface);
+        let Some((outbound_iface, new_raw)) = route_via_link_table(
+            &ctx.packet,
+            &link_entry,
+            ctx.iface,
+            LocalHopRewrite {
+                local_hops_delta: self.config.local_hops_delta,
+                from_local_client: ctx.from_local_client,
+                skip_local_hops_delta: instance_local_link,
+            },
+        ) else {
             return;
         };
 
@@ -1429,11 +1445,10 @@ impl TransportEngine {
 
     fn process_inbound_proof(
         &mut self,
-        packet: &RawPacket,
-        iface: InterfaceId,
-        _now: f64,
+        ctx: &InboundPacketCtx,
         actions: &mut Vec<TransportAction>,
     ) {
+        let packet = &ctx.packet;
         if packet.context == constants::CONTEXT_LRPROOF {
             // Link request proof routing
             if (self.config.transport_enabled)
@@ -1441,9 +1456,19 @@ impl TransportEngine {
             {
                 let link_entry = self.link_table.get(&packet.destination_hash).cloned();
                 if let Some(entry) = link_entry {
-                    if let Some((outbound_interface, new_raw)) =
-                        route_via_link_table(packet, &entry, iface)
-                    {
+                    let instance_local_link = self
+                        .interface_is_local_client(entry.next_hop_interface)
+                        && self.interface_is_local_client(entry.received_interface);
+                    if let Some((outbound_interface, new_raw)) = route_via_link_table(
+                        packet,
+                        &entry,
+                        ctx.iface,
+                        LocalHopRewrite {
+                            local_hops_delta: self.config.local_hops_delta,
+                            from_local_client: ctx.from_local_client,
+                            skip_local_hops_delta: instance_local_link,
+                        },
+                    ) {
                         // Forward the proof (simplified: skip signature validation
                         // which requires Identity recall)
 
@@ -1469,14 +1494,25 @@ impl TransportEngine {
                     destination_hash: packet.destination_hash,
                     raw: PacketBytes::from(packet.raw.clone()),
                     packet_hash: packet.packet_hash,
-                    receiving_interface: iface,
+                    receiving_interface: ctx.iface,
                 });
             }
         } else {
             // Regular proof: check reverse table
             if self.config.transport_enabled {
                 if let Some(reverse_entry) = self.reverse_table.remove(&packet.destination_hash) {
-                    if let Some(action) = route_proof_via_reverse(packet, &reverse_entry, iface) {
+                    let proof_for_local_client =
+                        self.interface_is_local_client(reverse_entry.receiving_interface);
+                    if let Some(action) = route_proof_via_reverse(
+                        packet,
+                        &reverse_entry,
+                        ctx.iface,
+                        LocalHopRewrite {
+                            local_hops_delta: self.config.local_hops_delta,
+                            from_local_client: ctx.from_local_client,
+                            skip_local_hops_delta: proof_for_local_client,
+                        },
+                    ) {
                         actions.push(action);
                     }
                 }
@@ -1487,7 +1523,7 @@ impl TransportEngine {
                 destination_hash: packet.destination_hash,
                 raw: PacketBytes::from(packet.raw.clone()),
                 packet_hash: packet.packet_hash,
-                receiving_interface: iface,
+                receiving_interface: ctx.iface,
             });
         }
     }
@@ -4760,6 +4796,218 @@ mod tests {
         let forwarded_flags = PacketFlags::unpack(raw[0]);
         assert_eq!(forwarded_flags.header_type, constants::HEADER_1);
         assert_eq!(&raw[2..18], &dest_hash);
+    }
+
+    #[test]
+    fn test_local_client_link_routing_to_external_applies_local_hops_delta() {
+        let mut config = make_config(true);
+        config.local_hops_delta = 5;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_local_client_interface(1));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let link_id = [0x4C; 16];
+        engine.register_link(
+            link_id,
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0xAA; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 3,
+                received_interface: InterfaceId(1),
+                taken_hops: 0,
+                destination_hash: [0xBB; 16],
+                validated: true,
+                proof_timeout: 1100.0,
+            },
+        );
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_CHANNEL,
+            b"link data",
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x45; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("local-client link packet should be forwarded externally");
+        assert_eq!(raw[1], 5);
+    }
+
+    #[test]
+    fn test_instance_local_link_routing_preserves_hops() {
+        let mut config = make_config(true);
+        config.local_hops_delta = 5;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_local_client_interface(1));
+        engine.register_interface(make_local_client_interface(2));
+
+        let link_id = [0x4D; 16];
+        engine.register_link(
+            link_id,
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0xAA; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 0,
+                received_interface: InterfaceId(1),
+                taken_hops: 0,
+                destination_hash: [0xBB; 16],
+                validated: true,
+                proof_timeout: 1100.0,
+            },
+        );
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_CHANNEL,
+            b"local link data",
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x46; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("instance-local link packet should be forwarded");
+        assert_eq!(raw[1], 0);
+    }
+
+    #[test]
+    fn test_local_client_proof_to_external_applies_local_hops_delta() {
+        let mut config = make_config(true);
+        config.local_hops_delta = 5;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_local_client_interface(1));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let proof_dest = [0xA5; 16];
+        engine.reverse_table.insert(
+            proof_dest,
+            tables::ReverseEntry {
+                receiving_interface: InterfaceId(2),
+                outbound_interface: InterfaceId(1),
+                timestamp: 1000.0,
+            },
+        );
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            },
+            0,
+            &proof_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &[0xCC; 32],
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x47; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("local-client proof should be forwarded externally");
+        assert_eq!(raw[1], 5);
+    }
+
+    #[test]
+    fn test_proof_for_local_client_preserves_hops() {
+        let mut config = make_config(true);
+        config.local_hops_delta = 5;
+        let mut engine = TransportEngine::new(config);
+        engine.register_interface(make_local_client_interface(1));
+        engine.register_interface(make_local_client_interface(2));
+
+        let proof_dest = [0xA6; 16];
+        engine.reverse_table.insert(
+            proof_dest,
+            tables::ReverseEntry {
+                receiving_interface: InterfaceId(2),
+                outbound_interface: InterfaceId(1),
+                timestamp: 1000.0,
+            },
+        );
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            },
+            0,
+            &proof_dest,
+            None,
+            constants::CONTEXT_NONE,
+            &[0xCD; 32],
+        )
+        .unwrap();
+
+        let mut rng = rns_crypto::FixedRng::new(&[0x48; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame::new(&packet.raw, InterfaceId(1), 1001.0),
+            &mut rng,
+        );
+
+        let raw = actions.iter().find_map(|action| match action {
+            TransportAction::SendOnInterface { interface, raw } if *interface == InterfaceId(2) => {
+                Some(raw)
+            }
+            _ => None,
+        });
+        let raw = raw.expect("proof for local client should be forwarded");
+        assert_eq!(raw[1], 0);
     }
 
     #[test]

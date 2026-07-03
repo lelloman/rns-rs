@@ -6,6 +6,23 @@ use crate::constants;
 use crate::link::handshake::compute_link_id;
 use crate::packet::RawPacket;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocalHopRewrite {
+    pub local_hops_delta: u8,
+    pub from_local_client: bool,
+    pub skip_local_hops_delta: bool,
+}
+
+impl LocalHopRewrite {
+    fn hop_byte(self, packet: &RawPacket) -> u8 {
+        if self.local_hops_delta != 0 && self.from_local_client && !self.skip_local_hops_delta {
+            self.local_hops_delta
+        } else {
+            packet.hops
+        }
+    }
+}
+
 /// Forward a packet that is addressed to us as a transport node.
 ///
 /// Transport.py:1427-1504: When we receive a HEADER_2 packet with our
@@ -110,11 +127,12 @@ pub fn route_proof_via_reverse(
     packet: &RawPacket,
     reverse_entry: &ReverseEntry,
     receiving_interface: InterfaceId,
+    hop_rewrite: LocalHopRewrite,
 ) -> Option<TransportAction> {
     if receiving_interface == reverse_entry.outbound_interface {
         let mut new_raw = Vec::new();
         new_raw.push(packet.raw[0]);
-        new_raw.push(packet.hops);
+        new_raw.push(hop_rewrite.hop_byte(packet));
         new_raw.extend_from_slice(&packet.raw[2..]);
 
         Some(TransportAction::SendOnInterface {
@@ -133,6 +151,7 @@ pub fn route_via_link_table(
     packet: &RawPacket,
     link_entry: &LinkEntry,
     receiving_interface: InterfaceId,
+    hop_rewrite: LocalHopRewrite,
 ) -> Option<(InterfaceId, Vec<u8>)> {
     let outbound_interface;
 
@@ -164,7 +183,7 @@ pub fn route_via_link_table(
 
     let mut new_raw = Vec::new();
     new_raw.push(packet.raw[0]);
-    new_raw.push(packet.hops);
+    new_raw.push(hop_rewrite.hop_byte(packet));
     new_raw.extend_from_slice(&packet.raw[2..]);
 
     Some((outbound_interface, new_raw))
@@ -303,7 +322,12 @@ mod tests {
             timestamp: 100.0,
         };
 
-        let action = route_proof_via_reverse(&packet, &reverse, InterfaceId(2));
+        let action = route_proof_via_reverse(
+            &packet,
+            &reverse,
+            InterfaceId(2),
+            LocalHopRewrite::default(),
+        );
         assert!(action.is_some());
         match action.unwrap() {
             TransportAction::SendOnInterface { interface, .. } => {
@@ -339,7 +363,12 @@ mod tests {
         };
 
         // Received on wrong interface (3 instead of 2)
-        let action = route_proof_via_reverse(&packet, &reverse, InterfaceId(3));
+        let action = route_proof_via_reverse(
+            &packet,
+            &reverse,
+            InterfaceId(3),
+            LocalHopRewrite::default(),
+        );
         assert!(action.is_none());
     }
 
@@ -375,7 +404,8 @@ mod tests {
         };
 
         // Received on next_hop_interface (1), should forward to received_interface (2)
-        let result = route_via_link_table(&packet, &link, InterfaceId(1));
+        let result =
+            route_via_link_table(&packet, &link, InterfaceId(1), LocalHopRewrite::default());
         assert!(result.is_some());
         let (iface, _) = result.unwrap();
         assert_eq!(iface, InterfaceId(2));
@@ -390,7 +420,8 @@ mod tests {
             b"data",
         )
         .unwrap();
-        let result2 = route_via_link_table(&packet2, &link, InterfaceId(2));
+        let result2 =
+            route_via_link_table(&packet2, &link, InterfaceId(2), LocalHopRewrite::default());
         assert!(result2.is_some());
         let (iface2, _) = result2.unwrap();
         assert_eq!(iface2, InterfaceId(1));
@@ -428,7 +459,8 @@ mod tests {
             proof_timeout: 200.0,
         };
 
-        let result = route_via_link_table(&packet, &link, InterfaceId(1));
+        let result =
+            route_via_link_table(&packet, &link, InterfaceId(1), LocalHopRewrite::default());
         assert!(result.is_none());
     }
 }

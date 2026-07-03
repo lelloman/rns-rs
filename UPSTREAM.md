@@ -7,11 +7,11 @@ The current upstream reference baseline is:
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
 - Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.6`
-- Tag: no local `1.3.6` tag was fetched; rgit `master` carries the release version
-- Commit: `c0bc19d9985759d3d5733c4810715a4a3bc7e67d`
-- Commit date: `2026-06-27 21:59:34 +0200`
-- Subject: `Cleanup`
+- Version: `1.3.7`
+- Tag: no local `1.3.7` tag was fetched; rgit `master` carries the release version
+- Commit: `4ba1750c0174a55b5eb37daf52f0db4ae6d6c601`
+- Commit date: `2026-07-03 18:32:34 +0200`
+- Subject: `Updated changelog`
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -41,6 +41,27 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.6..1.3.7 Porting Queue
+
+The `/home/lelloman/Reticulum` checkout was advanced from rgit baseline
+`c0bc19d9985759d3d5733c4810715a4a3bc7e67d` to rgit `master` commit
+`4ba1750c0174a55b5eb37daf52f0db4ae6d6c601` on 2026-07-03. Upstream
+`RNS/_version.py` reports `1.3.7` at this commit.
+
+This range supersedes the `1.3.6` release after a local-instance transport
+handling bug. Generated upstream manuals, upstream changelog text and Python
+package version metadata were not vendored.
+
+Upstream-to-local handling for this queue:
+
+- `8768e163aeb7a8074f7863ec4ecfe0e961aad3a9`: changelog-only `1.3.6`
+  release note, audited with no local code change.
+- `eacff56fe297af90012929dd804305a00286806f`: local shared-instance link and
+  proof hop handling cleanup, ported by threading local-hop rewrite context
+  through link-table and reverse-proof routing.
+- `4ba1750c0174a55b5eb37daf52f0db4ae6d6c601`: changelog-only `1.3.7`
+  release note superseding `1.3.6`, audited with no local code change.
 
 ## Completed 1.3.6..rgit Porting Queue
 
