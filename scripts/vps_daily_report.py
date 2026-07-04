@@ -540,15 +540,23 @@ set -euo pipefail
 count_journal() {
   local pattern="$1"
   local output
-  if output=$(timeout 180s journalctl -u rns-server --since '24 hours ago' --no-pager --grep "$pattern" -q 2>/dev/null); then
-    if [ -n "$output" ]; then
-      printf '%s\n' "$output" | wc -l
-    else
-      printf '0\n'
-    fi
-  else
-    printf -- '-1\n'
-  fi
+  local status
+  set +e
+  output=$(timeout 180s journalctl -u rns-server --since '24 hours ago' --no-pager --grep "$pattern" -q 2>/dev/null)
+  status=$?
+  set -e
+  case "$status" in
+    0|1)
+      if [ -n "$output" ]; then
+        printf '%s\n' "$output" | wc -l
+      else
+        printf '0\n'
+      fi
+      ;;
+    *)
+      printf -- '-1\n'
+      ;;
+  esac
 }
 echo "PROVIDER_DROPPED_24H=$(count_journal 'provider bridge dropped')"
 echo "PROVIDER_DISCONNECTED_24H=$(count_journal 'provider bridge disconnected')"
@@ -567,10 +575,12 @@ echo "IDLE_TIMEOUT_24H=$(count_journal 'repeated idle timeouts')"
     ann_rows = run_ssh(
         ssh_host,
         f"""timeout 180s sqlite3 {shlex.quote(stats_db)} "
-SELECT COUNT(*) FROM seen_announces;
-SELECT datetime(MAX(seen_at_ms)/1000, 'unixepoch') FROM seen_announces;
-SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-3600)*1000;
-SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms >= (strftime('%s','now')-86400)*1000;
+SELECT printf('%d\n%s\n%d\n%d',
+       COUNT(*),
+       COALESCE(datetime(MAX(seen_at_ms)/1000, 'unixepoch'), ''),
+       COALESCE(SUM(CASE WHEN seen_at_ms >= (strftime('%s','now')-3600)*1000 THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN seen_at_ms >= (strftime('%s','now')-86400)*1000 THEN 1 ELSE 0 END), 0))
+FROM seen_announces;
 " || printf '%s\n' -1 '' -1 -1""",
     ).splitlines()
 
