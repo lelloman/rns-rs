@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "rns-cli"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -2010,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "criterion",
  "log",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "aes",
  "cbc",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.2.7"
+version = "0.3.0"
 dependencies = [
  "env_logger",
  "libc",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "rns-git"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "env_logger",
  "log",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "rns-hooks"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "criterion",
  "libloading",
@@ -2087,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.5.10"
+version = "0.6.0"
 dependencies = [
  "bzip2",
  "criterion",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "rns-sentinel-hook"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "rns-hooks",
  "rns-hooks-abi",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "rns-server"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "env_logger",
  "libc",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "rns-stats-hook"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "rns-hooks",
  "rns-hooks-abi",
