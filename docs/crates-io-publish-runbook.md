@@ -31,16 +31,18 @@ released.
 
 Common currently published crates:
 
+- `rns-hooks-abi`
+- `rns-hooks-sdk`
 - `rns-crypto`
 - `rns-core`
+- `rns-hooks`
+- `rns-stats-hook`
+- `rns-sentinel-hook`
 - `rns-net`
 - `rns-cli`
 - `rns-git`
 - `rns-ctl`
-- `rns-hooks`
-- `rns-stats-hook`
-- `rns-hooks-sdk`
-- `rns-hooks-abi`
+- `rns-server`
 
 `rns-esp32` is excluded from the workspace and is not published on crates.io.
 It has its own release process — see
@@ -51,6 +53,10 @@ Important detail:
 - `rns-crypto` uses `version.workspace = true`, so its released version comes
   from the root [Cargo.toml](/home/lelloman/lelloprojects/rns-rs/Cargo.toml)
 - the other published crates use explicit crate-local versions
+- crates inheriting `publish.workspace = true` are not publishable while the
+  workspace has `publish = false`; before a crates.io release, make sure every
+  crate in the release set is publishable and `cargo publish --dry-run` confirms
+  the manifest state
 
 ## 3. Bump versions
 
@@ -68,6 +74,8 @@ Files commonly involved:
 - [rns-ctl/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-ctl/Cargo.toml)
 - [rns-hooks/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/Cargo.toml)
 - [rns-stats-hook/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-stats-hook/Cargo.toml)
+- [rns-sentinel-hook/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-sentinel-hook/Cargo.toml)
+- [rns-server/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-server/Cargo.toml)
 - [rns-hooks/sdk/rns-hooks-sdk/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/sdk/rns-hooks-sdk/Cargo.toml)
 - [rns-hooks/sdk/rns-hooks-abi/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/sdk/rns-hooks-abi/Cargo.toml)
 
@@ -99,10 +107,12 @@ Typical order for this workspace:
 4. `rns-core`
 5. `rns-hooks`
 6. `rns-stats-hook`
-7. `rns-net`
-8. `rns-cli`
-9. `rns-git`
-10. `rns-ctl`
+7. `rns-sentinel-hook`
+8. `rns-net`
+9. `rns-cli`
+10. `rns-git`
+11. `rns-ctl`
+12. `rns-server`
 
 Example:
 
@@ -113,10 +123,12 @@ cargo publish --dry-run -p rns-crypto
 cargo publish --dry-run -p rns-core
 cargo publish --dry-run -p rns-hooks
 cargo publish --dry-run -p rns-stats-hook
+cargo publish --dry-run -p rns-sentinel-hook
 cargo publish --dry-run -p rns-net
 cargo publish --dry-run -p rns-cli
 cargo publish --dry-run -p rns-git
 cargo publish --dry-run -p rns-ctl
+cargo publish --dry-run -p rns-server
 ```
 
 If only part of the workspace is being released, keep the same dependency
@@ -132,11 +144,18 @@ Example:
 ```bash
 git status --short
 git add Cargo.toml Cargo.lock \
+  rns-crypto/Cargo.toml \
   rns-core/Cargo.toml \
+  rns-hooks/Cargo.toml \
+  rns-stats-hook/Cargo.toml \
+  rns-sentinel-hook/Cargo.toml \
   rns-net/Cargo.toml \
   rns-cli/Cargo.toml \
   rns-git/Cargo.toml \
-  rns-ctl/Cargo.toml
+  rns-ctl/Cargo.toml \
+  rns-server/Cargo.toml \
+  rns-hooks/sdk/rns-hooks-sdk/Cargo.toml \
+  rns-hooks/sdk/rns-hooks-abi/Cargo.toml
 git commit -m "Release selected crates"
 ```
 
@@ -162,10 +181,12 @@ cargo publish -p rns-crypto
 cargo publish -p rns-core
 cargo publish -p rns-hooks
 cargo publish -p rns-stats-hook
+cargo publish -p rns-sentinel-hook
 cargo publish -p rns-net
 cargo publish -p rns-cli
 cargo publish -p rns-git
 cargo publish -p rns-ctl
+cargo publish -p rns-server
 ```
 
 If crates.io indexing lags briefly between publishes, wait and retry only after
@@ -183,6 +204,7 @@ cargo search rns-core --limit 1
 cargo search rns-net --limit 1
 cargo search rns-cli --limit 1
 cargo search rns-git --limit 1
+cargo search rns-server --limit 1
 ```
 
 If you want an exact machine-readable check, use the crates.io API.
@@ -194,6 +216,7 @@ curl -sS https://crates.io/api/v1/crates/rns-core | jq -r '.crate.newest_version
 curl -sS https://crates.io/api/v1/crates/rns-net | jq -r '.crate.newest_version'
 curl -sS https://crates.io/api/v1/crates/rns-cli | jq -r '.crate.newest_version'
 curl -sS https://crates.io/api/v1/crates/rns-git | jq -r '.crate.newest_version'
+curl -sS https://crates.io/api/v1/crates/rns-server | jq -r '.crate.newest_version'
 ```
 
 ## 8. Tag the published commit
@@ -211,6 +234,7 @@ git tag -a rns-core-v0.1.5 HEAD -m "rns-core 0.1.5"
 git tag -a rns-net-v0.5.1 HEAD -m "rns-net 0.5.1"
 git tag -a rns-cli-v0.2.0 HEAD -m "rns-cli 0.2.0"
 git tag -a rns-git-v0.1.0 HEAD -m "rns-git 0.1.0"
+git tag -a rns-server-v0.1.0 HEAD -m "rns-server 0.1.0"
 ```
 
 This repo should not rely on a single repo-wide release tag. The crates are
@@ -231,7 +255,8 @@ git push origin \
   rns-core-v0.1.5 \
   rns-net-v0.5.1 \
   rns-cli-v0.2.0 \
-  rns-git-v0.1.0
+  rns-git-v0.1.0 \
+  rns-server-v0.1.0
 ```
 
 Adjust the branch and tag list to match the release.
@@ -244,6 +269,7 @@ Use this as the final release gate:
 - all intended version bumps are committed
 - `cargo check --workspace` passes
 - `cargo test --workspace` passes
+- publishable crate manifests do not inherit `publish = false`
 - each released crate passes `cargo publish --dry-run`
 - crates are published in dependency order
 - crates.io shows the intended versions
