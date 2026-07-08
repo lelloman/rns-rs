@@ -694,7 +694,7 @@ impl Driver {
                         snr: rx.snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
-                    log::info!(
+                    log::debug!(
                         "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
                         destination_hash[0],
                         destination_hash[1],
