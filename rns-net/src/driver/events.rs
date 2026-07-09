@@ -17,10 +17,12 @@ impl Driver {
                 data[0]
             );
         }
-        if let Some(entry) = self.interfaces.get(&interface_id) {
-            if !entry.enabled || !entry.online {
-                return;
-            }
+        let Some(entry) = self.interfaces.get(&interface_id) else {
+            log::warn!("[{}] dropping frame from unknown interface", interface_id.0);
+            return;
+        };
+        if !entry.enabled || !entry.online {
+            return;
         }
         if let Some(entry) = self.interfaces.get_mut(&interface_id) {
             entry.stats.rxb += data.len() as u64;

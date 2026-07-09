@@ -157,6 +157,10 @@ impl Writer for BackboneWriter {
         let frame = hdlc::frame(data);
         self.write_buffer(&frame, write_stall_timeout)
     }
+
+    fn shutdown(&mut self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
 }
 
 impl BackboneWriter {
@@ -2016,6 +2020,32 @@ mod tests {
         assert!(stalled, "expected writer to time out on persistent stall");
         let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
+    }
+
+    #[test]
+    fn shutting_down_backbone_writer_closes_the_client_socket() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(9670));
+        let config = make_server_config(port, 99, None, None, None, BackboneAbuseConfig::default());
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        let mut writer = match event {
+            Event::InterfaceUp(_, Some(writer), _) => writer,
+            other => panic!("expected InterfaceUp with writer, got {:?}", other),
+        };
+
+        writer.shutdown();
+
+        let mut byte = [0u8; 1];
+        assert_eq!(client.read(&mut byte).unwrap(), 0);
     }
 
     /// Drain events matching a predicate, return the first match.
