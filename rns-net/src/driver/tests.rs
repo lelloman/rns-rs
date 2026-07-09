@@ -8702,6 +8702,24 @@ fn announce_stores_receiving_interface_in_known_destinations() {
 }
 
 #[test]
+fn frame_from_removed_interface_is_dropped() {
+    let (tx, rx) = event::channel();
+    let (cbs, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(cbs));
+    let identity = Identity::new(&mut OsRng);
+
+    driver.handle_frame_event(
+        InterfaceId(999),
+        build_announce_packet(&identity),
+        Some(-100),
+        Some(10.5),
+    );
+
+    assert!(driver.known_destinations.is_empty());
+    assert_eq!(driver.engine.path_table_count(), 0);
+}
+
+#[test]
 fn announce_on_different_interfaces_stores_correct_id() {
     // Announces arriving on interface 2 should store InterfaceId(2).
     let (tx, rx) = event::channel();

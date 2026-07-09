@@ -69,6 +69,8 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// Each implementation wraps a socket + framing.
 pub trait Writer: Send {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
+
+    fn shutdown(&mut self) {}
 }
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
@@ -219,6 +221,7 @@ fn async_writer_loop(
                 interface_id.0,
                 err
             );
+            writer.shutdown();
             let _ = event_tx.send(crate::event::Event::InterfaceDown(interface_id));
             return;
         }
@@ -445,11 +448,17 @@ mod tests {
         }
     }
 
-    struct FailingWriter;
+    struct FailingWriter {
+        shutdown_called: Arc<AtomicBool>,
+    }
 
     impl Writer for FailingWriter {
         fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"))
+        }
+
+        fn shutdown(&mut self) {
+            self.shutdown_called.store(true, Ordering::Relaxed);
         }
     }
 
@@ -482,12 +491,21 @@ mod tests {
     #[test]
     fn async_writer_reports_interface_down_after_worker_failure() {
         let (event_tx, event_rx) = crate::event::channel();
-        let (mut writer, metrics) =
-            wrap_async_writer(Box::new(FailingWriter), InterfaceId(9), "fail", event_tx, 2);
+        let shutdown_called = Arc::new(AtomicBool::new(false));
+        let (mut writer, metrics) = wrap_async_writer(
+            Box::new(FailingWriter {
+                shutdown_called: Arc::clone(&shutdown_called),
+            }),
+            InterfaceId(9),
+            "fail",
+            event_tx,
+            2,
+        );
 
         writer.send_frame(&[1]).unwrap();
         let event = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(InterfaceId(9))));
         assert!(!metrics.worker_alive());
+        assert!(shutdown_called.load(Ordering::Relaxed));
     }
 }

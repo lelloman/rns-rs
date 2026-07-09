@@ -189,6 +189,9 @@ impl TransportEngine {
 
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
+        self.drop_paths_for_interface(id);
+        self.drop_reverse_for_interface(id);
+        self.drop_links_for_interface(id);
         self.announce_queues.remove_interface(id);
         self.ingress_control.remove_interface(&id);
     }
@@ -1976,6 +1979,60 @@ mod tests {
 
         engine.deregister_interface(InterfaceId(1));
         assert_eq!(engine.announce_queue_count(), 0);
+    }
+
+    #[test]
+    fn test_deregister_interface_removes_transport_state() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let destination_hash = [0x11; 16];
+        engine.inject_path(
+            destination_hash,
+            PathEntry {
+                timestamp: 1000.0,
+                next_hop: [0x22; 16],
+                hops: 2,
+                expires: 2000.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(1),
+                packet_hash: [0x33; 32],
+                announce_raw: None,
+            },
+        );
+        engine.reverse_table.insert(
+            [0x44; 16],
+            tables::ReverseEntry {
+                receiving_interface: InterfaceId(2),
+                outbound_interface: InterfaceId(1),
+                timestamp: 1000.0,
+            },
+        );
+        engine.register_link(
+            [0x55; 16],
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0x66; 16],
+                next_hop_interface: InterfaceId(1),
+                remaining_hops: 1,
+                received_interface: InterfaceId(2),
+                taken_hops: 1,
+                destination_hash,
+                validated: true,
+                proof_timeout: 1100.0,
+            },
+        );
+
+        assert_eq!(engine.path_table_count(), 1);
+        assert_eq!(engine.reverse_table_count(), 1);
+        assert_eq!(engine.link_table_count(), 1);
+
+        engine.deregister_interface(InterfaceId(1));
+
+        assert_eq!(engine.path_table_count(), 0);
+        assert_eq!(engine.reverse_table_count(), 0);
+        assert_eq!(engine.link_table_count(), 0);
     }
 
     #[test]

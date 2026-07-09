@@ -289,62 +289,71 @@ impl Driver {
                     .unwrap_or(false)
             );
         }
-        if let Some(entry) = self.interfaces.get_mut(&interface) {
-            if entry.online && entry.enabled {
-                if Self::interface_send_deferred(entry, Instant::now()) {
-                    return;
-                }
-                let data = if let Some(ref ifac_state) = entry.ifac {
-                    ifac::mask_outbound(&raw, ifac_state)
-                } else {
-                    Vec::new()
-                };
-                let send_len = if entry.ifac.is_some() {
-                    data.len()
-                } else {
-                    raw.len()
-                };
-                entry.stats.txb += send_len as u64;
-                entry.stats.tx_packets += 1;
-                if is_announce {
-                    entry.stats.record_outgoing_announce(time::now());
-                }
-                if is_path_request {
-                    let now = time::now();
-                    entry.stats.record_outgoing_path_request(now);
-                    self.engine.update_interface_freqs(
-                        interface,
-                        entry.stats.incoming_announce_freq(),
-                        entry.stats.incoming_path_request_freq(),
-                        entry.stats.outgoing_path_request_freq(),
-                        entry.stats.outgoing_path_request_samples(),
-                    );
-                }
-                let send_result = if entry.ifac.is_some() {
-                    entry.writer.send_frame(&data)
-                } else {
-                    entry.writer.send_frame(&raw)
-                };
-                let sent_ok = send_result.is_ok();
-                Self::record_send_result(entry, &send_result, "send", interface);
-                if sent_ok && is_announce {
-                    let sent_slice: &[u8] = if entry.ifac.is_some() { &data } else { &raw };
-                    let header_type = (sent_slice[0] >> 6) & 0x03;
-                    let dest_start = if header_type == 1 { 18usize } else { 2usize };
-                    let dest_preview = if sent_slice.len() >= dest_start + 4 {
-                        format!("{:02x?}", &sent_slice[dest_start..dest_start + 4])
-                    } else {
-                        "??".into()
-                    };
-                    log::debug!(
-                        "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
-                        interface.0,
-                        sent_slice.len(),
-                        header_type,
-                        dest_preview
-                    );
-                }
-            }
+        let Some(entry) = self.interfaces.get_mut(&interface) else {
+            log::warn!("[{}] cannot send on missing interface", interface.0);
+            return;
+        };
+        if !entry.online || !entry.enabled {
+            log::debug!(
+                "[{}] cannot send on unavailable interface (online={}, enabled={})",
+                interface.0,
+                entry.online,
+                entry.enabled
+            );
+            return;
+        }
+        if Self::interface_send_deferred(entry, Instant::now()) {
+            return;
+        }
+        let data = if let Some(ref ifac_state) = entry.ifac {
+            ifac::mask_outbound(&raw, ifac_state)
+        } else {
+            Vec::new()
+        };
+        let send_len = if entry.ifac.is_some() {
+            data.len()
+        } else {
+            raw.len()
+        };
+        entry.stats.txb += send_len as u64;
+        entry.stats.tx_packets += 1;
+        if is_announce {
+            entry.stats.record_outgoing_announce(time::now());
+        }
+        if is_path_request {
+            let now = time::now();
+            entry.stats.record_outgoing_path_request(now);
+            self.engine.update_interface_freqs(
+                interface,
+                entry.stats.incoming_announce_freq(),
+                entry.stats.incoming_path_request_freq(),
+                entry.stats.outgoing_path_request_freq(),
+                entry.stats.outgoing_path_request_samples(),
+            );
+        }
+        let send_result = if entry.ifac.is_some() {
+            entry.writer.send_frame(&data)
+        } else {
+            entry.writer.send_frame(&raw)
+        };
+        let sent_ok = send_result.is_ok();
+        Self::record_send_result(entry, &send_result, "send", interface);
+        if sent_ok && is_announce {
+            let sent_slice: &[u8] = if entry.ifac.is_some() { &data } else { &raw };
+            let header_type = (sent_slice[0] >> 6) & 0x03;
+            let dest_start = if header_type == 1 { 18usize } else { 2usize };
+            let dest_preview = if sent_slice.len() >= dest_start + 4 {
+                format!("{:02x?}", &sent_slice[dest_start..dest_start + 4])
+            } else {
+                "??".into()
+            };
+            log::debug!(
+                "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
+                interface.0,
+                sent_slice.len(),
+                header_type,
+                dest_preview
+            );
         }
     }
 
