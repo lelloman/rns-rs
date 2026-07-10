@@ -22,7 +22,7 @@ Status values:
 |---|---|---|---|
 | `dd3ddb9d` | Runtime | Weave `ET_BOARD_INIT = 0x0003` is parsed and retained | covered |
 | `b7068888` | Runtime | `LinkEngine.expected_hops`; initiator path value and authenticated responder LRRTT hop | covered |
-| `72db6e0e` | Runtime | Per-link packet and packed data/ciphertext byte counters; API fields | in progress — complete context fixture comparison remains |
+| `72db6e0e` | Runtime | Per-link packet and packed data/ciphertext byte counters; API fields | covered |
 | `a0f0f318` | Runtime | Reject wire hops `>= PATHFINDER_M`, checked ingress increment, announce boundary, fallible cached parsing | covered |
 | `b1b3ff71` | Version metadata | No crate release bump in this milestone | non-runtime |
 | `dca2a928` | Changelog/release artifacts | Not vendored | non-runtime |
@@ -34,23 +34,23 @@ Status values:
 |---|---|---|
 | Cryptography | X25519, Ed25519, HKDF, AES, token, hashes, IFAC | Existing Python fixtures and interop; exact generator now rejects other baselines (`interop`) |
 | Packet codec | Header 1/2, hashes, MTU, permissive pack, strict inbound hops | Unit boundary tests for 127/128/255 (`covered`) |
-| Transport | announce/path selection, ingress control, held announces, cache/restore safety | Hop and held boundary ported; full exact-baseline fixture refresh pending (`in progress`) |
+| Transport | announce/path selection, ingress control, held announces, cache/restore safety | Exact-baseline hop/held vectors and malformed-cache regressions (`interop`) |
 | Links | handshake, expected hops, identify, keepalive, close, requests/responses | Engine and manager tests (`covered`) |
-| Link accounting | LRPROOF/LRRTT, data, request, channel, resource contexts | Central inbound and packed outbound accounting present; exhaustive Python padding fixture pending (`in progress`) |
+| Link accounting | LRPROOF/LRRTT, data, request, channel, resource contexts | Central inbound/outbound accounting, lifecycle/context tests, and exact Python ciphertext-padding vectors (`interop`) |
 | Channels | envelopes, windows, proofs, retry timing | Existing fixtures/tests (`covered`) |
 | Resources | advertise/request/parts/proofs/cancel, persistence | Existing fixtures/tests (`covered`) |
 | Persistence | destinations, ratchets, announces, paths, tunnels | Existing restart/corruption tests (`covered`) |
 | Shared RPC | pickle/msgpack status and management | Existing RPC tests; new optional telemetry fields serialized (`covered`) |
 | Discovery | accepted types and generated Weave configuration | Existing discovery tests plus Weave type/config rendering (`covered`) |
-| TCP/UDP/Local/Auto/I2P/Pipe/Serial/KISS | Built-in interface behavior | Existing unit, interop, and Docker topology suites (`covered`) |
+| TCP/UDP/Local/Auto/I2P/Pipe/Serial/KISS | Built-in interface behavior | Existing suites plus typed dynamic peer registration and inherited IFAC (`covered`) |
 | Backbone client compatibility | `BackboneClientInterface`; `remote`/`port` and `target_host`/`target_port` aliases | Factory registration and parser tests (`covered`) |
 | AX.25 KISS | callsign/SSID validation, APZRNS UI header, KISS transport behavior | Default feature, deterministic UI frame tests, inherited KISS reconnect/flow control (`covered`) |
 | RNode single | Existing single-radio behavior unchanged | Existing RNode tests (`covered`) |
-| RNode multi | third-level sections, up to 11 enabled radios, actual virtual-port demux, outgoing flag | Parser/factory and vport demux implementation; hardware trace fixture pending (`in progress`) |
+| RNode multi | third-level sections, up to 11 enabled radios, actual virtual-port demux, outgoing flag | Parser/factory, non-sequential vport tests, and exact outbound wire vector (`interop`) |
 | Weave codec | bounded WDCL HDLC, command/event/display/endpoint frames | Deterministic fragmented/coalesced codec and state tests (`covered`) |
-| Weave session | signed discovery/connect, two-second gate, five-second reconnect | Authenticated serial session implementation pending (`in progress`) |
-| Weave peers | dynamic typed peers, IFAC inheritance, duplicates, expiry/reconnect | State primitives covered; driver registration/session integration pending (`in progress`) |
-| Weave telemetry | CPU/memory, IDs, via, peers, logs, 128x64 display | State and serialization fields present; live update plumbing pending (`in progress`) |
+| Weave session | signed discovery/connect, two-second gate, five-second reconnect | Authenticated shared session and simulated-device integration (`covered`); physical session is gated below |
+| Weave peers | dynamic typed peers, IFAC inheritance, duplicates, expiry/reconnect | Simulated bidirectional delivery, duplicate/expiry, teardown, and reconnect (`covered`) |
+| Weave telemetry | CPU/memory, IDs, via, peers, logs, 128x64 display | Live update plumbing and status/RPC serialization (`covered`); hardware telemetry is gated below |
 | `rnstatus` | optional telemetry and hidden Weave peers unless `--all` | Text/JSON handling implemented (`covered`) |
 | Existing Rust CLI tools | daemon, status, path, probe, identity, HTTP/RPC | Workspace/CLI integration tests (`covered`) |
 
