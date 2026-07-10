@@ -63,6 +63,8 @@ fn main() {
         base_interface_id: InterfaceId(1),
         subinterfaces: vec![RNodeSubConfig {
             name: "LoRa".into(),
+            vport: 0,
+            outgoing: true,
             frequency,
             bandwidth: 125000,
             txpower: 14,
@@ -72,6 +74,7 @@ fn main() {
             st_alock: None,
             lt_alock: None,
         }],
+        multi: false,
         id_interval: None,
         id_callsign: None,
         pre_opened_fd: None,
@@ -79,6 +82,8 @@ fn main() {
             rns_net::interface::rnode::RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: String::new(),
+                    vport: 0,
+                    outgoing: true,
                     frequency: 868_000_000,
                     bandwidth: 125_000,
                     txpower: 7,
