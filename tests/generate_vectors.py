@@ -6,10 +6,51 @@ Uses PROVIDER_INTERNAL (pure Python) to ensure we test against the same code pat
 
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
 
-# Add the parent Reticulum directory to path so we can import RNS
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+UPSTREAM_COMMIT = "de0f399a1696895dcb95ad1efa19f3b21a7886ab"
+UPSTREAM_VERSION = "1.3.8"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_upstream():
+    configured = os.environ.get("RETICULUM_UPSTREAM_DIR")
+    pointer = PROJECT_ROOT / ".local" / "reticulum-upstream.path"
+    if configured:
+        upstream = Path(configured).expanduser().resolve()
+    elif pointer.is_file():
+        upstream = Path(pointer.read_text().strip()).expanduser().resolve()
+    else:
+        raise SystemExit(
+            "Set RETICULUM_UPSTREAM_DIR or create .local/reticulum-upstream.path "
+            f"pointing at Reticulum {UPSTREAM_VERSION} commit {UPSTREAM_COMMIT}."
+        )
+
+    try:
+        actual = subprocess.check_output(
+            ["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"Invalid Reticulum checkout {upstream}: {error}") from error
+    if actual != UPSTREAM_COMMIT:
+        raise SystemExit(
+            f"Refusing fixture generation from {actual}; expected {UPSTREAM_COMMIT}."
+        )
+    return upstream
+
+
+UPSTREAM_DIR = resolve_upstream()
+sys.path.insert(0, str(UPSTREAM_DIR))
+
+import RNS
+
+if RNS.__version__ != UPSTREAM_VERSION:
+    raise SystemExit(
+        f"Refusing fixture generation from RNS {RNS.__version__}; "
+        f"expected {UPSTREAM_VERSION}."
+    )
 
 # Force internal provider before importing RNS modules
 import RNS.Cryptography.Provider as cp
