@@ -84,13 +84,6 @@ impl Decoder {
     /// Feed raw bytes into the decoder and return any complete frames.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         self.buffer.extend_from_slice(chunk);
-        if self.buffer.len() > self.max_buffer_size {
-            if let Some(last_flag) = self.buffer.iter().rposition(|&byte| byte == FLAG) {
-                self.buffer.drain(..last_flag);
-            } else {
-                self.buffer.clear();
-            }
-        }
         let mut frames = Vec::new();
 
         loop {
@@ -127,6 +120,20 @@ impl Decoder {
             // Keep the closing FLAG as the opening FLAG of the next frame
             // (matches Python: frame_buffer = frame_buffer[frame_end:])
             self.buffer.drain(..end);
+        }
+
+        // Bound only the unconsumed tail. Applying the limit before decoding
+        // can discard a large batch of complete coalesced frames.
+        if self.buffer.len() > self.max_buffer_size {
+            if let Some(last_flag) = self.buffer.iter().rposition(|&byte| byte == FLAG) {
+                if self.buffer.len() - last_flag <= self.max_buffer_size {
+                    self.buffer.drain(..last_flag);
+                } else {
+                    self.buffer.clear();
+                }
+            } else {
+                self.buffer.clear();
+            }
         }
 
         frames
@@ -236,6 +243,25 @@ mod tests {
         let frames2 = decoder.feed(&framed[mid..]);
         assert_eq!(frames2.len(), 1);
         assert_eq!(frames2[0], data);
+    }
+
+    #[test]
+    fn decoder_does_not_drop_large_coalesced_batches() {
+        let payload = vec![0x42; 32];
+        let encoded = frame(&payload);
+        let count = 3_000;
+        let mut batch = Vec::with_capacity(encoded.len() * count);
+        for index in 0..count {
+            if index == 0 {
+                batch.extend_from_slice(&encoded);
+            } else {
+                batch.extend_from_slice(&encoded[1..]);
+            }
+        }
+        let mut decoder = Decoder::with_limits(HEADER_MINSIZE, 64 * 1024);
+        let frames = decoder.feed(&batch);
+        assert_eq!(frames.len(), count);
+        assert!(frames.iter().all(|decoded| decoded == &payload));
     }
 
     #[test]
