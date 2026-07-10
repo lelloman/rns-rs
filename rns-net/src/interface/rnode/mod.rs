@@ -209,6 +209,7 @@ struct RNodeSubWriter {
     index: u8,
     flow_control: bool,
     flow_state: Arc<Mutex<SubFlowState>>,
+    multi: bool,
 }
 
 struct SubFlowState {
@@ -221,18 +222,24 @@ fn make_sub_writer(
     index: u8,
     flow_control: bool,
     flow_state: Arc<Mutex<SubFlowState>>,
+    multi: bool,
 ) -> Box<dyn Writer> {
     Box::new(RNodeSubWriter {
         writer,
         index,
         flow_control,
         flow_state,
+        multi,
     })
 }
 
 impl Writer for RNodeSubWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let frame = rnode_kiss::rnode_data_frame(self.index, data);
+        let frame = if self.multi {
+            rnode_kiss::rnode_multi_data_frame(self.index, data)
+        } else {
+            rnode_kiss::rnode_data_frame(self.index, data)
+        };
         if self.flow_control {
             let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
             if state.ready {
@@ -306,6 +313,7 @@ pub fn start(
             sub.vport,
             sub.flow_control,
             flow_state,
+            config.multi,
         );
         writers.push((sub_id, sub_writer));
     }
@@ -422,6 +430,7 @@ fn reader_loop(
                                             fs,
                                             &writer,
                                             config.subinterfaces[i].vport,
+                                            config.multi,
                                         );
                                     }
                                 }
@@ -591,6 +600,7 @@ fn signal_interface_up(
                 config.subinterfaces[i].vport,
                 config.subinterfaces[i].flow_control,
                 flow_state.clone(),
+                config.multi,
             )
         });
         let _ = tx.send(Event::InterfaceUp(sub_id, new_writer, None));
@@ -757,12 +767,17 @@ fn process_flow_queue(
     flow_state: &Arc<Mutex<SubFlowState>>,
     writer: &Arc<Mutex<Transport>>,
     index: u8,
+    multi: bool,
 ) {
     let mut state = lock_or_recover(flow_state, "rnode flow state");
     if let Some(data) = state.queue.pop_front() {
         state.ready = false;
         drop(state);
-        let frame = rnode_kiss::rnode_data_frame(index, &data);
+        let frame = if multi {
+            rnode_kiss::rnode_multi_data_frame(index, &data)
+        } else {
+            rnode_kiss::rnode_data_frame(index, &data)
+        };
         let _ = lock_or_recover(writer, "rnode shared writer").write_all(&frame);
     } else {
         state.ready = true;
@@ -1350,6 +1365,7 @@ mod tests {
             index: 0,
             flow_control: true,
             flow_state: flow_state.clone(),
+            multi: false,
         };
 
         // First send: should go through (ready=true) and set ready=false
@@ -1361,12 +1377,12 @@ mod tests {
         assert_eq!(flow_state.lock().unwrap().queue.len(), 1);
 
         // Process flow queue (simulates CMD_READY)
-        process_flow_queue(&flow_state, &shared_writer, 0);
+        process_flow_queue(&flow_state, &shared_writer, 0, false);
         assert_eq!(flow_state.lock().unwrap().queue.len(), 0);
         assert!(!flow_state.lock().unwrap().ready); // sent queued, still locked
 
         // Process again with empty queue: sets ready=true
-        process_flow_queue(&flow_state, &shared_writer, 0);
+        process_flow_queue(&flow_state, &shared_writer, 0, false);
         assert!(flow_state.lock().unwrap().ready);
 
         unsafe { libc::close(master_fd) };
@@ -1400,6 +1416,7 @@ mod tests {
             index: 1, // subinterface 1
             flow_control: false,
             flow_state,
+            multi: false,
         };
 
         let payload = vec![0xAA, 0xBB, 0xCC];

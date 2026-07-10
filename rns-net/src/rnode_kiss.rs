@@ -443,6 +443,13 @@ pub fn rnode_data_frame(index: u8, data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Build the Python `RNodeMultiInterface` transmit sequence. Outbound multi
+/// frames select the actual virtual port and then use `CMD_DATA`; the
+/// `CMD_INTn_DATA` values are device-to-host demultiplexing commands.
+pub fn rnode_multi_data_frame(index: u8, data: &[u8]) -> Vec<u8> {
+    rnode_select_command(index, kiss::CMD_DATA, data)
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -602,5 +609,25 @@ mod tests {
         // Subinterface 2
         let frame2 = rnode_data_frame(2, &data);
         assert_eq!(frame2[1], CMD_INT2_DATA);
+    }
+
+    #[test]
+    fn rnode_multi_data_frame_selects_actual_virtual_port() {
+        let frame = rnode_multi_data_frame(7, &[1, 2, 3]);
+        assert_eq!(
+            frame,
+            vec![
+                kiss::FEND,
+                CMD_SEL_INT,
+                7,
+                kiss::FEND,
+                kiss::FEND,
+                kiss::CMD_DATA,
+                1,
+                2,
+                3,
+                kiss::FEND,
+            ]
+        );
     }
 }
