@@ -11,6 +11,25 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::common::link_manager::RequestResponse;
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InterfaceTelemetry {
+    pub cpu_load: Option<f64>,
+    pub mem_load: Option<f64>,
+    pub switch_id: Option<[u8; 4]>,
+    pub endpoint_id: Option<[u8; 8]>,
+    pub via_switch_id: Option<[u8; 4]>,
+    pub peers: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DynamicInterfaceRegistration {
+    pub info: InterfaceInfo,
+    pub interface_type: String,
+    pub parent_id: InterfaceId,
+    pub telemetry: InterfaceTelemetry,
+    pub ifac: Option<crate::ifac::IfacState>,
+}
+
 /// Policy for handling incoming direct-connect proposals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HolePunchPolicy {
@@ -130,6 +149,17 @@ pub enum Event<W: Send> {
     /// Carries a new writer if the connection was re-established.
     /// Carries InterfaceInfo if this is a new dynamic interface (e.g. TCP server client).
     InterfaceUp(InterfaceId, Option<W>, Option<InterfaceInfo>),
+    /// Register a dynamic interface with an exact type and parent identity.
+    DynamicInterfaceUp {
+        id: InterfaceId,
+        writer: W,
+        registration: DynamicInterfaceRegistration,
+    },
+    /// Update optional device/interface telemetry without replacing counters.
+    InterfaceTelemetry {
+        interface_id: InterfaceId,
+        telemetry: InterfaceTelemetry,
+    },
     /// An interface went offline (socket closed, error).
     InterfaceDown(InterfaceId),
     /// Periodic maintenance tick (1s interval).
@@ -834,6 +864,22 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field(id)
                 .field(&writer.is_some())
                 .field(&info.is_some())
+                .finish(),
+            Event::DynamicInterfaceUp {
+                id, registration, ..
+            } => f
+                .debug_struct("DynamicInterfaceUp")
+                .field("id", id)
+                .field("type", &registration.interface_type)
+                .field("parent_id", &registration.parent_id)
+                .finish(),
+            Event::InterfaceTelemetry {
+                interface_id,
+                telemetry,
+            } => f
+                .debug_struct("InterfaceTelemetry")
+                .field("interface_id", interface_id)
+                .field("telemetry", telemetry)
                 .finish(),
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),
             Event::Tick => write!(f, "Tick"),

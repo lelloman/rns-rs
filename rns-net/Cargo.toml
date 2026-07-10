@@ -67,3 +67,7 @@ name = "rnode_lora"
 
 [[example]]
 name = "rnode_hil"
+
+[[example]]
+name = "weave_hil"
+required-features = ["iface-weave"]

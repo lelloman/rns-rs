@@ -22,6 +22,25 @@ pub struct IfacState {
     pub identity: Identity,
 }
 
+impl core::fmt::Debug for IfacState {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IfacState")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for IfacState {
+    fn clone(&self) -> Self {
+        Self {
+            size: self.size,
+            key: self.key,
+            identity: Identity::from_private_key(&self.key),
+        }
+    }
+}
+
 /// Derive IFAC state from network name and/or passphrase.
 ///
 /// Matches Python `Reticulum.py:811-829`:
