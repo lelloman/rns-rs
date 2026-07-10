@@ -13,6 +13,12 @@ The current upstream reference baseline is:
 - Commit date: `2026-07-03 18:32:34 +0200`
 - Subject: `Updated changelog`
 
+Reticulum 1.3.8 at `de0f399a1696895dcb95ad1efa19f3b21a7886ab`
+is the active parity candidate. Its tracked subsystem and commit audit is in
+[`docs/reticulum-1.3.8-parity.md`](docs/reticulum-1.3.8-parity.md). The accepted
+baseline above is intentionally unchanged until software conformance and Weave
+hardware acceptance are complete.
+
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
 range was reviewed and the relevant path-request control, `rnstatus`, `rnpath`,
