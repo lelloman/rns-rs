@@ -168,6 +168,9 @@ impl IngressControl {
         dest_hash: [u8; 16],
         held: HeldAnnounce,
     ) {
+        if held.hops >= crate::constants::PATHFINDER_M - 1 {
+            return;
+        }
         let state = self
             .states
             .entry(interface)
@@ -482,6 +485,27 @@ mod tests {
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
+    }
+
+    #[test]
+    fn held_announce_rejects_pathfinder_boundary() {
+        let mut control = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        for hops in [126, 127] {
+            control.hold_announce(
+                iface(1),
+                &config,
+                [hops; 16],
+                HeldAnnounce {
+                    raw: vec![0; 20],
+                    hops,
+                    receiving_interface: iface(1),
+                    rx: RxMetadata::default(),
+                    timestamp: 1.0,
+                },
+            );
+        }
+        assert_eq!(control.held_count(&iface(1)), 1);
     }
 
     #[test]

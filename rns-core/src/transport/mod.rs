@@ -889,9 +889,16 @@ impl TransportEngine {
                 .local_destinations
                 .contains_key(&ctx.packet.destination_hash)
         {
+            let mut delivery_raw = ctx.packet.raw.clone();
+            // Link responders learn the post-ingress hop metric from the
+            // authenticated LRRTT packet. Preserve that field when crossing
+            // the action boundary without changing ordinary callback bytes.
+            if ctx.packet.context == constants::CONTEXT_LRRTT && delivery_raw.len() >= 2 {
+                delivery_raw[1] = ctx.packet.hops;
+            }
             actions.push(TransportAction::DeliverLocal {
                 destination_hash: ctx.packet.destination_hash,
-                raw: PacketBytes::from(ctx.packet.raw.clone()),
+                raw: PacketBytes::from(delivery_raw),
                 packet_hash: ctx.packet.packet_hash,
                 receiving_interface: ctx.iface,
             });
@@ -1235,7 +1242,7 @@ impl TransportEngine {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
             return;
         }
-        if ctx.packet.hops >= constants::PATHFINDER_M - 1 {
+        if ctx.packet.hops > constants::PATHFINDER_M {
             return;
         }
 
@@ -3167,6 +3174,46 @@ mod tests {
             .iter()
             .find(|a| matches!(a, TransportAction::DeliverLocal { .. }));
         assert!(deliver.is_some(), "Should deliver locally");
+    }
+
+    #[test]
+    fn lrrtt_local_delivery_preserves_post_ingress_hops() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let link_id = [0x4c; 16];
+        engine.register_destination(link_id, constants::DESTINATION_LINK);
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_LRRTT,
+            b"authenticated ciphertext",
+        )
+        .unwrap();
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1.0,
+                rx: RxMetadata::default(),
+            },
+            &mut rns_crypto::FixedRng::new(&[0; 32]),
+        );
+        let raw = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::DeliverLocal { raw, .. } => Some(raw),
+                _ => None,
+            })
+            .expect("LRRTT should be delivered locally");
+        assert_eq!(RawPacket::unpack(raw).unwrap().hops, 1);
     }
 
     #[test]

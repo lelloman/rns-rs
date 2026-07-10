@@ -302,8 +302,10 @@ pub fn bench_shared_client_replay_once(
                 Err(e) => return Err(e),
             };
             for frame in decoder.feed(&buf[..n]) {
-                let packet = RawPacket::unpack(&frame)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e}")))?;
+                let Ok(packet) = RawPacket::unpack(&frame) else {
+                    log::debug!("skipping malformed shared-instance packet");
+                    continue;
+                };
                 if packet.context == expected_context {
                     frames.push(frame);
                 }
