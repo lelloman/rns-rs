@@ -1,0 +1,7 @@
+{
+  "project": "Reticulum",
+  "version": "1.3.8",
+  "commit": "de0f399a1696895dcb95ad1efa19f3b21a7886ab",
+  "release_tag_commit": "dca2a928",
+  "fixture_policy": "Generated only from the exact checkout resolved by RETICULUM_UPSTREAM_DIR or .local/reticulum-upstream.path"
+}
