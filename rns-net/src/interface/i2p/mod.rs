@@ -179,12 +179,21 @@ fn load_or_generate_keypair(
 /// Start the I2P interface coordinator. All peer connections are registered
 /// as dynamic interfaces via InterfaceUp events.
 pub fn start(config: I2pConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
+    start_with_template(config, tx, next_id, None)
+}
+
+fn start_with_template(
+    config: I2pConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
+) -> io::Result<()> {
     let name = config.name.clone();
 
     thread::Builder::new()
         .name(format!("i2p-coord-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = coordinator(config, tx, next_id) {
+            if let Err(e) = coordinator(config, tx, next_id, dynamic_template) {
                 log::error!("[{}] I2P coordinator failed: {}", name, e);
             }
         })?;
@@ -197,6 +206,7 @@ fn coordinator(
     config: I2pConfig,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> Result<(), SamError> {
     let ingress_control = config.ingress_control;
     let sam_addr: SocketAddr = format!("{}:{}", config.sam_host, config.sam_port)
@@ -239,6 +249,7 @@ fn coordinator(
         let session_id2 = session_id.clone();
         let iface_name = config.name.clone();
         let runtime = Arc::clone(&config.runtime);
+        let dynamic_template = dynamic_template.clone();
 
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer_addr))
@@ -252,6 +263,7 @@ fn coordinator(
                     next_id2,
                     runtime,
                     ingress_control,
+                    dynamic_template,
                 );
             })
             .ok();
@@ -264,6 +276,7 @@ fn coordinator(
         let sam_addr2 = sam_addr;
         let session_id2 = session_id.clone();
         let iface_name = config.name.clone();
+        let dynamic_template = dynamic_template.clone();
 
         thread::Builder::new()
             .name("i2p-acceptor".into())
@@ -275,6 +288,7 @@ fn coordinator(
                     tx2,
                     next_id2,
                     ingress_control,
+                    dynamic_template,
                 );
             })
             .ok();
@@ -299,6 +313,7 @@ fn outbound_peer_loop(
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<I2pRuntime>>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
@@ -371,10 +386,16 @@ fn outbound_peer_loop(
                 };
 
                 // Register dynamic interface
-                if tx
-                    .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-                    .is_err()
-                {
+                let event = if let Some(template) = &dynamic_template {
+                    Event::DynamicInterfaceUp {
+                        id: client_id,
+                        writer,
+                        registration: template.registration(info),
+                    }
+                } else {
+                    Event::InterfaceUp(client_id, Some(writer), Some(info))
+                };
+                if tx.send(event).is_err() {
                     return; // Driver shut down
                 }
 
@@ -414,6 +435,7 @@ fn acceptor_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     loop {
         match sam::stream_accept(&sam_addr, session_id) {
@@ -468,10 +490,16 @@ fn acceptor_loop(
                 };
 
                 // Register dynamic interface
-                if tx
-                    .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-                    .is_err()
-                {
+                let event = if let Some(template) = &dynamic_template {
+                    Event::DynamicInterfaceUp {
+                        id: client_id,
+                        writer,
+                        registration: template.registration(info),
+                    }
+                } else {
+                    Event::InterfaceUp(client_id, Some(writer), Some(info))
+                };
+                if tx.send(event).is_err() {
                     return; // Driver shut down
                 }
 
@@ -608,7 +636,20 @@ impl InterfaceFactory for I2pFactory {
             .downcast::<I2pConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         cfg.ingress_control = ctx.ingress_control;
-        start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+        let parent_id = cfg.interface_id;
+        start_with_template(
+            cfg,
+            ctx.tx,
+            ctx.next_dynamic_id,
+            Some(super::DynamicInterfaceTemplate {
+                parent_id,
+                interface_type: "I2PInterfacePeer".into(),
+                ifac: ctx.ifac,
+                mode: ctx.mode,
+                recursive_prs: ctx.recursive_prs,
+                announces_from_internal: ctx.announces_from_internal,
+            }),
+        )?;
         Ok(StartResult::Listener { control: None })
     }
 }
