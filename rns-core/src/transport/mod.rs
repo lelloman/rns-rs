@@ -608,7 +608,7 @@ impl TransportEngine {
             .get(&frame.iface)
             .map(|i| i.is_local_client)
             .unwrap_or(false);
-        packet.hops += 1;
+        packet.hops = packet.hops.checked_add(1)?;
         packet.rssi = frame.rx.rssi;
         packet.snr = frame.rx.snr;
         if from_local_client {
@@ -1235,7 +1235,7 @@ impl TransportEngine {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
             return;
         }
-        if ctx.packet.hops > constants::PATHFINDER_M {
+        if ctx.packet.hops >= constants::PATHFINDER_M - 1 {
             return;
         }
 

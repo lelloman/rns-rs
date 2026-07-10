@@ -34,6 +34,14 @@ pub struct KissIfaceConfig {
     pub beacon_interval: Option<u32>, // seconds
     pub beacon_data: Option<Vec<u8>>, // padded to 15 bytes
     pub interface_id: InterfaceId,
+    pub ax25_source: Option<Ax25Address>,
+    pub interface_type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ax25Address {
+    pub callsign: String,
+    pub ssid: u8,
 }
 
 impl Default for KissIfaceConfig {
@@ -53,6 +61,8 @@ impl Default for KissIfaceConfig {
             beacon_interval: None,
             beacon_data: None,
             interface_id: InterfaceId(0),
+            ax25_source: None,
+            interface_type_name: "KISSInterface".into(),
         }
     }
 }
@@ -70,23 +80,29 @@ struct KissWriter {
     file: std::fs::File,
     flow_control: bool,
     flow_state: Arc<Mutex<FlowState>>,
+    ax25_source: Option<Ax25Address>,
 }
 
 impl Writer for KissWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        let data = self
+            .ax25_source
+            .as_ref()
+            .map(|source| super::ax25_kiss::encode_ui_frame(source, data))
+            .unwrap_or_else(|| data.to_vec());
         if self.flow_control {
             let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
             if state.ready {
                 state.ready = false;
                 state.lock_time = Instant::now();
                 drop(state);
-                self.file.write_all(&kiss::frame(data))
+                self.file.write_all(&kiss::frame(&data))
             } else {
-                state.queue.push_back(data.to_vec());
+                state.queue.push_back(data);
                 Ok(())
             }
         } else {
-            self.file.write_all(&kiss::frame(data))
+            self.file.write_all(&kiss::frame(&data))
         }
     }
 }
@@ -144,6 +160,7 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
         file: writer_file,
         flow_control: config.flow_control,
         flow_state,
+        ax25_source: config.ax25_source.clone(),
     }))
 }
 
@@ -207,6 +224,14 @@ fn reader_loop(
                 for event in decoder.feed(&buf[..n]) {
                     match event {
                         kiss::KissEvent::DataFrame(data) => {
+                            let data = if config.ax25_source.is_some() {
+                                match super::ax25_kiss::decode_ui_frame(&data) {
+                                    Some(data) => data.to_vec(),
+                                    None => continue,
+                                }
+                            } else {
+                                data
+                            };
                             if tx
                                 .send(Event::Frame {
                                     interface_id: id,
@@ -333,6 +358,7 @@ fn reconnect(
                             file: cfg_writer,
                             flow_control: config.flow_control,
                             flow_state: flow_state.clone(),
+                            ax25_source: config.ax25_source.clone(),
                         });
                         let _ = tx.send(Event::InterfaceUp(
                             config.interface_id,
@@ -457,6 +483,8 @@ impl InterfaceFactory for KissFactory {
             beacon_interval,
             beacon_data,
             interface_id: id,
+            ax25_source: None,
+            interface_type_name: "KISSInterface".into(),
         }))
     }
 
@@ -474,6 +502,7 @@ impl InterfaceFactory for KissFactory {
 
         let id = kiss_config.interface_id;
         let name = kiss_config.name.clone();
+        let interface_type_name = kiss_config.interface_type_name.clone();
 
         let info = InterfaceInfo {
             id,
@@ -507,7 +536,7 @@ impl InterfaceFactory for KissFactory {
             id,
             info,
             writer,
-            interface_type_name: "KISSInterface".to_string(),
+            interface_type_name,
         })
     }
 }
@@ -568,6 +597,7 @@ mod tests {
             file: writer_file,
             flow_control: false,
             flow_state,
+            ax25_source: None,
         };
 
         let payload = vec![0xC0, 0xDB, 0x01]; // includes bytes that need KISS escaping
@@ -687,6 +717,7 @@ mod tests {
             file: writer_file,
             flow_control: true,
             flow_state: flow_state.clone(),
+            ax25_source: None,
         };
 
         // First send should go through (ready=true) and lock

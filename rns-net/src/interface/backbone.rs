@@ -1114,6 +1114,36 @@ pub(crate) enum BackboneMode {
 /// (server mode).
 pub struct BackboneInterfaceFactory;
 
+/// Compatibility name used by Reticulum 1.3.8 for a forced client-mode
+/// Backbone interface.
+pub struct BackboneClientInterfaceFactory;
+
+impl InterfaceFactory for BackboneClientInterfaceFactory {
+    fn type_name(&self) -> &str {
+        "BackboneClientInterface"
+    }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        if !params.contains_key("remote") && !params.contains_key("target_host") {
+            return Err("BackboneClientInterface requires 'remote' or 'target_host'".into());
+        }
+        BackboneInterfaceFactory.parse_config(name, id, params)
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        BackboneInterfaceFactory.start(config, ctx)
+    }
+}
+
 fn parse_positive_duration_secs(params: &HashMap<String, String>, key: &str) -> Option<Duration> {
     params
         .get(key)

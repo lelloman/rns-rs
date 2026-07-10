@@ -53,7 +53,7 @@ pub fn should_update_path(
     prefer_shorter_path: bool,
 ) -> PathDecision {
     // Hop limit
-    if announce_hops > constants::PATHFINDER_M {
+    if announce_hops >= constants::PATHFINDER_M - 1 {
         return PathDecision::Reject;
     }
 
@@ -132,7 +132,7 @@ pub fn decide_announce_multipath(
     prefer_shorter_path: bool,
 ) -> MultiPathDecision {
     // Hop limit
-    if announce_hops > constants::PATHFINDER_M {
+    if announce_hops >= constants::PATHFINDER_M - 1 {
         return MultiPathDecision::Reject;
     }
 

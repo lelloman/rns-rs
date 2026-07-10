@@ -41,6 +41,8 @@ pub const LORA_CRC: bool = true;
 #[derive(Debug, Clone)]
 pub struct RNodeSubConfig {
     pub name: String,
+    pub vport: u8,
+    pub outgoing: bool,
     pub frequency: u32,
     pub bandwidth: u32,
     pub txpower: i8,
@@ -58,6 +60,7 @@ pub struct RNodeConfig {
     pub port: String,
     pub speed: u32,
     pub subinterfaces: Vec<RNodeSubConfig>,
+    pub multi: bool,
     pub id_interval: Option<u32>,
     pub id_callsign: Option<Vec<u8>>,
     pub base_interface_id: InterfaceId,
@@ -82,6 +85,8 @@ impl RNodeRuntime {
                 .cloned()
                 .unwrap_or_else(|| RNodeSubConfig {
                     name: config.name.clone(),
+                    vport: 0,
+                    outgoing: true,
                     frequency: 868_000_000,
                     bandwidth: 125_000,
                     txpower: 7,
@@ -110,6 +115,7 @@ impl Default for RNodeConfig {
             port: String::new(),
             speed: 115200,
             subinterfaces: Vec::new(),
+            multi: false,
             id_interval: None,
             id_callsign: None,
             base_interface_id: InterfaceId(0),
@@ -117,6 +123,8 @@ impl Default for RNodeConfig {
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: String::new(),
+                    vport: 0,
+                    outgoing: true,
                     frequency: 868_000_000,
                     bandwidth: 125_000,
                     txpower: 7,
@@ -293,8 +301,12 @@ pub fn start(
             queue: std::collections::VecDeque::new(),
         }));
         flow_states.push(flow_state.clone());
-        let sub_writer =
-            make_sub_writer(shared_writer.clone(), i as u8, sub.flow_control, flow_state);
+        let sub_writer = make_sub_writer(
+            shared_writer.clone(),
+            sub.vport,
+            sub.flow_control,
+            flow_state,
+        );
         writers.push((sub_id, sub_writer));
     }
 
@@ -379,7 +391,15 @@ fn reader_loop(
                     for event in decoder.feed(&buf[..n]) {
                         match event {
                             rnode_kiss::RNodeEvent::DataFrame { index, data } => {
-                                let sub_id = InterfaceId(config.base_interface_id.0 + index as u64);
+                                let Some(position) = config
+                                    .subinterfaces
+                                    .iter()
+                                    .position(|sub| usize::from(sub.vport) == index)
+                                else {
+                                    continue;
+                                };
+                                let sub_id =
+                                    InterfaceId(config.base_interface_id.0 + position as u64);
                                 if tx
                                     .send(Event::Frame {
                                         interface_id: sub_id,
@@ -398,7 +418,11 @@ fn reader_loop(
                                 // Flow control: unlock all subinterfaces that have flow_control
                                 for (i, fs) in flow_states.iter().enumerate() {
                                     if config.subinterfaces[i].flow_control {
-                                        process_flow_queue(fs, &writer, i as u8);
+                                        process_flow_queue(
+                                            fs,
+                                            &writer,
+                                            config.subinterfaces[i].vport,
+                                        );
                                     }
                                 }
                             }
@@ -532,8 +556,8 @@ fn detect_and_configure(
         ));
     }
 
-    for (i, sub) in config.subinterfaces.iter().enumerate() {
-        configure_subinterface(writer, i as u8, sub, config.subinterfaces.len() > 1)?;
+    for sub in &config.subinterfaces {
+        configure_subinterface(writer, sub.vport, sub, config.multi)?;
     }
 
     thread::sleep(Duration::from_millis(300));
@@ -564,7 +588,7 @@ fn signal_interface_up(
         let new_writer = reconnected.then(|| {
             make_sub_writer(
                 writer.clone(),
-                i as u8,
+                config.subinterfaces[i].vport,
                 config.subinterfaces[i].flow_control,
                 flow_state.clone(),
             )
@@ -747,7 +771,9 @@ fn process_flow_queue(
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface};
+use super::{
+    ConfigSection, InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
+};
 use rns_core::transport::types::InterfaceInfo;
 use std::collections::HashMap;
 
@@ -824,6 +850,8 @@ impl InterfaceFactory for RNodeFactory {
 
         let sub = RNodeSubConfig {
             name: name.to_string(),
+            vport: 0,
+            outgoing: true,
             frequency,
             bandwidth,
             txpower,
@@ -839,6 +867,7 @@ impl InterfaceFactory for RNodeFactory {
             port,
             speed,
             subinterfaces: vec![sub],
+            multi: false,
             id_interval,
             id_callsign,
             base_interface_id: id,
@@ -846,6 +875,8 @@ impl InterfaceFactory for RNodeFactory {
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: name.to_string(),
+                    vport: 0,
+                    outgoing: true,
                     frequency,
                     bandwidth,
                     txpower,
@@ -869,7 +900,6 @@ impl InterfaceFactory for RNodeFactory {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
         })?;
 
-        let name = rnode_config.name.clone();
         let sub_bitrates: Vec<u64> = rnode_config
             .subinterfaces
             .iter()
@@ -881,15 +911,11 @@ impl InterfaceFactory for RNodeFactory {
             .map(lora_airtime_profile)
             .collect();
 
-        let pairs = start(rnode_config, ctx.tx)?;
+        let pairs = start(rnode_config.clone(), ctx.tx)?;
 
         let mut subs = Vec::with_capacity(pairs.len());
         for (index, (sub_id, writer)) in pairs.into_iter().enumerate() {
-            let sub_name = if index == 0 {
-                name.clone()
-            } else {
-                format!("{}/{}", name, index)
-            };
+            let sub_name = rnode_config.subinterfaces[index].name.clone();
 
             let info = InterfaceInfo {
                 id: sub_id,
@@ -897,7 +923,7 @@ impl InterfaceFactory for RNodeFactory {
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
-                out_capable: true,
+                out_capable: rnode_config.subinterfaces[index].outgoing,
                 in_capable: true,
                 bitrate: sub_bitrates.get(index).copied(),
                 airtime_profile: airtime_profiles.get(index).copied(),
@@ -921,11 +947,144 @@ impl InterfaceFactory for RNodeFactory {
                 id: sub_id,
                 info,
                 writer,
-                interface_type_name: "RNodeInterface".to_string(),
+                interface_type_name: if rnode_config.multi {
+                    "RNodeMultiInterface"
+                } else {
+                    "RNodeInterface"
+                }
+                .to_string(),
             });
         }
 
         Ok(StartResult::Multi(subs))
+    }
+}
+
+/// Factory for ConfigObj-driven `RNodeMultiInterface` devices.
+pub struct RNodeMultiFactory;
+
+impl InterfaceFactory for RNodeMultiFactory {
+    fn type_name(&self) -> &str {
+        "RNodeMultiInterface"
+    }
+
+    fn default_ifac_size(&self) -> usize {
+        8
+    }
+
+    fn parse_config(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        params: &HashMap<String, String>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        self.parse_config_section(
+            name,
+            id,
+            ConfigSection {
+                params,
+                children: &[],
+            },
+        )
+    }
+
+    fn parse_config_section(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        section: ConfigSection<'_>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let base = RNodeFactory.parse_config(name, id, section.params)?;
+        let mut config = *base
+            .into_any()
+            .downcast::<RNodeConfig>()
+            .map_err(|_| "wrong RNode config type".to_string())?;
+
+        let mut subinterfaces = Vec::new();
+        for (position, child) in section.children.iter().enumerate() {
+            let enabled = child
+                .params
+                .get("enabled")
+                .and_then(|value| crate::config::parse_bool_pub(value))
+                .unwrap_or(true);
+            if !enabled {
+                continue;
+            }
+            if subinterfaces.len() >= 11 {
+                return Err("RNodeMultiInterface supports at most 11 enabled subinterfaces".into());
+            }
+            let vport = child
+                .params
+                .get("vport")
+                .and_then(|value| value.parse::<u8>().ok())
+                .unwrap_or(position as u8);
+            if vport > 10
+                || subinterfaces
+                    .iter()
+                    .any(|sub: &RNodeSubConfig| sub.vport == vport)
+            {
+                return Err(format!("invalid or duplicate RNode virtual port {}", vport));
+            }
+            let parse_u32 = |key: &str, default| {
+                child
+                    .params
+                    .get(key)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(default)
+            };
+            let parse_u8_alias = |first: &str, second: &str, default| {
+                child
+                    .params
+                    .get(first)
+                    .or_else(|| child.params.get(second))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(default)
+            };
+            let sub = RNodeSubConfig {
+                name: child.name.clone(),
+                vport,
+                outgoing: child
+                    .params
+                    .get("outgoing")
+                    .and_then(|v| crate::config::parse_bool_pub(v))
+                    .unwrap_or(true),
+                frequency: parse_u32("frequency", 868_000_000),
+                bandwidth: parse_u32("bandwidth", 125_000),
+                txpower: child
+                    .params
+                    .get("txpower")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(7),
+                spreading_factor: parse_u8_alias("spreadingfactor", "spreading_factor", 8),
+                coding_rate: parse_u8_alias("codingrate", "coding_rate", 5),
+                flow_control: child
+                    .params
+                    .get("flow_control")
+                    .and_then(|v| crate::config::parse_bool_pub(v))
+                    .unwrap_or(false),
+                st_alock: child.params.get("st_alock").and_then(|v| v.parse().ok()),
+                lt_alock: child.params.get("lt_alock").and_then(|v| v.parse().ok()),
+            };
+            if let Some(error) = validate_sub_config(&sub) {
+                return Err(error);
+            }
+            subinterfaces.push(sub);
+        }
+        if subinterfaces.is_empty() {
+            return Err("RNodeMultiInterface requires at least one enabled subinterface".into());
+        }
+        config.multi = true;
+        config.subinterfaces = subinterfaces;
+        *lock_or_recover(&config.runtime, "rnode runtime") = RNodeRuntime::from_config(&config);
+        Ok(Box::new(config))
+    }
+
+    fn start(
+        &self,
+        config: Box<dyn InterfaceConfigData>,
+        ctx: StartContext,
+    ) -> io::Result<StartResult> {
+        RNodeFactory.start(config, ctx)
     }
 }
 
@@ -1095,6 +1254,8 @@ mod tests {
 
         let sub = RNodeSubConfig {
             name: "test".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
@@ -1302,6 +1463,8 @@ mod tests {
     fn rnode_config_validation() {
         let good = RNodeSubConfig {
             name: "test".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
@@ -1343,6 +1506,8 @@ mod tests {
     fn rnode_lora_bitrate_estimate_uses_radio_params() {
         let mut sub = RNodeSubConfig {
             name: "test".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
@@ -1366,6 +1531,8 @@ mod tests {
     fn rnode_lora_airtime_profile_uses_radio_params() {
         let sub = RNodeSubConfig {
             name: "test".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
@@ -1406,6 +1573,8 @@ mod tests {
         let (tx, rx) = event::channel();
         let sub = RNodeSubConfig {
             name: "test-rnode".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
@@ -1420,6 +1589,7 @@ mod tests {
             port: port_path.display().to_string(),
             speed: 115200,
             subinterfaces: vec![sub],
+            multi: false,
             id_interval: None,
             id_callsign: None,
             base_interface_id: InterfaceId(41),
@@ -1427,6 +1597,8 @@ mod tests {
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: String::new(),
+                    vport: 0,
+                    outgoing: true,
                     frequency: 868_000_000,
                     bandwidth: 125_000,
                     txpower: 7,

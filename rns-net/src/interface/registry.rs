@@ -45,6 +45,8 @@ impl InterfaceRegistry {
         reg.register(Box::new(super::serial_iface::SerialFactory));
         #[cfg(feature = "iface-kiss")]
         reg.register(Box::new(super::kiss_iface::KissFactory));
+        #[cfg(feature = "iface-ax25-kiss")]
+        reg.register(Box::new(super::ax25_kiss::Ax25KissFactory));
         #[cfg(feature = "iface-pipe")]
         reg.register(Box::new(super::pipe::PipeFactory));
         #[cfg(feature = "iface-local")]
@@ -53,13 +55,21 @@ impl InterfaceRegistry {
             reg.register(Box::new(super::local::LocalClientFactory));
         }
         #[cfg(feature = "iface-backbone")]
-        reg.register(Box::new(super::backbone::BackboneInterfaceFactory));
+        {
+            reg.register(Box::new(super::backbone::BackboneInterfaceFactory));
+            reg.register(Box::new(super::backbone::BackboneClientInterfaceFactory));
+        }
         #[cfg(feature = "iface-auto")]
         reg.register(Box::new(super::auto::AutoFactory));
         #[cfg(feature = "iface-i2p")]
         reg.register(Box::new(super::i2p::I2pFactory));
         #[cfg(feature = "iface-rnode")]
-        reg.register(Box::new(super::rnode::RNodeFactory));
+        {
+            reg.register(Box::new(super::rnode::RNodeFactory));
+            reg.register(Box::new(super::rnode::RNodeMultiFactory));
+        }
+        #[cfg(all(feature = "iface-weave", target_os = "linux"))]
+        reg.register(Box::new(super::weave::WeaveFactory));
         reg
     }
 }

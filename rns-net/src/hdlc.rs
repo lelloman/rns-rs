@@ -59,16 +59,38 @@ fn unescape(data: &[u8]) -> Vec<u8> {
 /// Matches the decode loop in `TCPInterface.py:381-394`.
 pub struct Decoder {
     buffer: Vec<u8>,
+    min_frame_size: usize,
+    max_buffer_size: usize,
 }
 
 impl Decoder {
     pub fn new() -> Self {
-        Decoder { buffer: Vec::new() }
+        Self::with_limits(HEADER_MINSIZE, 64 * 1024)
+    }
+
+    /// Construct a decoder for protocols with a different minimum frame size.
+    pub fn with_min_frame_size(min_frame_size: usize) -> Self {
+        Self::with_limits(min_frame_size, 64 * 1024)
+    }
+
+    pub fn with_limits(min_frame_size: usize, max_buffer_size: usize) -> Self {
+        Decoder {
+            buffer: Vec::new(),
+            min_frame_size,
+            max_buffer_size: max_buffer_size.max(2),
+        }
     }
 
     /// Feed raw bytes into the decoder and return any complete frames.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         self.buffer.extend_from_slice(chunk);
+        if self.buffer.len() > self.max_buffer_size {
+            if let Some(last_flag) = self.buffer.iter().rposition(|&byte| byte == FLAG) {
+                self.buffer.drain(..last_flag);
+            } else {
+                self.buffer.clear();
+            }
+        }
         let mut frames = Vec::new();
 
         loop {
@@ -98,7 +120,7 @@ impl Decoder {
             let unescaped = unescape(between);
 
             // Only yield frames that meet minimum size
-            if unescaped.len() >= HEADER_MINSIZE {
+            if unescaped.len() >= self.min_frame_size {
                 frames.push(unescaped);
             }
 

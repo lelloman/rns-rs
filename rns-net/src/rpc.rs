@@ -1184,6 +1184,42 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.tx_packets as i64),
         ),
         (
+            PickleValue::String("cpu_load".into()),
+            s.cpu_load
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("mem_load".into()),
+            s.mem_load
+                .map(PickleValue::Float)
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("switch_id".into()),
+            s.switch_id
+                .map(|v| PickleValue::Bytes(v.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("endpoint_id".into()),
+            s.endpoint_id
+                .map(|v| PickleValue::Bytes(v.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("via_switch_id".into()),
+            s.via_switch_id
+                .map(|v| PickleValue::Bytes(v.to_vec()))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
+            PickleValue::String("peers".into()),
+            s.peers
+                .map(|v| PickleValue::Int(v as i64))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("started".into()),
             PickleValue::Float(s.started),
         ),
@@ -2649,6 +2685,12 @@ mod tests {
                             txb: 2000,
                             rx_packets: 10,
                             tx_packets: 20,
+                            cpu_load: None,
+                            mem_load: None,
+                            switch_id: None,
+                            endpoint_id: None,
+                            via_switch_id: None,
+                            peers: None,
                             bitrate: Some(10_000_000),
                             ifac_size: None,
                             started: 1000.0,
@@ -2849,6 +2891,12 @@ mod tests {
                 txb: 200,
                 rx_packets: 5,
                 tx_packets: 10,
+                cpu_load: Some(12.0),
+                mem_load: Some(34.5),
+                switch_id: Some([1, 2, 3, 4]),
+                endpoint_id: Some([5; 8]),
+                via_switch_id: Some([6; 4]),
+                peers: Some(2),
                 bitrate: Some(1000000),
                 ifac_size: Some(16),
                 started: 1000.0,

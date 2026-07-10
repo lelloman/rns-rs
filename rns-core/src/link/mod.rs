@@ -12,7 +12,7 @@ use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::Rng;
 
 use crate::constants::{
-    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, MTU,
+    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, MTU, PATHFINDER_M,
 };
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
@@ -59,6 +59,13 @@ pub struct LinkEngine {
     keepalive_interval: f64,
     stale_time: f64,
     establishment_timeout: f64,
+    expected_hops: u8,
+
+    // Counts packed packet data/ciphertext, matching Python Link accounting.
+    tx_packets: u64,
+    rx_packets: u64,
+    tx_bytes: u64,
+    rx_bytes: u64,
 
     // Identity
     remote_identity: Option<([u8; 16], [u8; 64])>,
@@ -114,6 +121,15 @@ impl LinkEngine {
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
             ),
+            expected_hops: if hops < PATHFINDER_M {
+                hops
+            } else {
+                PATHFINDER_M
+            },
+            tx_packets: 0,
+            rx_packets: 0,
+            tx_bytes: 0,
+            rx_bytes: 0,
             remote_identity: None,
             destination_hash: *dest_hash,
             mtu: link_mtu,
@@ -196,6 +212,11 @@ impl LinkEngine {
                 LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
             ),
+            expected_hops: PATHFINDER_M,
+            tx_packets: 0,
+            rx_packets: 0,
+            tx_bytes: 0,
+            rx_bytes: 0,
             remote_identity: None,
             destination_hash: *dest_hash,
             mtu: link_mtu,
@@ -281,12 +302,26 @@ impl LinkEngine {
         encrypted_data: &[u8],
         now: f64,
     ) -> Result<Vec<LinkAction>, LinkError> {
+        self.handle_lrrtt_with_hops(encrypted_data, None, now)
+    }
+
+    /// Handle LRRTT while recording the responder-side hop metric. The legacy
+    /// timing-only method remains available for existing callers.
+    pub fn handle_lrrtt_with_hops(
+        &mut self,
+        encrypted_data: &[u8],
+        packet_hops: Option<u8>,
+        now: f64,
+    ) -> Result<Vec<LinkAction>, LinkError> {
         if self.state != LinkState::Handshake || self.is_initiator {
             return Err(LinkError::InvalidState);
         }
 
         let plaintext = self.decrypt(encrypted_data)?;
         let initiator_rtt = unpack_rtt(&plaintext).ok_or(LinkError::InvalidData)?;
+        if let Some(hops) = packet_hops {
+            self.expected_hops = hops;
+        }
 
         let measured_rtt = now - self.request_time;
         let rtt = if measured_rtt > initiator_rtt {
@@ -389,6 +424,20 @@ impl LinkEngine {
         if is_keepalive {
             self.last_keepalive = now;
         }
+    }
+
+    /// Record one accepted inbound packet using its packed data/ciphertext size.
+    pub fn record_inbound_traffic(&mut self, data_len: usize) {
+        if self.state != LinkState::Closed {
+            self.rx_packets = self.rx_packets.saturating_add(1);
+            self.rx_bytes = self.rx_bytes.saturating_add(data_len as u64);
+        }
+    }
+
+    /// Record one successfully packed outbound packet.
+    pub fn record_outbound_traffic(&mut self, data_len: usize) {
+        self.tx_packets = self.tx_packets.saturating_add(1);
+        self.tx_bytes = self.tx_bytes.saturating_add(data_len as u64);
     }
 
     /// Periodic tick: check keepalive, stale, timeouts.
@@ -525,6 +574,26 @@ impl LinkEngine {
         &self.destination_hash
     }
 
+    pub fn expected_hops(&self) -> u8 {
+        self.expected_hops
+    }
+
+    pub fn tx_packets(&self) -> u64 {
+        self.tx_packets
+    }
+
+    pub fn rx_packets(&self) -> u64 {
+        self.rx_packets
+    }
+
+    pub fn tx_bytes(&self) -> u64 {
+        self.tx_bytes
+    }
+
+    pub fn rx_bytes(&self) -> u64 {
+        self.rx_bytes
+    }
+
     /// Get the derived session key (needed for hole-punch token derivation).
     pub fn derived_key(&self) -> Option<&[u8]> {
         self.derived_key.as_deref()
@@ -641,8 +710,17 @@ mod tests {
         assert_eq!(actions.len(), 2); // StateChanged + LinkEstablished
 
         // Step 4: Responder handles LRRTT
-        let actions = responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
+        let actions = responder
+            .handle_lrrtt_with_hops(&lrrtt_encrypted, Some(4), 101.0)
+            .unwrap();
         assert_eq!(responder.state(), LinkState::Active);
+        assert_eq!(initiator.expected_hops(), 1);
+        assert_eq!(responder.expected_hops(), 4);
+
+        initiator.record_outbound_traffic(48);
+        initiator.record_inbound_traffic(32);
+        assert_eq!((initiator.tx_packets(), initiator.tx_bytes()), (1, 48));
+        assert_eq!((initiator.rx_packets(), initiator.rx_bytes()), (1, 32));
         assert!(responder.rtt().is_some());
         assert_eq!(actions.len(), 2);
     }

@@ -742,7 +742,14 @@ impl RnsNode {
                 }
             }
 
-            let config_data = match factory.parse_config(&iface.name, iface_id, &params) {
+            let config_data = match factory.parse_config_section(
+                &iface.name,
+                iface_id,
+                crate::interface::ConfigSection {
+                    params: &params,
+                    children: &iface.subinterfaces,
+                },
+            ) {
                 Ok(data) => data,
                 Err(e) => {
                     log::warn!("Failed to parse config for '{}': {}", iface.name, e);
@@ -4029,6 +4036,8 @@ enable_transport = False
 
         let sub = RNodeSubConfig {
             name: "test".into(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,

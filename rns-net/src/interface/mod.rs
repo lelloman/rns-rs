@@ -2,6 +2,8 @@
 
 #[cfg(feature = "iface-auto")]
 pub mod auto;
+#[cfg(feature = "iface-kiss")]
+pub mod ax25_kiss;
 #[cfg(feature = "iface-backbone")]
 pub mod backbone;
 #[cfg(feature = "iface-i2p")]
@@ -23,6 +25,8 @@ pub mod tcp;
 pub mod tcp_server;
 #[cfg(feature = "iface-udp")]
 pub mod udp;
+#[cfg(all(feature = "iface-weave", target_os = "linux"))]
+pub mod weave;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -297,6 +301,12 @@ pub trait InterfaceConfigData: Send + Any {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
+/// ConfigObj section passed to factories that need nested `[[[sections]]]`.
+pub struct ConfigSection<'a> {
+    pub params: &'a HashMap<String, String>,
+    pub children: &'a [crate::config::ParsedSubinterface],
+}
+
 impl<T: Send + 'static> InterfaceConfigData for T {
     fn as_any(&self) -> &dyn Any {
         self
@@ -324,6 +334,17 @@ pub trait InterfaceFactory: Send + Sync {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String>;
+
+    /// Parse a complete ConfigObj interface section. Flat factories inherit
+    /// the compatibility default; multi-interface factories can inspect children.
+    fn parse_config_section(
+        &self,
+        name: &str,
+        id: InterfaceId,
+        section: ConfigSection<'_>,
+    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        self.parse_config(name, id, section.params)
+    }
 
     /// Start the interface from parsed config.
     fn start(
