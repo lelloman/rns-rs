@@ -17,6 +17,12 @@ pub struct InterfaceStats {
     pub txb: u64,
     pub rx_packets: u64,
     pub tx_packets: u64,
+    pub cpu_load: Option<f64>,
+    pub mem_load: Option<f64>,
+    pub switch_id: Option<[u8; 4]>,
+    pub endpoint_id: Option<[u8; 8]>,
+    pub via_switch_id: Option<[u8; 4]>,
+    pub peers: Option<usize>,
     pub started: f64,
     /// Recent incoming announce timestamps (bounded).
     pub ia_timestamps: Vec<f64>,

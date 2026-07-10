@@ -53,8 +53,15 @@ pub use event::{
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]
 pub use interface::auto::{AutoConfig, AutoFactory};
+#[cfg(feature = "iface-ax25-kiss")]
+pub use interface::ax25_kiss::{
+    decode_ui_frame as decode_ax25_ui_frame, encode_ui_frame as encode_ax25_ui_frame,
+    validate_address as validate_ax25_address, Ax25KissFactory,
+};
 #[cfg(feature = "iface-backbone")]
-pub use interface::backbone::{BackboneClientConfig, BackboneConfig, BackboneInterfaceFactory};
+pub use interface::backbone::{
+    BackboneClientConfig, BackboneClientInterfaceFactory, BackboneConfig, BackboneInterfaceFactory,
+};
 #[cfg(feature = "iface-i2p")]
 pub use interface::i2p::{I2pConfig, I2pFactory};
 #[cfg(feature = "iface-kiss")]
@@ -67,7 +74,7 @@ pub use interface::local::{
 pub use interface::pipe::{PipeConfig, PipeFactory};
 pub use interface::registry::InterfaceRegistry;
 #[cfg(feature = "iface-rnode")]
-pub use interface::rnode::{RNodeConfig, RNodeFactory, RNodeSubConfig};
+pub use interface::rnode::{RNodeConfig, RNodeFactory, RNodeMultiFactory, RNodeSubConfig};
 #[cfg(feature = "iface-serial")]
 pub use interface::serial_iface::{SerialFactory, SerialIfaceConfig};
 #[cfg(feature = "iface-tcp")]
@@ -76,6 +83,11 @@ pub use interface::tcp::{TcpClientConfig, TcpClientFactory};
 pub use interface::tcp_server::{TcpServerConfig, TcpServerFactory};
 #[cfg(feature = "iface-udp")]
 pub use interface::udp::{UdpConfig, UdpFactory};
+#[cfg(all(feature = "iface-weave", target_os = "linux"))]
+pub use interface::weave::{
+    parse_device_frame as parse_weave_device_frame, WdclFrame, WeaveConfig, WeaveFactory,
+    WeaveInput, WeaveLogFrame, WeavePeerState, WeaveState,
+};
 pub use interface::{
     InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
 };

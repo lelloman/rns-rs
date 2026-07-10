@@ -472,6 +472,7 @@ impl LinkManager {
         engine.set_link_id_from_hashable(&packet.get_hashable_part(), request_data.len());
         let link_id = *engine.link_id();
 
+        engine.record_outbound_traffic(packet.data.len());
         let managed = ManagedLink {
             engine,
             channel: None,
@@ -526,6 +527,14 @@ impl LinkManager {
             Ok(p) => p,
             Err(_) => return Vec::new(),
         };
+
+        // Python accounts link traffic once the packet is accepted on its
+        // attached interface, before dispatch/decryption of its context.
+        if packet.flags.packet_type != constants::PACKET_TYPE_LINKREQUEST {
+            if let Some(link) = self.links.get_mut(&dest_hash) {
+                link.engine.record_inbound_traffic(packet.data.len());
+            }
+        }
 
         match packet.flags.packet_type {
             constants::PACKET_TYPE_LINKREQUEST => {
@@ -643,6 +652,9 @@ impl LinkManager {
             constants::CONTEXT_LRPROOF,
             &lrproof_data,
         ) {
+            if let Some(link) = self.links.get_mut(&link_id) {
+                link.engine.record_outbound_traffic(lrproof_data.len());
+            }
             log::debug!(
                 "LRPROOF queued: link={:02x?} route_iface={} route_tid_present={} hops={}",
                 &link_id[..4],
@@ -783,6 +795,9 @@ impl LinkManager {
             constants::CONTEXT_NONE,
             &proof_data,
         ) {
+            if let Some(link) = self.links.get_mut(link_id) {
+                link.engine.record_outbound_traffic(proof_data.len());
+            }
             vec![LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -869,6 +884,9 @@ impl LinkManager {
             constants::CONTEXT_LRRTT,
             &lrrtt_encrypted,
         ) {
+            if let Some(link) = self.links.get_mut(&link_id) {
+                link.engine.record_outbound_traffic(lrrtt_encrypted.len());
+            }
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1002,7 +1020,11 @@ impl LinkManager {
 
             match packet.context {
                 constants::CONTEXT_LRRTT => {
-                    match link.engine.handle_lrrtt(&packet.data, time::now()) {
+                    match link.engine.handle_lrrtt_with_hops(
+                        &packet.data,
+                        Some(packet.hops),
+                        time::now(),
+                    ) {
                         Ok(link_actions) => {
                             let link_id = *link.engine.link_id();
                             LinkDataResult::Lrrtt {
@@ -2739,7 +2761,7 @@ impl LinkManager {
 
     /// Build a link DATA packet with a given context and data.
     fn build_link_packet(
-        &self,
+        &mut self,
         link_id: &LinkId,
         context: u8,
         data: &[u8],
@@ -2760,6 +2782,9 @@ impl LinkManager {
         if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
             flags, 0, link_id, None, context, data, max_mtu,
         ) {
+            if let Some(link) = self.links.get_mut(link_id) {
+                link.engine.record_outbound_traffic(data.len());
+            }
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -3116,6 +3141,11 @@ impl LinkManager {
                     dest_hash: managed.dest_hash,
                     remote_identity: managed.remote_identity.as_ref().map(|(h, _)| *h),
                     rtt: managed.engine.rtt(),
+                    expected_hops: managed.engine.expected_hops(),
+                    tx_packets: managed.engine.tx_packets(),
+                    rx_packets: managed.engine.rx_packets(),
+                    tx_bytes: managed.engine.tx_bytes(),
+                    rx_bytes: managed.engine.rx_bytes(),
                     channel_window: managed.channel.as_ref().map(|c| c.window()),
                     channel_outstanding: managed.channel.as_ref().map(|c| c.outstanding()),
                     pending_channel_packets: managed.pending_channel_packets.len(),
@@ -4811,7 +4841,7 @@ mod tests {
 
     #[test]
     fn test_build_link_packet() {
-        let (init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
 
         let actions =
             init_mgr.build_link_packet(&link_id, constants::CONTEXT_RESOURCE, b"test data");

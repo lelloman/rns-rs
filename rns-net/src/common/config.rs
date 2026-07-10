@@ -250,6 +250,14 @@ pub struct ParsedInterface {
     pub enabled: bool,
     pub mode: String,
     pub params: HashMap<String, String>,
+    pub subinterfaces: Vec<ParsedSubinterface>,
+}
+
+/// A `[[[subinterface]]]` nested under an interface section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedSubinterface {
+    pub name: String,
+    pub params: HashMap<String, String>,
 }
 
 /// Configuration parse error.
@@ -288,6 +296,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let mut interfaces: Vec<ParsedInterface> = Vec::new();
     let mut current_iface_kvs: Option<HashMap<String, String>> = None;
     let mut current_iface_name: Option<String> = None;
+    let mut current_iface_subinterfaces: Vec<ParsedSubinterface> = Vec::new();
+    let mut current_subiface_name: Option<String> = None;
+    let mut current_subiface_kvs: Option<HashMap<String, String>> = None;
     let mut hooks: Vec<ParsedHook> = Vec::new();
     let mut current_hook_kvs: Option<HashMap<String, String>> = None;
     let mut current_hook_name: Option<String> = None;
@@ -302,14 +313,40 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
             continue;
         }
 
+        // Check for third-level subsection [[[name]]] before [[name]].
+        if trimmed.starts_with("[[[") && trimmed.ends_with("]]]") {
+            if current_iface_kvs.is_none() {
+                return Err(ConfigError::Parse(
+                    "third-level section outside an interface".into(),
+                ));
+            }
+            if let (Some(name), Some(params)) =
+                (current_subiface_name.take(), current_subiface_kvs.take())
+            {
+                current_iface_subinterfaces.push(ParsedSubinterface { name, params });
+            }
+            current_subiface_name = Some(trimmed[3..trimmed.len() - 3].trim().to_string());
+            current_subiface_kvs = Some(HashMap::new());
+            continue;
+        }
+
         // Check for subsection [[name]]
         if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
             let name = trimmed[2..trimmed.len() - 2].trim().to_string();
+            if let (Some(name), Some(params)) =
+                (current_subiface_name.take(), current_subiface_kvs.take())
+            {
+                current_iface_subinterfaces.push(ParsedSubinterface { name, params });
+            }
             // Finalize previous interface subsection if any
             if let (Some(iface_name), Some(kvs)) =
                 (current_iface_name.take(), current_iface_kvs.take())
             {
-                interfaces.push(build_parsed_interface(iface_name, kvs));
+                interfaces.push(build_parsed_interface(
+                    iface_name,
+                    kvs,
+                    std::mem::take(&mut current_iface_subinterfaces),
+                ));
             }
             // Finalize previous hook subsection if any
             if let (Some(hook_name), Some(kvs)) =
@@ -331,11 +368,20 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
 
         // Check for section [name]
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if let (Some(name), Some(params)) =
+                (current_subiface_name.take(), current_subiface_kvs.take())
+            {
+                current_iface_subinterfaces.push(ParsedSubinterface { name, params });
+            }
             // Finalize previous interface subsection if any
             if let (Some(iface_name), Some(kvs)) =
                 (current_iface_name.take(), current_iface_kvs.take())
             {
-                interfaces.push(build_parsed_interface(iface_name, kvs));
+                interfaces.push(build_parsed_interface(
+                    iface_name,
+                    kvs,
+                    std::mem::take(&mut current_iface_subinterfaces),
+                ));
             }
             // Finalize previous hook subsection if any
             if let (Some(hook_name), Some(kvs)) =
@@ -361,7 +407,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                     !(current_hook_kvs.is_some() && current_iface_kvs.is_some()),
                     "hook and interface subsections should never be active simultaneously"
                 );
-                if let Some(ref mut kvs) = current_hook_kvs {
+                if let Some(ref mut kvs) = current_subiface_kvs {
+                    kvs.insert(key, value);
+                } else if let Some(ref mut kvs) = current_hook_kvs {
                     kvs.insert(key, value);
                 } else if let Some(ref mut kvs) = current_iface_kvs {
                     kvs.insert(key, value);
@@ -381,8 +429,16 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     }
 
     // Finalize last subsections
+    if let (Some(name), Some(params)) = (current_subiface_name.take(), current_subiface_kvs.take())
+    {
+        current_iface_subinterfaces.push(ParsedSubinterface { name, params });
+    }
     if let (Some(iface_name), Some(kvs)) = (current_iface_name.take(), current_iface_kvs.take()) {
-        interfaces.push(build_parsed_interface(iface_name, kvs));
+        interfaces.push(build_parsed_interface(
+            iface_name,
+            kvs,
+            current_iface_subinterfaces,
+        ));
     }
     if let (Some(hook_name), Some(kvs)) = (current_hook_name.take(), current_hook_kvs.take()) {
         hooks.push(build_parsed_hook(hook_name, kvs));
@@ -472,7 +528,11 @@ fn parse_usize_option(
     Ok(Some(parsed))
 }
 
-fn build_parsed_interface(name: String, mut kvs: HashMap<String, String>) -> ParsedInterface {
+fn build_parsed_interface(
+    name: String,
+    mut kvs: HashMap<String, String>,
+    subinterfaces: Vec<ParsedSubinterface>,
+) -> ParsedInterface {
     let interface_type = kvs.remove("type").unwrap_or_default();
     let enabled = kvs
         .remove("enabled")
@@ -490,6 +550,7 @@ fn build_parsed_interface(name: String, mut kvs: HashMap<String, String>) -> Par
         enabled,
         mode,
         params: kvs,
+        subinterfaces,
     }
 }
 
@@ -1605,6 +1666,20 @@ destination_timeout_secs = 777
         assert_eq!(config.interfaces[0].interface_type, "TCPClientInterface");
         assert_eq!(config.interfaces[1].name, "UDP Broadcast");
         assert_eq!(config.interfaces[1].interface_type, "UDPInterface");
+    }
+
+    #[test]
+    fn parse_third_level_interface_sections() {
+        let config = parse(
+            "[interfaces]\n[[radio]]\n  type = RNodeMultiInterface\n  port = /dev/ttyUSB0\n  [[[fast]]]\n    enabled = yes\n    vport = 7\n    frequency = 915000000\n  [[[disabled]]]\n    enabled = no\n    vport = 2\n",
+        )
+        .unwrap();
+        assert_eq!(config.interfaces.len(), 1);
+        let interface = &config.interfaces[0];
+        assert_eq!(interface.params["port"], "/dev/ttyUSB0");
+        assert_eq!(interface.subinterfaces.len(), 2);
+        assert_eq!(interface.subinterfaces[0].name, "fast");
+        assert_eq!(interface.subinterfaces[0].params["vport"], "7");
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub enum PacketError {
     ExceedsMtu,
     MissingTransportId,
     InvalidHeaderType,
+    /// Hop counts at or above PATHFINDER_M are invalid on received wire packets.
+    InvalidHopCount(u8),
 }
 
 impl fmt::Display for PacketError {
@@ -19,6 +21,7 @@ impl fmt::Display for PacketError {
             PacketError::ExceedsMtu => write!(f, "Packet exceeds MTU"),
             PacketError::MissingTransportId => write!(f, "HEADER_2 requires transport_id"),
             PacketError::InvalidHeaderType => write!(f, "Invalid header type"),
+            PacketError::InvalidHopCount(hops) => write!(f, "Invalid hop count: {}", hops),
         }
     }
 }
@@ -204,6 +207,9 @@ impl RawPacket {
 
         let flags = PacketFlags::unpack(raw[0]);
         let hops = raw[1];
+        if hops >= constants::PATHFINDER_M {
+            return Err(PacketError::InvalidHopCount(hops));
+        }
 
         let dst_len = constants::TRUNCATED_HASHLENGTH / 8; // 16
 
@@ -466,6 +472,27 @@ mod tests {
     #[test]
     fn test_unpack_too_short() {
         assert!(RawPacket::unpack(&[0x00; 5]).is_err());
+    }
+
+    #[test]
+    fn unpack_enforces_pathfinder_hop_boundary_but_pack_remains_permissive() {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let accepted = RawPacket::pack(flags, 127, &[1; 16], None, 0, b"x").unwrap();
+        assert_eq!(RawPacket::unpack(&accepted.raw).unwrap().hops, 127);
+
+        for hops in [128, 255] {
+            let packed = RawPacket::pack(flags, hops, &[1; 16], None, 0, b"x").unwrap();
+            assert!(matches!(
+                RawPacket::unpack(&packed.raw),
+                Err(PacketError::InvalidHopCount(value)) if value == hops
+            ));
+        }
     }
 
     #[test]

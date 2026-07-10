@@ -218,7 +218,7 @@ fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
 
 fn print_status(
     response: &PickleValue,
-    _show_all: bool,
+    show_all: bool,
     sort_by: Option<&str>,
     reverse: bool,
     filter: Option<&str>,
@@ -242,6 +242,14 @@ fn print_status(
     if let Some(interfaces) = response.get("interfaces").and_then(|v| v.as_list()) {
         // Collect into a sortable vec of references
         let mut iface_list: Vec<&PickleValue> = interfaces.iter().collect();
+        if !show_all {
+            iface_list.retain(|iface| {
+                !iface
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|name| name.starts_with("WeaveInterfacePeer["))
+            });
+        }
 
         // Apply filter
         if let Some(f) = filter {
@@ -328,6 +336,15 @@ fn print_status(
             println!("    Mode      : {}", mode_str);
             if let Some(br) = bitrate {
                 println!("    Rate      : {}", speed_str(br));
+            }
+            if let Some(load) = iface.get("cpu_load").and_then(|v| v.as_float()) {
+                println!("    CPU       : {:.1}%", load);
+            }
+            if let Some(load) = iface.get("mem_load").and_then(|v| v.as_float()) {
+                println!("    Memory    : {:.1}%", load);
+            }
+            if let Some(peers) = iface.get("peers").and_then(|v| v.as_int()) {
+                println!("    Peers     : {}", peers);
             }
             println!(
                 "    Traffic   : {} \u{2191}  {} \u{2193}",

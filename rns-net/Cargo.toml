@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["iface-tcp", "iface-udp", "iface-local", "iface-auto", "iface-serial", "iface-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p"]
+default = ["iface-tcp", "iface-udp", "iface-local", "iface-auto", "iface-serial", "iface-kiss", "iface-ax25-kiss", "iface-pipe", "iface-rnode", "iface-backbone", "iface-i2p", "iface-weave"]
 rns-hooks = ["rns-hooks-native"]
 rns-hooks-wasm = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/wasm", "dep:serde", "dep:postcard"]
 rns-hooks-native = ["hooks", "dep:rns-hooks-crate", "rns-hooks-crate/native", "dep:serde", "dep:postcard"]
@@ -21,10 +21,12 @@ iface-local = []
 iface-auto = []
 iface-serial = []
 iface-kiss = []
+iface-ax25-kiss = ["iface-kiss"]
 iface-pipe = []
 iface-rnode = []
 iface-backbone = []
 iface-i2p = []
+iface-weave = []
 
 [dependencies]
 rns-core.workspace = true

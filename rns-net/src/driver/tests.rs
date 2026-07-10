@@ -1253,6 +1253,8 @@ fn register_test_rnode(driver: &mut Driver, name: &str) {
     let startup = RNodeRuntime {
         sub: RNodeSubConfig {
             name: name.to_string(),
+            vport: 0,
+            outgoing: true,
             frequency: 868_000_000,
             bandwidth: 125_000,
             txpower: 7,
