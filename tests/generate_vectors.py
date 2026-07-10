@@ -78,6 +78,11 @@ os.makedirs(FIXTURE_DIR, exist_ok=True)
 PROTOCOL_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'protocol')
 os.makedirs(PROTOCOL_DIR, exist_ok=True)
 
+CONFORMANCE_138_DIR = os.path.join(
+    os.path.dirname(__file__), 'fixtures', 'conformance_1_3_8'
+)
+os.makedirs(CONFORMANCE_138_DIR, exist_ok=True)
+
 
 def to_hex(data):
     if isinstance(data, (bytes, bytearray)):
@@ -90,6 +95,119 @@ def write_fixture(name, data):
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
     print(f"  Written {path} ({len(data)} vectors)")
+
+
+def write_138_fixture(name, data):
+    path = os.path.join(CONFORMANCE_138_DIR, name)
+    with open(path, 'w') as f:
+        json.dump({
+            "baseline": {
+                "version": UPSTREAM_VERSION,
+                "commit": UPSTREAM_COMMIT,
+            },
+            "vectors": data,
+        }, f, indent=2)
+    print(f"  Written {path} ({len(data)} vector groups)")
+
+
+def generate_138_runtime_vectors():
+    """Focused fixtures for runtime behavior introduced in 1.3.8."""
+    packet_vectors = []
+    flags = RNS.Packet.HEADER_1 << 6 | RNS.Destination.PLAIN << 2 | RNS.Packet.DATA
+    for hops in [127, 128, 255]:
+        raw = bytes([flags, hops]) + bytes.fromhex("11" * 16) + bytes([RNS.Packet.NONE]) + b"hop"
+        packet = RNS.Packet(None, raw)
+        packet_vectors.append({
+            "hops": hops,
+            "raw": raw.hex(),
+            "unpack_ok": packet.unpack(),
+        })
+
+    ax25_vectors = []
+    for callsign, ssid, payload in [("N0CALL", 7, b"rns"), ("ABC", 0, b"\xc0\xdb")]:
+        def address(call, address_ssid, last):
+            encoded = b"".join(
+                bytes([ord(call[i]) << 1]) if i < len(call) else bytes([0x20])
+                for i in range(6)
+            )
+            return encoded + bytes([0x60 | address_ssid << 1 | (1 if last else 0)])
+        frame = address("APZRNS", 0, False) + address(callsign, ssid, True)
+        frame += bytes([0x03, 0xF0]) + payload
+        ax25_vectors.append({
+            "callsign": callsign,
+            "ssid": ssid,
+            "payload": payload.hex(),
+            "ui_frame": frame.hex(),
+        })
+
+    fend = 0xC0
+    select = 0x1F
+    cmd_data = 0x00
+    vport = 7
+    rnode_payload = b"virtual-port"
+    rnode_frame = bytes([fend, select, vport, fend, fend, cmd_data]) + rnode_payload + bytes([fend])
+
+    from RNS.Interfaces.WeaveInterface import HDLC, WDCL, Cmd, Evt
+    wdcl_groups = []
+    endpoint = bytes.fromhex("0102030405060708")
+    packet = b"rns-over-weave"
+    command_payload = Cmd.WDCL_CMD_ENDPOINT_PKT.to_bytes(2, "big") + endpoint + packet
+    command_frame = bytes.fromhex("a1b2c3d4") + bytes([WDCL.WDCL_T_CMD]) + command_payload
+    command_wire = bytes([HDLC.FLAG]) + HDLC.escape(command_frame) + bytes([HDLC.FLAG])
+    wdcl_groups.append({
+        "description": "endpoint_command",
+        "frame": command_frame.hex(),
+        "hdlc": command_wire.hex(),
+    })
+    log_payload = bytes([0]) + (1234).to_bytes(4, "big") + bytes([2])
+    log_payload += Evt.ET_BOARD_INIT.to_bytes(2, "big") + bytes([1])
+    log_frame = bytes.fromhex("11223344") + bytes([WDCL.WDCL_T_LOG]) + log_payload
+    wdcl_groups.append({
+        "description": "board_init_log",
+        "frame": log_frame.hex(),
+        "event": Evt.ET_BOARD_INIT,
+    })
+
+    key = bytes.fromhex(
+        "6080e432a453d453938cc0ebd1e53f73a5d48e5f21c6dd9c7db7db7da41337c4"
+        "c2059963e08e4b9d8073d2fcc6c51f2de39c81fc09d2e7a4ebeda4340b556bb3"
+    )
+    accounting = []
+    for context, plaintext in [("data", b"short"), ("request", b"request"), ("resource", b"part")]:
+        fixed_iv = bytes([len(accounting) + 1]) * 16
+        original_urandom = os.urandom
+        os.urandom = lambda n, _iv=fixed_iv: _iv[:n]
+        try:
+            ciphertext = Token(key).encrypt(plaintext)
+        finally:
+            os.urandom = original_urandom
+        accounting.append({
+            "context": context,
+            "plaintext": plaintext.hex(),
+            "ciphertext": ciphertext.hex(),
+            "accounted_bytes": len(ciphertext),
+        })
+
+    write_138_fixture("runtime_vectors.json", {
+        "packet_hops": packet_vectors,
+        "held_announce": [
+            {"hops": 126, "retained": True},
+            {"hops": 127, "retained": False},
+        ],
+        "expected_hops": {
+            "initiator_known": 3,
+            "initiator_unknown": RNS.Transport.PATHFINDER_M,
+            "responder_lrrtt": 5,
+        },
+        "link_accounting": accounting,
+        "ax25": ax25_vectors,
+        "rnode": [{
+            "vport": vport,
+            "payload": rnode_payload.hex(),
+            "outbound_frame": rnode_frame.hex(),
+        }],
+        "wdcl": wdcl_groups,
+    })
 
 
 def generate_pkcs7():
@@ -2199,6 +2317,8 @@ def main():
     generate_resource_hmu_vectors()
     print("\nGenerating Phase 5c IFAC test vectors...")
     generate_ifac_vectors()
+    print("\nGenerating Reticulum 1.3.8 runtime conformance vectors...")
+    generate_138_runtime_vectors()
     print("Done! All vectors generated successfully.")
 
 
