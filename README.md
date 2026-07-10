@@ -16,7 +16,7 @@ This is a faithful port of the Python reference implementation, validated agains
 |-------|----------|-------------|
 | [`rns-crypto`](https://crates.io/crates/rns-crypto) | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
 | [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
-| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node: TCP/UDP/Serial/KISS/RNode/Pipe/Backbone/Auto/I2P interfaces, config parsing, driver loop, DirectLink NAT hole punching |
+| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node: TCP/UDP/Serial/KISS/AX.25/RNode/Pipe/Backbone/Auto/I2P/Weave interfaces, config parsing, driver loop, DirectLink NAT hole punching |
 | [`rns-server`](https://crates.io/crates/rns-server) | No | All-in-one Reticulum node supervisor and default runtime binary |
 | [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh` |
 | [`rns-git`](https://crates.io/crates/rns-git) | No | Git-over-Reticulum utilities: `rngit` server and `git-remote-rns` helper |
@@ -39,6 +39,8 @@ cargo build
 | `rns-hooks-native` | Enables trusted native dynamic-library hooks without wasmtime |
 | `rns-hooks-builtin` | Enables static built-in hooks without wasmtime or dynamic libraries |
 | `tls` | Enables TLS support in rns-ctl (compiles in rustls) |
+| `iface-ax25-kiss` | Enables `AX25KISSInterface` (enabled by default in `rns-net`) |
+| `iface-weave` | Enables Linux `WeaveInterface` support (enabled by default in `rns-net`) |
 
 ```bash
 cargo build --features rns-hooks           # Enable native dynamic-library hooks
@@ -59,8 +61,8 @@ rustup target add wasm32-unknown-unknown
 Test vectors are generated from the Python RNS implementation:
 
 ```bash
-# Generate test fixtures (requires Python RNS installed)
-python3 tests/generate_vectors.py
+# Generate fixtures from the pinned Reticulum 1.3.8 checkout
+RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
 
 # Run all tests
 cargo test

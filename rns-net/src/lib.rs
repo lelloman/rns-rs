@@ -64,6 +64,8 @@ pub use interface::backbone::{
 };
 #[cfg(feature = "iface-i2p")]
 pub use interface::i2p::{I2pConfig, I2pFactory};
+#[cfg(feature = "iface-ax25-kiss")]
+pub use interface::kiss_iface::Ax25Address;
 #[cfg(feature = "iface-kiss")]
 pub use interface::kiss_iface::{KissFactory, KissIfaceConfig};
 #[cfg(feature = "iface-local")]
