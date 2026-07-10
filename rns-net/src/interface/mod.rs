@@ -308,6 +308,34 @@ pub struct ConfigSection<'a> {
     pub children: &'a [crate::config::ParsedSubinterface],
 }
 
+#[derive(Debug, Clone)]
+pub struct DynamicInterfaceTemplate {
+    pub parent_id: InterfaceId,
+    pub interface_type: String,
+    pub ifac: Option<IfacState>,
+    pub mode: u8,
+    pub recursive_prs: bool,
+    pub announces_from_internal: bool,
+}
+
+impl DynamicInterfaceTemplate {
+    pub fn registration(
+        &self,
+        mut info: InterfaceInfo,
+    ) -> crate::event::DynamicInterfaceRegistration {
+        info.mode = self.mode;
+        info.recursive_prs = self.recursive_prs;
+        info.announces_from_internal = self.announces_from_internal;
+        crate::event::DynamicInterfaceRegistration {
+            info,
+            interface_type: self.interface_type.clone(),
+            parent_id: self.parent_id,
+            telemetry: crate::event::InterfaceTelemetry::default(),
+            ifac: self.ifac.clone(),
+        }
+    }
+}
+
 impl<T: Send + 'static> InterfaceConfigData for T {
     fn as_any(&self) -> &dyn Any {
         self

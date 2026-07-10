@@ -13,11 +13,8 @@ const CONTROL_UI: u8 = 0x03;
 const PID_NO_LAYER_3: u8 = 0xF0;
 
 pub fn validate_address(callsign: &str, ssid: u8) -> Result<Ax25Address, String> {
-    if !(3..=6).contains(&callsign.len())
-        || !callsign.is_ascii()
-        || !callsign.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
-        return Err("AX.25 callsign must be 3-6 ASCII letters or digits".into());
+    if !(3..=6).contains(&callsign.len()) || !callsign.is_ascii() {
+        return Err("AX.25 callsign must be 3-6 ASCII characters".into());
     }
     if ssid > 15 {
         return Err("AX.25 SSID must be in 0..15".into());
@@ -29,7 +26,9 @@ pub fn validate_address(callsign: &str, ssid: u8) -> Result<Ax25Address, String>
 }
 
 fn encode_address(address: &Ax25Address, last: bool) -> [u8; 7] {
-    let mut encoded = [b' ' << 1; 7];
+    // Preserve Python 1.3.8's 0x20 padding byte (including its non-standard
+    // unshifted representation) for exact wire compatibility.
+    let mut encoded = [0x20; 7];
     for (output, input) in encoded[..6].iter_mut().zip(address.callsign.bytes()) {
         *output = input.to_ascii_uppercase() << 1;
     }

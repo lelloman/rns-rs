@@ -1118,6 +1118,7 @@ impl Driver {
                     // Route through the transport engine's outbound path
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
+                            self.link_manager.record_outbound_packet(&packet);
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
                                 self.sent_packets.insert(
                                     packet.packet_hash,

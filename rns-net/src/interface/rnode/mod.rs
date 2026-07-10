@@ -1001,10 +1001,11 @@ impl InterfaceFactory for RNodeMultiFactory {
             .map_err(|_| "wrong RNode config type".to_string())?;
 
         let mut subinterfaces = Vec::new();
-        for (position, child) in section.children.iter().enumerate() {
+        for child in section.children {
             let enabled = child
                 .params
-                .get("enabled")
+                .get("interface_enabled")
+                .or_else(|| child.params.get("enabled"))
                 .and_then(|value| crate::config::parse_bool_pub(value))
                 .unwrap_or(true);
             if !enabled {
@@ -1016,8 +1017,9 @@ impl InterfaceFactory for RNodeMultiFactory {
             let vport = child
                 .params
                 .get("vport")
-                .and_then(|value| value.parse::<u8>().ok())
-                .unwrap_or(position as u8);
+                .ok_or_else(|| format!("subinterface '{}' requires 'vport'", child.name))?
+                .parse::<u8>()
+                .map_err(|_| format!("invalid RNode virtual port for '{}'", child.name))?;
             if vport > 10
                 || subinterfaces
                     .iter()
@@ -1062,8 +1064,16 @@ impl InterfaceFactory for RNodeMultiFactory {
                     .get("flow_control")
                     .and_then(|v| crate::config::parse_bool_pub(v))
                     .unwrap_or(false),
-                st_alock: child.params.get("st_alock").and_then(|v| v.parse().ok()),
-                lt_alock: child.params.get("lt_alock").and_then(|v| v.parse().ok()),
+                st_alock: child
+                    .params
+                    .get("airtime_limit_short")
+                    .or_else(|| child.params.get("st_alock"))
+                    .and_then(|v| v.parse().ok()),
+                lt_alock: child
+                    .params
+                    .get("airtime_limit_long")
+                    .or_else(|| child.params.get("lt_alock"))
+                    .and_then(|v| v.parse().ok()),
             };
             if let Some(error) = validate_sub_config(&sub) {
                 return Err(error);
@@ -1500,6 +1510,56 @@ mod tests {
         bad = good.clone();
         bad.txpower = 50;
         assert!(validate_sub_config(&bad).is_some());
+    }
+
+    #[test]
+    fn multi_factory_preserves_nonsequential_virtual_ports_and_disabled_children() {
+        let parent = HashMap::from([
+            ("port".to_string(), "/dev/ttyUSB0".to_string()),
+            ("speed".to_string(), "115200".to_string()),
+        ]);
+        let children = vec![
+            crate::config::ParsedSubinterface {
+                name: "disabled".into(),
+                params: HashMap::from([
+                    ("interface_enabled".into(), "no".into()),
+                    ("vport".into(), "2".into()),
+                ]),
+            },
+            crate::config::ParsedSubinterface {
+                name: "high".into(),
+                params: HashMap::from([
+                    ("interface_enabled".into(), "yes".into()),
+                    ("vport".into(), "7".into()),
+                    ("frequency".into(), "915000000".into()),
+                    ("airtime_limit_short".into(), "12.5".into()),
+                    ("outgoing".into(), "no".into()),
+                ]),
+            },
+            crate::config::ParsedSubinterface {
+                name: "low".into(),
+                params: HashMap::from([
+                    ("enabled".into(), "yes".into()),
+                    ("vport".into(), "1".into()),
+                ]),
+            },
+        ];
+        let parsed = RNodeMultiFactory
+            .parse_config_section(
+                "multi",
+                InterfaceId(40),
+                ConfigSection {
+                    params: &parent,
+                    children: &children,
+                },
+            )
+            .unwrap();
+        let config = parsed.into_any().downcast::<RNodeConfig>().unwrap();
+        assert_eq!(config.subinterfaces.len(), 2);
+        assert_eq!(config.subinterfaces[0].vport, 7);
+        assert_eq!(config.subinterfaces[1].vport, 1);
+        assert!(!config.subinterfaces[0].outgoing);
+        assert_eq!(config.subinterfaces[0].st_alock, Some(12.5));
     }
 
     #[test]

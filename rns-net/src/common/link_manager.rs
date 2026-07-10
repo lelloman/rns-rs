@@ -646,78 +646,23 @@ impl LinkManager {
 
         if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
             flags,
-            packet.hops,
+            0,
             &link_id,
             None,
             constants::CONTEXT_LRPROOF,
             &lrproof_data,
         ) {
-            if let Some(link) = self.links.get_mut(&link_id) {
-                link.engine.record_outbound_traffic(lrproof_data.len());
-            }
             log::debug!(
-                "LRPROOF queued: link={:02x?} route_iface={} route_tid_present={} hops={}",
+                "LRPROOF queued: link={:02x?} route_iface={} route_tid_present={} hops=0",
                 &link_id[..4],
                 receiving_interface.0,
-                packet.transport_id.is_some(),
-                packet.hops
+                packet.transport_id.is_some()
             );
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
                 attached_interface: None,
             });
-        }
-
-        // Reticulum interop fallback #1: queue an LRPROOF variant with
-        // hop=0, matching peers that validate LRPROOF with hop=0 semantics.
-        if packet.hops != 0 {
-            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-                flags,
-                0,
-                &link_id,
-                None,
-                constants::CONTEXT_LRPROOF,
-                &lrproof_data,
-            ) {
-                log::debug!(
-                    "LRPROOF fallback queued: link={:02x?} route_iface={} hops=0",
-                    &link_id[..4],
-                    receiving_interface.0
-                );
-                actions.push(LinkManagerAction::SendPacket {
-                    raw,
-                    dest_type: constants::DESTINATION_LINK,
-                    attached_interface: None,
-                });
-            }
-        }
-
-        // Reticulum interop fallback #2: queue an LRPROOF +1 hop variant for
-        // peers that validate against a remaining-hop value derived
-        // differently from destination-side delivery hops.
-        if packet.hops < u8::MAX {
-            let hops_plus_one = packet.hops + 1;
-            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-                flags,
-                hops_plus_one,
-                &link_id,
-                None,
-                constants::CONTEXT_LRPROOF,
-                &lrproof_data,
-            ) {
-                log::debug!(
-                    "LRPROOF +1 queued: link={:02x?} route_iface={} hops={}",
-                    &link_id[..4],
-                    receiving_interface.0,
-                    hops_plus_one
-                );
-                actions.push(LinkManagerAction::SendPacket {
-                    raw,
-                    dest_type: constants::DESTINATION_LINK,
-                    attached_interface: None,
-                });
-            }
         }
 
         // Notify hook system about the incoming link request
@@ -795,9 +740,6 @@ impl LinkManager {
             constants::CONTEXT_NONE,
             &proof_data,
         ) {
-            if let Some(link) = self.links.get_mut(link_id) {
-                link.engine.record_outbound_traffic(proof_data.len());
-            }
             vec![LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -884,9 +826,6 @@ impl LinkManager {
             constants::CONTEXT_LRRTT,
             &lrrtt_encrypted,
         ) {
-            if let Some(link) = self.links.get_mut(&link_id) {
-                link.engine.record_outbound_traffic(lrrtt_encrypted.len());
-            }
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -2761,7 +2700,7 @@ impl LinkManager {
 
     /// Build a link DATA packet with a given context and data.
     fn build_link_packet(
-        &mut self,
+        &self,
         link_id: &LinkId,
         context: u8,
         data: &[u8],
@@ -2782,9 +2721,6 @@ impl LinkManager {
         if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
             flags, 0, link_id, None, context, data, max_mtu,
         ) {
-            if let Some(link) = self.links.get_mut(link_id) {
-                link.engine.record_outbound_traffic(data.len());
-            }
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -3159,6 +3095,17 @@ impl LinkManager {
                 }
             })
             .collect()
+    }
+
+    /// Account a packed outbound action at the single driver dispatch point.
+    /// LINKREQUEST is accounted when its engine is created since its wire
+    /// destination is not the resulting link ID.
+    pub fn record_outbound_packet(&mut self, packet: &RawPacket) {
+        if packet.flags.destination_type == constants::DESTINATION_LINK {
+            if let Some(link) = self.links.get_mut(&packet.destination_hash) {
+                link.engine.record_outbound_traffic(packet.data.len());
+            }
+        }
     }
 
     /// Get information about all active resource transfers.
@@ -4841,7 +4788,7 @@ mod tests {
 
     #[test]
     fn test_build_link_packet() {
-        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let (init_mgr, _resp_mgr, link_id) = setup_active_link();
 
         let actions =
             init_mgr.build_link_packet(&link_id, constants::CONTEXT_RESOURCE, b"test data");
@@ -4853,6 +4800,50 @@ mod tests {
         } else {
             panic!("Expected SendPacket");
         }
+    }
+
+    #[test]
+    fn link_traffic_accounting_uses_ciphertext_data_once() {
+        let (mut initiator, mut responder, link_id) = setup_active_link();
+        let before_tx = initiator.links[&link_id].engine.tx_packets();
+        let before_tx_bytes = initiator.links[&link_id].engine.tx_bytes();
+        let before_rx = responder.links[&link_id].engine.rx_packets();
+        let before_rx_bytes = responder.links[&link_id].engine.rx_bytes();
+        let actions = initiator.send_on_link(
+            &link_id,
+            b"short plaintext",
+            constants::CONTEXT_NONE,
+            &mut OsRng,
+        );
+        let raw = actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let packet = RawPacket::unpack(&raw).unwrap();
+        assert!(packet.data.len() > b"short plaintext".len());
+
+        initiator.record_outbound_packet(&packet);
+        assert_eq!(initiator.links[&link_id].engine.tx_packets(), before_tx + 1);
+        assert_eq!(
+            initiator.links[&link_id].engine.tx_bytes(),
+            before_tx_bytes + packet.data.len() as u64
+        );
+
+        responder.handle_local_delivery(
+            link_id,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(1),
+            &mut OsRng,
+        );
+        assert_eq!(responder.links[&link_id].engine.rx_packets(), before_rx + 1);
+        assert_eq!(
+            responder.links[&link_id].engine.rx_bytes(),
+            before_rx_bytes + packet.data.len() as u64
+        );
     }
 
     #[test]

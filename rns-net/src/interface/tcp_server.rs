@@ -89,6 +89,15 @@ pub fn start(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
 ) -> io::Result<ListenerControl> {
+    start_with_template(config, tx, next_id, None)
+}
+
+fn start_with_template(
+    config: TcpServerConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
+) -> io::Result<ListenerControl> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
     listener.set_nonblocking(true)?;
@@ -113,6 +122,7 @@ pub fn start(
                 ingress_control,
                 active_connections,
                 listener_control,
+                dynamic_template,
             );
         })?;
 
@@ -129,6 +139,7 @@ fn listener_loop(
     ingress_control: IngressControlConfig,
     active_connections: Arc<AtomicUsize>,
     control: ListenerControl,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     loop {
         if control.should_stop() {
@@ -221,10 +232,16 @@ fn listener_loop(
         };
 
         // Send InterfaceUp with InterfaceInfo for dynamic registration
-        if tx
-            .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-            .is_err()
-        {
+        let registration_result = if let Some(template) = &dynamic_template {
+            tx.send(Event::DynamicInterfaceUp {
+                id: client_id,
+                writer,
+                registration: template.registration(info),
+            })
+        } else {
+            tx.send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
+        };
+        if registration_result.is_err() {
             // Driver shut down
             return;
         }
@@ -342,7 +359,20 @@ impl InterfaceFactory for TcpServerFactory {
             .downcast::<TcpServerConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         cfg.ingress_control = ctx.ingress_control;
-        let control = start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+        let parent_id = cfg.interface_id;
+        let control = start_with_template(
+            cfg,
+            ctx.tx,
+            ctx.next_dynamic_id,
+            Some(super::DynamicInterfaceTemplate {
+                parent_id,
+                interface_type: "TCPServerClientInterface".into(),
+                ifac: ctx.ifac,
+                mode: ctx.mode,
+                recursive_prs: ctx.recursive_prs,
+                announces_from_internal: ctx.announces_from_internal,
+            }),
+        )?;
         Ok(StartResult::Listener {
             control: Some(control),
         })
@@ -418,6 +448,41 @@ mod tests {
                 assert!(info.is_some());
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn typed_registration_carries_exact_type_mode_parent_and_ifac() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let ifac = crate::ifac::derive_ifac(Some("network"), Some("key"), 8).unwrap();
+        let template = crate::interface::DynamicInterfaceTemplate {
+            parent_id: InterfaceId(77),
+            interface_type: "TCPServerClientInterface".into(),
+            ifac: Some(ifac),
+            mode: constants::MODE_GATEWAY,
+            recursive_prs: true,
+            announces_from_internal: false,
+        };
+        start_with_template(
+            make_server_config(port, 77, None),
+            tx,
+            Arc::new(AtomicU64::new(1200)),
+            Some(template),
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let _client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::DynamicInterfaceUp { registration, .. } => {
+                assert_eq!(registration.parent_id, InterfaceId(77));
+                assert_eq!(registration.interface_type, "TCPServerClientInterface");
+                assert_eq!(registration.info.mode, constants::MODE_GATEWAY);
+                assert!(registration.info.recursive_prs);
+                assert!(!registration.info.announces_from_internal);
+                assert_eq!(registration.ifac.as_ref().map(|state| state.size), Some(8));
+            }
+            other => panic!("expected typed dynamic registration, got {other:?}"),
         }
     }
 
