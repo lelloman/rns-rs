@@ -556,6 +556,8 @@ fn infer_interface_type(name: &str) -> String {
         "BackboneInterface".to_string()
     } else if name.starts_with("LocalInterface") {
         "LocalServerClientInterface".to_string()
+    } else if name.starts_with("WeaveInterfacePeer[") {
+        "WeaveInterfacePeer".to_string()
     } else {
         // AutoInterface peers use "{group_name}:{peer_addr}" format where
         // group_name is the config section name (typically "AutoInterface" or similar).

@@ -1,14 +1,21 @@
 //! Weave Device Control Link (WDCL) framing and interface state.
 
 use std::collections::{HashMap, VecDeque};
-use std::io;
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
-use rns_crypto::ed25519::Ed25519PublicKey;
+use rns_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use rns_crypto::sha256::sha256;
+use rns_crypto::OsRng;
 
 use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
+use crate::event::{DynamicInterfaceRegistration, Event, EventSender, InterfaceTelemetry};
+use crate::serial::{Parity, SerialConfig, SerialPort};
 
 pub const WDCL_T_DISCOVER: u8 = 0x00;
 pub const WDCL_T_CONNECT: u8 = 0x01;
@@ -196,8 +203,12 @@ impl WeaveState {
     }
 
     pub fn handle_log(&mut self, frame: WeaveLogFrame, now: f64) {
+        if self.logs.len() == 1024 {
+            self.logs.pop_front();
+        }
+        self.logs.push_back(frame.clone());
         match frame.event {
-            ET_BOARD_INIT => self.logs.push_back(frame),
+            ET_BOARD_INIT => {}
             ET_PROTO_WDCL_CONNECTION => self.connected = true,
             ET_PROTO_WDCL_HOST_ENDPOINT if frame.data.len() == 8 => {
                 self.endpoint_id = frame.data.as_slice().try_into().ok();
@@ -268,6 +279,387 @@ pub struct WeaveConfig {
     pub state: Arc<Mutex<WeaveState>>,
 }
 
+struct WeaveSession {
+    config: WeaveConfig,
+    tx: EventSender,
+    next_dynamic_id: Arc<AtomicU64>,
+    mode: u8,
+    recursive_prs: bool,
+    announces_from_internal: bool,
+    ingress_control: rns_core::transport::types::IngressControlConfig,
+    ifac: Option<crate::ifac::IfacState>,
+    host_identity: Arc<Ed25519PrivateKey>,
+    host_public: [u8; 32],
+    host_switch_id: [u8; 4],
+    writer: Arc<Mutex<Option<std::fs::File>>>,
+    remote_switch_id: Arc<Mutex<Option<[u8; 4]>>>,
+    peer_interfaces: Arc<Mutex<HashMap<[u8; 8], InterfaceId>>>,
+}
+
+impl WeaveSession {
+    fn new(config: WeaveConfig, ctx: &StartContext) -> Arc<Self> {
+        let identity = Ed25519PrivateKey::generate(&mut OsRng);
+        let host_public = identity.public_key().public_bytes();
+        Arc::new(Self {
+            config,
+            tx: ctx.tx.clone(),
+            next_dynamic_id: Arc::clone(&ctx.next_dynamic_id),
+            mode: ctx.mode,
+            recursive_prs: ctx.recursive_prs,
+            announces_from_internal: ctx.announces_from_internal,
+            ingress_control: ctx.ingress_control,
+            ifac: ctx.ifac.clone(),
+            host_identity: Arc::new(identity),
+            host_public,
+            host_switch_id: host_public[28..].try_into().unwrap(),
+            writer: Arc::new(Mutex::new(None)),
+            remote_switch_id: Arc::new(Mutex::new(None)),
+            peer_interfaces: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn spawn(self: &Arc<Self>) -> io::Result<()> {
+        let session = Arc::clone(self);
+        thread::Builder::new()
+            .name(format!("weave-session-{}", self.config.interface_id.0))
+            .spawn(move || session.reconnect_loop())?;
+        Ok(())
+    }
+
+    fn reconnect_loop(self: Arc<Self>) {
+        loop {
+            if let Err(error) = self.run_connection() {
+                log::warn!(
+                    "[{}] Weave connection failed: {}; retrying in five seconds",
+                    self.config.name,
+                    error
+                );
+            }
+            self.disconnect_all();
+            thread::sleep(Duration::from_secs(5));
+        }
+    }
+
+    fn run_connection(self: &Arc<Self>) -> io::Result<()> {
+        let port = SerialPort::open(&SerialConfig {
+            path: self.config.port.clone(),
+            baud: 3_000_000,
+            data_bits: 8,
+            parity: Parity::None,
+            stop_bits: 1,
+        })?;
+        let mut reader = port.reader()?;
+        *super::lock_or_recover(&self.writer, "weave writer") = Some(port.writer()?);
+        *super::lock_or_recover(&self.remote_switch_id, "weave remote switch") = None;
+        {
+            let mut state = super::lock_or_recover(&self.config.state, "weave state");
+            state.connected = false;
+            state.switch_id = None;
+        }
+
+        self.send_frame(&WdclFrame {
+            destination: WDCL_BROADCAST,
+            frame_type: WDCL_T_DISCOVER,
+            payload: self.host_switch_id.to_vec(),
+        })?;
+
+        let handshake_deadline = Instant::now() + Duration::from_secs(2);
+        let mut decoder = crate::hdlc::Decoder::with_limits(5, 128 * 1024);
+        let mut buffer = [0u8; 32 * 1024];
+        let mut last_peer_expiry = Instant::now();
+        loop {
+            let mut pollfd = libc::pollfd {
+                fd: reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut pollfd, 1, 250) };
+            if ready < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if ready > 0 {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "serial port closed",
+                    ));
+                }
+                for frame in decoder.feed(&buffer[..read]) {
+                    self.process_frame(&frame)?;
+                }
+            }
+
+            let connected = super::lock_or_recover(&self.config.state, "weave state").connected;
+            if !connected && Instant::now() >= handshake_deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "WDCL connection handshake timed out",
+                ));
+            }
+            if last_peer_expiry.elapsed() >= Duration::from_secs(1) {
+                self.expire_peers(crate::time::now());
+                last_peer_expiry = Instant::now();
+            }
+        }
+    }
+
+    fn send_frame(&self, frame: &WdclFrame) -> io::Result<()> {
+        let encoded = crate::hdlc::frame(&frame.encode());
+        let mut writer = super::lock_or_recover(&self.writer, "weave writer");
+        writer
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Weave is offline"))?
+            .write_all(&encoded)
+    }
+
+    fn process_frame(self: &Arc<Self>, raw: &[u8]) -> io::Result<()> {
+        let Some(input) = parse_device_frame(raw, self.host_switch_id) else {
+            return Ok(());
+        };
+        match input {
+            WeaveInput::Discovery {
+                switch_id,
+                signing_key: _,
+            } => {
+                *super::lock_or_recover(&self.remote_switch_id, "weave remote switch") =
+                    Some(switch_id);
+                super::lock_or_recover(&self.config.state, "weave state").switch_id =
+                    Some(switch_id);
+                let mut payload = self.host_public.to_vec();
+                payload.extend_from_slice(&self.host_identity.sign(&switch_id));
+                self.send_frame(&WdclFrame {
+                    destination: switch_id,
+                    frame_type: WDCL_T_CONNECT,
+                    payload,
+                })?;
+            }
+            WeaveInput::EndpointPacket { source, packet } => {
+                let now = crate::time::now();
+                {
+                    let mut state = super::lock_or_recover(&self.config.state, "weave state");
+                    state
+                        .peers
+                        .entry(source)
+                        .and_modify(|peer| peer.last_heard = now)
+                        .or_insert(WeavePeerState {
+                            endpoint_id: source,
+                            via_switch_id: None,
+                            last_heard: now,
+                        });
+                    if !state.accept_packet(&packet, now) {
+                        return Ok(());
+                    }
+                }
+                let interface_id = self.ensure_peer(source, now);
+                let _ = self.tx.send(Event::Frame {
+                    interface_id,
+                    data: packet,
+                    rssi: None,
+                    snr: None,
+                });
+            }
+            WeaveInput::Log(frame) => self.process_log(frame),
+            WeaveInput::Display {
+                offset,
+                total,
+                fragment,
+            } => {
+                super::lock_or_recover(&self.config.state, "weave state")
+                    .apply_display(offset, total, &fragment);
+            }
+            WeaveInput::Unknown(_) => {}
+        }
+        Ok(())
+    }
+
+    fn process_log(self: &Arc<Self>, frame: WeaveLogFrame) {
+        let now = crate::time::now();
+        let event = frame.event;
+        let data = frame.data.clone();
+        super::lock_or_recover(&self.config.state, "weave state").handle_log(frame, now);
+
+        match event {
+            ET_PROTO_WDCL_CONNECTION => {
+                let _ = self
+                    .tx
+                    .send(Event::InterfaceUp(self.config.interface_id, None, None));
+                self.publish_parent_telemetry();
+            }
+            ET_PROTO_WEAVE_EP_ALIVE if data.len() == 8 => {
+                let endpoint: [u8; 8] = data.as_slice().try_into().unwrap();
+                self.ensure_peer(endpoint, now);
+            }
+            ET_PROTO_WEAVE_EP_TIMEOUT if data.len() == 8 => {
+                let endpoint: [u8; 8] = data.as_slice().try_into().unwrap();
+                self.remove_peer(endpoint);
+            }
+            ET_PROTO_WEAVE_EP_VIA if data.len() == 12 => {
+                let endpoint: [u8; 8] = data[..8].try_into().unwrap();
+                let via: [u8; 4] = data[8..].try_into().unwrap();
+                if let Some(interface_id) =
+                    super::lock_or_recover(&self.peer_interfaces, "weave peer interfaces")
+                        .get(&endpoint)
+                        .copied()
+                {
+                    let _ = self.tx.send(Event::InterfaceTelemetry {
+                        interface_id,
+                        telemetry: InterfaceTelemetry {
+                            via_switch_id: Some(via),
+                            ..Default::default()
+                        },
+                    });
+                }
+            }
+            ET_PROTO_WDCL_HOST_ENDPOINT | ET_STAT_CPU | ET_STAT_MEMORY => {
+                self.publish_parent_telemetry()
+            }
+            _ => {}
+        }
+    }
+
+    fn ensure_peer(self: &Arc<Self>, endpoint: [u8; 8], now: f64) -> InterfaceId {
+        if let Some(id) = super::lock_or_recover(&self.peer_interfaces, "weave peers")
+            .get(&endpoint)
+            .copied()
+        {
+            return id;
+        }
+        let id = InterfaceId(self.next_dynamic_id.fetch_add(1, Ordering::Relaxed));
+        super::lock_or_recover(&self.peer_interfaces, "weave peers").insert(endpoint, id);
+        let via_switch_id = super::lock_or_recover(&self.config.state, "weave state")
+            .peers
+            .get(&endpoint)
+            .and_then(|peer| peer.via_switch_id);
+        let name = format!("WeaveInterfacePeer[{}]", hex(&endpoint));
+        let info = InterfaceInfo {
+            id,
+            name,
+            mode: self.mode,
+            recursive_prs: self.recursive_prs,
+            announces_from_internal: self.announces_from_internal,
+            out_capable: true,
+            in_capable: true,
+            bitrate: Some(self.config.configured_bitrate),
+            airtime_profile: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: rns_core::constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: WEAVE_HW_MTU,
+            ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            started: now,
+            ingress_control: self.ingress_control,
+        };
+        let _ = self.tx.send(Event::DynamicInterfaceUp {
+            id,
+            writer: Box::new(WeavePeerWriter {
+                session: Arc::clone(self),
+                endpoint,
+            }),
+            registration: DynamicInterfaceRegistration {
+                info,
+                interface_type: "WeaveInterfacePeer".into(),
+                parent_id: self.config.interface_id,
+                telemetry: InterfaceTelemetry {
+                    via_switch_id,
+                    ..Default::default()
+                },
+                ifac: self.ifac.clone(),
+            },
+        });
+        self.publish_parent_telemetry();
+        id
+    }
+
+    fn remove_peer(&self, endpoint: [u8; 8]) {
+        if let Some(id) =
+            super::lock_or_recover(&self.peer_interfaces, "weave peers").remove(&endpoint)
+        {
+            super::lock_or_recover(&self.config.state, "weave state")
+                .peers
+                .remove(&endpoint);
+            let _ = self.tx.send(Event::InterfaceDown(id));
+            self.publish_parent_telemetry();
+        }
+    }
+
+    fn expire_peers(&self, now: f64) {
+        let expired = super::lock_or_recover(&self.config.state, "weave state").expire_peers(now);
+        for endpoint in &expired {
+            if let Some(id) =
+                super::lock_or_recover(&self.peer_interfaces, "weave peers").remove(endpoint)
+            {
+                let _ = self.tx.send(Event::InterfaceDown(id));
+            }
+        }
+        if !super::lock_or_recover(&self.peer_interfaces, "weave peers").is_empty()
+            || !expired.is_empty()
+        {
+            self.publish_parent_telemetry();
+        }
+    }
+
+    fn publish_parent_telemetry(&self) {
+        let state = super::lock_or_recover(&self.config.state, "weave state");
+        let _ = self.tx.send(Event::InterfaceTelemetry {
+            interface_id: self.config.interface_id,
+            telemetry: InterfaceTelemetry {
+                cpu_load: state.cpu_load.map(f64::from),
+                mem_load: state.mem_load,
+                switch_id: state.switch_id,
+                endpoint_id: state.endpoint_id,
+                via_switch_id: None,
+                peers: Some(state.peers.len()),
+            },
+        });
+    }
+
+    fn disconnect_all(&self) {
+        *super::lock_or_recover(&self.writer, "weave writer") = None;
+        *super::lock_or_recover(&self.remote_switch_id, "weave remote switch") = None;
+        {
+            let mut state = super::lock_or_recover(&self.config.state, "weave state");
+            state.connected = false;
+            state.switch_id = None;
+            state.peers.clear();
+        }
+        let peers: Vec<_> = super::lock_or_recover(&self.peer_interfaces, "weave peers")
+            .drain()
+            .map(|(_, id)| id)
+            .collect();
+        for id in peers {
+            let _ = self.tx.send(Event::InterfaceDown(id));
+        }
+        let _ = self.tx.send(Event::InterfaceDown(self.config.interface_id));
+        self.publish_parent_telemetry();
+    }
+}
+
+struct WeavePeerWriter {
+    session: Arc<WeaveSession>,
+    endpoint: [u8; 8],
+}
+
+impl Writer for WeavePeerWriter {
+    fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        let remote = super::lock_or_recover(&self.session.remote_switch_id, "weave remote switch")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Weave is offline"))?;
+        self.session
+            .send_frame(&WdclFrame::endpoint_packet(remote, self.endpoint, data))
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 pub struct WeaveFactory;
 struct ParentWriter;
 impl Writer for ParentWriter {
@@ -316,9 +708,11 @@ impl InterfaceFactory for WeaveFactory {
             .into_any()
             .downcast::<WeaveConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong Weave config type"))?;
+        let session = WeaveSession::new(config.clone(), &ctx);
+        session.spawn()?;
         let info = InterfaceInfo {
             id: config.interface_id,
-            name: config.name,
+            name: config.name.clone(),
             mode: ctx.mode,
             recursive_prs: ctx.recursive_prs,
             announces_from_internal: ctx.announces_from_internal,
@@ -355,6 +749,18 @@ mod tests {
     use super::*;
     use rns_crypto::ed25519::Ed25519PrivateKey;
     use rns_crypto::FixedRng;
+
+    fn log_frame(host: [u8; 4], event: u16, data: &[u8]) -> Vec<u8> {
+        let mut payload = vec![0, 0, 0, 0, 1, 2];
+        payload.extend_from_slice(&event.to_be_bytes());
+        payload.extend_from_slice(data);
+        WdclFrame {
+            destination: host,
+            frame_type: WDCL_T_LOG,
+            payload,
+        }
+        .encode()
+    }
 
     #[test]
     fn wdcl_fragmented_hdlc_and_discovery_signature() {
@@ -401,10 +807,114 @@ mod tests {
             },
             2.0,
         );
-        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs.len(), 2);
         assert_eq!(state.unknown_events.len(), 1);
         assert!(state.accept_packet(b"packet", 3.0));
         assert!(!state.accept_packet(b"packet", 3.1));
         assert!(state.accept_packet(b"packet", 4.0));
+    }
+
+    #[test]
+    fn simulated_session_authenticates_and_manages_endpoint_lifecycle() {
+        let (tx, rx) = crate::event::channel();
+        let config = WeaveConfig {
+            name: "weave-test".into(),
+            port: "/dev/null".into(),
+            configured_bitrate: WEAVE_DEFAULT_BITRATE,
+            interface_id: InterfaceId(55),
+            state: Arc::new(Mutex::new(WeaveState::default())),
+        };
+        let context = StartContext {
+            tx,
+            next_dynamic_id: Arc::new(AtomicU64::new(10_000)),
+            mode: rns_core::constants::MODE_GATEWAY,
+            recursive_prs: true,
+            announces_from_internal: false,
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            ifac: None,
+        };
+        let session = WeaveSession::new(config, &context);
+        *super::super::lock_or_recover(&session.writer, "test writer") =
+            Some(tempfile::tempfile().unwrap());
+
+        let remote = Ed25519PrivateKey::generate(&mut FixedRng::new(&[0x44; 64]));
+        let remote_public = remote.public_key().public_bytes();
+        let mut discovery_payload = remote_public.to_vec();
+        discovery_payload.extend_from_slice(&remote.sign(&session.host_switch_id));
+        session
+            .process_frame(
+                &WdclFrame {
+                    destination: session.host_switch_id,
+                    frame_type: WDCL_T_DISCOVER,
+                    payload: discovery_payload,
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(
+            *super::super::lock_or_recover(&session.remote_switch_id, "test remote"),
+            Some(remote_public[28..].try_into().unwrap())
+        );
+
+        session
+            .process_frame(&log_frame(
+                session.host_switch_id,
+                ET_PROTO_WDCL_CONNECTION,
+                &[1],
+            ))
+            .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::InterfaceUp(InterfaceId(55), None, None)
+        ));
+
+        let endpoint = [0x77; 8];
+        session
+            .process_frame(&log_frame(
+                session.host_switch_id,
+                ET_PROTO_WEAVE_EP_ALIVE,
+                &endpoint,
+            ))
+            .unwrap();
+        let peer_id = loop {
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::DynamicInterfaceUp {
+                    id, registration, ..
+                } => {
+                    assert_eq!(registration.interface_type, "WeaveInterfacePeer");
+                    assert_eq!(registration.parent_id, InterfaceId(55));
+                    break id;
+                }
+                _ => {}
+            }
+        };
+
+        let mut endpoint_payload = b"rns-packet".to_vec();
+        endpoint_payload.extend_from_slice(&endpoint);
+        let endpoint_frame = WdclFrame {
+            destination: session.host_switch_id,
+            frame_type: WDCL_T_ENDPOINT_PKT,
+            payload: endpoint_payload,
+        }
+        .encode();
+        session.process_frame(&endpoint_frame).unwrap();
+        assert!(loop {
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::Frame {
+                    interface_id, data, ..
+                } => break interface_id == peer_id && data == b"rns-packet",
+                _ => {}
+            }
+        });
+        session.process_frame(&endpoint_frame).unwrap();
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        session.expire_peers(crate::time::now() + WEAVE_PEERING_TIMEOUT + 1.0);
+        assert!(loop {
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::InterfaceDown(id) => break id == peer_id,
+                _ => {}
+            }
+        });
     }
 }

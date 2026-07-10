@@ -2,8 +2,9 @@
 
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
-    BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, HolePunchPolicy,
-    HookInfo, InterfaceStatsResponse, KnownDestinationEntry, LifecycleState, LinkInfoEntry,
+    BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DrainStatus,
+    DynamicInterfaceRegistration, HolePunchPolicy, HookInfo, InterfaceStatsResponse,
+    InterfaceTelemetry, KnownDestinationEntry, LifecycleState, LinkInfoEntry,
     LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats,
     ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
     RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,

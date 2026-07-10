@@ -1403,6 +1403,7 @@ impl RnsNode {
                 recursive_prs: iface_config.recursive_prs,
                 announces_from_internal: iface_config.announces_from_internal,
                 ingress_control: iface_config.ingress_control,
+                ifac: ifac_state.clone(),
             };
 
             let result = match factory.start(iface_config.config_data, ctx) {

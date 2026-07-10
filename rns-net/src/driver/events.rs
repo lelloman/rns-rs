@@ -490,6 +490,59 @@ impl Driver {
         }
     }
 
+    pub(crate) fn handle_dynamic_interface_up_event(
+        &mut self,
+        id: InterfaceId,
+        writer: Box<dyn crate::interface::Writer>,
+        mut registration: crate::event::DynamicInterfaceRegistration,
+    ) {
+        let parent_ifac = self
+            .interfaces
+            .get(&registration.parent_id)
+            .and_then(|parent| {
+                registration.info.mode = parent.info.mode;
+                registration.info.recursive_prs = parent.info.recursive_prs;
+                registration.info.announces_from_internal = parent.info.announces_from_internal;
+                registration.info.announce_rate_target = parent.info.announce_rate_target;
+                registration.info.announce_rate_grace = parent.info.announce_rate_grace;
+                registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
+                registration.info.ingress_control = parent.info.ingress_control;
+                parent.ifac.clone()
+            });
+        let inherited_ifac = registration.ifac.take().or(parent_ifac);
+
+        let interface_type = registration.interface_type;
+        let telemetry = registration.telemetry;
+        self.handle_interface_up_event(id, Some(writer), Some(registration.info));
+        if let Some(entry) = self.interfaces.get_mut(&id) {
+            entry.interface_type = interface_type;
+            entry.ifac = inherited_ifac;
+            Self::apply_interface_telemetry(entry, telemetry);
+        }
+    }
+
+    fn apply_interface_telemetry(
+        entry: &mut crate::interface::InterfaceEntry,
+        telemetry: crate::event::InterfaceTelemetry,
+    ) {
+        entry.stats.cpu_load = telemetry.cpu_load;
+        entry.stats.mem_load = telemetry.mem_load;
+        entry.stats.switch_id = telemetry.switch_id;
+        entry.stats.endpoint_id = telemetry.endpoint_id;
+        entry.stats.via_switch_id = telemetry.via_switch_id;
+        entry.stats.peers = telemetry.peers;
+    }
+
+    pub(crate) fn handle_interface_telemetry_event(
+        &mut self,
+        interface_id: InterfaceId,
+        telemetry: crate::event::InterfaceTelemetry,
+    ) {
+        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+            Self::apply_interface_telemetry(entry, telemetry);
+        }
+    }
+
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {
@@ -686,6 +739,15 @@ impl Driver {
                 Event::InterfaceUp(id, new_writer, info) => {
                     self.handle_interface_up_event(id, new_writer, info);
                 }
+                Event::DynamicInterfaceUp {
+                    id,
+                    writer,
+                    registration,
+                } => self.handle_dynamic_interface_up_event(id, writer, registration),
+                Event::InterfaceTelemetry {
+                    interface_id,
+                    telemetry,
+                } => self.handle_interface_telemetry_event(interface_id, telemetry),
                 Event::InterfaceDown(id) => self.handle_interface_down_event(id),
                 Event::SendOutbound {
                     raw,

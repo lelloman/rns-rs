@@ -293,6 +293,7 @@ pub struct StartContext {
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    pub ifac: Option<IfacState>,
 }
 
 /// Opaque interface config data. Each factory downcasts to its concrete type.
