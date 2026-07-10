@@ -587,6 +587,7 @@ struct AutoWorkerContext {
     runtime: Arc<Mutex<AutoRuntime>>,
     shared: Arc<Mutex<SharedState>>,
     tx: EventSender,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 }
 
 /// Start an AutoInterface. Discovers local IPv6 link-local interfaces,
@@ -598,6 +599,15 @@ pub fn start(
     config: AutoConfig,
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
+) -> io::Result<()> {
+    start_with_template(config, tx, next_dynamic_id, None)
+}
+
+fn start_with_template(
+    config: AutoConfig,
+    tx: EventSender,
+    next_dynamic_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> io::Result<()> {
     let group_id = config.group_id.clone();
     let mcast_addr_str = derive_multicast_address(
@@ -636,6 +646,7 @@ pub fn start(
         runtime: runtime.clone(),
         shared: shared.clone(),
         tx: tx.clone(),
+        dynamic_template,
     };
 
     {
@@ -786,6 +797,7 @@ fn start_auto_worker(
         let data_port = context.data_port;
         let configured_bitrate = context.configured_bitrate;
         let ingress_control = context.ingress_control;
+        let dynamic_template = context.dynamic_template.clone();
         thread::Builder::new()
             .name(format!("auto-disc-rx-{}", key.ifname))
             .spawn(move || {
@@ -802,6 +814,7 @@ fn start_auto_worker(
                     configured_bitrate,
                     ingress_control,
                     runtime,
+                    dynamic_template,
                 );
             })?;
     }
@@ -818,6 +831,7 @@ fn start_auto_worker(
         let data_port = context.data_port;
         let configured_bitrate = context.configured_bitrate;
         let ingress_control = context.ingress_control;
+        let dynamic_template = context.dynamic_template.clone();
         thread::Builder::new()
             .name(format!("auto-udisc-rx-{}", key.ifname))
             .spawn(move || {
@@ -834,6 +848,7 @@ fn start_auto_worker(
                     configured_bitrate,
                     ingress_control,
                     runtime,
+                    dynamic_template,
                 );
             })?;
     }
@@ -1001,6 +1016,7 @@ fn discovery_receiver_loop(
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     runtime: Arc<Mutex<AutoRuntime>>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     let mut buf = [0u8; 1024];
 
@@ -1062,6 +1078,7 @@ fn discovery_receiver_loop(
                     configured_bitrate,
                     ingress_control,
                     &runtime,
+                    dynamic_template.as_ref(),
                 );
             }
             Err(ref e)
@@ -1092,6 +1109,7 @@ fn add_peer(
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     _runtime: &Arc<Mutex<AutoRuntime>>,
+    dynamic_template: Option<&super::DynamicInterfaceTemplate>,
 ) {
     // Create UDP writer to send data to this peer
     let send_socket = match UdpSocket::bind("[::]:0") {
@@ -1186,11 +1204,16 @@ fn add_peer(
     );
 
     // Notify driver of new dynamic interface
-    let _ = tx.send(Event::InterfaceUp(
-        peer_id,
-        Some(driver_writer),
-        Some(peer_info),
-    ));
+    let event = if let Some(template) = dynamic_template {
+        Event::DynamicInterfaceUp {
+            id: peer_id,
+            writer: driver_writer,
+            registration: template.registration(peer_info),
+        }
+    } else {
+        Event::InterfaceUp(peer_id, Some(driver_writer), Some(peer_info))
+    };
+    let _ = tx.send(event);
 }
 
 /// Data receiver: receives unicast UDP data from peers and dispatches as frames.
@@ -1444,7 +1467,20 @@ impl InterfaceFactory for AutoFactory {
         })?;
 
         auto_config.ingress_control = ctx.ingress_control;
-        start(auto_config, ctx.tx, ctx.next_dynamic_id)?;
+        let parent_id = auto_config.interface_id;
+        start_with_template(
+            auto_config,
+            ctx.tx,
+            ctx.next_dynamic_id,
+            Some(super::DynamicInterfaceTemplate {
+                parent_id,
+                interface_type: "AutoInterfacePeer".into(),
+                ifac: ctx.ifac,
+                mode: ctx.mode,
+                recursive_prs: ctx.recursive_prs,
+                announces_from_internal: ctx.announces_from_internal,
+            }),
+        )?;
         Ok(StartResult::Listener { control: None })
     }
 }

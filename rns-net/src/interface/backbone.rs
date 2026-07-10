@@ -27,7 +27,8 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{
-    lock_or_recover, InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer,
+    lock_or_recover, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceFactory, StartContext,
+    StartResult, Writer,
 };
 use crate::BackbonePeerStateEntry;
 
@@ -242,6 +243,15 @@ impl BackboneWriter {
 
 /// Start a backbone interface. Binds TCP listener, spawns poll thread.
 pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
+    start_with_template(config, tx, next_id, None)
+}
+
+fn start_with_template(
+    config: BackboneConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    dynamic_template: Option<DynamicInterfaceTemplate>,
+) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
     listener.set_nonblocking(true)?;
@@ -277,6 +287,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
                 accepted_peer_mode,
                 accepted_peer_recursive_prs,
                 accepted_peer_announces_from_internal,
+                dynamic_template,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -434,6 +445,7 @@ fn poll_loop(
     accepted_peer_mode: u8,
     accepted_peer_recursive_prs: bool,
     accepted_peer_announces_from_internal: bool,
+    dynamic_template: Option<DynamicInterfaceTemplate>,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -596,10 +608,16 @@ fn poll_loop(
                                 ingress_control,
                             };
 
-                            if tx
-                                .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-                                .is_err()
-                            {
+                            let event = if let Some(template) = &dynamic_template {
+                                Event::DynamicInterfaceUp {
+                                    id: client_id,
+                                    writer,
+                                    registration: template.registration(info),
+                                }
+                            } else {
+                                Event::InterfaceUp(client_id, Some(writer), Some(info))
+                            };
+                            if tx.send(event).is_err() {
                                 // Driver shut down
                                 cleanup(&poller, &clients, &listener);
                                 return Ok(());
@@ -1296,7 +1314,20 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 cfg.ingress_control = ctx.ingress_control;
                 cfg.mode = ctx.mode;
                 cfg.recursive_prs = ctx.recursive_prs;
-                start(cfg, ctx.tx, ctx.next_dynamic_id)?;
+                let parent_id = cfg.interface_id;
+                start_with_template(
+                    cfg,
+                    ctx.tx,
+                    ctx.next_dynamic_id,
+                    Some(DynamicInterfaceTemplate {
+                        parent_id,
+                        interface_type: "BackboneInterfacePeer".into(),
+                        ifac: ctx.ifac,
+                        mode: ctx.mode,
+                        recursive_prs: ctx.recursive_prs,
+                        announces_from_internal: ctx.announces_from_internal,
+                    }),
+                )?;
                 Ok(StartResult::Listener { control: None })
             }
         }

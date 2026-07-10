@@ -210,6 +210,15 @@ pub fn start_server(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
 ) -> io::Result<ListenerControl> {
+    start_server_with_template(config, tx, next_id, None)
+}
+
+fn start_server_with_template(
+    config: LocalServerConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
+) -> io::Result<ListenerControl> {
     let control = ListenerControl::new();
     // Try Unix socket first on Linux
     #[cfg(target_os = "linux")]
@@ -226,7 +235,14 @@ pub fn start_server(
                 thread::Builder::new()
                     .name("local-server".into())
                     .spawn(move || {
-                        unix_server_loop(listener, name, tx, next_id, listener_control);
+                        unix_server_loop(
+                            listener,
+                            name,
+                            tx,
+                            next_id,
+                            listener_control,
+                            dynamic_template,
+                        );
                     })?;
                 return Ok(control);
             }
@@ -247,7 +263,7 @@ pub fn start_server(
     thread::Builder::new()
         .name("local-server".into())
         .spawn(move || {
-            tcp_server_loop(listener, tx, next_id, listener_control);
+            tcp_server_loop(listener, tx, next_id, listener_control, dynamic_template);
         })?;
 
     Ok(control)
@@ -259,6 +275,7 @@ fn tcp_server_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     control: ListenerControl,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     loop {
         if control.should_stop() {
@@ -284,7 +301,7 @@ fn tcp_server_loop(
         }
 
         let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
-        spawn_local_client_handler(stream, client_id, tx.clone());
+        spawn_local_client_handler(stream, client_id, tx.clone(), dynamic_template.as_ref());
     }
 }
 
@@ -296,6 +313,7 @@ fn unix_server_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     control: ListenerControl,
+    dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) {
     loop {
         if control.should_stop() {
@@ -334,10 +352,16 @@ fn unix_server_loop(
             sleep_hold: sleep_hold.clone(),
         });
 
-        if tx
-            .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-            .is_err()
-        {
+        let event = if let Some(template) = &dynamic_template {
+            Event::DynamicInterfaceUp {
+                id: client_id,
+                writer,
+                registration: template.registration(info),
+            }
+        } else {
+            Event::InterfaceUp(client_id, Some(writer), Some(info))
+        };
+        if tx.send(event).is_err() {
             return;
         }
 
@@ -417,7 +441,12 @@ fn unix_reader_loop(
 }
 
 /// Spawn handler threads for a connected TCP local client.
-fn spawn_local_client_handler(stream: TcpStream, client_id: InterfaceId, tx: EventSender) {
+fn spawn_local_client_handler(
+    stream: TcpStream,
+    client_id: InterfaceId,
+    tx: EventSender,
+    dynamic_template: Option<&super::DynamicInterfaceTemplate>,
+) {
     let writer_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
@@ -433,10 +462,16 @@ fn spawn_local_client_handler(stream: TcpStream, client_id: InterfaceId, tx: Eve
         sleep_hold: sleep_hold.clone(),
     });
 
-    if tx
-        .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
-        .is_err()
-    {
+    let event = if let Some(template) = dynamic_template {
+        Event::DynamicInterfaceUp {
+            id: client_id,
+            writer,
+            registration: template.registration(info),
+        }
+    } else {
+        Event::InterfaceUp(client_id, Some(writer), Some(info))
+    };
+    if tx.send(event).is_err() {
         return;
     }
 
@@ -739,7 +774,20 @@ impl InterfaceFactory for LocalServerFactory {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
             })?;
 
-        let control = start_server(server_config, ctx.tx, ctx.next_dynamic_id)?;
+        let parent_id = server_config.interface_id;
+        let control = start_server_with_template(
+            server_config,
+            ctx.tx,
+            ctx.next_dynamic_id,
+            Some(super::DynamicInterfaceTemplate {
+                parent_id,
+                interface_type: "LocalClientInterface".into(),
+                ifac: ctx.ifac,
+                mode: ctx.mode,
+                recursive_prs: ctx.recursive_prs,
+                announces_from_internal: ctx.announces_from_internal,
+            }),
+        )?;
         Ok(StartResult::Listener {
             control: Some(control),
         })
