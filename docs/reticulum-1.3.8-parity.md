@@ -72,3 +72,20 @@ separately reachable endpoint. The run must capture sanitized traces and prove
 authenticated startup, board-init/log and CPU/memory telemetry, dynamic peer
 creation, bidirectional RNS delivery, peer expiry, and serial reconnect. This
 gate cannot be replaced by the simulated integration test.
+
+## Software acceptance record
+
+The complete software acceptance run passed on Linux x86_64 on 2026-07-11:
+
+- exact `de0f399a` fixture regeneration was byte-stable and live Python/Rust
+  bidirectional TCP interop passed with `PYTHONPATH` pinned to that checkout;
+- workspace, native-hook, TLS, rustfmt, and host lint checks passed;
+- release builds passed for the host and ARMv7 GNU/Linux runtime binaries;
+- all nine Docker runs passed (102 assertions, zero failures), covering chain,
+  mesh, star, 30-node scale, shared-client reconnection, and process supervision;
+- the live backbone smoke passed through independent `vps-eu` and `vps-us`
+  entry points, including announcements, identity recall, packets, links, and
+  bidirectional channel messages.
+
+Baseline promotion and the README badge remain gated solely on the physical
+Weave acceptance run described above.
