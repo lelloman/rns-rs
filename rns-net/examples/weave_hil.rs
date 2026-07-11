@@ -21,6 +21,7 @@ impl Callbacks for HilCallbacks {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     let port = std::env::args()
         .nth(1)
         .or_else(|| std::env::var("WEAVE_SERIAL_PORT").ok())
