@@ -5,8 +5,9 @@ Normative source: Reticulum `rgit/master` commit
 The release tag commit is `dca2a928`; `de0f399a` contains one subsequent
 release-artifact update.
 
-The README badge and the accepted baseline in `UPSTREAM.md` remain at 1.3.7
-until every software row is complete and the Weave HIL gate has passed.
+The README badge and accepted baseline in `UPSTREAM.md` were promoted to 1.3.8
+after software acceptance. Physical Weave HIL was explicitly waived because the
+required external lab hardware was unavailable; it remains a follow-up caveat.
 
 Status values:
 
@@ -67,11 +68,12 @@ or `interop`, followed by:
 - exact `de0f399a` live Python/Rust interop
 - manual Backbone smoke
 
-Weave HIL acceptance additionally requires a current-firmware USB switch and a
+Physical Weave HIL additionally requires a current-firmware USB switch and a
 separately reachable endpoint. The run must capture sanitized traces and prove
 authenticated startup, board-init/log and CPU/memory telemetry, dynamic peer
 creation, bidirectional RNS delivery, peer expiry, and serial reconnect. This
-gate cannot be replaced by the simulated integration test.
+was not available during baseline promotion and remains outstanding; simulated
+integration is the acceptance evidence for Weave in the 1.3.8 software profile.
 
 ## Software acceptance record
 
@@ -87,5 +89,6 @@ The complete software acceptance run passed on Linux x86_64 on 2026-07-11:
   entry points, including announcements, identity recall, packets, links, and
   bidirectional channel messages.
 
-Baseline promotion and the README badge remain gated solely on the physical
-Weave acceptance run described above.
+Reticulum 1.3.8 was promoted with the explicit caveat that physical Weave HIL
+remains outstanding until the required switch and reachable endpoint are
+available. No physical Weave compatibility claim is made by this acceptance.
