@@ -6,18 +6,18 @@ The current upstream reference baseline is:
 
 - Project: Reticulum
 - Repository: `https://github.com/markqvist/Reticulum`
-- Local checkout used: `/home/lelloman/Reticulum`
-- Version: `1.3.7`
-- Tag: no local `1.3.7` tag was fetched; rgit `master` carries the release version
-- Commit: `4ba1750c0174a55b5eb37daf52f0db4ae6d6c601`
-- Commit date: `2026-07-03 18:32:34 +0200`
-- Subject: `Updated changelog`
+- Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
+- Version: `1.3.8`
+- Release tag commit: `dca2a928`
+- Normative commit: `de0f399a1696895dcb95ad1efa19f3b21a7886ab`
+- Commit date: `2026-07-10 12:42:56 +0200`
+- Subject: `Prepare release`
 
-Reticulum 1.3.8 at `de0f399a1696895dcb95ad1efa19f3b21a7886ab`
-is the active parity candidate. Its tracked subsystem and commit audit is in
-[`docs/reticulum-1.3.8-parity.md`](docs/reticulum-1.3.8-parity.md). The accepted
-baseline above is intentionally unchanged until software conformance and Weave
-hardware acceptance are complete.
+The tracked subsystem and commit audit is in
+[`docs/reticulum-1.3.8-parity.md`](docs/reticulum-1.3.8-parity.md). Software
+acceptance is complete. Physical Weave HIL was unavailable for this promotion;
+Weave is accepted from exact fixtures, deterministic tests, and simulated-device
+integration, with physical validation retained as a documented follow-up caveat.
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
