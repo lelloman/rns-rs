@@ -232,11 +232,16 @@ repository. For this workstation that file should contain:
 /home/lelloman/Reticulum
 ```
 
-The upstream check treats the pointed checkout's current `HEAD` as the
-Reticulum baseline reviewed or integrated into `rns-rs`. Fetch both the GitHub
-remote and the Reticulum `rns-git` remote, then list commits present on either
-remote that are not in that local baseline. If either log prints commits, include
-that in the daily report as upstream Reticulum work not integrated yet:
+The accepted Reticulum baseline is the `Normative commit` recorded in
+`UPSTREAM.md`; the pointed checkout is only the local repository used to fetch
+and inspect upstream. Before reporting a delta, require the checkout's `HEAD`
+to equal that recorded commit. This catches a stale or accidentally advanced
+checkout instead of misreporting its distance from the remotes as unintegrated
+work. Fetch both the GitHub remote and the Reticulum `rns-git` remote, verify
+that the accepted baseline is an ancestor of both remote tips, then list commits
+present on either remote that are not in the accepted baseline. If either log
+prints commits, include that in the daily report as upstream Reticulum work not
+integrated yet:
 
 Refresh the local refs first when an internet connection is available; the
 version check compares the remote binaries against the local `origin/master` and
@@ -246,14 +251,19 @@ the live fabric check:
 ```bash
 git fetch origin
 RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
+RETICULUM_BASELINE="$(sed -n 's/^- Normative commit: `\([0-9a-f]\{40\}\)`.*/\1/p' UPSTREAM.md)"
 test -n "$RETICULUM_UPSTREAM_DIR"
 test -d "$RETICULUM_UPSTREAM_DIR/.git"
+test -n "$RETICULUM_BASELINE"
 RETICULUM_GITHUB_REMOTE="${RETICULUM_GITHUB_REMOTE:-origin}"
 RETICULUM_RGIT_REMOTE="${RETICULUM_RGIT_REMOTE:-rgit}"
 git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_GITHUB_REMOTE"
 git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_RGIT_REMOTE"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "HEAD..$RETICULUM_GITHUB_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "HEAD..$RETICULUM_RGIT_REMOTE/master"
+test "$(git -C "$RETICULUM_UPSTREAM_DIR" rev-parse HEAD)" = "$RETICULUM_BASELINE"
+git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_GITHUB_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_RGIT_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_GITHUB_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_RGIT_REMOTE/master"
 cargo build --release --bin rns-server --features rns-hooks-native
 
 mkdir -p data
