@@ -495,12 +495,13 @@ pub struct DiscoverableInterface {
     pub ifac_netkey: Option<String>,
 }
 
-/// Result of a completed background stamp generation.
-pub struct StampResult {
+/// Result of a completed background announce generation.
+pub struct AnnounceResult {
     /// Configured interface name this stamp was generated for.
     pub interface_name: String,
-    /// The complete app_data: [flags][packed][stamp].
-    pub app_data: Vec<u8>,
+    /// The complete app_data (`[flags][packed][stamp]`), or the reason this
+    /// announce was suppressed while preparing its metadata.
+    pub app_data: Result<Vec<u8>, String>,
 }
 
 /// Manages periodic announcing of discoverable interfaces.
@@ -516,9 +517,9 @@ pub struct InterfaceAnnouncer {
     /// Last announce time per interface (indexed same as `interfaces`).
     last_announced: Vec<f64>,
     /// Receiver for completed stamp results from background threads.
-    stamp_rx: std::sync::mpsc::Receiver<StampResult>,
+    stamp_rx: std::sync::mpsc::Receiver<AnnounceResult>,
     /// Sender cloned into background threads.
-    stamp_tx: std::sync::mpsc::Sender<StampResult>,
+    stamp_tx: std::sync::mpsc::Sender<AnnounceResult>,
     /// Whether a background stamp job is currently running.
     stamp_pending: bool,
 }
@@ -545,20 +546,24 @@ impl InterfaceAnnouncer {
         if self.stamp_pending {
             return;
         }
-        let due_index = self.interfaces.iter().enumerate().find_map(|(i, iface)| {
-            let elapsed = now - self.last_announced[i];
-            if elapsed >= iface.config.announce_interval as f64 {
-                Some(i)
-            } else {
-                None
-            }
-        });
+        let due_index = self
+            .interfaces
+            .iter()
+            .enumerate()
+            .filter(|(i, iface)| {
+                now - self.last_announced[*i] >= iface.config.announce_interval as f64
+            })
+            .min_by(|(left, _), (right, _)| {
+                self.last_announced[*left].total_cmp(&self.last_announced[*right])
+            })
+            .map(|(i, _)| i);
 
         if let Some(idx) = due_index {
-            let packed = self.pack_interface_info(idx);
-            let stamp_cost = self.interfaces[idx].config.stamp_value;
-            let name = self.interfaces[idx].config.discovery_name.clone();
-            let interface_name = self.interfaces[idx].interface_name.clone();
+            let iface = self.interfaces[idx].clone();
+            let transport_id = self.transport_id;
+            let stamp_cost = iface.config.stamp_value;
+            let name = iface.config.discovery_name.clone();
+            let interface_name = iface.interface_name.clone();
             let tx = self.stamp_tx.clone();
 
             log::info!(
@@ -571,6 +576,7 @@ impl InterfaceAnnouncer {
             self.last_announced[idx] = now;
 
             std::thread::spawn(move || {
+                let packed = Self::pack_interface_info(&transport_id, &iface);
                 let (stamp, value) = generate_discovery_stamp(&packed, stamp_cost);
                 log::info!("Discovery stamp generated (value={}) for '{}'", value, name,);
 
@@ -580,9 +586,9 @@ impl InterfaceAnnouncer {
                 app_data.extend_from_slice(&packed);
                 app_data.extend_from_slice(&stamp);
 
-                let _ = tx.send(StampResult {
+                let _ = tx.send(AnnounceResult {
                     interface_name,
-                    app_data,
+                    app_data: Ok(app_data),
                 });
             });
         }
@@ -590,7 +596,7 @@ impl InterfaceAnnouncer {
 
     /// Non-blocking poll: returns completed app_data if a background stamp
     /// job has finished.
-    pub fn poll_ready(&mut self) -> Option<StampResult> {
+    pub fn poll_ready(&mut self) -> Option<AnnounceResult> {
         match self.stamp_rx.try_recv() {
             Ok(result) => {
                 self.stamp_pending = false;
@@ -642,8 +648,7 @@ impl InterfaceAnnouncer {
     }
 
     /// Pack interface metadata as msgpack map with integer keys.
-    fn pack_interface_info(&self, index: usize) -> Vec<u8> {
-        let iface = &self.interfaces[index];
+    fn pack_interface_info(transport_id: &[u8; 16], iface: &DiscoverableInterface) -> Vec<u8> {
         let mut entries: Vec<(msgpack::Value, msgpack::Value)> = Vec::new();
 
         entries.push((
@@ -660,7 +665,7 @@ impl InterfaceAnnouncer {
         ));
         entries.push((
             msgpack::Value::UInt(TRANSPORT_ID as u64),
-            msgpack::Value::Bin(self.transport_id.to_vec()),
+            msgpack::Value::Bin(transport_id.to_vec()),
         ));
         if let Some(ref reachable) = iface.config.reachable_on {
             entries.push((
@@ -716,6 +721,91 @@ impl InterfaceAnnouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_announce_interface(name: &str, interval: u64) -> DiscoverableInterface {
+        DiscoverableInterface {
+            interface_name: name.to_string(),
+            config: DiscoveryConfig {
+                discovery_name: format!("Discovery {name}"),
+                announce_interval: interval,
+                stamp_value: 0,
+                reachable_on: Some("example.test".into()),
+                interface_type: "BackboneInterface".into(),
+                listen_port: Some(4242),
+                latitude: Some(45.0),
+                longitude: Some(9.0),
+                height: Some(100.0),
+            },
+            transport_enabled: true,
+            ifac_netname: Some("testnet".into()),
+            ifac_netkey: Some("secret".into()),
+        }
+    }
+
+    fn wait_for_announce(announcer: &mut InterfaceAnnouncer) -> AnnounceResult {
+        for _ in 0..10_000 {
+            if let Some(result) = announcer.poll_ready() {
+                return result;
+            }
+            std::thread::yield_now();
+        }
+        panic!("background discovery job did not complete");
+    }
+
+    #[test]
+    fn announcer_selects_due_interfaces_one_job_at_a_time_and_accounts_interval() {
+        let mut announcer = InterfaceAnnouncer::new(
+            [0x42; 16],
+            vec![
+                test_announce_interface("first", 10),
+                test_announce_interface("second", 10),
+            ],
+        );
+
+        announcer.maybe_start(10.0);
+        assert!(announcer.stamp_pending);
+        assert_eq!(announcer.last_announced, vec![10.0, 0.0]);
+        announcer.maybe_start(20.0);
+        assert_eq!(announcer.last_announced, vec![10.0, 0.0]);
+
+        let first = wait_for_announce(&mut announcer);
+        assert_eq!(first.interface_name, "first");
+        assert!(first.app_data.is_ok());
+        assert!(!announcer.stamp_pending);
+
+        announcer.maybe_start(20.0);
+        let second = wait_for_announce(&mut announcer);
+        assert_eq!(second.interface_name, "second");
+        assert_eq!(announcer.last_announced, vec![10.0, 20.0]);
+    }
+
+    #[test]
+    fn poll_ready_clears_pending_for_failed_generation() {
+        let mut announcer = InterfaceAnnouncer::new([0; 16], vec![]);
+        announcer.stamp_pending = true;
+        announcer
+            .stamp_tx
+            .send(AnnounceResult {
+                interface_name: "failed".into(),
+                app_data: Err("metadata failed".into()),
+            })
+            .unwrap();
+
+        let result = announcer.poll_ready().unwrap();
+        assert_eq!(result.app_data.unwrap_err(), "metadata failed");
+        assert!(!announcer.stamp_pending);
+    }
+
+    #[test]
+    fn background_packing_preserves_static_metadata_bytes() {
+        let iface = test_announce_interface("static", 1);
+        let expected = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface);
+        let mut announcer = InterfaceAnnouncer::new([0x24; 16], vec![iface]);
+
+        announcer.maybe_start(1.0);
+        let result = wait_for_announce(&mut announcer).app_data.unwrap();
+        assert_eq!(&result[1..result.len() - STAMP_SIZE], expected.as_slice());
+    }
 
     #[test]
     fn test_hex_encode() {

@@ -1814,6 +1814,18 @@ impl Driver {
             return;
         }
 
+        let app_data = match stamp_result.app_data {
+            Ok(app_data) => app_data,
+            Err(error) => {
+                log::error!(
+                    "Discovery: suppressing announce for '{}': {}",
+                    stamp_result.interface_name,
+                    error
+                );
+                return;
+            }
+        };
+
         let identity = match self.transport_identity.as_ref() {
             Some(id) => id,
             None => {
@@ -1839,7 +1851,7 @@ impl Driver {
             &name_hash,
             &random_hash,
             None,
-            Some(&stamp_result.app_data),
+            Some(&app_data),
         ) {
             Ok(v) => v,
             Err(e) => {
