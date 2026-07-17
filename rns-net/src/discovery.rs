@@ -1058,6 +1058,49 @@ mod tests {
         let _ = fs::remove_file(command);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn documented_location_stanza_parses_and_example_output_resolves() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const STANZA: &str = r#"[interfaces]
+  [[Mobile Backbone]]
+    type = BackboneInterface
+    enabled = yes
+    interface_mode = internal
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+    discoverable = yes
+    discovery_name = Mobile Backbone
+    reachable_on = backbone.example.net
+    location_cmd = ~/bin/reticulum-location"#;
+        const OUTPUT: &str = "45.4642,9.1900,122.5\n";
+        let documentation = include_str!("../../docs/interface-discovery.md");
+        assert!(documentation.contains(STANZA));
+        assert!(documentation.contains(OUTPUT.trim_end()));
+
+        let parsed = crate::config::parse(STANZA).unwrap();
+        let command = parsed.interfaces[0].params.get("location_cmd").unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "rns-documented-location-home-{}",
+            std::process::id()
+        ));
+        let bin = home.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let path = expand_location_path(command, Some(home.clone().into_os_string())).unwrap();
+        fs::write(&path, format!("#!/bin/sh\nprintf '{OUTPUT}'\n")).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+
+        assert_eq!(
+            resolve_location(path.to_str().unwrap()).unwrap(),
+            (45.4642, 9.19, 122.5)
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
     #[test]
     fn announcer_selects_due_interfaces_one_job_at_a_time_and_accounts_interval() {
         let mut announcer = InterfaceAnnouncer::new(
