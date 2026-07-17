@@ -206,6 +206,18 @@ impl ResourceReceiver {
         )]
     }
 
+    /// Cancel an accepted incoming transfer.
+    pub fn cancel(&mut self) -> Vec<ResourceAction> {
+        if self.status < ResourceStatus::Complete {
+            self.status = ResourceStatus::Failed;
+            vec![ResourceAction::SendCancelReceiver(
+                self.resource_hash.clone(),
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn corrupt_actions(&mut self, error: ResourceError) -> Vec<ResourceAction> {
         self.status = ResourceStatus::Corrupt;
         vec![
@@ -829,6 +841,18 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn test_cancel_is_distinct_from_advertisement_rejection() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.accept(1000.0);
+        let actions = receiver.cancel();
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
+        assert!(receiver.cancel().is_empty());
     }
 
     #[test]

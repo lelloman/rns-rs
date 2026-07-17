@@ -1730,12 +1730,23 @@ impl LinkManager {
             None => return Vec::new(),
         };
 
+        let previous_state = link.engine.state();
+        if previous_state == LinkState::Closed {
+            return Vec::new();
+        }
+
         let teardown_actions = link.engine.teardown();
         if let Some(ref mut channel) = link.channel {
             channel.shutdown();
         }
 
         let mut actions = self.process_link_actions(link_id, &teardown_actions);
+
+        // Pending links have not established link encryption and are closed
+        // locally without transmitting LINKCLOSE.
+        if previous_state == LinkState::Pending {
+            return actions;
+        }
 
         // Send LINKCLOSE packet
         let flags = PacketFlags {
@@ -2641,6 +2652,7 @@ impl LinkManager {
                     let encrypted = self
                         .links
                         .get(link_id)
+                        .filter(|link| link.engine.state() == LinkState::Active)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
@@ -2654,6 +2666,7 @@ impl LinkManager {
                     let encrypted = self
                         .links
                         .get(link_id)
+                        .filter(|link| link.engine.state() == LinkState::Active)
                         .and_then(|link| link.engine.encrypt(&data, rng).ok());
                     if let Some(encrypted) = encrypted {
                         result.extend(self.build_link_packet(
@@ -3040,7 +3053,7 @@ impl LinkManager {
 
             let mut receiver_actions = Vec::new();
             for receiver in &mut link.incoming_resources {
-                receiver_actions.extend(receiver.reject());
+                receiver_actions.extend(receiver.cancel());
             }
 
             link.outgoing_resources
@@ -3799,6 +3812,10 @@ mod tests {
             .iter()
             .any(|a| matches!(a, LinkManagerAction::LinkClosed { .. }));
         assert!(has_close);
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. })));
+        assert!(mgr.teardown_link(&link_id).is_empty());
 
         // After tick, closed links should be cleaned up
         let tick_actions = mgr.tick(&mut rng);
@@ -3807,6 +3824,27 @@ mod tests {
             .any(|a| matches!(a, LinkManagerAction::DeregisterLinkDest { .. }));
         assert!(has_deregister);
         assert_eq!(mgr.link_count(), 0);
+    }
+
+    #[test]
+    fn active_teardown_sends_linkclose_and_remote_closed_teardown_is_noop() {
+        let (mut initiator, mut responder, link_id) = setup_active_link();
+        let actions = initiator.teardown_link(&link_id);
+        assert!(actions.iter().any(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                .map(|packet| packet.context == constants::CONTEXT_LINKCLOSE)
+                .unwrap_or(false),
+            _ => false,
+        }));
+        assert!(initiator.teardown_link(&link_id).is_empty());
+
+        responder
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .handle_teardown();
+        assert!(responder.teardown_link(&link_id).is_empty());
     }
 
     #[test]
@@ -4749,7 +4787,81 @@ mod tests {
         let cancel_actions = init_mgr.cancel_all_resources(&mut rng);
 
         assert_eq!(init_mgr.resource_transfer_count(), 0);
-        assert!(cancel_actions
+        assert!(cancel_actions.iter().any(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                .map(|packet| packet.context == constants::CONTEXT_RESOURCE_ICL)
+                .unwrap_or(false),
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn receiver_cancel_sends_rcl_while_active_and_closed_cleanup_is_local_only() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+
+        let advertisement = init_mgr.send_resource(&link_id, b"incoming body", None, &mut rng);
+        let raw = extract_any_send_packet(&advertisement);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert_eq!(resp_mgr.resource_transfer_count(), 1);
+        let active_cancel = resp_mgr.cancel_all_resources(&mut rng);
+        assert_eq!(resp_mgr.resource_transfer_count(), 0);
+        assert!(active_cancel.iter().any(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                .map(|packet| packet.context == constants::CONTEXT_RESOURCE_RCL)
+                .unwrap_or(false),
+            _ => false,
+        }));
+
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+        let advertisement = init_mgr.send_resource(&link_id, b"second body", None, &mut rng);
+        let raw = extract_any_send_packet(&advertisement);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        resp_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .handle_teardown();
+        let closed_cancel = resp_mgr.cancel_all_resources(&mut rng);
+        assert_eq!(resp_mgr.resource_transfer_count(), 0);
+        assert!(!closed_cancel
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::SendPacket { .. })));
+    }
+
+    #[test]
+    fn stale_sender_cancel_cleans_up_without_icl() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr.send_resource(&link_id, b"stale transfer", None, &mut rng);
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .tick(time::now() + 100_000.0);
+        assert_eq!(init_mgr.link_state(&link_id), Some(LinkState::Stale));
+
+        let actions = init_mgr.cancel_all_resources(&mut rng);
+        assert_eq!(init_mgr.resource_transfer_count(), 0);
+        assert!(!actions
             .iter()
             .any(|action| matches!(action, LinkManagerAction::SendPacket { .. })));
     }
