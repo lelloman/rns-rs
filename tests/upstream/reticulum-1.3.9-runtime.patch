@@ -1,0 +1,149 @@
+diff --git a/RNS/Discovery.py b/RNS/Discovery.py
+index 62eafe1b..6f66fabf 100644
+--- a/RNS/Discovery.py
++++ b/RNS/Discovery.py
+@@ -99,6 +99,33 @@ class InterfaceAnnouncer():
+ 
+         if not interface_type in self.DISCOVERABLE_INTERFACE_TYPES: return None
+         else:
++            if not RNS.vendor.platformutils.is_windows() and interface.discovery_location:
++                try:
++                    discovery_location = self.sanitize(interface.discovery_location)
++                    exec_path = os.path.expanduser(discovery_location)
++                    if os.path.isfile(exec_path) and os.access(exec_path, os.X_OK):
++                        RNS.log(f"Evaluating discovery location from executable at {exec_path}", RNS.LOG_DEBUG)
++                        exec_result = subprocess.run([exec_path], stdout=subprocess.PIPE)
++                        exec_stdout = exec_result.stdout.decode("utf-8")
++                        if exec_result.returncode != 0: raise ValueError("Non-zero exit code from subprocess")
++                        discovery_location = self.sanitize(exec_stdout)
++                        location_components = discovery_location.replace(" ", "").split(",")
++                        if len(location_components) != 3: raise ValueError(f"Invalid location component count: {len(location_components)}")
++                        dlat = float(location_components[0])
++                        dlon = float(location_components[1])
++                        dhgt = float(location_components[2])
++                        if dlat < -90   or dlat > 90:  raise ValueError(f"Invalid latitude: {dlat}")
++                        if dlon < -180  or dlat > 180: raise ValueError(f"Invalid longitude: {dlon}")
++                        if dhgt < -4000 or dhgt > 1e6: raise ValueError(f"Invalid height: {dhgt}")
++                        interface.discovery_latitude  = dlat
++                        interface.discovery_longitude = dlon
++                        interface.discovery_height    = dhgt
++
++                except Exception as e:
++                    RNS.log(f"Error while getting reachable_on from executable at {interface.reachable_on}: {e}", RNS.LOG_ERROR)
++                    RNS.log(f"Aborting discovery announce", RNS.LOG_ERROR)
++                    return None
++
+             flags = 0x00
+             info  = {INTERFACE_TYPE: interface_type,
+                      TRANSPORT:      RNS.Reticulum.transport_enabled(),
+diff --git a/RNS/Link.py b/RNS/Link.py
+index 90812086..7116c7ea 100644
+--- a/RNS/Link.py
++++ b/RNS/Link.py
+@@ -664,6 +664,7 @@ class Link:
+         Closes the link and purges encryption keys. New keys will
+         be used if a new link to the same destination is established.
+         """
++        if self.status == Link.CLOSED: return
+         if self.status != Link.PENDING and self.status != Link.CLOSED: self.__teardown_packet()
+         self.status = Link.CLOSED
+         if self.initiator: self.teardown_reason = Link.INITIATOR_CLOSED
+@@ -968,10 +969,11 @@ class Link:
+                                         self.teardown()
+ 
+                                     else:
+-                                        self.__remote_identity = identity
+-                                        if self.callbacks.remote_identified != None:
+-                                            try: self.callbacks.remote_identified(self, self.__remote_identity)
+-                                            except Exception as e: RNS.log(f"Error while executing remote identified callback from {self}. The contained exception was: "+str(e), RNS.LOG_ERROR)
++                                        if self.__remote_identity == None:
++                                            self.__remote_identity = identity
++                                            if self.callbacks.remote_identified != None:
++                                                try: self.callbacks.remote_identified(self, self.__remote_identity)
++                                                except Exception as e: RNS.log(f"Error while executing remote identified callback from {self}. The contained exception was: "+str(e), RNS.LOG_ERROR)
+                                 
+                                     self.__update_phy_stats(packet, query_shared=True)
+ 
+diff --git a/RNS/Resource.py b/RNS/Resource.py
+index 6de1ec99..eff05629 100644
+--- a/RNS/Resource.py
++++ b/RNS/Resource.py
+@@ -149,7 +149,7 @@ class Resource:
+     COMPLETE        = 0x06
+     FAILED          = 0x07
+     CORRUPT         = 0x08
+-    REJECTED        = 0x00
++    REJECTED        = 0x09
+ 
+     @staticmethod
+     def reject(advertisement_packet):
+@@ -1090,10 +1090,14 @@ class Resource:
+                     try:
+                         cancel_packet = RNS.Packet(self.link, self.hash, context=RNS.Packet.RESOURCE_ICL)
+                         cancel_packet.send()
+-                    except Exception as e:
+-                        RNS.log("Could not send resource cancel packet, the contained exception was: "+str(e), RNS.LOG_ERROR)
++                    except Exception as e: RNS.log("Could not send resource cancel packet, the contained exception was: "+str(e), RNS.LOG_ERROR)
+                 self.link.cancel_outgoing_resource(self)
+             else:
++                if self.link.status == RNS.Link.ACTIVE:
++                    try:
++                        cancel_packet = RNS.Packet(self.link, self.hash, context=RNS.Packet.RESOURCE_RCL)
++                        cancel_packet.send()
++                    except Exception as e: RNS.log("Could not send resource cancel packet, the contained exception was: "+str(e), RNS.LOG_ERROR)
+                 self.link.cancel_incoming_resource(self)
+             
+             if self.callback != None:
+diff --git a/RNS/Reticulum.py b/RNS/Reticulum.py
+index d944ed0d..6d1ee172 100755
+--- a/RNS/Reticulum.py
++++ b/RNS/Reticulum.py
+@@ -829,6 +829,7 @@ class Reticulum:
+         latitude = None
+         longitude = None
+         height = None
++        discovery_location = None
+         discovery_frequency = None
+         discovery_bandwidth = None
+         discovery_modulation = None
+@@ -846,6 +847,7 @@ class Reticulum:
+                 if "discovery_encrypt" in c: discovery_encrypt = c.as_bool("discovery_encrypt")
+                 if "reachable_on" in c: reachable_on = c["reachable_on"]
+                 if "publish_ifac" in c: publish_ifac = c.as_bool("publish_ifac")
++                if "location_cmd" in c: discovery_location = c["location_cmd"]
+                 if "latitude" in c: latitude = c.as_float("latitude")
+                 if "longitude" in c: longitude = c.as_float("longitude")
+                 if "height" in c: height = c.as_float("height")
+@@ -853,14 +855,14 @@ class Reticulum:
+                 if "discovery_bandwidth" in c: discovery_bandwidth = c.as_int("discovery_bandwidth")
+                 if "discovery_modulation" in c: discovery_modulation = c.as_int("discovery_modulation")
+ 
+-                if not interface_mode in [Interface.Interface.MODE_GATEWAY, Interface.Interface.MODE_ACCESS_POINT]:
++                if not interface_mode in [Interface.Interface.MODE_GATEWAY, Interface.Interface.MODE_ACCESS_POINT, Interface.Interface.MODE_INTERNAL]:
+                     if not ignore_config_warnings:
+                         if c["type"] in ["RNodeInterface", "RNodeMultiInterface"]:
+                             interface_mode = Interface.Interface.MODE_ACCESS_POINT
+-                            RNS.log(f"Discovery enabled on interface {name} without gateway or AP mode. Auto-configured to AP mode.", RNS.LOG_NOTICE)
++                            RNS.log(f"Discovery enabled on interface {name} without gateway, internal or AP mode. Auto-configured to AP mode.", RNS.LOG_NOTICE)
+                         else:
+                             interface_mode = Interface.Interface.MODE_GATEWAY
+-                            RNS.log(f"Discovery enabled on interface {name} without gateway or AP mode. Auto-configured to gateway mode.", RNS.LOG_NOTICE)
++                            RNS.log(f"Discovery enabled on interface {name} without gateway, internal or AP mode. Auto-configured to gateway mode.", RNS.LOG_NOTICE)
+                 
+         try:
+             def interface_post_init(interface):
+@@ -884,6 +886,7 @@ class Reticulum:
+                     interface.discovery_name                  = discovery_name
+                     interface.discovery_encrypt               = discovery_encrypt
+                     interface.discovery_stamp_value           = discovery_stamp_value
++                    interface.discovery_location              = discovery_location
+                     interface.discovery_latitude              = latitude
+                     interface.discovery_longitude             = longitude
+                     interface.discovery_height                = height
+diff --git a/RNS/_version.py b/RNS/_version.py
+index ffa9fecd..d4279444 100644
+--- a/RNS/_version.py
++++ b/RNS/_version.py
+@@ -1 +1 @@
+-__version__ = "1.3.8"
++__version__ = "1.3.9"

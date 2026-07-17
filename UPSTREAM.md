@@ -5,13 +5,21 @@ This repository is a Rust implementation of the Python Reticulum project.
 The current upstream reference baseline is:
 
 - Project: Reticulum
-- Repository: `https://github.com/markqvist/Reticulum`
+- Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
+- GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.3.9`
 - Version metadata commit: `406b141370fe69a347ab2cbf59eb7f5391f23fb2`
 - Normative commit: `cf6010da591e9361e26672b6917081a153f1f2c3`
 - Commit date: `2026-07-17 11:43:14 +0200`
 - Subject: `Enable discovery for internal-mode interfaces`
+
+The normative 1.3.9 commit is on Reticulum's rgit repository and is not yet in
+the GitHub release mirror. Since GitHub-hosted runners cannot reliably reach an
+RNS remote, the interop lane checks out mirrored parent `de0f399a`, applies the
+audited runtime delta in `tests/upstream/reticulum-1.3.9-runtime.patch`, and
+requires the resulting `RNS` tree object to equal upstream tree
+`ac7772853b49d02e786b6eeb573e5aa23d060384` before executing Python code.
 
 The tracked subsystem and commit audit is in
 [`docs/reticulum-1.3.9-parity.md`](docs/reticulum-1.3.9-parity.md). The PR CI
