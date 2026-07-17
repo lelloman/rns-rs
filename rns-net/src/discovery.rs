@@ -12,9 +12,11 @@
 pub use crate::common::discovery::*;
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_workblock};
@@ -524,6 +526,158 @@ pub struct InterfaceAnnouncer {
     stamp_pending: bool,
 }
 
+const LOCATION_CMD_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCATION_CMD_MAX_STDOUT: usize = 4096;
+
+fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), String> {
+    if output.len() > LOCATION_CMD_MAX_STDOUT {
+        return Err(format!(
+            "location command output exceeds {} bytes",
+            LOCATION_CMD_MAX_STDOUT
+        ));
+    }
+    let line = std::str::from_utf8(output)
+        .map_err(|error| format!("location command output is not UTF-8: {error}"))?;
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.contains(['\n', '\r']) {
+        return Err("location command must output exactly one line".into());
+    }
+    let values: Vec<&str> = line.split(',').map(str::trim).collect();
+    if values.len() != 3 {
+        return Err(format!(
+            "location command returned {} components; expected 3",
+            values.len()
+        ));
+    }
+    let parse = |value: &str, label: &str| {
+        value
+            .parse::<f64>()
+            .map_err(|error| format!("invalid {label} '{value}': {error}"))
+            .and_then(|number| {
+                number
+                    .is_finite()
+                    .then_some(number)
+                    .ok_or_else(|| format!("{label} must be finite"))
+            })
+    };
+    let latitude = parse(values[0], "latitude")?;
+    let longitude = parse(values[1], "longitude")?;
+    let height = parse(values[2], "height")?;
+    if !(-90.0..=90.0).contains(&latitude) {
+        return Err(format!("latitude {latitude} is outside -90..=90"));
+    }
+    if !(-180.0..=180.0).contains(&longitude) {
+        return Err(format!("longitude {longitude} is outside -180..=180"));
+    }
+    if !(-4000.0..=1_000_000.0).contains(&height) {
+        return Err(format!("height {height} is outside -4000..=1000000"));
+    }
+    Ok((latitude, longitude, height))
+}
+
+#[cfg(unix)]
+fn expand_location_path(
+    command: &str,
+    home: Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    let path = if command == "~" {
+        home.map(PathBuf::from).ok_or_else(|| {
+            "cannot expand location command '~' because HOME is not set".to_string()
+        })?
+    } else if let Some(suffix) = command.strip_prefix("~/") {
+        let home = home.map(PathBuf::from).ok_or_else(|| {
+            "cannot expand location command '~/' because HOME is not set".to_string()
+        })?;
+        home.join(suffix)
+    } else {
+        PathBuf::from(command)
+    };
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn resolve_location(command: &str) -> Result<(f64, f64, f64), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = expand_location_path(command, std::env::var_os("HOME"))?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("cannot inspect '{}': {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("'{}' is not a regular file", path.display()));
+    }
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(format!("'{}' is not executable", path.display()));
+    }
+
+    let mut child = Command::new(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot execute '{}': {error}", path.display()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "location command stdout was unavailable".to_string())?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take((LOCATION_CMD_MAX_STDOUT + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < LOCATION_CMD_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("location command timed out after 5 seconds".into());
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("failed waiting for location command: {error}"));
+            }
+        }
+    };
+    let output = reader
+        .join()
+        .map_err(|_| "location command stdout reader panicked".to_string())?
+        .map_err(|error| format!("failed reading location command stdout: {error}"))?;
+    if !status.success() {
+        return Err(format!("location command exited with {status}"));
+    }
+    parse_location_output(&output)
+}
+
+#[cfg(windows)]
+fn resolve_location(_command: &str) -> Result<(f64, f64, f64), String> {
+    Err("location_cmd is not supported on Windows".into())
+}
+
+fn prepare_interface_info(
+    transport_id: &[u8; 16],
+    iface: &DiscoverableInterface,
+) -> Result<Vec<u8>, String> {
+    let mut resolved = iface.clone();
+    if let Some(command) = &resolved.config.location_cmd {
+        let (latitude, longitude, height) = resolve_location(command)?;
+        resolved.config.latitude = Some(latitude);
+        resolved.config.longitude = Some(longitude);
+        resolved.config.height = Some(height);
+    }
+    Ok(InterfaceAnnouncer::pack_interface_info(
+        transport_id,
+        &resolved,
+    ))
+}
+
 impl InterfaceAnnouncer {
     /// Create a new announcer.
     pub fn new(transport_id: [u8; 16], interfaces: Vec<DiscoverableInterface>) -> Self {
@@ -576,7 +730,16 @@ impl InterfaceAnnouncer {
             self.last_announced[idx] = now;
 
             std::thread::spawn(move || {
-                let packed = Self::pack_interface_info(&transport_id, &iface);
+                let packed = match prepare_interface_info(&transport_id, &iface) {
+                    Ok(packed) => packed,
+                    Err(error) => {
+                        let _ = tx.send(AnnounceResult {
+                            interface_name,
+                            app_data: Err(error),
+                        });
+                        return;
+                    }
+                };
                 let (stamp, value) = generate_discovery_stamp(&packed, stamp_cost);
                 log::info!("Discovery stamp generated (value={}) for '{}'", value, name,);
 
@@ -732,6 +895,7 @@ mod tests {
                 reachable_on: Some("example.test".into()),
                 interface_type: "BackboneInterface".into(),
                 listen_port: Some(4242),
+                location_cmd: None,
                 latitude: Some(45.0),
                 longitude: Some(9.0),
                 height: Some(100.0),
@@ -747,9 +911,151 @@ mod tests {
             if let Some(result) = announcer.poll_ready() {
                 return result;
             }
-            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(1));
         }
         panic!("background discovery job did not complete");
+    }
+
+    #[test]
+    fn location_output_parser_enforces_shape_finiteness_and_ranges() {
+        for valid in [
+            "-90,-180,-4000",
+            "90,180,1000000\n",
+            " 45.5, 9.25, 123.0\r\n",
+        ] {
+            assert!(parse_location_output(valid.as_bytes()).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "1,2",
+            "1,2,3,4",
+            "one,2,3",
+            "NaN,2,3",
+            "inf,2,3",
+            "91,2,3",
+            "1,181,3",
+            "1,2,-4001",
+            "1,2,1000001",
+            "1,2,3\n4,5,6\n",
+        ] {
+            assert!(
+                parse_location_output(invalid.as_bytes()).is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(parse_location_output(&[0xff, 0xfe]).is_err());
+        assert!(parse_location_output(&vec![b'0'; LOCATION_CMD_MAX_STDOUT + 1]).is_err());
+    }
+
+    #[cfg(unix)]
+    fn executable_script(body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "rns-location-command-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).unwrap();
+        // Some overlay filesystems briefly report ETXTBSY immediately after
+        // replacing an executable inode.
+        std::thread::sleep(Duration::from_millis(10));
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn location_command_is_direct_bounded_and_overrides_static_coordinates() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = std::ffi::OsString::from("/tmp/rns-home");
+        assert_eq!(
+            expand_location_path("~/bin/location", Some(home)).unwrap(),
+            PathBuf::from("/tmp/rns-home/bin/location")
+        );
+        assert!(expand_location_path("~/bin/location", None).is_err());
+
+        let success = executable_script("printf '12.5,-44.25,321\\n'");
+        assert_eq!(
+            resolve_location(success.to_str().unwrap()).unwrap(),
+            (12.5, -44.25, 321.0)
+        );
+
+        let mut iface = test_announce_interface("dynamic", 1);
+        iface.config.location_cmd = Some(success.to_string_lossy().into_owned());
+        let packed = prepare_interface_info(&[0x55; 16], &iface).unwrap();
+        let (value, consumed) = msgpack::unpack(&packed).unwrap();
+        assert_eq!(consumed, packed.len());
+        let Value::Map(entries) = value else {
+            panic!("discovery metadata was not a map")
+        };
+        let coordinate = |key: u8| {
+            entries.iter().find_map(|(candidate, value)| {
+                (*candidate == Value::UInt(key as u64)).then_some(value)
+            })
+        };
+        assert_eq!(coordinate(LATITUDE), Some(&Value::Float(12.5)));
+        assert_eq!(coordinate(LONGITUDE), Some(&Value::Float(-44.25)));
+        assert_eq!(coordinate(HEIGHT), Some(&Value::Float(321.0)));
+        assert_eq!(iface.config.latitude, Some(45.0));
+        assert_eq!(iface.config.longitude, Some(9.0));
+        assert_eq!(iface.config.height, Some(100.0));
+
+        let nonzero = executable_script("exit 7");
+        assert!(resolve_location(nonzero.to_str().unwrap()).is_err());
+        let oversized = executable_script("head -c 4097 /dev/zero");
+        assert!(resolve_location(oversized.to_str().unwrap()).is_err());
+        let missing = success.with_extension("missing");
+        assert!(resolve_location(missing.to_str().unwrap()).is_err());
+
+        let non_executable = executable_script("printf '1,2,3'");
+        let mut permissions = fs::metadata(&non_executable).unwrap().permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&non_executable, permissions).unwrap();
+        assert!(resolve_location(non_executable.to_str().unwrap()).is_err());
+
+        for path in [success, nonzero, oversized, non_executable] {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_dynamic_location_is_suppressed_then_retried_at_normal_interval() {
+        let failure = executable_script("exit 1");
+        let success = executable_script("printf '1,2,3\\n'");
+        let mut iface = test_announce_interface("recovering", 10);
+        iface.config.location_cmd = Some(failure.to_string_lossy().into_owned());
+        let mut announcer = InterfaceAnnouncer::new([0x77; 16], vec![iface.clone()]);
+
+        announcer.maybe_start(10.0);
+        assert!(wait_for_announce(&mut announcer).app_data.is_err());
+        announcer.maybe_start(19.0);
+        assert!(!announcer.stamp_pending);
+
+        iface.config.location_cmd = Some(success.to_string_lossy().into_owned());
+        announcer.upsert_interface(iface);
+        announcer.maybe_start(20.0);
+        assert!(wait_for_announce(&mut announcer).app_data.is_ok());
+
+        let _ = fs::remove_file(failure);
+        let _ = fs::remove_file(success);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn location_command_timeout_kills_and_reaps_child() {
+        let command = executable_script("exec sleep 30");
+        let started = Instant::now();
+        let error = resolve_location(command.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(7));
+        let _ = fs::remove_file(command);
     }
 
     #[test]

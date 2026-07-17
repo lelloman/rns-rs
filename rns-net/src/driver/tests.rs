@@ -1086,6 +1086,7 @@ fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverabl
             reachable_on: None,
             interface_type: "BackboneInterface".to_string(),
             listen_port: Some(4242),
+            location_cmd: None,
             latitude: None,
             longitude: None,
             height: None,
@@ -1124,6 +1125,7 @@ fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discovera
             reachable_on: None,
             interface_type: "TCPServerInterface".to_string(),
             listen_port: Some(4242),
+            location_cmd: None,
             latitude: None,
             longitude: None,
             height: None,
@@ -4353,6 +4355,7 @@ fn discovery_announcer_emits_local_synthetic_announce() {
                 reachable_on: Some("127.0.0.1".into()),
                 interface_type: "TCPServerInterface".into(),
                 listen_port: Some(4242),
+                location_cmd: None,
                 latitude: None,
                 longitude: None,
                 height: None,
@@ -4478,6 +4481,7 @@ fn runtime_config_lists_backbone_keys() {
     assert!(keys.contains(&"backbone.public.max_connections".to_string()));
     assert!(keys.contains(&"backbone.public.discoverable".to_string()));
     assert!(keys.contains(&"backbone.public.discovery_name".to_string()));
+    assert!(keys.contains(&"backbone.public.location_cmd".to_string()));
     assert!(keys.contains(&"backbone.public.latitude".to_string()));
     assert!(keys.contains(&"backbone.public.longitude".to_string()));
     assert!(keys.contains(&"backbone.public.height".to_string()));
@@ -4589,6 +4593,35 @@ fn runtime_config_sets_backbone_values() {
         panic!("expected runtime config set success");
     };
     assert_eq!(entry.value, RuntimeConfigValue::Float(120.0));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "backbone.public.location_cmd".into(),
+        value: RuntimeConfigValue::String("/opt/bin/location".into()),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected runtime config set success");
+    };
+    assert_eq!(
+        entry.value,
+        RuntimeConfigValue::String("/opt/bin/location".into())
+    );
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "backbone.public.location_cmd".into(),
+        value: RuntimeConfigValue::Null,
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected nullable runtime config set success");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Null);
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "backbone.public.location_cmd".into(),
+    });
+    let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+        panic!("expected runtime config reset success");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Null);
 
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
         key: "backbone.public.discoverable".into(),
@@ -4830,6 +4863,7 @@ fn runtime_config_lists_tcp_server_keys() {
     assert!(keys.contains(&"tcp_server.public.max_connections".to_string()));
     assert!(keys.contains(&"tcp_server.public.discoverable".to_string()));
     assert!(keys.contains(&"tcp_server.public.discovery_name".to_string()));
+    assert!(keys.contains(&"tcp_server.public.location_cmd".to_string()));
 }
 
 #[cfg(feature = "iface-tcp")]
@@ -4874,6 +4908,26 @@ fn runtime_config_sets_tcp_server_values() {
         panic!("expected runtime config set success");
     };
     assert_eq!(entry.value, RuntimeConfigValue::Float(41.9028));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "tcp_server.public.location_cmd".into(),
+        value: RuntimeConfigValue::String("/opt/bin/location".into()),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected runtime config set success");
+    };
+    assert_eq!(
+        entry.value,
+        RuntimeConfigValue::String("/opt/bin/location".into())
+    );
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "tcp_server.public.location_cmd".into(),
+    });
+    let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+        panic!("expected runtime config reset success");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Null);
 
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
         key: "tcp_server.public.latitude".into(),

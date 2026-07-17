@@ -88,6 +88,8 @@ pub struct DiscoveryConfig {
     pub interface_type: String,
     /// Listen port of the discoverable interface.
     pub listen_port: Option<u16>,
+    /// Executable that resolves `latitude,longitude,height` for each announce.
+    pub location_cmd: Option<String>,
     /// Geographic latitude in decimal degrees.
     pub latitude: Option<f64>,
     /// Geographic longitude in decimal degrees.
