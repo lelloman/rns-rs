@@ -2,6 +2,8 @@
 
 Normative source: Reticulum commit
 `cf6010da591e9361e26672b6917081a153f1f2c3` (`RNS.__version__ == 1.3.9`).
+This commit is on the normative rgit repository; it has not yet reached the
+GitHub release mirror.
 The README badge and accepted baseline in `UPSTREAM.md` are promoted to 1.3.9.
 The PR CI matrix is the final software acceptance authority.
 
@@ -25,8 +27,10 @@ errors accurately, and bounds both execution time and output size.
   byte-for-byte unchanged at `cf6010da`.
 - Reticulum 1.3.9 runtime vectors live in `conformance_1_3_9`; historical
   `conformance_1_3_8` vectors remain committed and tested.
-- The CI interop lane checks out exactly `cf6010da`, asserts version `1.3.9`,
-  and runs the live Python/Rust test.
+- The CI interop lane reconstructs the exact `cf6010da` Python runtime tree
+  from GitHub-mirrored parent `de0f399a` plus the audited runtime patch. It
+  verifies upstream `RNS` tree object `ac7772853b49d02e786b6eeb573e5aa23d060384`,
+  asserts version `1.3.9`, and runs the live Python/Rust test.
 - Rust crate versions are unchanged because this is an upstream compatibility
   baseline, not a Rust crate release.
 
