@@ -111,7 +111,7 @@ def write_139_fixture(name, data):
 
 
 def generate_139_runtime_vectors():
-    """Candidate fixtures retained separately from the accepted 1.3.8 set."""
+    """1.3.9 fixtures retained separately from the historical 1.3.8 set."""
     packet_vectors = []
     flags = RNS.Packet.HEADER_1 << 6 | RNS.Destination.PLAIN << 2 | RNS.Packet.DATA
     for hops in [127, 128, 255]:
@@ -2317,7 +2317,7 @@ def main():
     generate_resource_hmu_vectors()
     print("\nGenerating Phase 5c IFAC test vectors...")
     generate_ifac_vectors()
-    print("\nGenerating Reticulum 1.3.9 candidate runtime conformance vectors...")
+    print("\nGenerating Reticulum 1.3.9 runtime conformance vectors...")
     generate_139_runtime_vectors()
     print("Done! All vectors generated successfully.")
 

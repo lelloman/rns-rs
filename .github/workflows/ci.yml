@@ -63,7 +63,7 @@ jobs:
         run: cargo test --workspace
 
   reticulum-1-3-9-interop:
-    name: Reticulum 1.3.9 Candidate Interop
+    name: Reticulum 1.3.9 Interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

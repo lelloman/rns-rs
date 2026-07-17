@@ -4,7 +4,7 @@
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
-[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.3.8-blue)](UPSTREAM.md)
+[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.3.9-blue)](UPSTREAM.md)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
@@ -61,7 +61,7 @@ rustup target add wasm32-unknown-unknown
 Test vectors are generated from the Python RNS implementation:
 
 ```bash
-# Generate fixtures from the pinned Reticulum 1.3.8 checkout
+# Generate fixtures from the pinned Reticulum 1.3.9 checkout
 RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
 
 # Run all tests
