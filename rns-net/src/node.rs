@@ -218,6 +218,8 @@ fn extract_discovery_config(
         .or_else(|| params.get("port"))
         .and_then(|v| v.parse().ok());
 
+    let location_cmd = params.get("location_cmd").cloned();
+
     let latitude = params
         .get("latitude")
         .or_else(|| params.get("lat"))
@@ -235,6 +237,7 @@ fn extract_discovery_config(
         reachable_on,
         interface_type: iface_type.to_string(),
         listen_port,
+        location_cmd,
         latitude,
         longitude,
         height,
@@ -253,6 +256,7 @@ fn default_discovery_runtime_config(
         reachable_on: None,
         interface_type: interface_type.to_string(),
         listen_port,
+        location_cmd: None,
         latitude: None,
         longitude: None,
         height: None,
@@ -3006,6 +3010,20 @@ mod tests {
         assert!(
             discovery.is_none(),
             "TCPClientInterface discovery must be rejected unless KISS framing is supported"
+        );
+    }
+
+    #[test]
+    fn discovery_config_parses_location_command() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("discoverable".into(), "yes".into());
+        params.insert("location_cmd".into(), "~/bin/reticulum-location".into());
+
+        let discovery =
+            super::extract_discovery_config("public", "BackboneInterface", &params).unwrap();
+        assert_eq!(
+            discovery.location_cmd.as_deref(),
+            Some("~/bin/reticulum-location")
         );
     }
 

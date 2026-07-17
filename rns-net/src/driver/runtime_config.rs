@@ -31,6 +31,7 @@ impl Driver {
                 | "discovery_name"
                 | "announce_interval_secs"
                 | "reachable_on"
+                | "location_cmd"
                 | "stamp_value"
                 | "latitude"
                 | "longitude"
@@ -103,6 +104,22 @@ impl Driver {
                     .unwrap_or(RuntimeConfigValue::Null),
                 format!(
                     "Reachable hostname or IP advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "location_cmd" => Some(make_entry(
+                current_config
+                    .location_cmd
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .location_cmd
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Executable resolving discovery coordinates for this {} interface; null clears it.",
                     interface_label
                 ),
             )),
@@ -1473,6 +1490,7 @@ impl Driver {
                 | "discovery_name"
                 | "announce_interval_secs"
                 | "reachable_on"
+                | "location_cmd"
                 | "stamp_value"
                 | "latitude"
                 | "longitude"
@@ -1558,6 +1576,9 @@ impl Driver {
             "reachable_on" => {
                 handle.current.config.reachable_on = Self::expect_optional_string(value, key)?;
             }
+            "location_cmd" => {
+                handle.current.config.location_cmd = Self::expect_optional_string(value, key)?;
+            }
             "stamp_value" => {
                 let raw = Self::expect_u64(value, key)?;
                 if raw > u8::MAX as u64 {
@@ -1611,6 +1632,9 @@ impl Driver {
             "reachable_on" => {
                 handle.current.config.reachable_on = handle.startup.config.reachable_on.clone()
             }
+            "location_cmd" => {
+                handle.current.config.location_cmd = handle.startup.config.location_cmd.clone()
+            }
             "stamp_value" => handle.current.config.stamp_value = handle.startup.config.stamp_value,
             "latitude" => handle.current.config.latitude = handle.startup.config.latitude,
             "longitude" => handle.current.config.longitude = handle.startup.config.longitude,
@@ -1637,6 +1661,7 @@ impl Driver {
                 | "discovery_name"
                 | "announce_interval_secs"
                 | "reachable_on"
+                | "location_cmd"
                 | "stamp_value"
                 | "latitude"
                 | "longitude"
@@ -1827,6 +1852,7 @@ impl Driver {
                 "discovery_name",
                 "announce_interval_secs",
                 "reachable_on",
+                "location_cmd",
                 "stamp_value",
                 "latitude",
                 "longitude",
@@ -3463,6 +3489,7 @@ impl Driver {
                 | "discovery_name"
                 | "announce_interval_secs"
                 | "reachable_on"
+                | "location_cmd"
                 | "stamp_value"
                 | "latitude"
                 | "longitude"
@@ -3502,6 +3529,7 @@ impl Driver {
                 | "discovery_name"
                 | "announce_interval_secs"
                 | "reachable_on"
+                | "location_cmd"
                 | "stamp_value"
                 | "latitude"
                 | "longitude"
@@ -3562,6 +3590,9 @@ impl Driver {
             "reachable_on" => {
                 handle.current.config.reachable_on = Self::expect_optional_string(value, key)?
             }
+            "location_cmd" => {
+                handle.current.config.location_cmd = Self::expect_optional_string(value, key)?
+            }
             "stamp_value" => {
                 let raw = Self::expect_u64(value, key)?;
                 if raw > u8::MAX as u64 {
@@ -3609,6 +3640,9 @@ impl Driver {
             "reachable_on" => {
                 handle.current.config.reachable_on = handle.startup.config.reachable_on.clone()
             }
+            "location_cmd" => {
+                handle.current.config.location_cmd = handle.startup.config.location_cmd.clone()
+            }
             "stamp_value" => handle.current.config.stamp_value = handle.startup.config.stamp_value,
             "latitude" => handle.current.config.latitude = handle.startup.config.latitude,
             "longitude" => handle.current.config.longitude = handle.startup.config.longitude,
@@ -3645,6 +3679,7 @@ impl Driver {
                 "discovery_name",
                 "announce_interval_secs",
                 "reachable_on",
+                "location_cmd",
                 "stamp_value",
                 "latitude",
                 "longitude",
