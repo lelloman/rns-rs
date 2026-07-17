@@ -67,7 +67,7 @@ fn parse_interface_mode(mode: &str) -> u8 {
     }
 }
 
-/// Apply Reticulum's pre-1.3.9 mode normalization for discoverable interfaces.
+/// Apply Reticulum's mode normalization for discoverable interfaces.
 fn normalize_discovery_mode(
     interface_type: &str,
     configured_mode: u8,
@@ -78,7 +78,9 @@ fn normalize_discovery_mode(
         || ignore_config_warnings
         || matches!(
             configured_mode,
-            rns_core::constants::MODE_ACCESS_POINT | rns_core::constants::MODE_GATEWAY
+            rns_core::constants::MODE_ACCESS_POINT
+                | rns_core::constants::MODE_GATEWAY
+                | rns_core::constants::MODE_INTERNAL
         )
     {
         return configured_mode;
@@ -3694,7 +3696,7 @@ instance_control_port = {}
     }
 
     #[test]
-    fn pre_1_3_9_discovery_mode_normalization_matrix() {
+    fn discovery_mode_normalization_matrix() {
         use rns_core::constants::*;
 
         let interface_types = [
@@ -3720,8 +3722,10 @@ instance_control_port = {}
                     for ignore_warnings in [false, true] {
                         let expected = if !discoverable
                             || ignore_warnings
-                            || matches!(configured_mode, MODE_ACCESS_POINT | MODE_GATEWAY)
-                        {
+                            || matches!(
+                                configured_mode,
+                                MODE_ACCESS_POINT | MODE_GATEWAY | MODE_INTERNAL
+                            ) {
                             configured_mode
                         } else if matches!(interface_type, "RNodeInterface" | "RNodeMultiInterface")
                         {
