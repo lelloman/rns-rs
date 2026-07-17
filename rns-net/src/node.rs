@@ -67,6 +67,30 @@ fn parse_interface_mode(mode: &str) -> u8 {
     }
 }
 
+/// Apply Reticulum's pre-1.3.9 mode normalization for discoverable interfaces.
+fn normalize_discovery_mode(
+    interface_type: &str,
+    configured_mode: u8,
+    discoverable: bool,
+    ignore_config_warnings: bool,
+) -> u8 {
+    if !discoverable
+        || ignore_config_warnings
+        || matches!(
+            configured_mode,
+            rns_core::constants::MODE_ACCESS_POINT | rns_core::constants::MODE_GATEWAY
+        )
+    {
+        return configured_mode;
+    }
+
+    if matches!(interface_type, "RNodeInterface" | "RNodeMultiInterface") {
+        rns_core::constants::MODE_ACCESS_POINT
+    } else {
+        rns_core::constants::MODE_GATEWAY
+    }
+}
+
 fn default_ingress_control_for_type(
     iface_type: &str,
 ) -> rns_core::transport::types::IngressControlConfig {
@@ -673,35 +697,33 @@ impl RnsNode {
 
             let mut iface_mode = parse_interface_mode(&iface.mode);
 
-            // Auto-configure mode when discovery is enabled (Python Reticulum.py).
-            let has_discovery = match iface.interface_type.as_str() {
-                "AutoInterface" => true,
-                "RNodeInterface" => iface
-                    .params
-                    .get("discoverable")
-                    .and_then(|v| config::parse_bool_pub(v))
-                    .unwrap_or(false),
-                _ => false,
-            };
-            if has_discovery
-                && iface_mode != rns_core::constants::MODE_ACCESS_POINT
-                && iface_mode != rns_core::constants::MODE_GATEWAY
-            {
-                let new_mode = if iface.interface_type == "RNodeInterface" {
-                    rns_core::constants::MODE_ACCESS_POINT
-                } else {
-                    rns_core::constants::MODE_GATEWAY
-                };
+            let discoverable = iface
+                .params
+                .get("discoverable")
+                .and_then(|value| config::parse_bool_pub(value))
+                .unwrap_or(false);
+            let ignore_config_warnings = iface
+                .params
+                .get("ignore_config_warnings")
+                .and_then(|value| config::parse_bool_pub(value))
+                .unwrap_or(false);
+            let normalized_mode = normalize_discovery_mode(
+                &iface.interface_type,
+                iface_mode,
+                discoverable,
+                ignore_config_warnings,
+            );
+            if normalized_mode != iface_mode {
                 log::info!(
                     "Interface '{}' has discovery enabled, auto-configuring mode to {}",
                     iface.name,
-                    if new_mode == rns_core::constants::MODE_ACCESS_POINT {
+                    if normalized_mode == rns_core::constants::MODE_ACCESS_POINT {
                         "ACCESS_POINT"
                     } else {
                         "GATEWAY"
                     }
                 );
-                iface_mode = new_mode;
+                iface_mode = normalized_mode;
             }
 
             let default_ifac_size = factory.default_ifac_size();
@@ -3669,6 +3691,58 @@ instance_control_port = {}
         assert_eq!(parse_interface_mode("Internal"), MODE_INTERNAL);
         // Unknown defaults to FULL
         assert_eq!(parse_interface_mode("invalid"), MODE_FULL);
+    }
+
+    #[test]
+    fn pre_1_3_9_discovery_mode_normalization_matrix() {
+        use rns_core::constants::*;
+
+        let interface_types = [
+            "RNodeInterface",
+            "RNodeMultiInterface",
+            "BackboneInterface",
+            "TCPServerInterface",
+            "AutoInterface",
+        ];
+        let modes = [
+            MODE_FULL,
+            MODE_ACCESS_POINT,
+            MODE_POINT_TO_POINT,
+            MODE_ROAMING,
+            MODE_BOUNDARY,
+            MODE_GATEWAY,
+            MODE_INTERNAL,
+        ];
+
+        for interface_type in interface_types {
+            for configured_mode in modes {
+                for discoverable in [false, true] {
+                    for ignore_warnings in [false, true] {
+                        let expected = if !discoverable
+                            || ignore_warnings
+                            || matches!(configured_mode, MODE_ACCESS_POINT | MODE_GATEWAY)
+                        {
+                            configured_mode
+                        } else if matches!(interface_type, "RNodeInterface" | "RNodeMultiInterface")
+                        {
+                            MODE_ACCESS_POINT
+                        } else {
+                            MODE_GATEWAY
+                        };
+                        assert_eq!(
+                            normalize_discovery_mode(
+                                interface_type,
+                                configured_mode,
+                                discoverable,
+                                ignore_warnings,
+                            ),
+                            expected,
+                            "type={interface_type}, mode={configured_mode}, discoverable={discoverable}, ignore={ignore_warnings}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
