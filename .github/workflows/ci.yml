@@ -62,8 +62,8 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
-  reticulum-1-3-8-interop:
-    name: Reticulum 1.3.8 Interop
+  reticulum-1-3-9-interop:
+    name: Reticulum 1.3.9 Candidate Interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -74,8 +74,8 @@ jobs:
       - name: Checkout exact Reticulum baseline
         run: |
           git clone https://github.com/markqvist/Reticulum.git reticulum-upstream
-          git -C reticulum-upstream checkout de0f399a1696895dcb95ad1efa19f3b21a7886ab
-          test "$(git -C reticulum-upstream rev-parse HEAD)" = "de0f399a1696895dcb95ad1efa19f3b21a7886ab"
+          git -C reticulum-upstream checkout cf6010da591e9361e26672b6917081a153f1f2c3
+          test "$(git -C reticulum-upstream rev-parse HEAD)" = "cf6010da591e9361e26672b6917081a153f1f2c3"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
@@ -85,7 +85,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
           RETICULUM_UPSTREAM_DIR: ${{ github.workspace }}/reticulum-upstream
         run: |
-          python3 -c 'import RNS; assert RNS.__version__ == "1.3.8", RNS.__version__'
+          python3 -c 'import RNS; assert RNS.__version__ == "1.3.9", RNS.__version__'
           cargo test -p rns-net --test python_interop -- --nocapture
 
   cargo-test-hooks:
