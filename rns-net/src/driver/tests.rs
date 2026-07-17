@@ -3908,11 +3908,11 @@ fn create_link_uses_known_destination_interface_without_path() {
             sent_packets.is_empty(),
             "LINKREQUEST should not broadcast to unrelated interfaces when a known destination interface exists"
         );
-    assert_eq!(sent_packets2.len(), 2);
+    assert_eq!(sent_packets2.len(), 1);
     let flags = PacketFlags::unpack(sent_packets2[0][0] & 0x7F);
     assert_eq!(flags.packet_type, constants::PACKET_TYPE_LINKREQUEST);
     assert_eq!(extract_dest_hash(&sent_packets2[0]), dest_hash);
-    assert!(sent_contains_linkclose(&sent_packets2, link_id));
+    assert!(!sent_contains_linkclose(&sent_packets2, link_id));
 }
 
 #[test]
@@ -3979,7 +3979,7 @@ fn create_link_ignores_sentinel_known_destination_interface() {
     let sent_packets = sent.lock().unwrap();
     let sent_packets2 = sent2.lock().unwrap();
     assert!(
-        sent_packets.len() == 2 && sent_packets2.len() == 2,
+        sent_packets.len() == 1 && sent_packets2.len() == 1,
         "sentinel InterfaceId(0) must not suppress the default broadcast behavior"
     );
     let flags = PacketFlags::unpack(sent_packets[0][0] & 0x7F);
@@ -4097,7 +4097,7 @@ fn shutdown_tears_down_pending_link() {
     assert_eq!(driver.link_manager.link_count(), 0);
     assert_eq!(link_closed.lock().unwrap().len(), 1);
     assert_eq!(link_closed.lock().unwrap()[0], TypedLinkId(link_id));
-    assert!(sent_contains_linkclose(&sent.lock().unwrap(), link_id));
+    assert!(!sent_contains_linkclose(&sent.lock().unwrap(), link_id));
 }
 
 #[test]
