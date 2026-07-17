@@ -10,8 +10,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-UPSTREAM_COMMIT = "de0f399a1696895dcb95ad1efa19f3b21a7886ab"
-UPSTREAM_VERSION = "1.3.8"
+UPSTREAM_COMMIT = "cf6010da591e9361e26672b6917081a153f1f2c3"
+UPSTREAM_VERSION = "1.3.9"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -78,10 +78,10 @@ os.makedirs(FIXTURE_DIR, exist_ok=True)
 PROTOCOL_DIR = os.path.join(os.path.dirname(__file__), 'fixtures', 'protocol')
 os.makedirs(PROTOCOL_DIR, exist_ok=True)
 
-CONFORMANCE_138_DIR = os.path.join(
-    os.path.dirname(__file__), 'fixtures', 'conformance_1_3_8'
+CONFORMANCE_139_DIR = os.path.join(
+    os.path.dirname(__file__), 'fixtures', 'conformance_1_3_9'
 )
-os.makedirs(CONFORMANCE_138_DIR, exist_ok=True)
+os.makedirs(CONFORMANCE_139_DIR, exist_ok=True)
 
 
 def to_hex(data):
@@ -97,8 +97,8 @@ def write_fixture(name, data):
     print(f"  Written {path} ({len(data)} vectors)")
 
 
-def write_138_fixture(name, data):
-    path = os.path.join(CONFORMANCE_138_DIR, name)
+def write_139_fixture(name, data):
+    path = os.path.join(CONFORMANCE_139_DIR, name)
     with open(path, 'w') as f:
         json.dump({
             "baseline": {
@@ -110,8 +110,8 @@ def write_138_fixture(name, data):
     print(f"  Written {path} ({len(data)} vector groups)")
 
 
-def generate_138_runtime_vectors():
-    """Focused fixtures for runtime behavior introduced in 1.3.8."""
+def generate_139_runtime_vectors():
+    """Candidate fixtures retained separately from the accepted 1.3.8 set."""
     packet_vectors = []
     flags = RNS.Packet.HEADER_1 << 6 | RNS.Destination.PLAIN << 2 | RNS.Packet.DATA
     for hops in [127, 128, 255]:
@@ -188,7 +188,7 @@ def generate_138_runtime_vectors():
             "accounted_bytes": len(ciphertext),
         })
 
-    write_138_fixture("runtime_vectors.json", {
+    write_139_fixture("runtime_vectors.json", {
         "packet_hops": packet_vectors,
         "held_announce": [
             {"hops": 126, "retained": True},
@@ -2317,8 +2317,8 @@ def main():
     generate_resource_hmu_vectors()
     print("\nGenerating Phase 5c IFAC test vectors...")
     generate_ifac_vectors()
-    print("\nGenerating Reticulum 1.3.8 runtime conformance vectors...")
-    generate_138_runtime_vectors()
+    print("\nGenerating Reticulum 1.3.9 candidate runtime conformance vectors...")
+    generate_139_runtime_vectors()
     print("Done! All vectors generated successfully.")
 
 
