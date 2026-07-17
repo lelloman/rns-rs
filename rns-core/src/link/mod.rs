@@ -388,6 +388,9 @@ impl LinkEngine {
         let plaintext = self.decrypt(encrypted_data)?;
         let (identity_hash, public_key) =
             identify::validate_identify_data(&plaintext, &self.link_id)?;
+        if self.remote_identity.is_some() {
+            return Ok(Vec::new());
+        }
         self.remote_identity = Some((identity_hash, public_key));
 
         Ok(alloc::vec![LinkAction::RemoteIdentified {
@@ -1049,6 +1052,37 @@ mod tests {
             }
             _ => panic!("Expected RemoteIdentified"),
         }
+
+        // Valid repeated identifies are authenticated, but identification is
+        // one-shot and cannot replace the first identity or emit callbacks.
+        let mut rng_repeat = make_rng(0x51);
+        let repeated = initiator
+            .build_identify(&my_identity, &mut rng_repeat)
+            .unwrap();
+        assert!(responder.handle_identify(&repeated).unwrap().is_empty());
+
+        let mut rng_other = make_rng(0x60);
+        let other_identity = rns_crypto::identity::Identity::new(&mut rng_other);
+        let mut rng_other_enc = make_rng(0x61);
+        let other = initiator
+            .build_identify(&other_identity, &mut rng_other_enc)
+            .unwrap();
+        assert!(responder.handle_identify(&other).unwrap().is_empty());
+        assert_eq!(
+            responder.remote_identity().map(|(hash, _)| hash),
+            Some(my_identity.hash())
+        );
+
+        // Malformed repeats are still rejected cryptographically.
+        let mut rng_bad = make_rng(0x70);
+        let malformed = initiator
+            .encrypt(b"invalid identify", &mut rng_bad)
+            .unwrap();
+        assert!(responder.handle_identify(&malformed).is_err());
+        assert_eq!(
+            responder.remote_identity().map(|(hash, _)| hash),
+            Some(my_identity.hash())
+        );
     }
 
     #[test]
