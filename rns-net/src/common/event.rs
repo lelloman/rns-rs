@@ -742,6 +742,8 @@ pub struct SingleInterfaceStat {
     pub pr_burst_activated: f64,
     /// Connected client count for aggregate server interfaces, if reported.
     pub clients: Option<u64>,
+    /// Fast-flapping IPs currently blocked by an aggregate server interface.
+    pub blocked_ips: Option<u64>,
     /// Target interval for outgoing announce rate control, in seconds.
     pub announce_rate_target: Option<f64>,
     /// Announce-rate control grace count.

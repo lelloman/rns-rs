@@ -1057,7 +1057,12 @@ fn register_test_backbone(driver: &mut Driver, name: &str) {
     driver.register_backbone_peer_state(BackbonePeerStateHandle {
         interface_id: InterfaceId(1),
         interface_name: name.to_string(),
+        mode: rns_core::constants::MODE_FULL,
         peer_state,
+        fast_flap: crate::interface::backbone::BackboneFastFlapConfig::default(),
+        fast_flap_state: Arc::new(std::sync::Mutex::new(
+            crate::interface::backbone::BackboneFastFlapMonitor::new(),
+        )),
     });
 }
 
@@ -4714,28 +4719,94 @@ fn backbone_peer_state_query_lists_entries() {
 
 #[cfg(feature = "iface-backbone")]
 #[test]
-fn backbone_peer_state_clear_removes_entry() {
+fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     let mut driver = new_test_driver();
     register_test_backbone(&mut driver, "public");
-    driver
-        .backbone_peer_state
-        .get("public")
-        .unwrap()
+    let handle = driver.backbone_peer_state.get("public").unwrap().clone();
+    let peer_ip = "203.0.113.20".parse().unwrap();
+    handle
         .peer_state
         .lock()
         .unwrap()
         .seed_entry(BackbonePeerStateEntry {
             interface_name: "public".into(),
-            peer_ip: "203.0.113.11".parse().unwrap(),
+            peer_ip,
+            connected_count: 2,
+            blacklisted_remaining_secs: None,
+            blacklist_reason: None,
+            reject_count: 0,
+        });
+    let now = Instant::now();
+    for offset in 0..=handle.fast_flap.grace {
+        handle
+            .fast_flap_state
+            .lock()
+            .unwrap()
+            .record_disconnect(
+                peer_ip,
+                Duration::from_secs(1),
+                &handle.fast_flap,
+                now + Duration::from_secs(offset),
+            )
+            .unwrap();
+    }
+
+    let QueryResponse::InterfaceStats(stats) = driver.handle_query(QueryRequest::InterfaceStats)
+    else {
+        panic!("expected interface stats");
+    };
+    let public = stats
+        .interfaces
+        .iter()
+        .find(|entry| entry.name == "public")
+        .expect("backbone listener stats");
+    assert_eq!(public.interface_type, "BackboneInterface");
+    assert_eq!(public.clients, Some(2));
+    assert_eq!(public.blocked_ips, Some(1));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn backbone_peer_state_clear_removes_entry() {
+    let mut driver = new_test_driver();
+    register_test_backbone(&mut driver, "public");
+    let handle = driver.backbone_peer_state.get("public").unwrap().clone();
+    let peer_ip = "203.0.113.11".parse().unwrap();
+    handle
+        .peer_state
+        .lock()
+        .unwrap()
+        .seed_entry(BackbonePeerStateEntry {
+            interface_name: "public".into(),
+            peer_ip,
             connected_count: 0,
             blacklisted_remaining_secs: None,
             blacklist_reason: None,
             reject_count: 0,
         });
+    let now = Instant::now();
+    for offset in 0..=handle.fast_flap.grace {
+        handle
+            .fast_flap_state
+            .lock()
+            .unwrap()
+            .record_disconnect(
+                peer_ip,
+                Duration::from_secs(1),
+                &handle.fast_flap,
+                now + Duration::from_secs(offset),
+            )
+            .unwrap();
+    }
+    assert!(handle.fast_flap_state.lock().unwrap().is_blocked(
+        peer_ip,
+        &handle.fast_flap,
+        now + Duration::from_secs(handle.fast_flap.grace),
+    ));
 
     let response = driver.handle_query_mut(QueryRequest::ClearBackbonePeerState {
         interface_name: "public".into(),
-        peer_ip: "203.0.113.11".parse().unwrap(),
+        peer_ip,
     });
     let QueryResponse::ClearBackbonePeerState(true) = response else {
         panic!("expected successful peer-state clear");
@@ -4748,6 +4819,10 @@ fn backbone_peer_state_clear_removes_entry() {
         panic!("expected backbone peer state list");
     };
     assert!(entries.is_empty());
+    assert_eq!(
+        handle.fast_flap_state.lock().unwrap().flap_count(peer_ip),
+        0
+    );
 }
 
 #[cfg(feature = "iface-backbone")]

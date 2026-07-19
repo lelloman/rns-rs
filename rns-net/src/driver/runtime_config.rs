@@ -1008,7 +1008,12 @@ impl Driver {
         self.backbone_peer_state
             .get(interface_name)
             .map(|handle| {
-                recover_mutex_guard(&handle.peer_state, "backbone peer state").clear(peer_ip)
+                let peer_cleared =
+                    recover_mutex_guard(&handle.peer_state, "backbone peer state").clear(peer_ip);
+                let flap_cleared =
+                    recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
+                        .clear(peer_ip);
+                peer_cleared || flap_cleared
             })
             .unwrap_or(false)
     }

@@ -394,6 +394,9 @@ fn print_status(
                     println!("    Uptime    : {}", prettytime(uptime));
                 }
             }
+            for line in client_status_lines(iface) {
+                println!("{}", line);
+            }
             if show_announces {
                 let ia_freq = iface
                     .get("ia_freq")
@@ -553,6 +556,22 @@ fn interface_has_active_burst(iface: &PickleValue) -> bool {
             .get("pr_burst_active")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
+}
+
+fn client_status_lines(iface: &PickleValue) -> Vec<String> {
+    let Some(clients) = iface.get("clients").and_then(|value| value.as_int()) else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!("    Clients   : {}", clients.max(0))];
+    if let Some(blocked) = iface
+        .get("blocked_ips")
+        .and_then(|value| value.as_int())
+        .filter(|blocked| *blocked > 0)
+    {
+        let suffix = if blocked == 1 { "IP" } else { "IPs" };
+        lines.push(format!("    Blocked   : {} {}", blocked, suffix));
+    }
+    lines
 }
 
 fn announce_status_lines(
@@ -1017,6 +1036,45 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn client_stats(clients: i64, blocked_ips: Option<i64>) -> PickleValue {
+        let mut fields = vec![(
+            PickleValue::String("clients".into()),
+            PickleValue::Int(clients),
+        )];
+        if let Some(blocked) = blocked_ips {
+            fields.push((
+                PickleValue::String("blocked_ips".into()),
+                PickleValue::Int(blocked),
+            ));
+        }
+        PickleValue::Dict(fields)
+    }
+
+    #[test]
+    fn client_status_shows_blocked_ip_count_with_pluralization() {
+        assert_eq!(
+            client_status_lines(&client_stats(4, Some(1))),
+            vec!["    Clients   : 4", "    Blocked   : 1 IP"]
+        );
+        assert_eq!(
+            client_status_lines(&client_stats(4, Some(2))),
+            vec!["    Clients   : 4", "    Blocked   : 2 IPs"]
+        );
+    }
+
+    #[test]
+    fn client_status_hides_zero_or_missing_blocked_count() {
+        assert_eq!(
+            client_status_lines(&client_stats(0, Some(0))),
+            vec!["    Clients   : 0"]
+        );
+        assert_eq!(
+            client_status_lines(&client_stats(3, None)),
+            vec!["    Clients   : 3"]
+        );
+        assert!(client_status_lines(&PickleValue::Dict(Vec::new())).is_empty());
+    }
 
     #[test]
     fn monitor_sleep_accounts_for_elapsed_iteration_time() {
