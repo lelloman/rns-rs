@@ -133,7 +133,8 @@ pub fn main() -> i32 {
 
 #[derive(Debug, Clone, Default)]
 struct CliOptions {
-    config: Option<String>,
+    rnsh_config: Option<String>,
+    rns_config: Option<String>,
     identity: Option<String>,
     verbose: u8,
     quiet: u8,
@@ -176,16 +177,27 @@ impl CliOptions {
                 continue;
             }
 
-            if let Some(name) = arg.strip_prefix("--") {
+            if let Some(long_option) = arg.strip_prefix("--") {
+                let (name, inline_value) = long_option
+                    .split_once('=')
+                    .map(|(name, value)| (name, Some(value)))
+                    .unwrap_or((long_option, None));
                 match name {
-                    "config" | "identity" | "service" | "announce" | "allowed" | "timeout" => {
-                        i += 1;
-                        let value = rnsh_argv
-                            .get(i)
-                            .ok_or_else(|| format!("--{name} requires a value"))?
-                            .clone();
+                    "config" | "rnsconfig" | "identity" | "service" | "announce" | "allowed"
+                    | "timeout" => {
+                        let value = match inline_value {
+                            Some(value) => value.to_string(),
+                            None => {
+                                i += 1;
+                                rnsh_argv
+                                    .get(i)
+                                    .ok_or_else(|| format!("--{name} requires a value"))?
+                                    .clone()
+                            }
+                        };
                         match name {
-                            "config" => opts.config = Some(value),
+                            "config" => opts.rnsh_config = Some(value),
+                            "rnsconfig" => opts.rns_config = Some(value),
                             "identity" => opts.identity = Some(value),
                             "service" => opts.service = Some(value),
                             "announce" => {
@@ -202,18 +214,41 @@ impl CliOptions {
                             _ => {}
                         }
                     }
-                    "verbose" => opts.verbose = opts.verbose.saturating_add(1),
-                    "quiet" => opts.quiet = opts.quiet.saturating_add(1),
-                    "print-identity" => opts.print_identity = true,
-                    "base256" => opts.base256 = true,
-                    "version" => opts.version = true,
-                    "help" => opts.help = true,
-                    "listen" => opts.listen = true,
-                    "no-auth" => opts.no_auth = true,
-                    "remote-command-as-args" => opts.remote_command_as_args = true,
-                    "no-remote-command" => opts.no_remote_command = true,
-                    "no-id" => opts.no_id = true,
-                    "mirror" => opts.mirror_exit = true,
+                    "verbose" if inline_value.is_none() => {
+                        opts.verbose = opts.verbose.saturating_add(1)
+                    }
+                    "quiet" if inline_value.is_none() => opts.quiet = opts.quiet.saturating_add(1),
+                    "print-identity" if inline_value.is_none() => opts.print_identity = true,
+                    "base256" if inline_value.is_none() => opts.base256 = true,
+                    "version" if inline_value.is_none() => opts.version = true,
+                    "help" if inline_value.is_none() => opts.help = true,
+                    "listen" if inline_value.is_none() => opts.listen = true,
+                    "no-auth" if inline_value.is_none() => opts.no_auth = true,
+                    "remote-command-as-args" if inline_value.is_none() => {
+                        opts.remote_command_as_args = true
+                    }
+                    "no-remote-command" if inline_value.is_none() => opts.no_remote_command = true,
+                    "no-id" if inline_value.is_none() => opts.no_id = true,
+                    "mirror" if inline_value.is_none() => opts.mirror_exit = true,
+                    name if inline_value.is_some()
+                        && matches!(
+                            name,
+                            "verbose"
+                                | "quiet"
+                                | "print-identity"
+                                | "base256"
+                                | "version"
+                                | "help"
+                                | "listen"
+                                | "no-auth"
+                                | "remote-command-as-args"
+                                | "no-remote-command"
+                                | "no-id"
+                                | "mirror"
+                        ) =>
+                    {
+                        return Err(format!("--{name} does not take a value"));
+                    }
                     _ => return Err(format!("unknown option --{name}")),
                 }
                 i += 1;
@@ -236,7 +271,7 @@ impl CliOptions {
                                 .clone()
                         };
                         match key {
-                            'c' => opts.config = Some(value),
+                            'c' => opts.rnsh_config = Some(value),
                             'i' => opts.identity = Some(value),
                             's' => opts.service = Some(value),
                             'b' => {
@@ -285,16 +320,16 @@ impl CliOptions {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -Z, --base256            Also print compact base256 display for hashes\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
+        "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        rnsh application config directory\n      --rnsconfig PATH     Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -Z, --base256            Also print compact base256 display for hashes\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
     );
 }
 
 fn init_rnsh_logging(opts: &CliOptions) -> Result<(), RnshError> {
-    let dir = rnsh_config_dir()?;
+    let dir = rnsh_config_dir(opts)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("logfile"))?;
+        .open(rnsh_log_path(&dir))?;
     let mut builder = env_logger::Builder::new();
     builder
         .filter_level(rnsh_log_level(opts.listen, opts.verbose, opts.quiet))
@@ -305,15 +340,50 @@ fn init_rnsh_logging(opts: &CliOptions) -> Result<(), RnshError> {
         .map_err(|err| RnshError::Protocol(format!("failed to initialize rnsh logging: {err}")))
 }
 
-fn rnsh_config_dir() -> Result<PathBuf, RnshError> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let xdg = PathBuf::from(&home).join(".config").join("rnsh");
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn expand_user_path(path: &str, home: &Path) -> PathBuf {
+    if path == "~" {
+        home.to_path_buf()
+    } else if let Some(suffix) = path.strip_prefix("~/") {
+        home.join(suffix)
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+fn resolve_rnsh_config_dir(explicit: Option<&str>, home: &Path) -> Result<PathBuf, RnshError> {
+    if let Some(explicit) = explicit {
+        let selected = expand_user_path(explicit, home);
+        fs::create_dir_all(&selected)?;
+        return Ok(selected);
+    }
+
+    let xdg = home.join(".config").join("rnsh");
     if xdg.is_dir() {
         return Ok(xdg);
     }
-    let legacy = PathBuf::from(home).join(".rnsh");
+    let legacy = home.join(".rnsh");
     fs::create_dir_all(&legacy)?;
     Ok(legacy)
+}
+
+fn rnsh_config_dir(opts: &CliOptions) -> Result<PathBuf, RnshError> {
+    resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home_dir())
+}
+
+fn resolve_rns_config_dir(explicit: Option<&str>, home: &Path) -> PathBuf {
+    explicit
+        .map(|path| expand_user_path(path, home))
+        .unwrap_or_else(|| home.join(".reticulum"))
+}
+
+fn rnsh_log_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("logfile")
 }
 
 fn rnsh_log_level(listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
@@ -1445,8 +1515,11 @@ impl ListenerSession {
 
 fn listen(opts: CliOptions) -> Result<(), RnshError> {
     let (event_tx, event_rx) = mpsc::channel();
+    let home = home_dir();
+    let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
+    let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
     let node = RnsNode::connect_shared_from_config(
-        opts.config.as_deref().map(Path::new),
+        Some(&rns_config),
         Box::new(RnshCallbacks {
             tx: event_tx.clone(),
         }),
@@ -1454,9 +1527,11 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
 
     let service = opts.service.as_deref().unwrap_or(DEFAULT_SERVICE_NAME);
     let identity = prepare_identity(
-        opts.config.as_deref(),
+        &rnsh_config,
+        &rns_config,
         opts.identity.as_deref(),
         Some(service),
+        &home,
     )?;
     let identity_hash = IdentityHash(*identity.hash());
     let dest = Destination::single_in(APP_NAME, &[], identity_hash);
@@ -1473,7 +1548,7 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
 
     eprintln!("rnsh listening on {}", prettyhexrep(&dest.hash.0));
 
-    let allowed = load_allowed_identities(&opts)?;
+    let allowed = load_allowed_identities(&opts, &rnsh_config)?;
     if allowed.is_empty() && !opts.no_auth {
         eprintln!("warning: no allowed identities configured; no initiators will be accepted");
     }
@@ -1568,13 +1643,22 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     .ok_or_else(|| RnshError::Protocol("destination must be 32 hexadecimal characters".into()))?;
     let timeout = Duration::from_secs_f64(opts.timeout.unwrap_or(15.0));
     let (event_tx, event_rx) = mpsc::channel();
+    let home = home_dir();
+    let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
+    let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
     let node = RnsNode::connect_shared_from_config(
-        opts.config.as_deref().map(Path::new),
+        Some(&rns_config),
         Box::new(RnshCallbacks {
             tx: event_tx.clone(),
         }),
     )?;
-    let identity = prepare_identity(opts.config.as_deref(), opts.identity.as_deref(), None)?;
+    let identity = prepare_identity(
+        &rnsh_config,
+        &rns_config,
+        opts.identity.as_deref(),
+        None,
+        &home,
+    )?;
 
     wait_for_path(&node, dest_hash, &event_rx, timeout)?;
     let recalled = node
@@ -1795,24 +1879,64 @@ fn spawn_stdin_reader(event_tx: mpsc::Sender<RnshEvent>) {
 }
 
 fn prepare_identity(
-    config: Option<&str>,
+    rnsh_config: &Path,
+    rns_config: &Path,
     explicit_path: Option<&str>,
     service: Option<&str>,
+    home: &Path,
 ) -> Result<Identity, RnshError> {
-    let path = if let Some(path) = explicit_path {
-        PathBuf::from(path)
+    let path = rnsh_identity_path(rnsh_config, explicit_path, service, home);
+    if explicit_path.is_none() {
+        let old_path = legacy_rnsh_identity_path(rns_config, service);
+        if let Some(warning) = legacy_identity_migration_warning(&path, &old_path) {
+            eprintln!("{warning}");
+        }
+    }
+    prepare_identity_at(&path)
+}
+
+fn rnsh_identity_path(
+    config_dir: &Path,
+    explicit_path: Option<&str>,
+    service: Option<&str>,
+    home: &Path,
+) -> PathBuf {
+    if let Some(path) = explicit_path {
+        return expand_user_path(path, home);
+    }
+    let suffix = service.map(sanitize_service_name).unwrap_or_default();
+    if suffix.is_empty() {
+        config_dir.join("identity")
     } else {
-        let config_dir = rns_net::storage::resolve_config_dir(config.map(Path::new));
-        let paths = rns_net::storage::ensure_storage_dirs(&config_dir)?;
-        let suffix = service.map(sanitize_service_name).unwrap_or_default();
-        let filename = if suffix.is_empty() {
-            APP_NAME.to_string()
-        } else {
-            format!("{APP_NAME}.{suffix}")
-        };
-        paths.identities.join(filename)
+        config_dir.join(format!("identity.{suffix}"))
+    }
+}
+
+fn legacy_rnsh_identity_path(rns_config: &Path, service: Option<&str>) -> PathBuf {
+    let suffix = service.map(sanitize_service_name).unwrap_or_default();
+    let filename = if suffix.is_empty() {
+        APP_NAME.to_string()
+    } else {
+        format!("{APP_NAME}.{suffix}")
     };
-    if let Some(parent) = path.parent() {
+    rns_config.join("storage").join("identities").join(filename)
+}
+
+fn legacy_identity_migration_warning(new_path: &Path, old_path: &Path) -> Option<String> {
+    (!new_path.exists() && old_path.is_file()).then(|| {
+        format!(
+            "warning: existing pre-migration rnsh identity found at '{}'; rnsh now uses '{}'. Move the identity explicitly or pass --identity to retain the same destination. No private key was copied.",
+            old_path.display(),
+            new_path.display(),
+        )
+    })
+}
+
+fn prepare_identity_at(path: &Path) -> Result<Identity, RnshError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     if path.exists() {
@@ -1825,10 +1949,15 @@ fn prepare_identity(
 }
 
 fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
+    let home = home_dir();
+    let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;
+    let rns_config = resolve_rns_config_dir(opts.rns_config.as_deref(), &home);
     let identity = prepare_identity(
-        opts.config.as_deref(),
+        &rnsh_config,
+        &rns_config,
         opts.identity.as_deref(),
         opts.service.as_deref(),
+        &home,
     )?;
     println!("Identity     : {}", prettyhexrep(identity.hash()));
     if opts.base256 {
@@ -1844,7 +1973,10 @@ fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
     Ok(())
 }
 
-fn load_allowed_identities(opts: &CliOptions) -> Result<HashSet<[u8; 16]>, RnshError> {
+fn load_allowed_identities(
+    opts: &CliOptions,
+    config_dir: &Path,
+) -> Result<HashSet<[u8; 16]>, RnshError> {
     let mut allowed = HashSet::new();
     for entry in &opts.allowed {
         if let Some(hash) = parse_hash_16(entry) {
@@ -1855,10 +1987,8 @@ fn load_allowed_identities(opts: &CliOptions) -> Result<HashSet<[u8; 16]>, RnshE
             )));
         }
     }
-    for path in allowed_identity_files() {
-        if !path.exists() {
-            continue;
-        }
+    let path = config_dir.join("allowed_identities");
+    if path.is_file() {
         let contents = fs::read_to_string(path)?;
         for line in contents
             .lines()
@@ -1871,17 +2001,6 @@ fn load_allowed_identities(opts: &CliOptions) -> Result<HashSet<[u8; 16]>, RnshE
         }
     }
     Ok(allowed)
-}
-
-fn allowed_identity_files() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    vec![
-        PathBuf::from(&home)
-            .join(".config")
-            .join("rnsh")
-            .join("allowed_identities"),
-        PathBuf::from(home).join(".rnsh").join("allowed_identities"),
-    ]
 }
 
 fn sanitize_service_name(value: &str) -> String {
@@ -1920,9 +2039,20 @@ fn extract_sig_keys(identity: &Identity) -> Result<([u8; 32], [u8; 32]), RnshErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::Mutex;
 
     const TEST_LINK: [u8; 16] = [0x42; 16];
+    static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir(label: &str) -> PathBuf {
+        let id = TEST_DIR_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("rns-rnsh-{label}-{}-{id}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 
     #[derive(Default)]
     struct FakeTransport {
@@ -2054,6 +2184,155 @@ mod tests {
         let long = CliOptions::parse(vec!["--base256".into(), "--print-identity".into()]).unwrap();
         assert!(long.base256);
         assert!(long.print_identity);
+    }
+
+    #[test]
+    fn cli_separates_rnsh_and_reticulum_config_directories() {
+        let short = CliOptions::parse(vec![
+            "-c".into(),
+            "/tmp/rnsh-app".into(),
+            "--rnsconfig".into(),
+            "/tmp/reticulum".into(),
+        ])
+        .unwrap();
+        assert_eq!(short.rnsh_config.as_deref(), Some("/tmp/rnsh-app"));
+        assert_eq!(short.rns_config.as_deref(), Some("/tmp/reticulum"));
+
+        let long = CliOptions::parse(vec![
+            "--config".into(),
+            "/tmp/rnsh-long".into(),
+            "--rnsconfig".into(),
+            "/tmp/rns-long".into(),
+        ])
+        .unwrap();
+        assert_eq!(long.rnsh_config.as_deref(), Some("/tmp/rnsh-long"));
+        assert_eq!(long.rns_config.as_deref(), Some("/tmp/rns-long"));
+
+        let equals = CliOptions::parse(vec![
+            "--config=/tmp/rnsh-equals".into(),
+            "--rnsconfig=/tmp/rns-equals".into(),
+        ])
+        .unwrap();
+        assert_eq!(equals.rnsh_config.as_deref(), Some("/tmp/rnsh-equals"));
+        assert_eq!(equals.rns_config.as_deref(), Some("/tmp/rns-equals"));
+    }
+
+    #[test]
+    fn rnsconfig_has_no_short_alias() {
+        let error = CliOptions::parse(vec!["-r".into(), "/tmp/reticulum".into()]).unwrap_err();
+        assert!(error.contains("unknown option -r"));
+    }
+
+    #[test]
+    fn explicit_rnsh_directory_is_expanded_and_created() {
+        let home = test_dir("explicit-home");
+        let selected = resolve_rnsh_config_dir(Some("~/nested/rnsh"), &home).unwrap();
+
+        assert_eq!(selected, home.join("nested/rnsh"));
+        assert!(selected.is_dir());
+        assert_eq!(
+            resolve_rns_config_dir(Some("~/reticulum"), &home),
+            home.join("reticulum")
+        );
+        assert_eq!(resolve_rns_config_dir(None, &home), home.join(".reticulum"));
+    }
+
+    #[test]
+    fn default_rnsh_directory_prefers_existing_xdg_then_creates_legacy() {
+        let xdg_home = test_dir("xdg-home");
+        let xdg = xdg_home.join(".config/rnsh");
+        fs::create_dir_all(&xdg).unwrap();
+        assert_eq!(resolve_rnsh_config_dir(None, &xdg_home).unwrap(), xdg);
+
+        let fresh_home = test_dir("legacy-home");
+        let legacy = fresh_home.join(".rnsh");
+        assert_eq!(resolve_rnsh_config_dir(None, &fresh_home).unwrap(), legacy);
+        assert!(legacy.is_dir());
+    }
+
+    #[test]
+    fn default_identity_paths_match_upstream_for_initiator_and_listener() {
+        let home = test_dir("identity-home");
+        let config = home.join("rnsh");
+        fs::create_dir_all(&config).unwrap();
+
+        assert_eq!(
+            rnsh_identity_path(&config, None, None, &home),
+            config.join("identity")
+        );
+        assert_eq!(
+            rnsh_identity_path(&config, None, Some("dev-shell_1!"), &home),
+            config.join("identity.devshell1")
+        );
+        assert_eq!(
+            rnsh_identity_path(&config, Some("~/keys/operator"), Some("ignored"), &home),
+            home.join("keys/operator")
+        );
+    }
+
+    #[test]
+    fn prepare_identity_uses_new_default_and_preserves_explicit_override() {
+        let home = test_dir("prepare-home");
+        let config = home.join("rnsh");
+        fs::create_dir_all(&config).unwrap();
+        let default_path = config.join("identity.default");
+
+        let generated = prepare_identity_at(&default_path).unwrap();
+        assert!(default_path.is_file());
+        assert_eq!(
+            rns_net::storage::load_identity(&default_path)
+                .unwrap()
+                .hash(),
+            generated.hash()
+        );
+
+        let explicit = home.join("keys/explicit");
+        let explicit_identity = prepare_identity_at(&explicit).unwrap();
+        assert!(explicit.is_file());
+        assert_eq!(
+            rns_net::storage::load_identity(&explicit).unwrap().hash(),
+            explicit_identity.hash()
+        );
+        assert!(!config.join("identity").exists());
+    }
+
+    #[test]
+    fn legacy_identity_migration_warning_names_both_paths_without_copying() {
+        let home = test_dir("migration-home");
+        let rns_config = home.join("reticulum");
+        let old = rns_config.join("storage/identities/rnsh.default");
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(&old, [0x44; 64]).unwrap();
+        let new = home.join("rnsh/identity.default");
+
+        let warning = legacy_identity_migration_warning(&new, &old).unwrap();
+        assert!(warning.contains(old.to_str().unwrap()));
+        assert!(warning.contains(new.to_str().unwrap()));
+        assert!(
+            !new.exists(),
+            "migration check must never copy key material"
+        );
+
+        fs::create_dir_all(new.parent().unwrap()).unwrap();
+        fs::write(&new, [0x55; 64]).unwrap();
+        assert!(legacy_identity_migration_warning(&new, &old).is_none());
+    }
+
+    #[test]
+    fn allowlist_and_logfile_are_scoped_to_selected_rnsh_directory() {
+        let selected = test_dir("selected-config");
+        let allowed_hash = "11111111111111111111111111111111";
+        fs::write(
+            selected.join("allowed_identities"),
+            format!("{allowed_hash}\n"),
+        )
+        .unwrap();
+        let opts = CliOptions::default();
+
+        let allowed = load_allowed_identities(&opts, &selected).unwrap();
+
+        assert!(allowed.contains(&[0x11; 16]));
+        assert_eq!(rnsh_log_path(&selected), selected.join("logfile"));
     }
 
     #[test]
