@@ -275,6 +275,17 @@ impl ResourceSender {
             return vec![];
         }
 
+        let wants_more_hashmap = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EXHAUSTED);
+        let pad = if wants_more_hashmap {
+            1 + RESOURCE_MAPHASH_LEN
+        } else {
+            1
+        };
+
+        if request_data.len() < pad + 32 || request_data[pad..pad + 32] != self.resource_hash {
+            return vec![];
+        }
+
         // Measure RTT from advertisement
         if self.rtt.is_none() {
             self.rtt = Some(now - self.adv_sent);
@@ -286,17 +297,6 @@ impl ResourceSender {
 
         self.retries_left = self.max_retries;
         self.last_activity = now;
-
-        let wants_more_hashmap = request_data.first() == Some(&RESOURCE_HASHMAP_IS_EXHAUSTED);
-        let pad = if wants_more_hashmap {
-            1 + RESOURCE_MAPHASH_LEN
-        } else {
-            1
-        };
-
-        if request_data.len() < pad + 32 {
-            return vec![];
-        }
 
         let requested_hashes_data = &request_data[pad + 32..];
         let mut actions = Vec::new();
@@ -334,8 +334,12 @@ impl ResourceSender {
 
         // Handle hashmap exhaustion
         if wants_more_hashmap {
-            if let Some(hmu) = self.build_hmu(request_data, now) {
-                actions.push(ResourceAction::SendHmu(hmu));
+            match self.build_hmu(request_data, now) {
+                Ok(hmu) => actions.push(ResourceAction::SendHmu(hmu)),
+                Err(_) => {
+                    actions.extend(self.cancel());
+                    return actions;
+                }
             }
         }
 
@@ -349,9 +353,9 @@ impl ResourceSender {
     }
 
     /// Build hashmap update data.
-    fn build_hmu(&mut self, request_data: &[u8], now: f64) -> Option<Vec<u8>> {
+    fn build_hmu(&mut self, request_data: &[u8], now: f64) -> Result<Vec<u8>, ResourceError> {
         if request_data.len() < 1 + RESOURCE_MAPHASH_LEN {
-            return None;
+            return Err(ResourceError::InvalidState);
         }
 
         let last_map_hash_bytes = &request_data[1..1 + RESOURCE_MAPHASH_LEN];
@@ -382,7 +386,7 @@ impl ResourceSender {
 
         // Verify alignment
         if !part_index.is_multiple_of(RESOURCE_HASHMAP_MAX_LEN) {
-            return None; // sequencing error
+            return Err(ResourceError::InvalidState);
         }
 
         let segment = part_index / RESOURCE_HASHMAP_MAX_LEN;
@@ -397,6 +401,10 @@ impl ResourceSender {
             );
         }
 
+        if hashmap_segment.is_empty() {
+            return Err(ResourceError::InvalidState);
+        }
+
         // Build HMU: resource_hash + msgpack([segment, hashmap])
         let hmu_payload = crate::msgpack::pack(&crate::msgpack::Value::Array(vec![
             crate::msgpack::Value::UInt(segment as u64),
@@ -408,7 +416,7 @@ impl ResourceSender {
         hmu.extend_from_slice(&hmu_payload);
 
         self.last_activity = now;
-        Some(hmu)
+        Ok(hmu)
     }
 
     /// Handle proof from receiver.
@@ -546,6 +554,16 @@ mod tests {
         .unwrap()
     }
 
+    fn varying_data(len: usize) -> Vec<u8> {
+        let mut state = 0x1234_5678u32;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 16) as u8
+            })
+            .collect()
+    }
+
     #[test]
     fn test_new_sender_status() {
         let sender = make_sender(b"test data");
@@ -593,6 +611,103 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ResourceAction::SendPart(_)));
         assert!(has_part);
+    }
+
+    #[test]
+    fn test_request_for_another_resource_is_ignored_without_mutating_sender() {
+        let mut sender = make_sender(b"short");
+        sender.advertise(1000.0);
+        let status = sender.status;
+        let last_activity = sender.last_activity;
+        let retries_left = sender.retries_left;
+        let mut request = Vec::new();
+        request.push(RESOURCE_HASHMAP_IS_NOT_EXHAUSTED);
+        request.extend_from_slice(&[0xEE; 32]);
+        request.extend_from_slice(&sender.part_hashes[0]);
+
+        let actions = sender.handle_request(&request, 2000.0);
+
+        assert!(actions.is_empty());
+        assert_eq!(sender.status, status);
+        assert_eq!(sender.last_activity, last_activity);
+        assert_eq!(sender.retries_left, retries_left);
+        assert_eq!(sender.sent_parts, 0);
+    }
+
+    fn exhausted_request(
+        sender: &ResourceSender,
+        last_map_hash: [u8; RESOURCE_MAPHASH_LEN],
+    ) -> Vec<u8> {
+        let mut request = Vec::new();
+        request.push(RESOURCE_HASHMAP_IS_EXHAUSTED);
+        request.extend_from_slice(&last_map_hash);
+        request.extend_from_slice(&sender.resource_hash);
+        request
+    }
+
+    #[test]
+    fn test_empty_hmu_generation_cancels_sender() {
+        let data =
+            varying_data(RESOURCE_HASHMAP_MAX_LEN * RESOURCE_SDU - RESOURCE_RANDOM_HASH_SIZE);
+        let mut sender = make_sender(&data);
+        assert_eq!(sender.total_parts(), RESOURCE_HASHMAP_MAX_LEN);
+        sender.advertise(1000.0);
+        let request = exhausted_request(&sender, sender.part_hashes[RESOURCE_HASHMAP_MAX_LEN - 1]);
+
+        let actions = sender.handle_request(&request, 1001.0);
+
+        assert_eq!(sender.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelInitiator(_))));
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendHmu(_))));
+    }
+
+    #[test]
+    fn test_misaligned_hmu_request_cancels_sender() {
+        let data = varying_data((RESOURCE_HASHMAP_MAX_LEN + 2) * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        let request = exhausted_request(&sender, sender.part_hashes[5]);
+
+        let actions = sender.handle_request(&request, 1001.0);
+
+        assert_eq!(sender.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelInitiator(_))));
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendHmu(_))));
+    }
+
+    #[test]
+    fn test_valid_nonempty_hmu_is_emitted() {
+        let data = varying_data((RESOURCE_HASHMAP_MAX_LEN + 2) * RESOURCE_SDU);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        let request = exhausted_request(&sender, sender.part_hashes[RESOURCE_HASHMAP_MAX_LEN - 1]);
+
+        let actions = sender.handle_request(&request, 1001.0);
+
+        assert_ne!(sender.status, ResourceStatus::Failed);
+        let hmu = actions
+            .iter()
+            .find_map(|action| match action {
+                ResourceAction::SendHmu(data) => Some(data),
+                _ => None,
+            })
+            .expect("valid exhausted request should produce an HMU");
+        let (value, consumed) = crate::msgpack::unpack(&hmu[32..]).unwrap();
+        assert_eq!(consumed, hmu.len() - 32);
+        let array = value.as_array().unwrap();
+        assert_eq!(array[0].as_uint(), Some(1));
+        assert_eq!(
+            array[1].as_bin().map(<[u8]>::len),
+            Some((sender.total_parts() - RESOURCE_HASHMAP_MAX_LEN) * RESOURCE_MAPHASH_LEN)
+        );
     }
 
     #[test]
