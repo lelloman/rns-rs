@@ -186,6 +186,10 @@ pub struct DiscoveredInterface {
     pub discovery_hash: [u8; 32],
 }
 
+fn insufficient_stamp_diagnostic(value: u32) -> String {
+    format!("Ignored discovered interface with insufficient stamp value {value}")
+}
+
 impl DiscoveredInterface {
     /// Compute the current status based on last_heard timestamp
     pub fn compute_status(&self) -> DiscoveredStatus {
@@ -240,14 +244,14 @@ pub fn parse_interface_announce(
     let infohash = sha256(packed);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
 
-    // Validate stamp
+    // Calculate the value before validation so rejected announcements can be
+    // diagnosed with the actual work they supplied.
+    let stamp_value = stamp_value(&workblock, stamp);
+
     if !stamp_valid(stamp, required_stamp_value, &workblock) {
-        log::debug!("Ignoring discovered interface with invalid stamp");
+        log::debug!("{}", insufficient_stamp_diagnostic(stamp_value));
         return None;
     }
-
-    // Calculate stamp value
-    let stamp_value = stamp_value(&workblock, stamp);
 
     // Unpack the interface info
     let (value, _) = msgpack::unpack(packed).ok()?;
@@ -703,6 +707,14 @@ mod tests {
 
     fn build_discovery_app_data(interface_type: &str, reachable_on: Option<&str>) -> Vec<u8> {
         pack_discovery_entries(discovery_entries(interface_type, reachable_on))
+    }
+
+    #[test]
+    fn insufficient_stamp_diagnostic_includes_calculated_value() {
+        assert_eq!(
+            insufficient_stamp_diagnostic(7),
+            "Ignored discovered interface with insufficient stamp value 7"
+        );
     }
 
     #[test]
