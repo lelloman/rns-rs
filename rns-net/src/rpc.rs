@@ -1262,6 +1262,12 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
+            PickleValue::String("blocked_ips".into()),
+            s.blocked_ips
+                .map(|blocked| PickleValue::Int(blocked as i64))
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("announce_rate_grace".into()),
             PickleValue::Int(s.announce_rate_grace as i64),
         ),
@@ -2704,6 +2710,7 @@ mod tests {
                             pr_burst_activated: 0.0,
                             oa_freq: 0.0,
                             clients: Some(2),
+                            blocked_ips: None,
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
@@ -2910,6 +2917,7 @@ mod tests {
                 pr_burst_activated: 1300.0,
                 oa_freq: 4.0,
                 clients: Some(3),
+                blocked_ips: Some(2),
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
@@ -2989,6 +2997,7 @@ mod tests {
             0.0
         );
         assert_eq!(ifaces[0].get("clients").unwrap().as_int().unwrap(), 3);
+        assert_eq!(ifaces[0].get("blocked_ips").unwrap().as_int().unwrap(), 2);
     }
 
     #[test]

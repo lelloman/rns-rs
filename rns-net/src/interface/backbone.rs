@@ -14,7 +14,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,6 +50,8 @@ pub struct BackboneConfig {
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
+    pub fast_flap: BackboneFastFlapConfig,
+    pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
     pub ingress_control: IngressControlConfig,
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
@@ -59,6 +61,157 @@ pub struct BackboneConfig {
 #[derive(Debug, Clone, Default)]
 pub struct BackboneAbuseConfig {
     pub max_penalty_duration: Option<Duration>,
+}
+
+/// Upstream-compatible automatic blocking for repeatedly short-lived inbound
+/// Backbone connections.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct BackboneFastFlapConfig {
+    pub enabled: bool,
+    pub connection_threshold: Duration,
+    pub grace: u64,
+    pub block_duration: Duration,
+}
+
+impl Default for BackboneFastFlapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            connection_threshold: Duration::from_secs(20),
+            grace: 5,
+            block_duration: Duration::from_secs(12 * 60 * 60),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FastFlapPeerState {
+    first_flap_at: Instant,
+    last_flap_at: Instant,
+    flap_count: u64,
+}
+
+/// Result of recording one short-lived connection.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct FastFlapRecord {
+    pub flap_count: u64,
+    pub blocked: bool,
+    pub newly_blocked: bool,
+    pub blocked_until: Option<Instant>,
+    pub elapsed_since_first: Duration,
+}
+
+/// Process-wide fast-flap history. Policy remains per listener, while the IP
+/// history is shared like upstream's class-level `fast_flapping` table.
+#[derive(Debug, Default)]
+pub struct BackboneFastFlapMonitor {
+    peers: HashMap<IpAddr, FastFlapPeerState>,
+}
+
+impl BackboneFastFlapMonitor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_disconnect(
+        &mut self,
+        peer_ip: IpAddr,
+        connected_for: Duration,
+        config: &BackboneFastFlapConfig,
+        now: Instant,
+    ) -> Option<FastFlapRecord> {
+        if !config.enabled || connected_for >= config.connection_threshold {
+            return None;
+        }
+
+        self.expire_peer(peer_ip, config, now);
+        let state = self.peers.entry(peer_ip).or_insert(FastFlapPeerState {
+            first_flap_at: now,
+            last_flap_at: now,
+            flap_count: 0,
+        });
+        let was_blocked = state.flap_count > config.grace;
+        state.last_flap_at = now;
+        state.flap_count = state.flap_count.saturating_add(1);
+        let blocked = state.flap_count > config.grace;
+
+        Some(FastFlapRecord {
+            flap_count: state.flap_count,
+            blocked,
+            newly_blocked: blocked && !was_blocked,
+            blocked_until: blocked
+                .then(|| now.checked_add(config.block_duration))
+                .flatten(),
+            elapsed_since_first: now.saturating_duration_since(state.first_flap_at),
+        })
+    }
+
+    pub fn is_blocked(
+        &mut self,
+        peer_ip: IpAddr,
+        config: &BackboneFastFlapConfig,
+        now: Instant,
+    ) -> bool {
+        self.blocked_until(peer_ip, config, now).is_some()
+    }
+
+    pub fn blocked_until(
+        &mut self,
+        peer_ip: IpAddr,
+        config: &BackboneFastFlapConfig,
+        now: Instant,
+    ) -> Option<Instant> {
+        if !config.enabled {
+            return None;
+        }
+        self.expire_peer(peer_ip, config, now);
+        self.peers
+            .get(&peer_ip)
+            .filter(|state| state.flap_count > config.grace)
+            .and_then(|state| state.last_flap_at.checked_add(config.block_duration))
+    }
+
+    pub fn blocked_ip_count(&mut self, config: &BackboneFastFlapConfig, now: Instant) -> usize {
+        if !config.enabled {
+            return 0;
+        }
+        self.expire_all(config, now);
+        self.peers
+            .values()
+            .filter(|state| state.flap_count > config.grace)
+            .count()
+    }
+
+    pub fn flap_count(&self, peer_ip: IpAddr) -> u64 {
+        self.peers
+            .get(&peer_ip)
+            .map(|state| state.flap_count)
+            .unwrap_or(0)
+    }
+
+    pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
+        self.peers.remove(&peer_ip).is_some()
+    }
+
+    fn expire_peer(&mut self, peer_ip: IpAddr, config: &BackboneFastFlapConfig, now: Instant) {
+        let expired = self.peers.get(&peer_ip).is_some_and(|state| {
+            now.saturating_duration_since(state.last_flap_at) > config.block_duration
+        });
+        if expired {
+            self.peers.remove(&peer_ip);
+        }
+    }
+
+    fn expire_all(&mut self, config: &BackboneFastFlapConfig, now: Instant) {
+        self.peers.retain(|_, state| {
+            now.saturating_duration_since(state.last_flap_at) <= config.block_duration
+        });
+    }
+}
+
+fn shared_fast_flap_monitor() -> Arc<Mutex<BackboneFastFlapMonitor>> {
+    static MONITOR: OnceLock<Arc<Mutex<BackboneFastFlapMonitor>>> = OnceLock::new();
+    Arc::clone(MONITOR.get_or_init(|| Arc::new(Mutex::new(BackboneFastFlapMonitor::new()))))
 }
 
 /// Live runtime state for a backbone server interface.
@@ -92,7 +245,10 @@ pub struct BackboneRuntimeConfigHandle {
 pub struct BackbonePeerStateHandle {
     pub interface_id: InterfaceId,
     pub interface_name: String,
+    pub mode: u8,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    pub fast_flap: BackboneFastFlapConfig,
+    pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
 }
 
 impl Default for BackboneConfig {
@@ -109,6 +265,8 @@ impl Default for BackboneConfig {
             idle_timeout: None,
             write_stall_timeout: None,
             abuse: BackboneAbuseConfig::default(),
+            fast_flap: BackboneFastFlapConfig::default(),
+            fast_flap_state: shared_fast_flap_monitor(),
             ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
@@ -268,6 +426,8 @@ fn start_with_template(
     let server_interface_id = config.interface_id;
     let runtime = Arc::clone(&config.runtime);
     let peer_state = Arc::clone(&config.peer_state);
+    let fast_flap = config.fast_flap;
+    let fast_flap_state = Arc::clone(&config.fast_flap_state);
     let ingress_control = config.ingress_control;
     let accepted_peer_mode = config.mode;
     let accepted_peer_recursive_prs = config.recursive_prs;
@@ -283,6 +443,8 @@ fn start_with_template(
                 next_id,
                 runtime,
                 peer_state,
+                fast_flap,
+                fast_flap_state,
                 ingress_control,
                 accepted_peer_mode,
                 accepted_peer_recursive_prs,
@@ -348,10 +510,8 @@ impl BackbonePeerMonitor {
                 .or_insert_with(PeerBehaviorState::new);
             entry.connected_count = state.connected_count;
             entry.reject_count = state.reject_count;
-            if state.blacklisted_until.is_some() {
-                entry.blacklisted_until = state.blacklisted_until;
-                entry.blacklist_reason = state.blacklist_reason.clone();
-            }
+            entry.blacklisted_until = state.blacklisted_until;
+            entry.blacklist_reason = state.blacklist_reason.clone();
         }
 
         merged.retain(|peer_ip, state| {
@@ -441,6 +601,8 @@ fn poll_loop(
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
     peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    fast_flap: BackboneFastFlapConfig,
+    fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
     ingress_control: IngressControlConfig,
     accepted_peer_mode: u8,
     accepted_peer_recursive_prs: bool,
@@ -463,10 +625,10 @@ fn poll_loop(
         let runtime_snapshot = runtime.lock().unwrap().clone();
         let max_connections = runtime_snapshot.max_connections;
         let idle_timeout = runtime_snapshot.idle_timeout;
-        cleanup_peer_state(&mut peers);
         {
             let mut monitor = peer_state.lock().unwrap();
             monitor.sync_into(&mut peers);
+            cleanup_peer_state(&mut peers);
             monitor.upsert_snapshot(&peers);
         }
 
@@ -482,12 +644,27 @@ fn poll_loop(
                             let peer_ip = peer_addr.ip();
                             let peer_port = peer_addr.port();
 
-                            if is_ip_blacklisted(&mut peers, peer_ip) {
+                            let fast_flap_blocked_until =
+                                lock_or_recover(&fast_flap_state, "backbone fast-flap state")
+                                    .blocked_until(peer_ip, &fast_flap, Instant::now());
+                            if is_ip_blacklisted(&mut peers, peer_ip)
+                                || fast_flap_blocked_until.is_some()
+                            {
+                                let state =
+                                    peers.entry(peer_ip).or_insert_with(PeerBehaviorState::new);
+                                if let Some(blocked_until) = fast_flap_blocked_until {
+                                    state.blacklisted_until = Some(blocked_until);
+                                    state.blacklist_reason = Some("fast flapping".into());
+                                }
                                 if let Some(state) = peers.get_mut(&peer_ip) {
                                     state.reject_count = state.reject_count.saturating_add(1);
                                 }
                                 peer_state.lock().unwrap().upsert_snapshot(&peers);
-                                log::debug!("[{}] rejecting blacklisted peer {}", name, peer_addr);
+                                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                                    "[{}] rejecting blocked peer {}",
+                                    name,
+                                    peer_addr,
+                                );
                                 drop(stream);
                                 continue;
                             }
@@ -520,7 +697,7 @@ fn poll_loop(
                             next_key += 1;
                             let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
 
-                            log::info!(
+                            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                 "[{}] backbone client connected: {} → id {}",
                                 name,
                                 peer_addr,
@@ -688,6 +865,8 @@ fn poll_loop(
                         server_interface_id,
                         &tx,
                         &peer_state,
+                        &fast_flap,
+                        &fast_flap_state,
                         key,
                         client_id,
                         reason,
@@ -722,6 +901,8 @@ fn poll_loop(
                     server_interface_id,
                     &tx,
                     &peer_state,
+                    &fast_flap,
+                    &fast_flap_state,
                     key,
                     client_id,
                     DisconnectReason::IdleTimeout,
@@ -763,6 +944,8 @@ fn disconnect_client(
     server_interface_id: InterfaceId,
     tx: &EventSender,
     peer_state: &Arc<Mutex<BackbonePeerMonitor>>,
+    fast_flap: &BackboneFastFlapConfig,
+    fast_flap_state: &Arc<Mutex<BackboneFastFlapMonitor>>,
     key: usize,
     client_id: InterfaceId,
     reason: DisconnectReason,
@@ -773,7 +956,11 @@ fn disconnect_client(
 
     match reason {
         DisconnectReason::RemoteClosed => {
-            log::info!("[{}] backbone client {} disconnected", name, client_id.0);
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "[{}] backbone client {} disconnected",
+                name,
+                client_id.0,
+            );
         }
         DisconnectReason::IdleTimeout => {
             log::info!(
@@ -790,6 +977,39 @@ fn disconnect_client(
     let _ = poller.delete(&client.stream);
     // client.stream closes on drop
     let connected_for = client.connected_at.elapsed();
+    if let Some(record) = lock_or_recover(fast_flap_state, "backbone fast-flap state")
+        .record_disconnect(client.peer_ip, connected_for, fast_flap, Instant::now())
+    {
+        let frequency = if record.elapsed_since_first.is_zero() {
+            None
+        } else {
+            Some(record.flap_count as f64 / record.elapsed_since_first.as_secs_f64())
+        };
+        log::debug!(
+            "[{}] peer {} fast flapped after {:.3}s ({} flaps{})",
+            name,
+            client.peer_ip,
+            connected_for.as_secs_f64(),
+            record.flap_count,
+            frequency
+                .map(|value| format!(", {:.3} Hz", value))
+                .unwrap_or_default(),
+        );
+        if record.blocked {
+            let state = peers
+                .entry(client.peer_ip)
+                .or_insert_with(PeerBehaviorState::new);
+            state.blacklisted_until = record.blocked_until;
+            state.blacklist_reason = Some("fast flapping".into());
+            if record.newly_blocked {
+                log::warn!(
+                    "[{}] blocking further connections from {} due to fast flapping",
+                    name,
+                    client.peer_ip,
+                );
+            }
+        }
+    }
     let _ = tx.send(Event::BackbonePeerDisconnected {
         server_interface_id,
         peer_interface_id: client.id,
@@ -1170,6 +1390,67 @@ fn parse_positive_duration_secs(params: &HashMap<String, String>, key: &str) -> 
         .map(Duration::from_secs_f64)
 }
 
+fn parse_nonnegative_duration(
+    params: &HashMap<String, String>,
+    key: &str,
+    multiplier: f64,
+    default: Duration,
+) -> Result<Duration, String> {
+    let Some(raw) = params.get(key) else {
+        return Ok(default);
+    };
+    let value = raw
+        .parse::<f64>()
+        .map_err(|_| format!("invalid {key} '{raw}' (expected a non-negative number)"))?;
+    let seconds = value * multiplier;
+    if !value.is_finite() || value < 0.0 || !seconds.is_finite() || seconds > u64::MAX as f64 {
+        return Err(format!(
+            "invalid {key} '{raw}' (expected a finite non-negative number)"
+        ));
+    }
+    let duration = Duration::from_secs_f64(seconds);
+    if Instant::now().checked_add(duration).is_none() {
+        return Err(format!("invalid {key} '{raw}' (duration is too large)"));
+    }
+    Ok(duration)
+}
+
+fn parse_fast_flap_config(
+    params: &HashMap<String, String>,
+) -> Result<BackboneFastFlapConfig, String> {
+    let defaults = BackboneFastFlapConfig::default();
+    let enabled = match params.get("block_fast_flapping") {
+        Some(raw) => crate::config::parse_bool_pub(raw)
+            .ok_or_else(|| format!("invalid block_fast_flapping '{raw}' (expected yes or no)"))?,
+        None => defaults.enabled,
+    };
+    let connection_threshold = parse_nonnegative_duration(
+        params,
+        "fast_flapping_threshold",
+        1.0,
+        defaults.connection_threshold,
+    )?;
+    let grace = match params.get("fast_flapping_grace") {
+        Some(raw) => raw.parse::<u64>().map_err(|_| {
+            format!("invalid fast_flapping_grace '{raw}' (expected a non-negative integer)")
+        })?,
+        None => defaults.grace,
+    };
+    let block_duration = parse_nonnegative_duration(
+        params,
+        "fast_flapping_block_time",
+        60.0,
+        defaults.block_duration,
+    )?;
+
+    Ok(BackboneFastFlapConfig {
+        enabled,
+        connection_threshold,
+        grace,
+        block_duration,
+    })
+}
+
 impl InterfaceFactory for BackboneInterfaceFactory {
     fn type_name(&self) -> &str {
         "BackboneInterface"
@@ -1234,6 +1515,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             let abuse = BackboneAbuseConfig {
                 max_penalty_duration: parse_positive_duration_secs(params, "max_penalty_duration"),
             };
+            let fast_flap = parse_fast_flap_config(params)?;
             let mut config = BackboneConfig {
                 name: name.to_string(),
                 listen_ip,
@@ -1246,6 +1528,8 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 idle_timeout,
                 write_stall_timeout,
                 abuse,
+                fast_flap,
+                fast_flap_state: shared_fast_flap_monitor(),
                 ingress_control: IngressControlConfig::enabled(),
                 runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                     max_connections: None,
@@ -1350,7 +1634,10 @@ pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<Backbon
         BackboneMode::Server(config) => Some(BackbonePeerStateHandle {
             interface_id: config.interface_id,
             interface_name: config.name.clone(),
+            mode: config.mode,
             peer_state: Arc::clone(&config.peer_state),
+            fast_flap: config.fast_flap,
+            fast_flap_state: Arc::clone(&config.fast_flap_state),
         }),
         BackboneMode::Client(_, _) => None,
     }
@@ -1397,6 +1684,178 @@ mod tests {
             .port()
     }
 
+    fn test_fast_flap_config() -> BackboneFastFlapConfig {
+        BackboneFastFlapConfig {
+            enabled: true,
+            connection_threshold: Duration::from_secs(20),
+            grace: 5,
+            block_duration: Duration::from_secs(12 * 60 * 60),
+        }
+    }
+
+    #[test]
+    fn fast_flap_defaults_match_upstream() {
+        assert_eq!(BackboneFastFlapConfig::default(), test_fast_flap_config());
+    }
+
+    #[test]
+    fn sixth_short_connection_blocks_but_fifth_does_not() {
+        let config = test_fast_flap_config();
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let peer: IpAddr = "192.0.2.10".parse().unwrap();
+        let start = Instant::now();
+
+        for flap in 1..=5 {
+            let record = monitor
+                .record_disconnect(
+                    peer,
+                    Duration::from_secs(19),
+                    &config,
+                    start + Duration::from_secs(flap),
+                )
+                .unwrap();
+            assert_eq!(record.flap_count, flap as u64);
+            assert!(!record.blocked);
+            assert!(!monitor.is_blocked(peer, &config, start + Duration::from_secs(flap)));
+        }
+
+        let sixth = monitor
+            .record_disconnect(
+                peer,
+                Duration::from_secs(1),
+                &config,
+                start + Duration::from_secs(6),
+            )
+            .unwrap();
+        assert_eq!(sixth.flap_count, 6);
+        assert!(sixth.blocked);
+        assert!(sixth.newly_blocked);
+        assert!(monitor.is_blocked(peer, &config, start + Duration::from_secs(6)));
+    }
+
+    #[test]
+    fn every_short_connection_counts_even_after_receiving_data() {
+        let config = test_fast_flap_config();
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let peer: IpAddr = "192.0.2.11".parse().unwrap();
+        let now = Instant::now();
+
+        let record = monitor
+            .record_disconnect(peer, Duration::from_secs(2), &config, now)
+            .unwrap();
+        assert_eq!(record.flap_count, 1);
+        assert_eq!(monitor.flap_count(peer), 1);
+    }
+
+    #[test]
+    fn threshold_boundary_and_long_connections_are_not_counted() {
+        let config = test_fast_flap_config();
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let peer: IpAddr = "192.0.2.12".parse().unwrap();
+        let now = Instant::now();
+
+        assert!(monitor
+            .record_disconnect(peer, Duration::from_secs(20), &config, now)
+            .is_none());
+        assert!(monitor
+            .record_disconnect(peer, Duration::from_secs(21), &config, now)
+            .is_none());
+        assert_eq!(monitor.flap_count(peer), 0);
+    }
+
+    #[test]
+    fn disabled_fast_flapping_neither_tracks_nor_blocks() {
+        let mut config = test_fast_flap_config();
+        config.enabled = false;
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let peer: IpAddr = "192.0.2.13".parse().unwrap();
+        let now = Instant::now();
+
+        for offset in 0..10 {
+            assert!(monitor
+                .record_disconnect(
+                    peer,
+                    Duration::from_secs(1),
+                    &config,
+                    now + Duration::from_secs(offset),
+                )
+                .is_none());
+        }
+        assert_eq!(monitor.flap_count(peer), 0);
+        assert!(!monitor.is_blocked(peer, &config, now + Duration::from_secs(10)));
+        assert_eq!(monitor.blocked_ip_count(&config, now), 0);
+    }
+
+    #[test]
+    fn flap_blocks_expire_strictly_after_configured_duration() {
+        let mut config = test_fast_flap_config();
+        config.grace = 0;
+        config.block_duration = Duration::from_secs(60);
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let peer: IpAddr = "192.0.2.14".parse().unwrap();
+        let now = Instant::now();
+
+        monitor
+            .record_disconnect(peer, Duration::from_secs(1), &config, now)
+            .unwrap();
+        assert!(monitor.is_blocked(peer, &config, now + Duration::from_secs(60)));
+        assert!(!monitor.is_blocked(
+            peer,
+            &config,
+            now + Duration::from_secs(60) + Duration::from_nanos(1)
+        ));
+        assert_eq!(monitor.flap_count(peer), 0);
+    }
+
+    #[test]
+    fn fast_flap_history_is_isolated_by_ip() {
+        let mut config = test_fast_flap_config();
+        config.grace = 1;
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let first: IpAddr = "192.0.2.15".parse().unwrap();
+        let second: IpAddr = "192.0.2.16".parse().unwrap();
+        let now = Instant::now();
+
+        for offset in 0..2 {
+            monitor
+                .record_disconnect(
+                    first,
+                    Duration::from_secs(1),
+                    &config,
+                    now + Duration::from_secs(offset),
+                )
+                .unwrap();
+        }
+        monitor
+            .record_disconnect(second, Duration::from_secs(1), &config, now)
+            .unwrap();
+
+        assert!(monitor.is_blocked(first, &config, now + Duration::from_secs(2)));
+        assert!(!monitor.is_blocked(second, &config, now + Duration::from_secs(2)));
+        assert_eq!(
+            monitor.blocked_ip_count(&config, now + Duration::from_secs(2)),
+            1
+        );
+    }
+
+    #[test]
+    fn peer_monitor_snapshot_clears_expired_blacklist_state() {
+        let peer: IpAddr = "192.0.2.17".parse().unwrap();
+        let mut monitor = BackbonePeerMonitor::new();
+        monitor.blacklist(peer, Duration::from_secs(60), "temporary".into());
+        let mut peers = HashMap::new();
+        monitor.sync_into(&mut peers);
+        let state = peers.get_mut(&peer).unwrap();
+        state.blacklisted_until = None;
+        state.blacklist_reason = None;
+
+        monitor.upsert_snapshot(&peers);
+
+        let entry = monitor.list("test").into_iter().next().unwrap();
+        assert!(entry.blacklisted_remaining_secs.is_none());
+        assert!(entry.blacklist_reason.is_none());
+    }
+
     fn recv_non_peer_event(
         rx: &mpsc::Receiver<Event>,
         timeout: Duration,
@@ -1439,6 +1898,8 @@ mod tests {
             idle_timeout,
             write_stall_timeout,
             abuse,
+            fast_flap: BackboneFastFlapConfig::default(),
+            fast_flap_state: Arc::new(Mutex::new(BackboneFastFlapMonitor::new())),
             ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
@@ -2233,6 +2694,79 @@ mod tests {
     }
 
     #[test]
+    fn backbone_six_fast_flaps_reject_before_allocating_seventh_interface() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(9900));
+        let mut config =
+            make_server_config(port, 99, None, None, None, BackboneAbuseConfig::default());
+        config.fast_flap = test_fast_flap_config();
+        let fast_flap_state = Arc::clone(&config.fast_flap_state);
+        let peer_state = Arc::clone(&config.peer_state);
+
+        start(config, tx, Arc::clone(&next_id)).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        for flap in 0..6 {
+            let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+            let up = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+            assert!(matches!(up, Event::InterfaceUp(_, _, _)));
+
+            // Receiving traffic must not exempt a short-lived connection.
+            if flap == 0 {
+                let payload = vec![0x41; 32];
+                client.write_all(&hdlc::frame(&payload)).unwrap();
+                let frame = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+                assert!(matches!(frame, Event::Frame { data, .. } if data == payload));
+            }
+
+            drop(client);
+            let down = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+            assert!(matches!(down, Event::InterfaceDown(_)));
+        }
+
+        let peer_ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(
+            lock_or_recover(&fast_flap_state, "test fast-flap state").is_blocked(
+                peer_ip,
+                &test_fast_flap_config(),
+                Instant::now(),
+            )
+        );
+        assert_eq!(next_id.load(Ordering::Relaxed), 9906);
+        let entries = lock_or_recover(&peer_state, "test peer state").list("test-backbone");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.peer_ip == peer_ip)
+            .expect("fast-flapping peer state");
+        assert_eq!(entry.blacklist_reason.as_deref(), Some("fast flapping"));
+        assert!(entry.blacklisted_remaining_secs.is_some());
+
+        let _rejected = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            next_id.load(Ordering::Relaxed),
+            9906,
+            "rejection must happen before dynamic interface allocation"
+        );
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, Event::InterfaceUp(_, _, _)),
+                "blocked peer must not register a dynamic interface"
+            );
+        }
+        let entries = lock_or_recover(&peer_state, "test peer state").list("test-backbone");
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.peer_ip == peer_ip)
+                .unwrap()
+                .reject_count,
+            1
+        );
+    }
+
+    #[test]
     fn backbone_parse_config_reads_abuse_settings() {
         let factory = BackboneInterfaceFactory;
         let mut params = HashMap::new();
@@ -2260,6 +2794,80 @@ mod tests {
             }
             BackboneMode::Client(_, _) => panic!("expected server config"),
         }
+    }
+
+    #[test]
+    fn backbone_parse_config_reads_fast_flapping_settings() {
+        let factory = BackboneInterfaceFactory;
+        let mut params = HashMap::new();
+        params.insert("listen_ip".into(), "127.0.0.1".into());
+        params.insert("listen_port".into(), "4242".into());
+        params.insert("block_fast_flapping".into(), "no".into());
+        params.insert("fast_flapping_threshold".into(), "2.5".into());
+        params.insert("fast_flapping_grace".into(), "9".into());
+        params.insert("fast_flapping_block_time".into(), "1.5".into());
+
+        let config = factory
+            .parse_config("test-backbone", InterfaceId(93), &params)
+            .unwrap();
+        let mode = *config.into_any().downcast::<BackboneMode>().unwrap();
+        let BackboneMode::Server(config) = mode else {
+            panic!("expected server config");
+        };
+
+        assert!(!config.fast_flap.enabled);
+        assert_eq!(
+            config.fast_flap.connection_threshold,
+            Duration::from_secs_f64(2.5)
+        );
+        assert_eq!(config.fast_flap.grace, 9);
+        assert_eq!(config.fast_flap.block_duration, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn backbone_parse_config_rejects_invalid_fast_flapping_settings() {
+        let factory = BackboneInterfaceFactory;
+        for (key, value) in [
+            ("block_fast_flapping", "perhaps"),
+            ("fast_flapping_threshold", "-1"),
+            ("fast_flapping_threshold", "NaN"),
+            ("fast_flapping_grace", "-1"),
+            ("fast_flapping_block_time", "infinite"),
+        ] {
+            let mut params = HashMap::new();
+            params.insert("listen_port".into(), "4242".into());
+            params.insert(key.into(), value.into());
+
+            let err = match factory.parse_config("test-backbone", InterfaceId(92), &params) {
+                Ok(_) => panic!("{key}={value} should be rejected"),
+                Err(err) => err,
+            };
+            assert!(err.contains(key), "unexpected error: {err}");
+        }
+    }
+
+    #[test]
+    fn parsed_backbone_listeners_share_fast_flap_history() {
+        let factory = BackboneInterfaceFactory;
+        let mut params = HashMap::new();
+        params.insert("listen_port".into(), "4242".into());
+
+        let first = factory
+            .parse_config("first", InterfaceId(90), &params)
+            .unwrap();
+        let second = factory
+            .parse_config("second", InterfaceId(91), &params)
+            .unwrap();
+        let BackboneMode::Server(first) = *first.into_any().downcast::<BackboneMode>().unwrap()
+        else {
+            panic!("expected server config");
+        };
+        let BackboneMode::Server(second) = *second.into_any().downcast::<BackboneMode>().unwrap()
+        else {
+            panic!("expected server config");
+        };
+
+        assert!(Arc::ptr_eq(&first.fast_flap_state, &second.fast_flap_state));
     }
 
     #[test]

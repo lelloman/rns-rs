@@ -37,10 +37,57 @@ impl Driver {
                 pr_burst_active: self.engine.pr_burst_active(&interface_id),
                 pr_burst_activated: self.engine.pr_burst_activated(&interface_id),
                 clients: None,
+                blocked_ips: None,
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,
                 announce_rate_penalty: entry.info.announce_rate_penalty,
                 interface_type: entry.interface_type.clone(),
+            });
+        }
+        #[cfg(feature = "iface-backbone")]
+        for handle in self.backbone_peer_state.values() {
+            let clients = recover_mutex_guard(&handle.peer_state, "backbone peer state")
+                .list(&handle.interface_name)
+                .into_iter()
+                .map(|entry| entry.connected_count as u64)
+                .sum();
+            let blocked_ips =
+                recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
+                    .blocked_ip_count(&handle.fast_flap, std::time::Instant::now())
+                    as u64;
+            interfaces.push(SingleInterfaceStat {
+                id: handle.interface_id.0,
+                name: handle.interface_name.clone(),
+                status: true,
+                mode: handle.mode,
+                rxb: 0,
+                txb: 0,
+                rx_packets: 0,
+                tx_packets: 0,
+                cpu_load: None,
+                mem_load: None,
+                switch_id: None,
+                endpoint_id: None,
+                via_switch_id: None,
+                peers: None,
+                bitrate: Some(1_000_000_000),
+                ifac_size: None,
+                started: self.started,
+                ia_freq: 0.0,
+                oa_freq: 0.0,
+                ip_freq: 0.0,
+                op_freq: 0.0,
+                op_samples: 0,
+                burst_active: false,
+                burst_activated: 0.0,
+                pr_burst_active: false,
+                pr_burst_activated: 0.0,
+                clients: Some(clients),
+                blocked_ips: Some(blocked_ips),
+                announce_rate_target: None,
+                announce_rate_grace: 0,
+                announce_rate_penalty: 0.0,
+                interface_type: "BackboneInterface".into(),
             });
         }
         interfaces.sort_by(|a, b| a.name.cmp(&b.name));
