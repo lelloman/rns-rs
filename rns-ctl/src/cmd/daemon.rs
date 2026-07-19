@@ -22,7 +22,11 @@ impl Callbacks for DaemonCallbacks {
     }
 
     fn on_path_updated(&mut self, dest_hash: rns_net::DestHash, hops: u8) {
-        log::debug!("Path updated for {} (hops: {})", hex(&dest_hash.0), hops);
+        log::trace!(target: rns_net::logging::PATHING_LOG_TARGET,
+            "Path updated for {} (hops: {})",
+            hex(&dest_hash.0),
+            hops,
+        );
     }
 
     fn on_local_delivery(

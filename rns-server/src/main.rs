@@ -114,23 +114,41 @@ fn run_start(args: Args) {
 }
 
 fn init_logging(args: &Args) {
-    let log_level = if args.quiet > 0 {
-        match args.quiet {
-            1 => log::LevelFilter::Warn,
-            _ => log::LevelFilter::Error,
+    let configured = configured_logging(args.config_path());
+    let log_level =
+        rns_net::logging::adjust_log_level(configured.loglevel, args.verbosity, args.quiet);
+    let filter = rns_net::logging::numeric_log_filter(log_level);
+
+    let mut builder = env_logger::Builder::new();
+    builder
+        .filter_level(filter.default)
+        .filter_module(rns_net::logging::PATHING_LOG_TARGET, filter.pathing);
+    if configured.logtimestamps {
+        builder.format_timestamp_secs();
+    } else {
+        builder.format_timestamp(None);
+    }
+    builder.init();
+}
+
+fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSection {
+    let config_dir = rns_net::storage::resolve_config_dir(config_path.map(std::path::Path::new));
+    let config_file = config_dir.join("config");
+    if config_file.exists() {
+        match rns_net::config::parse_file(&config_file) {
+            Ok(config) => config.logging,
+            Err(err) => {
+                eprintln!(
+                    "Could not parse logging config {}: {}",
+                    config_file.display(),
+                    err
+                );
+                rns_net::config::LoggingSection::default()
+            }
         }
     } else {
-        match args.verbosity {
-            0 => log::LevelFilter::Info,
-            1 => log::LevelFilter::Debug,
-            _ => log::LevelFilter::Trace,
-        }
-    };
-
-    env_logger::Builder::new()
-        .filter_level(log_level)
-        .format_timestamp_secs()
-        .init();
+        rns_net::config::LoggingSection::default()
+    }
 }
 
 fn start_control_http(
@@ -226,6 +244,29 @@ mod tests {
             },
             rnsd_rpc_addr: "127.0.0.1:37429".parse().unwrap(),
         }
+    }
+
+    #[test]
+    fn configured_logging_reads_reticulum_logging_section() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config"),
+            "[logging]\nloglevel = 7\nlogtimestamps = no\n",
+        )
+        .unwrap();
+
+        let configured = configured_logging(dir.path().to_str());
+        assert_eq!(configured.loglevel, rns_net::logging::LOG_PATHING);
+        assert!(!configured.logtimestamps);
+    }
+
+    #[test]
+    fn configured_logging_defaults_when_config_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let configured = configured_logging(dir.path().to_str());
+
+        assert_eq!(configured.loglevel, rns_net::logging::LOG_INFO);
+        assert!(configured.logtimestamps);
     }
 
     #[test]

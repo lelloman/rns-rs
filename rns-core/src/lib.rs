@@ -10,6 +10,7 @@ pub mod display;
 pub mod hash;
 pub mod holepunch;
 pub mod link;
+pub mod logging;
 pub mod msgpack;
 pub mod packet;
 pub mod receipt;

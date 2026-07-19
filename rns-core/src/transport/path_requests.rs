@@ -10,15 +10,32 @@ impl TransportEngine {
         let Some(ctx) = self.parse_path_request(data, interface_id, now) else {
             return Vec::new();
         };
+        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+            "Path request for {:02x?} on interface {}",
+            &ctx.destination_hash[..4],
+            interface_id.0,
+        );
         if self.local_destinations.contains_key(&ctx.destination_hash) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Ignoring path request for {:02x?}: destination is local",
+                &ctx.destination_hash[..4],
+            );
             return Vec::new();
         }
         if self.config.transport_enabled && self.handle_known_path_request(&ctx) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Answering path request for {:02x?}: path is known",
+                &ctx.destination_hash[..4],
+            );
             return Vec::new();
         }
         if self.config.transport_enabled {
             return self.handle_discovery_path_request(&ctx);
         }
+        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+            "Ignoring path request for {:02x?}: transport is disabled",
+            &ctx.destination_hash[..4],
+        );
         Vec::new()
     }
 
@@ -134,6 +151,11 @@ impl TransportEngine {
 
         let should_discover = recursive_prs || constants::DISCOVER_PATHS_FOR.contains(&mode);
         if !should_discover {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Not discovering path to {:02x?}: recursive path discovery is disabled on interface {}",
+                &ctx.destination_hash[..4],
+                ctx.interface_id.0,
+            );
             return Vec::new();
         }
 
@@ -144,6 +166,11 @@ impl TransportEngine {
             started,
             ctx.now,
         ) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Not discovering path to {:02x?}: ingress path-request limiting is active on interface {}",
+                &ctx.destination_hash[..4],
+                ctx.interface_id.0,
+            );
             return Vec::new();
         }
 
@@ -203,12 +230,23 @@ impl TransportEngine {
         }
 
         if !actions.is_empty() {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Discovering unknown path to {:02x?} on behalf of interface {} via {} interfaces",
+                &ctx.destination_hash[..4],
+                ctx.interface_id.0,
+                actions.len(),
+            );
             self.discovery_path_requests.insert(
                 ctx.destination_hash,
                 DiscoveryPathRequest {
                     timestamp: ctx.now,
                     requesting_interface: ctx.interface_id,
                 },
+            );
+        } else {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Not discovering path to {:02x?}: no eligible egress interface",
+                &ctx.destination_hash[..4],
             );
         }
 

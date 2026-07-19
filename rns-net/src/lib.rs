@@ -11,6 +11,7 @@ pub mod common;
 pub mod event;
 pub mod hdlc;
 pub mod kiss;
+pub mod logging;
 pub mod rnode_kiss;
 pub use common::time;
 pub mod driver;
