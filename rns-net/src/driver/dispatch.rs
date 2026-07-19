@@ -279,7 +279,7 @@ impl Driver {
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
         if is_announce {
-            log::debug!(
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Announce:dispatching to iface {} (len={}, online={})",
                 interface.0,
                 raw.len(),
@@ -716,9 +716,16 @@ impl Driver {
                 TransportAction::PathUpdated {
                     destination_hash,
                     hops,
+                    next_hop,
                     interface,
-                    ..
                 } => {
+                    log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                        "Destination {:02x?} is now {} hops away via {:02x?} on interface {}",
+                        &destination_hash[..4],
+                        hops,
+                        &next_hop[..4],
+                        interface.0,
+                    );
                     #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Announce {
@@ -907,7 +914,7 @@ impl Driver {
                     tunnel_id,
                     interface,
                 } => {
-                    log::info!(
+                    log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                         "Tunnel established: {:02x?} on interface {}",
                         &tunnel_id[..4],
                         interface.0
@@ -1092,14 +1099,14 @@ impl Driver {
                                 if packet.flags.header_type == rns_core::constants::HEADER_1 {
                                     if let Some(next_hop) = route_hint.transport_id {
                                         raw = inject_transport_header(&packet.raw, &next_hop);
-                                        log::debug!(
+                                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                             "Link SendPacket rewrite: link={:02x?} iface={} header=1->2 tid={:02x?}",
                                             &link_id[..4],
                                             route_hint.interface.0,
                                             &next_hop[..4]
                                         );
                                     } else {
-                                        log::debug!(
+                                        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                             "Link SendPacket route: link={:02x?} iface={} header=1 (no transport_id)",
                                             &link_id[..4],
                                             route_hint.interface.0
@@ -1107,7 +1114,7 @@ impl Driver {
                                     }
                                 }
                             } else {
-                                log::debug!(
+                                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                                     "Link SendPacket no route hint: link={:02x?}",
                                     &link_id[..4]
                                 );

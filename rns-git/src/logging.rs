@@ -10,9 +10,11 @@ pub fn init_file_logger(path: &Path, log_level: u8) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let filter = rns_net::logging::numeric_log_filter(log_level);
     let mut builder = env_logger::Builder::new();
     builder
-        .filter_level(level_filter(log_level))
+        .filter_level(filter.default)
+        .filter_module(rns_net::logging::PATHING_LOG_TARGET, filter.pathing)
         .format_timestamp_secs()
         .target(env_logger::Target::Pipe(Box::new(file)));
     builder
@@ -21,13 +23,11 @@ pub fn init_file_logger(path: &Path, log_level: u8) -> Result<()> {
 }
 
 pub fn level_filter(log_level: u8) -> log::LevelFilter {
-    match log_level {
-        0 | 1 => log::LevelFilter::Error,
-        2 => log::LevelFilter::Warn,
-        3 | 4 => log::LevelFilter::Info,
-        5 | 6 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
-    }
+    rns_net::logging::numeric_log_filter(log_level).default
+}
+
+pub fn pathing_level_filter(log_level: u8) -> log::LevelFilter {
+    rns_net::logging::numeric_log_filter(log_level).pathing
 }
 
 #[cfg(test)]
@@ -40,6 +40,15 @@ mod tests {
         assert_eq!(level_filter(2), log::LevelFilter::Warn);
         assert_eq!(level_filter(4), log::LevelFilter::Info);
         assert_eq!(level_filter(6), log::LevelFilter::Debug);
-        assert_eq!(level_filter(7), log::LevelFilter::Trace);
+        assert_eq!(level_filter(7), log::LevelFilter::Debug);
+        assert_eq!(level_filter(8), log::LevelFilter::Trace);
+        assert_eq!(level_filter(u8::MAX), log::LevelFilter::Trace);
+    }
+
+    #[test]
+    fn pathing_filter_is_distinct_at_level_seven() {
+        assert_eq!(pathing_level_filter(6), log::LevelFilter::Debug);
+        assert_eq!(pathing_level_filter(7), log::LevelFilter::Trace);
+        assert_eq!(pathing_level_filter(8), log::LevelFilter::Trace);
     }
 }

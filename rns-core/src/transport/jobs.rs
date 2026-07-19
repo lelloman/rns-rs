@@ -54,6 +54,12 @@ pub fn process_pending_announces(
         };
 
         if let Some((raw, attached_interface, hops)) = retransmit {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Rebroadcasting announce for {:02x?} with hop count {}{}",
+                &dest_hash[..4],
+                hops,
+                if attached_interface.is_some() { " as path response" } else { "" },
+            );
             if let Some(attached) = attached_interface {
                 actions.push(TransportAction::SendOnInterface {
                     interface: attached,
@@ -158,6 +164,12 @@ pub fn cull_path_table(
         culled += before - ps.len();
     }
     path_table.retain(|_, ps| !ps.is_empty());
+    if culled > 0 {
+        log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+            "Removed {} expired or unavailable path table entries",
+            culled,
+        );
+    }
     culled
 }
 

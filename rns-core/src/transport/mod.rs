@@ -382,6 +382,20 @@ impl TransportEngine {
         now: f64,
     ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
+        let reattaching = self.tunnel_table.get(&tunnel_id).is_some();
+        if reattaching {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Tunnel endpoint {:02x?} reappeared on interface {}; restoring paths",
+                &tunnel_id[..4],
+                interface.0,
+            );
+        } else {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Tunnel endpoint {:02x?} established on interface {}",
+                &tunnel_id[..4],
+                interface.0,
+            );
+        }
 
         // Set tunnel_id on the interface
         if let Some(info) = self.interfaces.get_mut(&interface) {
@@ -424,6 +438,18 @@ impl TransportEngine {
                     announce_raw: None,
                 };
                 self.upsert_path_destination(*dest_hash, entry, now);
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Restored tunnel path to {:02x?}: hops={} via={:02x?} interface={}",
+                    &dest_hash[..4],
+                    tunnel_path.hops,
+                    &tunnel_path.received_from[..4],
+                    interface.0,
+                );
+            } else {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Did not restore tunnel path to {:02x?}: existing path is preferred or tunnel path expired",
+                    &dest_hash[..4],
+                );
             }
         }
 
@@ -1110,7 +1136,7 @@ impl TransportEngine {
             .local_destinations
             .contains_key(&ctx.packet.destination_hash)
         {
-            log::debug!(
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Announce:skipping local destination {:02x}{:02x}{:02x}{:02x}..",
                 ctx.packet.destination_hash[0],
                 ctx.packet.destination_hash[1],
@@ -1270,7 +1296,7 @@ impl TransportEngine {
         );
 
         if mp_decision == MultiPathDecision::Reject {
-            log::debug!(
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Announce:path decision REJECT for dest={:02x}{:02x}{:02x}{:02x}..",
                 ctx.packet.destination_hash[0],
                 ctx.packet.destination_hash[1],

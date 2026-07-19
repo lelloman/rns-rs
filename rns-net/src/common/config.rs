@@ -1125,6 +1125,12 @@ fn build_logging_section(kvs: &HashMap<String, String>) -> Result<LoggingSection
             key: "loglevel".into(),
             value: v.clone(),
         })?;
+        if section.loglevel > crate::logging::LOG_EXTREME {
+            return Err(ConfigError::InvalidValue {
+                key: "loglevel".into(),
+                value: v.clone(),
+            });
+        }
     }
     if let Some(v) = kvs.get("logtimestamps") {
         section.logtimestamps = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -1573,6 +1579,25 @@ destination_timeout_secs = 777
         let config = parse(input).unwrap();
         assert_eq!(config.logging.loglevel, 6);
         assert!(!config.logging.logtimestamps);
+    }
+
+    #[test]
+    fn parse_logging_accepts_pathing_and_extreme_levels() {
+        for level in [7, 8] {
+            let config = parse(&format!("[logging]\nloglevel = {level}\n")).unwrap();
+            assert_eq!(config.logging.loglevel, level);
+        }
+    }
+
+    #[test]
+    fn parse_logging_rejects_levels_above_extreme() {
+        for value in ["9", "255", "256", "-1"] {
+            let err = parse(&format!("[logging]\nloglevel = {value}\n")).unwrap_err();
+            assert!(matches!(
+                err,
+                ConfigError::InvalidValue { key, .. } if key == "loglevel"
+            ));
+        }
     }
 
     #[test]

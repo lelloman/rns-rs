@@ -30,7 +30,11 @@ impl Callbacks for DaemonCallbacks {
     }
 
     fn on_path_updated(&mut self, dest_hash: rns_net::DestHash, hops: u8) {
-        log::debug!("Path updated for {} (hops: {})", hex(&dest_hash.0), hops);
+        log::trace!(target: rns_net::logging::PATHING_LOG_TARGET,
+            "Path updated for {} (hops: {})",
+            hex(&dest_hash.0),
+            hops,
+        );
     }
 
     fn on_local_delivery(
@@ -73,21 +77,9 @@ pub fn main_entry_from(args: Args) {
 
     let service_mode = args.has("s");
     let config_path = args.config_path().map(|s| s.to_string());
-    let log_timestamps = configured_log_timestamps(config_path.as_deref());
-
-    let log_level = match args.verbosity {
-        0 => log::LevelFilter::Info,
-        1 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
-    };
-    let log_level = if args.quiet > 0 {
-        match args.quiet {
-            1 => log::LevelFilter::Warn,
-            _ => log::LevelFilter::Error,
-        }
-    } else {
-        log_level
-    };
+    let logging = configured_logging(config_path.as_deref());
+    let log_level = effective_log_level(logging.loglevel, args.verbosity, args.quiet, service_mode);
+    let log_filter = rns_net::logging::numeric_log_filter(log_level);
 
     if service_mode {
         let config_dir =
@@ -101,9 +93,10 @@ pub fn main_entry_from(args: Args) {
             Ok(file) => {
                 let mut builder = env_logger::Builder::new();
                 builder
-                    .filter_level(log_level)
+                    .filter_level(log_filter.default)
+                    .filter_module(rns_net::logging::PATHING_LOG_TARGET, log_filter.pathing)
                     .target(env_logger::Target::Pipe(Box::new(file)));
-                apply_log_timestamp_format(&mut builder, log_timestamps);
+                apply_log_timestamp_format(&mut builder, logging.logtimestamps);
                 builder.init();
             }
             Err(e) => {
@@ -113,8 +106,10 @@ pub fn main_entry_from(args: Args) {
         }
     } else {
         let mut builder = env_logger::Builder::new();
-        builder.filter_level(log_level);
-        apply_log_timestamp_format(&mut builder, log_timestamps);
+        builder
+            .filter_level(log_filter.default)
+            .filter_module(rns_net::logging::PATHING_LOG_TARGET, log_filter.pathing);
+        apply_log_timestamp_format(&mut builder, logging.logtimestamps);
         builder.init();
     }
 
@@ -166,23 +161,31 @@ pub fn main_entry_from(args: Args) {
     log::info!("rnsd stopped");
 }
 
-fn configured_log_timestamps(config_path: Option<&str>) -> bool {
+fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSection {
     let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
     let config_file = config_dir.join("config");
     if !config_file.exists() {
-        return true;
+        return rns_net::config::LoggingSection::default();
     }
 
     match rns_net::config::parse_file(&config_file) {
-        Ok(config) => config.logging.logtimestamps,
+        Ok(config) => config.logging,
         Err(err) => {
             eprintln!(
                 "Could not parse logging config {}: {}",
                 config_file.display(),
                 err
             );
-            true
+            rns_net::config::LoggingSection::default()
         }
+    }
+}
+
+fn effective_log_level(configured: u8, verbosity: u8, quietness: u8, service_mode: bool) -> u8 {
+    if service_mode {
+        configured.min(rns_net::logging::LOG_EXTREME)
+    } else {
+        rns_net::logging::adjust_log_level(configured, verbosity, quietness)
     }
 }
 
@@ -260,6 +263,16 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   panic_on_interface_error = false
 
 [logging]
+  # Valid log levels are 0 through 8:
+  #   0: Critical information only
+  #   1: Errors
+  #   2: Warnings
+  #   3: Notices
+  #   4: Information (default)
+  #   5: Verbose logging
+  #   6: Debug logging
+  #   7: Path logging
+  #   8: Extreme logging
   loglevel = 4
 
   # Disable timestamp inclusion when an external logging tool
@@ -347,21 +360,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn configured_log_timestamps_defaults_to_enabled() {
+    fn configured_logging_defaults_to_info_with_timestamps() {
         let dir = tempfile::tempdir().unwrap();
 
-        assert!(configured_log_timestamps(Some(
-            dir.path().to_str().unwrap()
-        )));
+        let logging = configured_logging(Some(dir.path().to_str().unwrap()));
+        assert_eq!(logging.loglevel, 4);
+        assert!(logging.logtimestamps);
     }
 
     #[test]
-    fn configured_log_timestamps_reads_logging_section() {
+    fn configured_logging_reads_level_and_timestamps_together() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("config"), "[logging]\nlogtimestamps = no\n").unwrap();
+        fs::write(
+            dir.path().join("config"),
+            "[logging]\nloglevel = 7\nlogtimestamps = no\n",
+        )
+        .unwrap();
 
-        assert!(!configured_log_timestamps(Some(
-            dir.path().to_str().unwrap()
-        )));
+        let logging = configured_logging(Some(dir.path().to_str().unwrap()));
+        assert_eq!(logging.loglevel, 7);
+        assert!(!logging.logtimestamps);
+    }
+
+    #[test]
+    fn service_mode_uses_configured_level_without_cli_adjustment() {
+        assert_eq!(effective_log_level(7, 3, 0, true), 7);
+        assert_eq!(effective_log_level(7, 0, 3, true), 7);
+    }
+
+    #[test]
+    fn foreground_mode_adjusts_configured_level() {
+        assert_eq!(effective_log_level(4, 3, 0, false), 7);
+        assert_eq!(effective_log_level(4, 0, 3, false), 1);
+        assert_eq!(effective_log_level(4, 2, 1, false), 5);
+    }
+
+    #[test]
+    fn example_config_documents_all_supported_logging_levels() {
+        assert!(EXAMPLE_CONFIG.contains("Valid log levels are 0 through 8"));
+        assert!(EXAMPLE_CONFIG.contains("7: Path logging"));
+        assert!(EXAMPLE_CONFIG.contains("8: Extreme logging"));
     }
 }

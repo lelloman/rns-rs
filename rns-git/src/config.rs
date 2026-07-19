@@ -244,7 +244,7 @@ fn split_list(value: &str) -> Vec<String> {
 fn parse_log_level(value: &str, fallback: u8) -> u8 {
     value
         .parse::<u8>()
-        .map(|level| level.min(7))
+        .map(|level| level.min(rns_net::logging::LOG_EXTREME))
         .unwrap_or(fallback)
 }
 
@@ -304,7 +304,7 @@ mod tests {
         .unwrap();
         let (cfg, created) = ClientConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
         assert!(!created);
-        assert_eq!(cfg.log_level, 7);
+        assert_eq!(cfg.log_level, 8);
     }
 
     #[test]
