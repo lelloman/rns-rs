@@ -17,6 +17,9 @@ use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
+/// Upstream `TCPInterface.HW_MTU` inherited by spawned server clients.
+const HW_MTU: usize = 262_144;
+
 /// Configuration for a TCP server interface.
 #[derive(Debug, Clone)]
 pub struct TcpServerConfig {
@@ -105,6 +108,11 @@ fn start_with_template(
     log::info!("[{}] TCP server listening on {}", config.name, addr);
 
     let name = config.name.clone();
+    let ifac_size = dynamic_template
+        .as_ref()
+        .and_then(|template| template.ifac.as_ref())
+        .map(|ifac| ifac.size)
+        .unwrap_or(0);
     let runtime = Arc::clone(&config.runtime);
     let ingress_control = config.ingress_control;
     let active_connections = Arc::new(AtomicUsize::new(0));
@@ -123,6 +131,7 @@ fn start_with_template(
                 active_connections,
                 listener_control,
                 dynamic_template,
+                ifac_size,
             );
         })?;
 
@@ -140,6 +149,7 @@ fn listener_loop(
     active_connections: Arc<AtomicUsize>,
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    ifac_size: usize,
 ) {
     loop {
         if control.should_stop() {
@@ -253,7 +263,14 @@ fn listener_loop(
         thread::Builder::new()
             .name(format!("tcp-server-reader-{}", client_id.0))
             .spawn(move || {
-                client_reader_loop(stream, client_id, client_name, client_tx, client_active);
+                client_reader_loop(
+                    stream,
+                    client_id,
+                    client_name,
+                    client_tx,
+                    client_active,
+                    ifac_size,
+                );
             })
             .ok();
     }
@@ -266,8 +283,9 @@ fn client_reader_loop(
     name: String,
     tx: EventSender,
     active_connections: Arc<AtomicUsize>,
+    ifac_size: usize,
 ) {
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -279,7 +297,16 @@ fn client_reader_loop(
                 return;
             }
             Ok(n) => {
-                for frame in decoder.feed(&buf[..n]) {
+                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
+                for frame_len in decoded.invalid_frame_lengths {
+                    log::debug!(
+                        "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
+                        name,
+                        frame_len,
+                        id.0,
+                    );
+                }
+                for frame in decoded.frames {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
@@ -449,6 +476,34 @@ mod tests {
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn spawned_client_drops_exact_header_minimum_and_recovers() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(1100));
+        start(make_server_config(port, 1, None), tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceUp(InterfaceId(1100), _, _)
+        ));
+        client
+            .write_all(&hdlc::frame(&vec![
+                0x11;
+                rns_core::constants::HEADER_MINSIZE
+            ]))
+            .unwrap();
+        let valid = vec![0x22; rns_core::constants::HEADER_MINSIZE + 1];
+        client.write_all(&hdlc::frame(&valid)).unwrap();
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::Frame { interface_id: InterfaceId(1100), data, .. } if data == valid
+        ));
     }
 
     #[test]

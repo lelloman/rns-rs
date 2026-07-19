@@ -15,6 +15,9 @@ use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{lock_or_recover, Writer};
 
+/// Upstream `TCPInterface.HW_MTU`.
+const HW_MTU: usize = 262_144;
+
 /// Configuration for a TCP client interface.
 #[derive(Debug, Clone)]
 pub struct TcpClientConfig {
@@ -327,6 +330,14 @@ fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, l
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+    start_with_ifac(config, tx, 0)
+}
+
+fn start_with_ifac(
+    config: TcpClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect(&config)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
@@ -341,7 +352,7 @@ pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Wri
     thread::Builder::new()
         .name(format!("tcp-reader-{}", id.0))
         .spawn(move || {
-            reader_loop(reader_stream, reader_config, reader_tx);
+            reader_loop(reader_stream, reader_config, reader_tx, ifac_size);
         })?;
 
     Ok(Box::new(TcpWriter {
@@ -351,9 +362,9 @@ pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Wri
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
 /// On disconnect, attempts reconnection.
-fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) {
+fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender, ifac_size: usize) {
     let id = config.interface_id;
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -365,7 +376,7 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
                 match reconnect(&config, &tx) {
                     Some(new_stream) => {
                         stream = new_stream;
-                        decoder = hdlc::Decoder::new();
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
                         continue;
                     }
                     None => {
@@ -375,7 +386,15 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
                 }
             }
             Ok(n) => {
-                for frame in decoder.feed(&buf[..n]) {
+                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
+                for frame_len in decoded.invalid_frame_lengths {
+                    log::debug!(
+                        "[{}] invalid HDLC frame of {} bytes received, dropping frame",
+                        config.name,
+                        frame_len,
+                    );
+                }
+                for frame in decoded.frames {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
@@ -396,7 +415,7 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
                 match reconnect(&config, &tx) {
                     Some(new_stream) => {
                         stream = new_stream;
-                        decoder = hdlc::Decoder::new();
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
                         continue;
                     }
                     None => {
@@ -533,7 +552,8 @@ impl InterfaceFactory for TcpClientFactory {
             started: crate::time::now(),
         };
 
-        let writer = start(tcp_config, ctx.tx)?;
+        let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
+        let writer = start_with_ifac(tcp_config, ctx.tx, ifac_size)?;
 
         Ok(StartResult::Simple {
             id,
@@ -638,6 +658,60 @@ mod tests {
             }
             other => panic!("expected Frame, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn reader_enforces_upstream_frame_bounds_and_ifac_allowance() {
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+        let ifac_size = 8;
+
+        let config = make_config(port);
+        let _writer = start_with_ifac(config, tx, ifac_size).unwrap();
+        let (mut server_stream, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::InterfaceUp(_, _, _)
+        ));
+
+        // The exact Reticulum header minimum is invalid; the next valid frame
+        // must still be recovered from the same stream.
+        server_stream
+            .write_all(&hdlc::frame(&vec![
+                0x11;
+                rns_core::constants::HEADER_MINSIZE
+            ]))
+            .unwrap();
+        let minimum_valid = vec![0x22; rns_core::constants::HEADER_MINSIZE + 1];
+        server_stream
+            .write_all(&hdlc::frame(&minimum_valid))
+            .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::Frame { data, .. } if data == minimum_valid
+        ));
+
+        // IFAC bytes are part of the on-wire frame allowance.
+        let maximum_valid = vec![0x33; HW_MTU + ifac_size];
+        server_stream
+            .write_all(&hdlc::frame(&maximum_valid))
+            .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Frame { data, .. } if data == maximum_valid
+        ));
+
+        // An oversized frame is discarded and cannot poison the next frame.
+        server_stream
+            .write_all(&hdlc::frame(&vec![0x44; HW_MTU + ifac_size + 1]))
+            .unwrap();
+        let recovery = vec![0x55; rns_core::constants::HEADER_MINSIZE + 1];
+        server_stream.write_all(&hdlc::frame(&recovery)).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Frame { data, .. } if data == recovery
+        ));
     }
 
     #[test]
