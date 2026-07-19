@@ -59,6 +59,8 @@ struct ManagedLink {
     incoming_resources: Vec<ResourceReceiver>,
     /// Active outgoing resource transfers.
     outgoing_resources: Vec<ResourceSender>,
+    /// Request IDs awaiting a packet or resource response.
+    pending_requests: HashMap<[u8; 16], Option<f64>>,
     /// Logical incoming split transfers, keyed by original resource hash.
     incoming_splits: HashMap<[u8; 32], IncomingSplitTransfer>,
     /// Logical outgoing split transfers, keyed by original resource hash.
@@ -82,6 +84,7 @@ struct IncomingSplitTransfer {
     current_total_parts: usize,
     data: Vec<u8>,
     metadata: Option<Vec<u8>>,
+    is_request: bool,
     is_response: bool,
 }
 
@@ -489,6 +492,7 @@ impl LinkManager {
             dest_sig_pub_bytes: Some(*dest_sig_pub_bytes),
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
+            pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
             resource_strategy: ResourceStrategy::default(),
@@ -618,6 +622,7 @@ impl LinkManager {
             dest_sig_pub_bytes: None,
             incoming_resources: Vec::new(),
             outgoing_resources: Vec::new(),
+            pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
             resource_strategy: ld.resource_strategy,
@@ -1599,6 +1604,9 @@ impl LinkManager {
                     return Vec::new();
                 }
             };
+            // Resource request response timing starts once the remote proves
+            // receipt of the final request-resource segment.
+            link.pending_requests.insert(request_id, None);
             let adv_actions = Self::start_resource_senders(link, senders, now);
             let _ = link;
             return self.process_resource_actions(link_id, adv_actions, rng);
@@ -1619,7 +1627,7 @@ impl LinkManager {
 
         let mut actions = Vec::new();
         let max_mtu = link.engine.mtu() as usize;
-        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
+        if let Ok((raw, packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
             flags,
             0,
             link_id,
@@ -1628,6 +1636,10 @@ impl LinkManager {
             &encrypted,
             max_mtu,
         ) {
+            let mut request_id = [0u8; 16];
+            request_id.copy_from_slice(&packet_hash[..16]);
+            let deadline = Self::request_response_deadline(link, time::now());
+            link.pending_requests.insert(request_id, Some(deadline));
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1786,7 +1798,7 @@ impl LinkManager {
 
     /// Handle a response on a link.
     fn handle_response(
-        &self,
+        &mut self,
         link_id: &LinkId,
         plaintext: &[u8],
         metadata: Option<Vec<u8>>,
@@ -1826,6 +1838,13 @@ impl LinkManager {
             }
         };
 
+        let Some(link) = self.links.get_mut(link_id) else {
+            return Vec::new();
+        };
+        if link.pending_requests.remove(&request_id).is_none() {
+            return Vec::new();
+        }
+
         vec![LinkManagerAction::ResponseReceived {
             link_id: *link_id,
             request_id,
@@ -1842,6 +1861,11 @@ impl LinkManager {
         let mut out = [0u8; 16];
         out.copy_from_slice(bytes);
         Some(out)
+    }
+
+    fn request_response_deadline(link: &ManagedLink, now: f64) -> f64 {
+        now + link.engine.rtt().unwrap_or(1.0) * constants::LINK_TRAFFIC_TIMEOUT_FACTOR
+            + constants::RESOURCE_RESPONSE_MAX_GRACE_TIME * 1.125
     }
 
     fn build_resource_senders(
@@ -1994,6 +2018,8 @@ impl LinkManager {
         adv_plaintext: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        let has_request_handlers =
+            !self.request_handlers.is_empty() || !self.management_paths.is_empty();
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -2014,7 +2040,8 @@ impl LinkManager {
             Ok(r) => r,
             Err(e) => {
                 log::debug!("Resource ADV rejected: {}", e);
-                return Vec::new();
+                let _ = link;
+                return self.teardown_link(link_id);
             }
         };
 
@@ -2022,6 +2049,7 @@ impl LinkManager {
         let resource_hash = receiver.resource_hash.clone();
         let transfer_size = receiver.transfer_size;
         let has_metadata = receiver.has_metadata;
+        let is_request = receiver.flags.is_request;
         let is_response = receiver.flags.is_response;
         let is_split = receiver.flags.split;
         let segment_index = receiver.segment_index;
@@ -2062,9 +2090,12 @@ impl LinkManager {
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
-        if is_response {
-            // Response resources bypass the application acceptance strategy —
-            // they are answers to pending requests, not independent resources.
+        if is_request {
+            // A request resource is only useful when this destination has a
+            // request handler, and request IDs are truncated hashes.
+            if !has_request_handlers || Self::response_request_id(&receiver.request_id).is_none() {
+                return Vec::new();
+            }
             if is_split {
                 link.incoming_splits.insert(
                     original_hash,
@@ -2076,6 +2107,39 @@ impl LinkManager {
                         current_total_parts: receiver.total_parts,
                         data: Vec::new(),
                         metadata: None,
+                        is_request: true,
+                        is_response: false,
+                    },
+                );
+            }
+            link.incoming_resources.push(receiver);
+            let idx = link.incoming_resources.len() - 1;
+            let resource_actions = link.incoming_resources[idx].accept(now);
+            let _ = link;
+            return self.process_resource_actions(link_id, resource_actions, rng);
+        }
+
+        if is_response {
+            // Response resources bypass the application acceptance strategy —
+            // they are answers to pending requests, not independent resources.
+            let Some(request_id) = Self::response_request_id(&receiver.request_id) else {
+                return Vec::new();
+            };
+            if !link.pending_requests.contains_key(&request_id) {
+                return Vec::new();
+            }
+            if is_split {
+                link.incoming_splits.insert(
+                    original_hash,
+                    IncomingSplitTransfer {
+                        total_segments,
+                        completed_segments: 0,
+                        current_segment_index: segment_index,
+                        current_received_parts: 0,
+                        current_total_parts: receiver.total_parts,
+                        data: Vec::new(),
+                        metadata: None,
+                        is_request: false,
                         is_response,
                     },
                 );
@@ -2108,6 +2172,7 @@ impl LinkManager {
                             current_total_parts: receiver.total_parts,
                             data: Vec::new(),
                             metadata: None,
+                            is_request: false,
                             is_response,
                         },
                     );
@@ -2168,6 +2233,7 @@ impl LinkManager {
                         current_total_parts: link.incoming_resources[idx].total_parts,
                         data: Vec::new(),
                         metadata: None,
+                        is_request: link.incoming_resources[idx].flags.is_request,
                         is_response: link.incoming_resources[idx].flags.is_response,
                     });
             }
@@ -2277,7 +2343,9 @@ impl LinkManager {
         let resource_sdu = Self::resource_sdu_for_link(link);
         let mut all_actions = Vec::new();
         let mut assemble_idx = None;
+        let mut assembled_is_request = false;
         let mut assembled_is_response = false;
+        let mut request_request_id = None;
         let mut response_request_id = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
@@ -2330,14 +2398,21 @@ impl LinkManager {
             let split_segment_index = link.incoming_resources[idx].segment_index;
             let split_segment_total = link.incoming_resources[idx].total_segments;
             let split_segment_parts = link.incoming_resources[idx].total_parts;
+            let split_is_request = link.incoming_resources[idx].flags.is_request;
             let split_is_response = link.incoming_resources[idx].flags.is_response;
-            response_request_id =
+            let resource_request_id =
                 Self::response_request_id(&link.incoming_resources[idx].request_id);
+            if split_is_request {
+                request_request_id = resource_request_id;
+            } else if split_is_response {
+                response_request_id = resource_request_id;
+            }
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 link.engine.decrypt(ciphertext).map_err(|_| ())
             };
             let mut assemble_actions =
                 link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
+            assembled_is_request = split_is_request;
             assembled_is_response = split_is_response;
 
             if let Some(key) = split_key {
@@ -2369,6 +2444,7 @@ impl LinkManager {
 
                     if split_segment_index == split_segment_total {
                         if let Some(split) = link.incoming_splits.remove(&key) {
+                            assembled_is_request = split.is_request;
                             assembled_is_response = split.is_response;
                             converted_actions.push(ResourceAction::DataReceived {
                                 data: split.data,
@@ -2387,7 +2463,23 @@ impl LinkManager {
         let _ = link;
         let mut out = self.process_resource_actions(link_id, all_actions, rng);
 
-        if assembled_is_response || response_request_id.is_some() {
+        if assembled_is_request {
+            let mut converted = Vec::new();
+            for action in out {
+                match action {
+                    LinkManagerAction::ResourceReceived { data, .. } => {
+                        if let Some(request_id) = request_request_id {
+                            converted.extend(self.handle_request(link_id, &data, request_id, rng));
+                        }
+                    }
+                    LinkManagerAction::ResourceAcceptQuery { .. } => {
+                        // Request resources bypass application resource acceptance.
+                    }
+                    other => converted.push(other),
+                }
+            }
+            out = converted;
+        } else if assembled_is_response {
             let mut converted = Vec::new();
             for action in out {
                 match action {
@@ -2426,7 +2518,9 @@ impl LinkManager {
         let now = time::now();
         let mut result_actions = Vec::new();
         let mut completed_sender = None;
+        let mut completed_request_id = None;
         let mut failed_split = None;
+        let mut failed_request_id = None;
         let proof_hash = plaintext.get(..32);
         for sender in &mut link.outgoing_resources {
             if proof_hash.is_some_and(|hash| hash != sender.resource_hash.as_slice()) {
@@ -2444,6 +2538,9 @@ impl LinkManager {
                         sender.total_segments,
                         sender.total_parts(),
                     ));
+                    if sender.flags.is_request && sender.segment_index == sender.total_segments {
+                        completed_request_id = Self::response_request_id(&sender.request_id);
+                    }
                 }
                 if sender.flags.split
                     && resource_actions
@@ -2451,6 +2548,13 @@ impl LinkManager {
                         .any(|action| matches!(action, ResourceAction::Failed(_)))
                 {
                     failed_split = Some(sender.original_hash);
+                }
+                if resource_actions
+                    .iter()
+                    .any(|action| matches!(action, ResourceAction::Failed(_)))
+                    && sender.flags.is_request
+                {
+                    failed_request_id = Self::response_request_id(&sender.request_id);
                 }
                 result_actions.extend(resource_actions);
                 break;
@@ -2505,6 +2609,16 @@ impl LinkManager {
             }
         }
 
+        if let Some(request_id) = completed_request_id {
+            let deadline = Self::request_response_deadline(link, now);
+            if let Some(entry) = link.pending_requests.get_mut(&request_id) {
+                *entry = Some(deadline);
+            }
+        }
+        if let Some(request_id) = failed_request_id {
+            link.pending_requests.remove(&request_id);
+        }
+
         // Clean up completed/failed senders
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
@@ -2549,6 +2663,12 @@ impl LinkManager {
             None => return Vec::new(),
         };
 
+        let request_ids: Vec<[u8; 16]> = link
+            .outgoing_resources
+            .iter()
+            .filter(|sender| sender.flags.is_request)
+            .filter_map(|sender| Self::response_request_id(&sender.request_id))
+            .collect();
         let mut actions = Vec::new();
         for sender in &mut link.outgoing_resources {
             let ra = sender.handle_reject();
@@ -2564,7 +2684,33 @@ impl LinkManager {
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
         link.outgoing_splits.clear();
+        for request_id in request_ids {
+            link.pending_requests.remove(&request_id);
+        }
         actions
+    }
+
+    fn resource_link_is_active(&self, link_id: &LinkId) -> bool {
+        self.links
+            .get(link_id)
+            .is_some_and(|link| link.engine.state() == LinkState::Active)
+    }
+
+    fn abort_resources_on_inactive_link(&mut self, link_id: &LinkId) {
+        let Some(link) = self.links.get_mut(link_id) else {
+            return;
+        };
+        for sender in &mut link.outgoing_resources {
+            let _ = sender.cancel();
+        }
+        for receiver in &mut link.incoming_resources {
+            let _ = receiver.cancel();
+        }
+        link.outgoing_resources.clear();
+        link.incoming_resources.clear();
+        link.outgoing_splits.clear();
+        link.incoming_splits.clear();
+        link.pending_requests.clear();
     }
 
     /// Convert ResourceActions to LinkManagerActions.
@@ -2576,6 +2722,19 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         let mut result = Vec::new();
         for action in actions {
+            let requires_active_link = matches!(
+                &action,
+                ResourceAction::SendAdvertisement(_)
+                    | ResourceAction::SendPart(_)
+                    | ResourceAction::SendRequest(_)
+                    | ResourceAction::SendHmu(_)
+                    | ResourceAction::SendProof(_)
+            );
+            if requires_active_link && !self.resource_link_is_active(link_id) {
+                self.abort_resources_on_inactive_link(link_id);
+                continue;
+            }
+
             match action {
                 ResourceAction::SendAdvertisement(data) => {
                     // Link-encrypt and send as CONTEXT_RESOURCE_ADV
@@ -2936,6 +3095,21 @@ impl LinkManager {
                 };
                 receiver_actions.extend(receiver.tick(now, &decrypt_fn, &Bzip2Compressor));
             }
+
+            let failed_request_ids: Vec<[u8; 16]> = link
+                .outgoing_resources
+                .iter()
+                .filter(|sender| {
+                    sender.flags.is_request
+                        && sender.status >= rns_core::resource::ResourceStatus::Failed
+                })
+                .filter_map(|sender| Self::response_request_id(&sender.request_id))
+                .collect();
+            for request_id in failed_request_ids {
+                link.pending_requests.remove(&request_id);
+            }
+            link.pending_requests
+                .retain(|_, deadline| deadline.is_none_or(|expires_at| now <= expires_at));
 
             // Clean up completed/failed resources
             link.outgoing_resources
@@ -4096,6 +4270,12 @@ mod tests {
         assert!(adv.is_request());
         assert!(!adv.is_response());
         assert_eq!(adv.request_id.as_ref().map(Vec::len), Some(16));
+        let request_id = LinkManager::response_request_id(&adv.request_id).unwrap();
+        assert_eq!(
+            init_mgr.links[&link_id].pending_requests.get(&request_id),
+            Some(&None),
+            "resource request timeout must wait for delivery proof"
+        );
 
         let has_request_packet = actions.iter().any(|action| match action {
             LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
@@ -4104,6 +4284,245 @@ mod tests {
             _ => false,
         });
         assert!(!has_request_packet);
+    }
+
+    #[test]
+    fn unanswered_packet_request_expires_from_pending_set() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let actions = init_mgr.send_request(&link_id, "/no-response", b"\xc0", &mut rng);
+        let raw = extract_any_send_packet(&actions);
+        let request_id = RawPacket::unpack(&raw).unwrap().get_truncated_hash();
+        assert!(init_mgr.links[&link_id]
+            .pending_requests
+            .get(&request_id)
+            .is_some_and(Option::is_some));
+
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .pending_requests
+            .insert(request_id, Some(time::now() - 1.0));
+        init_mgr.tick(&mut rng);
+
+        assert!(!init_mgr.links[&link_id]
+            .pending_requests
+            .contains_key(&request_id));
+    }
+
+    #[test]
+    fn invalid_resource_advertisement_tears_down_link_once() {
+        let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+
+        let actions = resp_mgr.handle_resource_adv(&link_id, &[0xc1], &mut rng);
+
+        assert_eq!(resp_mgr.link_state(&link_id), Some(LinkState::Closed));
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(action, LinkManagerAction::LinkClosed { .. }))
+                .count(),
+            1
+        );
+        assert!(resp_mgr
+            .handle_resource_adv(&link_id, &[0xc1], &mut rng)
+            .is_empty());
+    }
+
+    #[test]
+    fn oversized_resource_advertisement_tears_down_link() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let adv_actions = init_mgr.send_resource_with_auto_compress(
+            &link_id,
+            &deterministic_bytes(1024),
+            None,
+            false,
+            &mut rng,
+        );
+        let mut adv = first_resource_advertisement(&init_mgr, &link_id, &adv_actions);
+        adv.transfer_size = (constants::RESOURCE_MAX_EFFICIENT_SIZE * 3 + 1) as u64;
+
+        let actions = resp_mgr.handle_resource_adv(&link_id, &adv.pack(0), &mut rng);
+
+        assert_eq!(resp_mgr.link_state(&link_id), Some(LinkState::Closed));
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::LinkClosed { .. })));
+    }
+
+    #[test]
+    fn request_resource_without_any_handler_is_ignored() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let data = deterministic_bytes(4096);
+
+        let adv_actions = init_mgr.send_request(&link_id, "/missing", &data, &mut rng);
+        let adv_raw = extract_any_send_packet(&adv_actions);
+        let adv_pkt = RawPacket::unpack(&adv_raw).unwrap();
+        assert_eq!(adv_pkt.context, constants::CONTEXT_RESOURCE_ADV);
+
+        let actions = resp_mgr.handle_local_delivery(
+            adv_pkt.destination_hash,
+            &adv_raw,
+            adv_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(
+            actions.is_empty(),
+            "unhandled request resource must be ignored"
+        );
+        assert!(resp_mgr.links[&link_id].incoming_resources.is_empty());
+    }
+
+    #[test]
+    fn unsolicited_response_resource_is_ignored() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let unsolicited_id = [0xEF; 16];
+
+        let adv_actions = resp_mgr.send_response_resource(
+            &link_id,
+            &unsolicited_id,
+            &deterministic_bytes(4096),
+            None,
+            false,
+            &mut rng,
+        );
+        let adv_raw = extract_any_send_packet(&adv_actions);
+        let adv_pkt = RawPacket::unpack(&adv_raw).unwrap();
+        let actions = init_mgr.handle_local_delivery(
+            adv_pkt.destination_hash,
+            &adv_raw,
+            adv_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(
+            actions.is_empty(),
+            "unsolicited response resource must be ignored"
+        );
+        assert!(init_mgr.links[&link_id].incoming_resources.is_empty());
+    }
+
+    #[test]
+    fn resource_packets_are_suppressed_after_link_closes() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        init_mgr.send_resource_with_auto_compress(
+            &link_id,
+            &deterministic_bytes(4096),
+            None,
+            false,
+            &mut rng,
+        );
+        init_mgr
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .handle_teardown();
+
+        for action in [
+            ResourceAction::SendAdvertisement(vec![1]),
+            ResourceAction::SendPart(vec![2]),
+            ResourceAction::SendRequest(vec![3]),
+            ResourceAction::SendHmu(vec![4]),
+            ResourceAction::SendProof(vec![5; 64]),
+        ] {
+            let emitted = init_mgr.process_resource_actions(&link_id, vec![action], &mut rng);
+            assert!(
+                !emitted
+                    .iter()
+                    .any(|item| matches!(item, LinkManagerAction::SendPacket { .. })),
+                "closed link emitted a resource packet"
+            );
+        }
+        assert!(init_mgr.links[&link_id]
+            .outgoing_resources
+            .iter()
+            .all(|sender| sender.status == rns_core::resource::ResourceStatus::Failed));
+    }
+
+    #[test]
+    fn large_request_resource_reaches_registered_handler_and_returns_response() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let request_value =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(deterministic_bytes(4096)));
+        let observed = Arc::new(Mutex::new(None));
+        resp_mgr.register_request_handler("/large-request", None, {
+            let observed = Arc::clone(&observed);
+            move |_link_id, _path, data, _remote| {
+                *observed.lock().unwrap() = Some(data.to_vec());
+                Some(rns_core::msgpack::pack(&rns_core::msgpack::Value::Bool(
+                    true,
+                )))
+            }
+        });
+
+        let initial = init_mgr.send_request(&link_id, "/large-request", &request_value, &mut rng);
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            initial.into_iter().map(|action| ('i', action)).collect();
+        let mut response = None;
+
+        for _ in 0..300 {
+            if pending.is_empty() || response.is_some() {
+                break;
+            }
+            let mut next = Vec::new();
+            for (source, action) in pending.drain(..) {
+                let LinkManagerAction::SendPacket { raw, .. } = action else {
+                    continue;
+                };
+                let packet = RawPacket::unpack(&raw).unwrap();
+                let actions = if source == 'i' {
+                    resp_mgr.handle_local_delivery(
+                        packet.destination_hash,
+                        &raw,
+                        packet.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                } else {
+                    init_mgr.handle_local_delivery(
+                        packet.destination_hash,
+                        &raw,
+                        packet.packet_hash,
+                        rns_core::transport::types::InterfaceId(0),
+                        &mut rng,
+                    )
+                };
+                for action in &actions {
+                    if let LinkManagerAction::ResponseReceived { data, .. } = action {
+                        response = Some(data.clone());
+                    }
+                    assert!(!matches!(
+                        action,
+                        LinkManagerAction::ResourceAcceptQuery { .. }
+                    ));
+                }
+                let next_source = if source == 'i' { 'r' } else { 'i' };
+                next.extend(actions.into_iter().map(|action| (next_source, action)));
+            }
+            pending = next;
+        }
+
+        assert_eq!(*observed.lock().unwrap(), Some(request_value));
+        assert_eq!(
+            response,
+            Some(rns_core::msgpack::pack(&rns_core::msgpack::Value::Bool(
+                true
+            )))
+        );
+        assert!(init_mgr.links[&link_id].pending_requests.is_empty());
     }
 
     fn first_resource_advertisement(

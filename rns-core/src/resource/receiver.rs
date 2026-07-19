@@ -347,53 +347,70 @@ impl ResourceReceiver {
     ///
     /// HMU format: [resource_hash: 32 bytes][msgpack([segment, hashmap])]
     pub fn handle_hashmap_update(&mut self, hmu_data: &[u8], now: f64) -> Vec<ResourceAction> {
-        if self.status == ResourceStatus::Failed {
+        if self.status == ResourceStatus::Failed || !self.waiting_for_hmu {
             return vec![];
         }
 
-        self.last_activity = now;
-        self.retries_left = self.max_retries;
-
-        if hmu_data.len() <= 32 {
+        if hmu_data.len() < 32 || hmu_data[..32] != self.resource_hash {
             return vec![];
+        }
+        if hmu_data.len() == 32 {
+            return self.cancel();
         }
 
         let payload = &hmu_data[32..];
-        let (value, _) = match crate::msgpack::unpack(payload) {
+        let value = match crate::msgpack::unpack_exact(payload) {
             Ok(v) => v,
-            Err(_) => return vec![],
+            Err(_) => return self.cancel(),
         };
 
         let arr = match value.as_array() {
-            Some(a) if a.len() >= 2 => a,
-            _ => return vec![],
+            Some(a) if a.len() == 2 => a,
+            _ => return self.cancel(),
         };
 
         let segment = match arr[0].as_uint() {
-            Some(s) => s as usize,
-            None => return vec![],
+            Some(s) => match usize::try_from(s) {
+                Ok(segment) => segment,
+                Err(_) => return self.cancel(),
+            },
+            None => return self.cancel(),
         };
 
         let hashmap_bytes = match arr[1].as_bin() {
             Some(b) => b,
-            None => return vec![],
+            None => return self.cancel(),
         };
 
-        // Populate hashmap slots
+        if hashmap_bytes.is_empty() || !hashmap_bytes.len().is_multiple_of(RESOURCE_MAPHASH_LEN) {
+            return self.cancel();
+        }
+
         let seg_len = RESOURCE_HASHMAP_MAX_LEN;
+        let segment_start = match segment.checked_mul(seg_len) {
+            Some(start) if start < self.total_parts => start,
+            _ => return self.cancel(),
+        };
         let num_hashes = hashmap_bytes.len() / RESOURCE_MAPHASH_LEN;
+        if num_hashes > seg_len || segment_start.saturating_add(num_hashes) > self.total_parts {
+            return self.cancel();
+        }
+
+        self.last_activity = now;
+        self.retries_left = self.max_retries;
+        self.status = ResourceStatus::Transferring;
+
+        // Populate hashmap slots
         for i in 0..num_hashes {
-            let idx = i + segment * seg_len;
-            if idx < self.total_parts {
-                let start = i * RESOURCE_MAPHASH_LEN;
-                let end = start + RESOURCE_MAPHASH_LEN;
-                if self.hashmap[idx].is_none() {
-                    self.hashmap_height += 1;
-                }
-                let mut h = [0u8; RESOURCE_MAPHASH_LEN];
-                h.copy_from_slice(&hashmap_bytes[start..end]);
-                self.hashmap[idx] = Some(h);
+            let idx = segment_start + i;
+            let start = i * RESOURCE_MAPHASH_LEN;
+            let end = start + RESOURCE_MAPHASH_LEN;
+            if self.hashmap[idx].is_none() {
+                self.hashmap_height += 1;
             }
+            let mut h = [0u8; RESOURCE_MAPHASH_LEN];
+            h.copy_from_slice(&hashmap_bytes[start..end]);
+            self.hashmap[idx] = Some(h);
         }
 
         self.waiting_for_hmu = false;
@@ -819,7 +836,7 @@ mod tests {
             Err(err) => err,
         };
 
-        assert_eq!(err, ResourceError::TooLarge);
+        assert_eq!(err, ResourceError::InvalidAdvertisement);
     }
 
     #[test]
@@ -853,6 +870,158 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
         assert!(receiver.cancel().is_empty());
+    }
+
+    fn hmu(resource_hash: &[u8], segment: u64, hashmap: Vec<u8>) -> Vec<u8> {
+        let payload = crate::msgpack::pack(&crate::msgpack::Value::Array(vec![
+            crate::msgpack::Value::UInt(segment),
+            crate::msgpack::Value::Bin(hashmap),
+        ]));
+        let mut data = resource_hash.to_vec();
+        data.extend_from_slice(&payload);
+        data
+    }
+
+    #[test]
+    fn test_unsolicited_hmu_is_ignored_without_refreshing_timeout_state() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = false;
+        receiver.last_activity = 1000.0;
+        receiver.retries_left = 1;
+        let update = hmu(&receiver.resource_hash, 0, vec![0x99; RESOURCE_MAPHASH_LEN]);
+
+        let actions = receiver.handle_hashmap_update(&update, 2000.0);
+
+        assert!(actions.is_empty());
+        assert_eq!(receiver.status, ResourceStatus::Transferring);
+        assert!(!receiver.waiting_for_hmu);
+        assert_eq!(receiver.last_activity, 1000.0);
+        assert_eq!(receiver.retries_left, 1);
+    }
+
+    #[test]
+    fn test_empty_hmu_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let update = hmu(&receiver.resource_hash, 1, Vec::new());
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendRequest(_))));
+    }
+
+    #[test]
+    fn test_malformed_hmu_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let mut malformed = receiver.resource_hash.clone();
+        malformed.extend_from_slice(&[0xc1]);
+
+        let actions = receiver.handle_hashmap_update(&malformed, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn test_hmu_without_payload_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let update = receiver.resource_hash.clone();
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn test_hmu_for_another_resource_is_ignored() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        receiver.last_activity = 1000.0;
+        let update = hmu(&[0xEE; 32], 0, vec![0x99; RESOURCE_MAPHASH_LEN]);
+
+        let actions = receiver.handle_hashmap_update(&update, 2000.0);
+
+        assert!(actions.is_empty());
+        assert!(receiver.waiting_for_hmu);
+        assert_eq!(receiver.last_activity, 1000.0);
+    }
+
+    #[test]
+    fn test_misaligned_hmu_hashmap_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let update = hmu(
+            &receiver.resource_hash,
+            0,
+            vec![0x99; RESOURCE_MAPHASH_LEN + 1],
+        );
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn test_out_of_range_hmu_segment_cancels_waiting_receiver() {
+        let (_, mut receiver) = make_sender_receiver();
+        receiver.status = ResourceStatus::Transferring;
+        receiver.waiting_for_hmu = true;
+        let update = hmu(
+            &receiver.resource_hash,
+            u64::MAX,
+            vec![0x99; RESOURCE_MAPHASH_LEN],
+        );
+
+        let actions = receiver.handle_hashmap_update(&update, 1001.0);
+
+        assert_eq!(receiver.status, ResourceStatus::Failed);
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, ResourceAction::SendCancelReceiver(_))));
+    }
+
+    #[test]
+    fn test_tick_is_inert_once_receiver_starts_assembling() {
+        for status in [
+            ResourceStatus::Assembling,
+            ResourceStatus::Complete,
+            ResourceStatus::Failed,
+            ResourceStatus::Corrupt,
+            ResourceStatus::Rejected,
+        ] {
+            let (_, mut receiver) = make_sender_receiver();
+            receiver.status = status;
+            receiver.last_activity = 1.0;
+            receiver.retries_left = 0;
+
+            let actions = receiver.tick(10_000.0, &identity_decrypt, &NoopCompressor);
+
+            assert!(actions.is_empty(), "tick emitted an action for {status:?}");
+            assert_eq!(receiver.status, status);
+            assert_eq!(receiver.last_activity, 1.0);
+        }
     }
 
     #[test]

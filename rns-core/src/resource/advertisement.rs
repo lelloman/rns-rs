@@ -131,6 +131,10 @@ impl ResourceAdvertisement {
             )
         };
 
+        if t > (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3) as u64 {
+            return Err(ResourceError::InvalidAdvertisement);
+        }
+
         Ok(ResourceAdvertisement {
             transfer_size: t,
             data_size: d,
@@ -390,5 +394,41 @@ mod tests {
         assert!(ResourceAdvertisement::unpack(&[]).is_err());
         assert!(ResourceAdvertisement::unpack(&[0xc0]).is_err()); // nil
         assert!(ResourceAdvertisement::unpack(&[0x01, 0x02]).is_err()); // not a map
+    }
+
+    #[test]
+    fn test_unpack_accepts_exact_upstream_transfer_limit() {
+        let flags = AdvFlags {
+            encrypted: true,
+            compressed: false,
+            split: false,
+            is_request: false,
+            is_response: false,
+            has_metadata: false,
+        };
+        let mut adv = make_adv(flags);
+        adv.transfer_size = (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3) as u64;
+
+        let unpacked = ResourceAdvertisement::unpack(&adv.pack(0)).unwrap();
+        assert_eq!(unpacked.transfer_size, adv.transfer_size);
+    }
+
+    #[test]
+    fn test_unpack_rejects_transfer_above_upstream_limit() {
+        let flags = AdvFlags {
+            encrypted: true,
+            compressed: false,
+            split: false,
+            is_request: false,
+            is_response: false,
+            has_metadata: false,
+        };
+        let mut adv = make_adv(flags);
+        adv.transfer_size = (crate::constants::RESOURCE_MAX_EFFICIENT_SIZE * 3 + 1) as u64;
+
+        assert_eq!(
+            ResourceAdvertisement::unpack(&adv.pack(0)).unwrap_err(),
+            ResourceError::InvalidAdvertisement
+        );
     }
 }
