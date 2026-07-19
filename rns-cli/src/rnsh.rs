@@ -1279,6 +1279,9 @@ impl ListenerSession {
     }
 
     fn remote_identified(&mut self, transport: &dyn RnshTransport, identity_hash: IdentityHash) {
+        if self.state == ListenerState::Closed {
+            return;
+        }
         if !self.config.allow_all && !self.config.allowed.contains(&identity_hash.0) {
             let _ = send_message(
                 transport,
@@ -1305,7 +1308,7 @@ impl ListenerSession {
         msgtype: u16,
         payload: Vec<u8>,
     ) {
-        if self.state == ListenerState::WaitIdent {
+        if matches!(self.state, ListenerState::WaitIdent | ListenerState::Closed) {
             return;
         }
         let message = match RnshMessage::unpack(msgtype, &payload) {
@@ -1369,6 +1372,12 @@ impl ListenerSession {
         event_tx: &mpsc::Sender<RnshEvent>,
         command: ExecuteCommand,
     ) -> Result<(), RnshError> {
+        let authenticated = self.config.allow_all || self.remote_identity.is_some();
+        if self.state != ListenerState::WaitCommand || !authenticated {
+            return Err(RnshError::Protocol(
+                "session is not authenticated and ready for a command".into(),
+            ));
+        }
         if !self.config.allow_remote_command && !command.cmdline.is_empty() {
             let _ = send_message(
                 transport,
@@ -2083,6 +2092,75 @@ mod tests {
             &messages[0].1,
             RnshMessage::Error { msg, fatal: true } if msg == "Identity is not allowed."
         ));
+    }
+
+    #[test]
+    fn denied_identity_cannot_pipeline_handshake_or_execute_after_termination() {
+        let mut allowed = HashSet::new();
+        allowed.insert([0x11; 16]);
+        let config = ListenerConfig {
+            allow_all: false,
+            allowed,
+            default_command: vec!["/bin/false".into()],
+            ..test_config()
+        };
+        let fake = FakeTransport::default();
+        let (tx, rx) = mpsc::channel();
+        let mut session = ListenerSession::new(TEST_LINK, config);
+
+        session.remote_identified(&fake, IdentityHash([0x22; 16]));
+        let version = version_message();
+        session.handle_message(&fake, &tx, version.msgtype(), version.pack());
+        let execute = exec_msg(Vec::new());
+        session.handle_message(&fake, &tx, execute.msgtype(), execute.pack());
+        session.handle_message(&fake, &tx, MSG_VERSION_INFO, vec![0xc1]);
+        session.remote_identified(&fake, IdentityHash([0x11; 16]));
+
+        assert_eq!(session.state, ListenerState::Closed);
+        assert!(session.remote_identity.is_none());
+        assert!(
+            session.process.is_none(),
+            "denied session spawned a process"
+        );
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+        let messages = fake.sent_messages();
+        assert_eq!(messages.len(), 1, "closed session emitted another response");
+        assert!(matches!(
+            &messages[0].1,
+            RnshMessage::Error { msg, fatal: true } if msg == "Identity is not allowed."
+        ));
+    }
+
+    #[test]
+    fn command_start_requires_authenticated_wait_command_state() {
+        let mut allowed = HashSet::new();
+        allowed.insert([0x11; 16]);
+        let config = ListenerConfig {
+            allow_all: false,
+            allowed,
+            default_command: vec!["/bin/false".into()],
+            ..test_config()
+        };
+        let fake = FakeTransport::default();
+        let (tx, rx) = mpsc::channel();
+        let mut session = ListenerSession::new(TEST_LINK, config);
+
+        let err = session
+            .start_command(
+                &fake,
+                &tx,
+                match exec_msg(Vec::new()) {
+                    RnshMessage::ExecuteCommand(command) => command,
+                    _ => unreachable!(),
+                },
+            )
+            .expect_err("unauthenticated session must not start a command");
+
+        assert!(err.to_string().contains("not authenticated"));
+        assert_eq!(session.state, ListenerState::WaitIdent);
+        assert!(session.process.is_none());
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 
     #[test]
