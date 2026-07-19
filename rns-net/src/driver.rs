@@ -35,8 +35,8 @@ use crate::interface::auto::AutoRuntime;
 use crate::interface::auto::AutoRuntimeConfigHandle;
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    start_client, BackboneClientConfig, BackboneClientRuntime, BackboneClientRuntimeConfigHandle,
-    BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
+    start_client_with_ifac, BackboneClientConfig, BackboneClientRuntime,
+    BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
 };
 #[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};

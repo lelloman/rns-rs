@@ -16,7 +16,7 @@ use rns_core::link::{LinkAction, LinkEngine, LinkMode};
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::resource::{ResourceAction, ResourceReceiver, ResourceSender};
 use rns_crypto::ed25519::Ed25519PrivateKey;
-use rns_crypto::Rng;
+use rns_crypto::{OsRng, Rng};
 
 use super::time;
 
@@ -1006,14 +1006,17 @@ impl LinkManager {
                         inbound_actions,
                     }
                 }
-                constants::CONTEXT_LINKCLOSE => {
-                    let teardown_actions = link.engine.handle_teardown();
-                    let link_id = *link.engine.link_id();
-                    LinkDataResult::LinkClose {
-                        link_id,
-                        teardown_actions,
+                constants::CONTEXT_LINKCLOSE => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) if plaintext.as_slice() == link_id_bytes => {
+                        let teardown_actions = link.engine.handle_teardown();
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::LinkClose {
+                            link_id,
+                            teardown_actions,
+                        }
                     }
-                }
+                    _ => LinkDataResult::Error,
+                },
                 constants::CONTEXT_CHANNEL => match link.engine.decrypt(&packet.data) {
                     Ok(plaintext) => {
                         let inbound_actions = link.engine.record_inbound(time::now());
@@ -1747,6 +1750,12 @@ impl LinkManager {
             return Vec::new();
         }
 
+        let encrypted_close = if previous_state == LinkState::Pending {
+            None
+        } else {
+            let mut rng = OsRng;
+            link.engine.encrypt(link_id, &mut rng).ok()
+        };
         let teardown_actions = link.engine.teardown();
         if let Some(ref mut channel) = link.channel {
             channel.shutdown();
@@ -1768,19 +1777,21 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
-            flags,
-            0,
-            link_id,
-            None,
-            constants::CONTEXT_LINKCLOSE,
-            &[],
-        ) {
-            actions.push(LinkManagerAction::SendPacket {
-                raw,
-                dest_type: constants::DESTINATION_LINK,
-                attached_interface: None,
-            });
+        if let Some(encrypted_close) = encrypted_close {
+            if let Ok((raw, _packet_hash)) = RawPacket::pack_raw_with_hash(
+                flags,
+                0,
+                link_id,
+                None,
+                constants::CONTEXT_LINKCLOSE,
+                &encrypted_close,
+            ) {
+                actions.push(LinkManagerAction::SendPacket {
+                    raw,
+                    dest_type: constants::DESTINATION_LINK,
+                    attached_interface: None,
+                });
+            }
         }
 
         actions
@@ -4004,12 +4015,24 @@ mod tests {
     fn active_teardown_sends_linkclose_and_remote_closed_teardown_is_noop() {
         let (mut initiator, mut responder, link_id) = setup_active_link();
         let actions = initiator.teardown_link(&link_id);
-        assert!(actions.iter().any(|action| match action {
-            LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
-                .map(|packet| packet.context == constants::CONTEXT_LINKCLOSE)
-                .unwrap_or(false),
-            _ => false,
-        }));
+        let close_packet = actions
+            .iter()
+            .find_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
+                    .ok()
+                    .filter(|packet| packet.context == constants::CONTEXT_LINKCLOSE),
+                _ => None,
+            })
+            .expect("active teardown must emit LINKCLOSE");
+        assert!(close_packet.raw.len() > constants::HEADER_MINSIZE);
+        let plaintext = responder
+            .links
+            .get(&link_id)
+            .unwrap()
+            .engine
+            .decrypt(&close_packet.data)
+            .expect("LINKCLOSE payload must authenticate");
+        assert_eq!(plaintext, link_id);
         assert!(initiator.teardown_link(&link_id).is_empty());
 
         responder
@@ -4019,6 +4042,43 @@ mod tests {
             .engine
             .handle_teardown();
         assert!(responder.teardown_link(&link_id).is_empty());
+    }
+
+    #[test]
+    fn forged_or_empty_linkclose_does_not_close_an_active_link() {
+        let (_initiator, mut responder, link_id) = setup_active_link();
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let mut rng = OsRng;
+
+        for forged_payload in [Vec::new(), vec![0x55; 48]] {
+            let packet = RawPacket::pack(
+                flags,
+                0,
+                &link_id,
+                None,
+                constants::CONTEXT_LINKCLOSE,
+                &forged_payload,
+            )
+            .unwrap();
+            let actions = responder.handle_local_delivery(
+                link_id,
+                &packet.raw,
+                [0u8; 32],
+                rns_core::transport::types::InterfaceId(1),
+                &mut rng,
+            );
+
+            assert_eq!(responder.link_state(&link_id), Some(LinkState::Active));
+            assert!(!actions
+                .iter()
+                .any(|action| matches!(action, LinkManagerAction::LinkClosed { .. })));
+        }
     }
 
     #[test]

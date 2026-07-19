@@ -33,7 +33,6 @@ use crate::interface::{
 use crate::BackbonePeerStateEntry;
 
 /// HW_MTU: 1 MB (matches Python BackboneInterface.HW_MTU)
-#[allow(dead_code)]
 const HW_MTU: usize = 1_048_576;
 
 /// Configuration for a backbone interface.
@@ -432,6 +431,11 @@ fn start_with_template(
     let accepted_peer_mode = config.mode;
     let accepted_peer_recursive_prs = config.recursive_prs;
     let accepted_peer_announces_from_internal = config.announces_from_internal;
+    let ifac_size = dynamic_template
+        .as_ref()
+        .and_then(|template| template.ifac.as_ref())
+        .map(|ifac| ifac.size)
+        .unwrap_or(0);
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
@@ -450,6 +454,7 @@ fn start_with_template(
                 accepted_peer_recursive_prs,
                 accepted_peer_announces_from_internal,
                 dynamic_template,
+                ifac_size,
             ) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -608,6 +613,7 @@ fn poll_loop(
     accepted_peer_recursive_prs: bool,
     accepted_peer_announces_from_internal: bool,
     dynamic_template: Option<DynamicInterfaceTemplate>,
+    ifac_size: usize,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -741,7 +747,7 @@ fn poll_loop(
                                     peer_ip,
                                     peer_port,
                                     stream,
-                                    decoder: hdlc::Decoder::new(),
+                                    decoder: hdlc::Decoder::reticulum(HW_MTU, ifac_size),
                                     connected_at: Instant::now(),
                                     has_received_data: false,
                                     write_stall_flag,
@@ -831,7 +837,16 @@ fn poll_loop(
                         let client = clients.get_mut(&key).unwrap();
                         client_id = client.id;
                         client.has_received_data = true;
-                        for frame in client.decoder.feed(&buf[..n]) {
+                        let decoded = client.decoder.feed_with_diagnostics(&buf[..n]);
+                        for frame_len in decoded.invalid_frame_lengths {
+                            log::debug!(
+                            "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
+                            name,
+                            frame_len,
+                            client_id.0,
+                        );
+                        }
+                        for frame in decoded.frames {
                             if tx
                                 .send(Event::Frame {
                                     interface_id: client_id,
@@ -1170,6 +1185,14 @@ fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+    start_client_with_ifac(config, tx, 0)
+}
+
+pub(crate) fn start_client_with_ifac(
+    config: BackboneClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect_client(&config)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
@@ -1188,7 +1211,7 @@ pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result
     thread::Builder::new()
         .name(format!("backbone-client-{}", id.0))
         .spawn(move || {
-            client_reader_loop(reader_stream, config, tx);
+            client_reader_loop(reader_stream, config, tx, ifac_size);
         })?;
 
     Ok(Box::new(BackboneClientWriter {
@@ -1198,9 +1221,14 @@ pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
 /// On disconnect, attempts reconnection.
-fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: EventSender) {
+fn client_reader_loop(
+    mut stream: TcpStream,
+    config: BackboneClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+) {
     let id = config.interface_id;
-    let mut decoder = hdlc::Decoder::new();
+    let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
 
     loop {
@@ -1211,7 +1239,7 @@ fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: E
                 match client_reconnect(&config, &tx) {
                     Some(new_stream) => {
                         stream = new_stream;
-                        decoder = hdlc::Decoder::new();
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
                         continue;
                     }
                     None => {
@@ -1221,7 +1249,15 @@ fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: E
                 }
             }
             Ok(n) => {
-                for frame in decoder.feed(&buf[..n]) {
+                let decoded = decoder.feed_with_diagnostics(&buf[..n]);
+                for frame_len in decoded.invalid_frame_lengths {
+                    log::debug!(
+                        "[{}] invalid HDLC frame of {} bytes received, dropping frame",
+                        config.name,
+                        frame_len,
+                    );
+                }
+                for frame in decoded.frames {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
@@ -1241,7 +1277,7 @@ fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: E
                 match client_reconnect(&config, &tx) {
                     Some(new_stream) => {
                         stream = new_stream;
-                        decoder = hdlc::Decoder::new();
+                        decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
                         continue;
                     }
                     None => {
@@ -1586,7 +1622,8 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     op_samples: 0,
                     started: crate::time::now(),
                 };
-                let writer = start_client(cfg, ctx.tx)?;
+                let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
+                let writer = start_client_with_ifac(cfg, ctx.tx, ifac_size)?;
                 Ok(StartResult::Simple {
                     id,
                     info,
@@ -1981,7 +2018,14 @@ mod tests {
         // Drain InterfaceUp
         let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
 
-        // Send HDLC frame (>= 19 bytes)
+        // The exact Reticulum header minimum must be dropped without
+        // preventing recovery of the next valid frame.
+        client
+            .write_all(&hdlc::frame(&vec![
+                0x11;
+                rns_core::constants::HEADER_MINSIZE
+            ]))
+            .unwrap();
         let payload: Vec<u8> = (0..32).collect();
         client.write_all(&hdlc::frame(&payload)).unwrap();
 
@@ -2225,7 +2269,13 @@ mod tests {
         // Drain InterfaceUp
         let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
-        // Send HDLC frame from server side (>= 19 bytes payload)
+        // Client mode applies the same strict lower bound and recovers.
+        server_stream
+            .write_all(&hdlc::frame(&vec![
+                0x11;
+                rns_core::constants::HEADER_MINSIZE
+            ]))
+            .unwrap();
         let payload: Vec<u8> = (0..32).collect();
         server_stream.write_all(&hdlc::frame(&payload)).unwrap();
 

@@ -60,7 +60,15 @@ fn unescape(data: &[u8]) -> Vec<u8> {
 pub struct Decoder {
     buffer: Vec<u8>,
     min_frame_size: usize,
+    max_frame_size: Option<usize>,
     max_buffer_size: usize,
+}
+
+/// Complete frames and non-empty frames rejected by configured size bounds.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct DecodeBatch {
+    pub frames: Vec<Vec<u8>>,
+    pub invalid_frame_lengths: Vec<usize>,
 }
 
 impl Decoder {
@@ -77,14 +85,35 @@ impl Decoder {
         Decoder {
             buffer: Vec::new(),
             min_frame_size,
+            max_frame_size: None,
             max_buffer_size: max_buffer_size.max(2),
+        }
+    }
+
+    /// Construct a decoder with Reticulum's TCP-style frame bounds.
+    ///
+    /// Decoded frames must be strictly larger than `HEADER_MINSIZE` and no
+    /// larger than the interface hardware MTU plus on-wire IFAC bytes. The
+    /// unterminated encoded tail is retained up to twice the hardware MTU.
+    pub fn reticulum(hardware_mtu: usize, ifac_size: usize) -> Self {
+        Decoder {
+            buffer: Vec::new(),
+            min_frame_size: HEADER_MINSIZE.saturating_add(1),
+            max_frame_size: Some(hardware_mtu.saturating_add(ifac_size)),
+            max_buffer_size: hardware_mtu.saturating_mul(2).max(2),
         }
     }
 
     /// Feed raw bytes into the decoder and return any complete frames.
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        self.feed_with_diagnostics(chunk).frames
+    }
+
+    /// Feed raw bytes and retain the decoded lengths of non-empty frames that
+    /// were rejected by the configured minimum or maximum.
+    pub fn feed_with_diagnostics(&mut self, chunk: &[u8]) -> DecodeBatch {
         self.buffer.extend_from_slice(chunk);
-        let mut frames = Vec::new();
+        let mut decoded = DecodeBatch::default();
 
         loop {
             // Find first FLAG
@@ -112,9 +141,14 @@ impl Decoder {
             let between = &self.buffer[1..end];
             let unescaped = unescape(between);
 
-            // Only yield frames that meet minimum size
-            if unescaped.len() >= self.min_frame_size {
-                frames.push(unescaped);
+            let frame_len = unescaped.len();
+            let within_maximum = self
+                .max_frame_size
+                .is_none_or(|max_frame_size| frame_len <= max_frame_size);
+            if frame_len >= self.min_frame_size && within_maximum {
+                decoded.frames.push(unescaped);
+            } else if frame_len != 0 {
+                decoded.invalid_frame_lengths.push(frame_len);
             }
 
             // Keep the closing FLAG as the opening FLAG of the next frame
@@ -136,7 +170,7 @@ impl Decoder {
             }
         }
 
-        frames
+        decoded
     }
 }
 
@@ -273,5 +307,106 @@ mod tests {
         let mut decoder = Decoder::new();
         let frames = decoder.feed(&framed);
         assert_eq!(frames.len(), 0); // dropped as too short
+    }
+
+    #[test]
+    fn reticulum_decoder_enforces_strict_minimum_and_ifac_adjusted_maximum() {
+        let hardware_mtu = 64;
+        let ifac_size = 8;
+        let mut decoder = Decoder::reticulum(hardware_mtu, ifac_size);
+        let lengths = [
+            HEADER_MINSIZE,
+            HEADER_MINSIZE + 1,
+            hardware_mtu + ifac_size,
+            hardware_mtu + ifac_size + 1,
+        ];
+        let mut encoded = vec![FLAG];
+        for length in lengths {
+            encoded.extend_from_slice(&frame(&vec![0x42; length])[1..]);
+        }
+
+        let decoded = decoder.feed_with_diagnostics(&encoded);
+
+        assert_eq!(
+            decoded.frames.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![HEADER_MINSIZE + 1, hardware_mtu + ifac_size]
+        );
+        assert_eq!(
+            decoded.invalid_frame_lengths,
+            vec![HEADER_MINSIZE, hardware_mtu + ifac_size + 1]
+        );
+    }
+
+    #[test]
+    fn empty_frames_are_ignored_without_invalid_frame_diagnostics() {
+        let mut decoder = Decoder::reticulum(64, 0);
+
+        let decoded = decoder.feed_with_diagnostics(&[FLAG, FLAG, FLAG]);
+
+        assert!(decoded.frames.is_empty());
+        assert!(decoded.invalid_frame_lengths.is_empty());
+    }
+
+    #[test]
+    fn oversized_complete_frame_is_dropped_and_next_frame_is_recovered() {
+        let mut decoder = Decoder::reticulum(64, 0);
+        let oversized = frame(&vec![0x55; 65]);
+        let valid = frame(&vec![0x33; HEADER_MINSIZE + 1]);
+        let mut encoded = oversized;
+        encoded.extend_from_slice(&valid[1..]);
+
+        let decoded = decoder.feed_with_diagnostics(&encoded);
+
+        assert_eq!(decoded.frames, vec![vec![0x33; HEADER_MINSIZE + 1]]);
+        assert_eq!(decoded.invalid_frame_lengths, vec![65]);
+    }
+
+    #[test]
+    fn fragmented_frame_larger_than_legacy_buffer_limit_is_preserved() {
+        let hardware_mtu = 70 * 1024;
+        let payload = vec![0x42; hardware_mtu];
+        let encoded = frame(&payload);
+        let split = 65 * 1024;
+        let mut decoder = Decoder::reticulum(hardware_mtu, 0);
+
+        let first = decoder.feed_with_diagnostics(&encoded[..split]);
+        assert!(first.frames.is_empty());
+        assert!(first.invalid_frame_lengths.is_empty());
+        assert_eq!(decoder.buffer.len(), split);
+
+        let second = decoder.feed_with_diagnostics(&encoded[split..]);
+        assert_eq!(second.frames, vec![payload]);
+        assert!(second.invalid_frame_lengths.is_empty());
+    }
+
+    #[test]
+    fn unterminated_tail_is_dropped_only_after_twice_hardware_mtu() {
+        let hardware_mtu = 32;
+        let mut decoder = Decoder::reticulum(hardware_mtu, 0);
+        let mut exact_limit = vec![FLAG];
+        exact_limit.extend(vec![0x22; hardware_mtu * 2 - 1]);
+
+        assert!(decoder.feed(&exact_limit).is_empty());
+        assert_eq!(decoder.buffer.len(), hardware_mtu * 2);
+
+        assert!(decoder.feed(&[0x22]).is_empty());
+        assert!(decoder.buffer.is_empty());
+
+        let payload = vec![0x44; HEADER_MINSIZE + 1];
+        assert_eq!(decoder.feed(&frame(&payload)), vec![payload]);
+    }
+
+    #[test]
+    fn decoded_length_not_escaped_wire_length_controls_frame_limit() {
+        let hardware_mtu = 64;
+        let payload = vec![FLAG; hardware_mtu];
+        let encoded = frame(&payload);
+        assert!(encoded.len() > hardware_mtu * 2);
+        let mut decoder = Decoder::reticulum(hardware_mtu, 0);
+
+        let decoded = decoder.feed_with_diagnostics(&encoded);
+
+        assert_eq!(decoded.frames, vec![payload]);
+        assert!(decoded.invalid_frame_lengths.is_empty());
     }
 }
