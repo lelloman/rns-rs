@@ -71,6 +71,7 @@ const DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES: usize = 8192;
 const DEFAULT_RATE_LIMITER_TTL_SECS: f64 = 48.0 * 60.0 * 60.0;
 const DEFAULT_TICK_INTERVAL_MS: u64 = 1000;
 const DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS: u32 = 3600;
+const KNOWN_DESTINATION_CLEANUP_BATCH_SIZE: usize = 64;
 const DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE: usize = 10_000;
 const DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS: u32 = 3600;
@@ -582,6 +583,13 @@ pub(crate) struct KnownDestinationState {
     retained: bool,
 }
 
+struct KnownDestinationCleanup {
+    candidates: Vec<[u8; 16]>,
+    cursor: usize,
+    started_at: Instant,
+    removed: usize,
+}
+
 /// The driver loop. Owns the engine and all interface entries.
 pub struct Driver {
     pub(crate) engine: TransportEngine,
@@ -731,6 +739,10 @@ pub struct Driver {
     pub(crate) announce_cache_cleanup_counter: u32,
     /// Runtime-configurable cleanup interval for known destinations.
     pub(crate) known_destinations_cleanup_interval_ticks: u32,
+    /// Incremental known-destination cleanup pass, if one is active.
+    known_destination_cleanup: Option<KnownDestinationCleanup>,
+    /// Low-priority ratchet filesystem cleanup associated with the last pass.
+    ratchet_cleanup_handle: Option<std::thread::JoinHandle<()>>,
     /// Count of known-destination cap evictions since start.
     pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
@@ -894,6 +906,8 @@ impl Driver {
             announce_cache_cleanup_counter: 0,
             known_destinations_cleanup_interval_ticks: runtime_config_defaults
                 .known_destinations_cleanup_interval_ticks,
+            known_destination_cleanup: None,
+            ratchet_cleanup_handle: None,
             known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
                 .announce_cache_cleanup_interval_ticks,
