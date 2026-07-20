@@ -625,11 +625,14 @@ pub struct RnsNode {
     driver_handle: Option<JoinHandle<()>>,
     verify_handle: Option<JoinHandle<()>>,
     verify_shutdown: Arc<AtomicBool>,
+    persist_handle: Option<JoinHandle<()>>,
+    persist_stop: Option<std::sync::mpsc::Sender<()>>,
     rpc_server: Option<crate::rpc::RpcServer>,
     tick_interval_ms: Arc<AtomicU64>,
     #[allow(dead_code)]
     probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
+    transport_state_dir: Option<std::path::PathBuf>,
     ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
     ratchet_expiry: Duration,
 }
@@ -1044,6 +1047,16 @@ impl RnsNode {
         announce_queue_ttl_secs: f64,
         announce_queue_overflow_policy: AnnounceQueueOverflowPolicy,
     ) -> io::Result<Self> {
+        let transport_state_dir = if config.transport_enabled {
+            config.cache_dir.as_ref().map(|cache_dir| {
+                cache_dir
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("storage")
+            })
+        } else {
+            None
+        };
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
         let transport_identity = if config.transport_enabled || config.static_transport_identity {
             Identity::from_private_key(
@@ -1533,6 +1546,33 @@ impl RnsNode {
                 crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
         }
 
+        // Restore after static interfaces and the announce cache are available,
+        // but before the driver can process inbound traffic.
+        if let Some(ref storage_dir) = transport_state_dir {
+            match storage::load_transport_state(storage_dir) {
+                Ok(snapshot) => {
+                    let announce_cache = driver.announce_cache.as_ref();
+                    let stats = driver.engine.restore_persistence_snapshot(
+                        snapshot,
+                        time::now(),
+                        |packet_hash| {
+                            announce_cache
+                                .and_then(|cache| cache.get(packet_hash).ok().flatten())
+                                .map(|(raw, _)| raw)
+                        },
+                    );
+                    log::debug!(
+                        "restored transport state: {} packet hashes, {} paths, {} tunnels ({} paths skipped)",
+                        stats.packet_hashes,
+                        stats.paths,
+                        stats.tunnels,
+                        stats.skipped_paths,
+                    );
+                }
+                Err(err) => log::warn!("failed to restore transport state: {}", err),
+            }
+        }
+
         #[cfg(feature = "iface-backbone")]
         if let Some(settings) = config.backbone_peer_pool.clone() {
             driver.configure_backbone_peer_pool(settings, backbone_peer_pool_candidates);
@@ -1807,15 +1847,65 @@ impl RnsNode {
                 driver.run();
             })?;
 
+        // Match upstream's 12-hour background persistence cadence. The worker
+        // performs disk serialization at low priority and never touches engine
+        // state directly; it obtains a consistent snapshot through the driver.
+        let (persist_handle, persist_stop) = if let Some(storage_dir) = transport_state_dir.clone()
+        {
+            let persist_tx = tx.clone();
+            let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+            let handle = thread::Builder::new()
+                .name("rns-persist".into())
+                .spawn(move || {
+                    #[cfg(target_family = "unix")]
+                    unsafe {
+                        libc::nice(5);
+                    }
+
+                    loop {
+                        match stop_rx.recv_timeout(Duration::from_secs(12 * 60 * 60)) {
+                            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        }
+                        let (response_tx, response_rx) = std::sync::mpsc::channel();
+                        if persist_tx
+                            .send(Event::Query(
+                                QueryRequest::TransportStateSnapshot,
+                                response_tx,
+                            ))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        let Ok(QueryResponse::TransportStateSnapshot(snapshot)) =
+                            response_rx.recv()
+                        else {
+                            continue;
+                        };
+                        if let Err(err) =
+                            storage::save_transport_state(&snapshot, &storage_dir, true)
+                        {
+                            log::warn!("failed to persist transport state: {}", err);
+                        }
+                    }
+                })?;
+            (Some(handle), Some(stop_tx))
+        } else {
+            (None, None)
+        };
+
         Ok(RnsNode {
             tx,
             driver_handle: Some(driver_handle),
             verify_handle: Some(verify_handle),
             verify_shutdown,
+            persist_handle,
+            persist_stop,
             rpc_server,
             tick_interval_ms,
             probe_server,
             known_destinations_path: None,
+            transport_state_dir,
             ratchet_store: config.ratchet_store,
             ratchet_expiry: config.ratchet_expiry,
         })
@@ -2464,6 +2554,20 @@ impl RnsNode {
         }
     }
 
+    fn persist_transport_state(&self) {
+        let Some(storage_dir) = self.transport_state_dir.as_ref() else {
+            return;
+        };
+        let Ok(QueryResponse::TransportStateSnapshot(snapshot)) =
+            self.query(QueryRequest::TransportStateSnapshot)
+        else {
+            return;
+        };
+        if let Err(err) = storage::save_transport_state(&snapshot, storage_dir, true) {
+            log::warn!("failed to persist transport state: {}", err);
+        }
+    }
+
     /// Load an in-memory WASM hook at runtime.
     pub fn load_hook(
         &self,
@@ -2665,10 +2769,13 @@ impl RnsNode {
             driver_handle: Some(driver_handle),
             verify_handle: None,
             verify_shutdown: Arc::new(AtomicBool::new(false)),
+            persist_handle: None,
+            persist_stop: None,
             rpc_server,
             tick_interval_ms,
             probe_server: None,
             known_destinations_path: None,
+            transport_state_dir: None,
             ratchet_store: None,
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
         }
@@ -2708,6 +2815,13 @@ impl RnsNode {
             rpc.stop();
         }
         self.persist_known_destinations();
+        self.persist_transport_state();
+        if let Some(stop) = self.persist_stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(handle) = self.persist_handle.take() {
+            let _ = handle.join();
+        }
         self.verify_shutdown.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Event::Shutdown);
         if let Some(handle) = self.driver_handle.take() {
@@ -2969,10 +3083,13 @@ mod tests {
             driver_handle: None,
             verify_handle: None,
             verify_shutdown: Arc::new(AtomicBool::new(false)),
+            persist_handle: None,
+            persist_stop: None,
             rpc_server: None,
             tick_interval_ms: Arc::new(AtomicU64::new(1000)),
             probe_server: None,
             known_destinations_path: None,
+            transport_state_dir: None,
             ratchet_store: Some(ratchet_store),
             ratchet_expiry: Duration::from_secs(rns_core::constants::RATCHET_EXPIRY),
         };
@@ -3226,6 +3343,95 @@ mod tests {
         assert_eq!(recalled.identity_hash.0, *identity.hash());
         assert_eq!(recalled.app_data, Some(b"persisted".to_vec()));
         restarted.shutdown();
+    }
+
+    #[test]
+    fn transport_paths_hashes_and_detached_tunnels_restore_from_upstream_files() {
+        use rns_core::packet::{PacketFlags, RawPacket};
+        use rns_core::transport::persistence::{
+            PersistedPath, PersistedTunnel, TransportStateSnapshot,
+        };
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("config"),
+            r#"[reticulum]
+enable_transport = True
+share_instance = False
+
+[interfaces]
+  [[Persistence Test]]
+    type = UDPInterface
+    forward_ip = 127.0.0.1
+    forward_port = 9
+    interface_mode = full
+"#,
+        )
+        .unwrap();
+        let paths = storage::ensure_storage_dirs(dir.path()).unwrap();
+        let destination_hash = [0x31; 16];
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: rns_core::constants::HEADER_1,
+                context_flag: rns_core::constants::FLAG_UNSET,
+                transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+                destination_type: rns_core::constants::DESTINATION_SINGLE,
+                packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+            },
+            0,
+            &destination_hash,
+            None,
+            rns_core::constants::CONTEXT_NONE,
+            &[0xA5; 32],
+        )
+        .unwrap();
+        crate::announce_cache::AnnounceCache::new(paths.cache.join("announces"))
+            .store(&packet.packet_hash, &packet.raw, None)
+            .unwrap();
+        let now = time::now();
+        let route = PersistedPath {
+            destination_hash,
+            timestamp: now,
+            received_from: [0x41; 16],
+            hops: 2,
+            expires: now + 600.0,
+            random_blobs: vec![[0x51; 10]],
+            interface_hash: Some(rns_core::hash::full_hash(b"Persistence Test")),
+            packet_hash: packet.packet_hash,
+        };
+        storage::save_transport_state(
+            &TransportStateSnapshot {
+                packet_hashes: vec![[0x61; 32], [0x62; 32]],
+                paths: vec![route.clone()],
+                tunnels: vec![PersistedTunnel {
+                    tunnel_id: [0x71; 32],
+                    interface_hash: None,
+                    paths: vec![PersistedPath {
+                        interface_hash: None,
+                        ..route
+                    }],
+                    expires: now + 1_200.0,
+                }],
+            },
+            &paths.storage,
+            false,
+        )
+        .unwrap();
+
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let QueryResponse::TransportStateSnapshot(restored) =
+            node.query(QueryRequest::TransportStateSnapshot).unwrap()
+        else {
+            panic!("unexpected transport snapshot response");
+        };
+        assert_eq!(restored.packet_hashes, vec![[0x61; 32], [0x62; 32]]);
+        assert_eq!(restored.paths.len(), 1);
+        assert_eq!(restored.paths[0].destination_hash, destination_hash);
+        assert_eq!(restored.paths[0].received_from, [0x41; 16]);
+        assert_eq!(restored.tunnels.len(), 1);
+        assert_eq!(restored.tunnels[0].tunnel_id, [0x71; 32]);
+        assert_eq!(restored.tunnels[0].interface_hash, None);
+        node.shutdown();
     }
 
     #[test]

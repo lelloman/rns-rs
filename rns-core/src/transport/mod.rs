@@ -8,6 +8,7 @@ pub mod jobs;
 pub mod outbound;
 pub mod path_requests;
 pub mod pathfinder;
+pub mod persistence;
 pub mod queries;
 pub mod rate_limit;
 pub mod retention;

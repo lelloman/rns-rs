@@ -505,6 +505,8 @@ pub enum QueryRequest {
     DropAnnounceQueues,
     /// Get the transport identity hash.
     TransportIdentity,
+    /// Snapshot restart-relevant transport routing state.
+    TransportStateSnapshot,
     /// Get all blackholed identities.
     GetBlackholed,
     /// Add an identity to the blackhole list.
@@ -616,6 +618,7 @@ pub enum QueryResponse {
     DropAllVia(usize),
     DropAnnounceQueues,
     TransportIdentity(Option<[u8; 16]>),
+    TransportStateSnapshot(rns_core::transport::persistence::TransportStateSnapshot),
     Blackholed(Vec<BlackholeInfo>),
     BlackholeResult(bool),
     UnblackholeResult(bool),

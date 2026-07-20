@@ -489,6 +489,266 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
     Ok(result)
 }
 
+/// Persist packet de-duplication, route, and tunnel state using the upstream
+/// Reticulum filenames and wire layouts.
+pub fn save_transport_state(
+    snapshot: &rns_core::transport::persistence::TransportStateSnapshot,
+    storage_dir: &Path,
+    low_priority: bool,
+) -> io::Result<()> {
+    let mut round_started = std::time::Instant::now();
+    save_transport_state_with_checkpoint(snapshot, storage_dir, || {
+        if low_priority && round_started.elapsed() > std::time::Duration::from_millis(10) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            round_started = std::time::Instant::now();
+        }
+    })
+}
+
+fn save_transport_state_with_checkpoint<F>(
+    snapshot: &rns_core::transport::persistence::TransportStateSnapshot,
+    storage_dir: &Path,
+    mut checkpoint: F,
+) -> io::Result<()>
+where
+    F: FnMut(),
+{
+    use rns_core::msgpack::{self, Value};
+
+    fs::create_dir_all(storage_dir)?;
+
+    let mut hashes = Vec::with_capacity(snapshot.packet_hashes.len() * 32);
+    for hash in &snapshot.packet_hashes {
+        checkpoint();
+        hashes.extend_from_slice(hash);
+    }
+    atomic_write(&storage_dir.join("packet_hashlist.raw"), &hashes)?;
+
+    let paths = snapshot
+        .paths
+        .iter()
+        .map(|path| {
+            checkpoint();
+            encode_persisted_path(path)
+        })
+        .collect();
+    atomic_write(
+        &storage_dir.join("destination_table"),
+        &msgpack::pack(&Value::Array(paths)),
+    )?;
+
+    let tunnels = snapshot
+        .tunnels
+        .iter()
+        .map(|tunnel| {
+            checkpoint();
+            let paths = tunnel
+                .paths
+                .iter()
+                .map(|path| {
+                    checkpoint();
+                    encode_persisted_path(path)
+                })
+                .collect();
+            Value::Array(vec![
+                Value::Bin(tunnel.tunnel_id.to_vec()),
+                optional_hash_value(tunnel.interface_hash),
+                Value::Array(paths),
+                Value::Float(tunnel.expires),
+            ])
+        })
+        .collect();
+    atomic_write(
+        &storage_dir.join("tunnels"),
+        &msgpack::pack(&Value::Array(tunnels)),
+    )
+}
+
+fn encode_persisted_path(
+    path: &rns_core::transport::persistence::PersistedPath,
+) -> rns_core::msgpack::Value {
+    use rns_core::msgpack::Value;
+
+    Value::Array(vec![
+        Value::Bin(path.destination_hash.to_vec()),
+        Value::Float(path.timestamp),
+        Value::Bin(path.received_from.to_vec()),
+        Value::UInt(path.hops as u64),
+        Value::Float(path.expires),
+        Value::Array(
+            path.random_blobs
+                .iter()
+                .map(|blob| Value::Bin(blob.to_vec()))
+                .collect(),
+        ),
+        optional_hash_value(path.interface_hash),
+        Value::Bin(path.packet_hash.to_vec()),
+    ])
+}
+
+fn optional_hash_value(hash: Option<[u8; 32]>) -> rns_core::msgpack::Value {
+    match hash {
+        Some(hash) => rns_core::msgpack::Value::Bin(hash.to_vec()),
+        None => rns_core::msgpack::Value::Nil,
+    }
+}
+
+/// Load transport state. Missing files are treated as empty state; malformed
+/// existing files are surfaced so callers can log and continue deliberately.
+pub fn load_transport_state(
+    storage_dir: &Path,
+) -> io::Result<rns_core::transport::persistence::TransportStateSnapshot> {
+    use rns_core::transport::persistence::TransportStateSnapshot;
+
+    let packet_hashes = load_packet_hashlist(&storage_dir.join("packet_hashlist.raw"))?;
+    let paths = load_path_table(&storage_dir.join("destination_table"))?;
+    let tunnels = load_tunnel_table(&storage_dir.join("tunnels"))?;
+    Ok(TransportStateSnapshot {
+        packet_hashes,
+        paths,
+        tunnels,
+    })
+}
+
+fn load_packet_hashlist(path: &Path) -> io::Result<Vec<[u8; 32]>> {
+    let data = match fs::read(path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    Ok(data
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(chunk);
+            hash
+        })
+        .collect())
+}
+
+fn load_path_table(
+    path: &Path,
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedPath>> {
+    let Some(value) = load_optional_msgpack(path)? else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .ok_or_else(|| invalid_transport_data("destination table must be an array"))?
+        .iter()
+        .map(decode_persisted_path)
+        .collect()
+}
+
+fn load_tunnel_table(
+    path: &Path,
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedTunnel>> {
+    use rns_core::transport::persistence::PersistedTunnel;
+
+    let Some(value) = load_optional_msgpack(path)? else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .ok_or_else(|| invalid_transport_data("tunnel table must be an array"))?
+        .iter()
+        .map(|value| {
+            let fields = value
+                .as_array()
+                .filter(|fields| fields.len() == 4)
+                .ok_or_else(|| invalid_transport_data("tunnel entry must contain 4 fields"))?;
+            let tunnel_id = fixed_bin::<32>(&fields[0], "tunnel id")?;
+            let interface_hash = optional_fixed_bin::<32>(&fields[1], "tunnel interface hash")?;
+            let paths = fields[2]
+                .as_array()
+                .ok_or_else(|| invalid_transport_data("tunnel paths must be an array"))?
+                .iter()
+                .map(decode_persisted_path)
+                .collect::<io::Result<Vec<_>>>()?;
+            let expires = fields[3]
+                .as_number()
+                .ok_or_else(|| invalid_transport_data("tunnel expiry must be numeric"))?;
+            Ok(PersistedTunnel {
+                tunnel_id,
+                interface_hash,
+                paths,
+                expires,
+            })
+        })
+        .collect()
+}
+
+fn decode_persisted_path(
+    value: &rns_core::msgpack::Value,
+) -> io::Result<rns_core::transport::persistence::PersistedPath> {
+    use rns_core::transport::persistence::PersistedPath;
+
+    let fields = value
+        .as_array()
+        .filter(|fields| fields.len() == 8)
+        .ok_or_else(|| invalid_transport_data("path entry must contain 8 fields"))?;
+    let random_blobs = fields[5]
+        .as_array()
+        .ok_or_else(|| invalid_transport_data("random blobs must be an array"))?
+        .iter()
+        .map(|value| fixed_bin::<10>(value, "random blob"))
+        .collect::<io::Result<Vec<_>>>()?;
+    let hops = fields[3]
+        .as_uint()
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| invalid_transport_data("hop count must fit in a byte"))?;
+    Ok(PersistedPath {
+        destination_hash: fixed_bin::<16>(&fields[0], "destination hash")?,
+        timestamp: fields[1]
+            .as_number()
+            .ok_or_else(|| invalid_transport_data("path timestamp must be numeric"))?,
+        received_from: fixed_bin::<16>(&fields[2], "received-from hash")?,
+        hops,
+        expires: fields[4]
+            .as_number()
+            .ok_or_else(|| invalid_transport_data("path expiry must be numeric"))?,
+        random_blobs,
+        interface_hash: optional_fixed_bin::<32>(&fields[6], "interface hash")?,
+        packet_hash: fixed_bin::<32>(&fields[7], "packet hash")?,
+    })
+}
+
+fn load_optional_msgpack(path: &Path) -> io::Result<Option<rns_core::msgpack::Value>> {
+    let data = match fs::read(path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    rns_core::msgpack::unpack_exact(&data)
+        .map(Some)
+        .map_err(|err| invalid_transport_data(&format!("msgpack error: {err}")))
+}
+
+fn fixed_bin<const N: usize>(value: &rns_core::msgpack::Value, field: &str) -> io::Result<[u8; N]> {
+    let bytes = value
+        .as_bin()
+        .filter(|bytes| bytes.len() == N)
+        .ok_or_else(|| invalid_transport_data(&format!("{field} must be {N} bytes")))?;
+    let mut result = [0u8; N];
+    result.copy_from_slice(bytes);
+    Ok(result)
+}
+
+fn optional_fixed_bin<const N: usize>(
+    value: &rns_core::msgpack::Value,
+    field: &str,
+) -> io::Result<Option<[u8; N]>> {
+    if matches!(value, rns_core::msgpack::Value::Nil) {
+        Ok(None)
+    } else {
+        fixed_bin(value, field).map(Some)
+    }
+}
+
+fn invalid_transport_data(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
 /// Resolve the config directory path.
 /// Priority: explicit path > `~/.reticulum/`
 pub fn resolve_config_dir(explicit: Option<&Path>) -> PathBuf {
@@ -789,6 +1049,116 @@ mod tests {
         let loaded = load_or_create_identity(&dir).unwrap();
         assert_eq!(*identity.hash(), *loaded.hash());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn transport_snapshot() -> rns_core::transport::persistence::TransportStateSnapshot {
+        use rns_core::transport::persistence::{
+            PersistedPath, PersistedTunnel, TransportStateSnapshot,
+        };
+
+        let path = PersistedPath {
+            destination_hash: [0x11; 16],
+            timestamp: 10.25,
+            received_from: [0x22; 16],
+            hops: 3,
+            expires: 20.5,
+            random_blobs: vec![[0x33; 10], [0x44; 10]],
+            interface_hash: Some([0x55; 32]),
+            packet_hash: [0x66; 32],
+        };
+        TransportStateSnapshot {
+            packet_hashes: vec![[1; 32], [2; 32]],
+            paths: vec![path.clone()],
+            tunnels: vec![PersistedTunnel {
+                tunnel_id: [0x77; 32],
+                interface_hash: None,
+                paths: vec![PersistedPath {
+                    destination_hash: [0x88; 16],
+                    interface_hash: None,
+                    ..path
+                }],
+                expires: 30.75,
+            }],
+        }
+    }
+
+    #[test]
+    fn packet_hashlist_raw_is_fixed_width_fifo_and_ignores_partial_tail() {
+        let dir = temp_dir();
+        let snapshot = transport_snapshot();
+        save_transport_state(&snapshot, &dir, false).unwrap();
+
+        let path = dir.join("packet_hashlist.raw");
+        let mut raw = fs::read(&path).unwrap();
+        assert_eq!(raw.len(), 64);
+        assert_eq!(&raw[..32], &[1; 32]);
+        assert_eq!(&raw[32..], &[2; 32]);
+        raw.extend_from_slice(&[0xFF; 17]);
+        fs::write(&path, raw).unwrap();
+
+        assert_eq!(load_packet_hashlist(&path).unwrap(), vec![[1; 32], [2; 32]]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn path_and_tunnel_tables_round_trip_python_compatible_fields() {
+        let dir = temp_dir();
+        let expected = transport_snapshot();
+        save_transport_state(&expected, &dir, false).unwrap();
+        let loaded = load_transport_state(&dir).unwrap();
+        assert_eq!(loaded, expected);
+
+        let packed = fs::read(dir.join("destination_table")).unwrap();
+        let value = rns_core::msgpack::unpack_exact(&packed).unwrap();
+        let entry = &value.as_array().unwrap()[0];
+        assert_eq!(entry.as_array().unwrap().len(), 8);
+        assert_eq!(entry.as_array().unwrap()[0].as_bin().unwrap().len(), 16);
+        assert_eq!(entry.as_array().unwrap()[6].as_bin().unwrap().len(), 32);
+
+        let packed = fs::read(dir.join("tunnels")).unwrap();
+        let value = rns_core::msgpack::unpack_exact(&packed).unwrap();
+        let tunnel = &value.as_array().unwrap()[0];
+        assert_eq!(tunnel.as_array().unwrap().len(), 4);
+        assert!(matches!(
+            tunnel.as_array().unwrap()[1],
+            rns_core::msgpack::Value::Nil
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_transport_state_files_load_as_empty_tables() {
+        let dir = temp_dir();
+        assert_eq!(
+            load_transport_state(&dir).unwrap(),
+            rns_core::transport::persistence::TransportStateSnapshot::default()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn low_priority_save_checkpoints_each_collection_without_temp_leaks() {
+        let dir = temp_dir();
+        let snapshot = transport_snapshot();
+        let mut checkpoints = 0;
+        save_transport_state_with_checkpoint(&snapshot, &dir, || checkpoints += 1).unwrap();
+
+        // 2 hashes + 1 route + 1 tunnel + 1 tunnel route.
+        assert_eq!(checkpoints, 5);
+        assert!(!fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".tmp.")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_transport_table_reports_invalid_data_without_panicking() {
+        let dir = temp_dir();
+        fs::write(dir.join("destination_table"), b"not-msgpack").unwrap();
+        let error = load_transport_state(&dir).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_dir_all(&dir);
     }
 }

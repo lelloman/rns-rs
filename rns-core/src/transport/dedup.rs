@@ -53,6 +53,14 @@ impl PacketHashlist {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Iterate retained hashes from oldest to newest.
+    pub fn iter(&self) -> impl Iterator<Item = &[u8; 32]> {
+        (0..self.queue.len).map(|offset| {
+            let index = (self.queue.head + offset) % self.queue.capacity();
+            &self.queue.entries[index]
+        })
+    }
 }
 
 /// Bounded TTL cache for announce signature verification results.

@@ -452,6 +452,9 @@ impl Driver {
             QueryRequest::TransportIdentity => {
                 QueryResponse::TransportIdentity(self.engine.identity_hash().copied())
             }
+            QueryRequest::TransportStateSnapshot => {
+                QueryResponse::TransportStateSnapshot(self.engine.persistence_snapshot())
+            }
             QueryRequest::GetBlackholed => {
                 let now = time::now();
                 let entries: Vec<BlackholeInfo> = self

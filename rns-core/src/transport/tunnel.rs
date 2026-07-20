@@ -310,6 +310,27 @@ impl TunnelTable {
         self.tunnels.iter()
     }
 
+    /// Restore a detached tunnel loaded from persistent storage.
+    pub fn restore_detached(
+        &mut self,
+        tunnel_id: [u8; 32],
+        paths: BTreeMap<[u8; 16], TunnelPath>,
+        expires: f64,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        self.tunnels.insert(
+            tunnel_id,
+            TunnelEntry {
+                tunnel_id,
+                interface: None,
+                paths,
+                expires,
+            },
+        );
+    }
+
     /// Number of retained tunnel destinations across all tunnels.
     pub fn path_count(&self) -> usize {
         self.tunnels.values().map(|entry| entry.paths.len()).sum()
