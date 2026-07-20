@@ -489,18 +489,36 @@ impl LinkEngine {
 
     /// Check if a keepalive should be sent. Returns true if conditions are met.
     pub fn needs_keepalive(&self, now: f64) -> bool {
-        if self.state != LinkState::Active {
+        if self.state != LinkState::Active || !self.is_initiator {
             return false;
         }
         let activated = self.activated_at.unwrap_or(0.0);
         let last_inbound = self.last_inbound.max(self.last_proof).max(activated);
 
-        // Only send keepalive when past keepalive interval from last inbound
-        if now < last_inbound + self.keepalive_interval {
+        // Initiators probe whenever either direction has been quiet for a full
+        // interval. In particular, continuous responder-to-initiator traffic
+        // must not suppress the probe that keeps the responder's inbound timer
+        // alive.
+        let inbound_quiet = now >= last_inbound + self.keepalive_interval;
+        let outbound_quiet = now >= self.last_outbound + self.keepalive_interval;
+        if !inbound_quiet && !outbound_quiet {
             return false;
         }
 
         should_send_keepalive(self.last_keepalive, self.keepalive_interval, now)
+    }
+
+    /// Return whether a received keepalive probe needs a responder reply.
+    ///
+    /// `0xff` is the initiator probe and `0xfe` the responder acknowledgement,
+    /// matching upstream Reticulum. A responder that sent any traffic within
+    /// the current keepalive interval can omit the acknowledgement because that
+    /// traffic already refreshed the initiator's inbound timer.
+    pub fn should_reply_keepalive(&self, payload: &[u8], now: f64) -> bool {
+        self.state == LinkState::Active
+            && !self.is_initiator
+            && payload == [0xff]
+            && now >= self.last_outbound + self.keepalive_interval
     }
 
     /// Tear down the link (initiator-initiated close).
@@ -652,6 +670,48 @@ mod tests {
 
     fn make_rng(seed: u8) -> FixedRng {
         FixedRng::new(&[seed; 128])
+    }
+
+    fn active_link_pair() -> (LinkEngine, LinkEngine, Vec<u8>) {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+
+        let mut rng_init = make_rng(0x10);
+        let (mut initiator, request_data) = LinkEngine::new_initiator(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
+        );
+        let mut hashable = vec![0x00, 0x00];
+        hashable.extend_from_slice(&dest_hash);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&request_data);
+        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+
+        let mut rng_resp = make_rng(0x20);
+        let (mut responder, lrproof_data) = LinkEngine::new_responder(
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
+        let mut rng_lrrtt = make_rng(0x30);
+        let (lrrtt_encrypted, _) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
+        responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
+
+        (initiator, responder, lrrtt_encrypted)
     }
 
     #[test]
@@ -908,6 +968,41 @@ mod tests {
     }
 
     #[test]
+    fn initiator_probes_when_outbound_is_quiet_despite_recent_inbound() {
+        let (mut initiator, _, _) = active_link_pair();
+        let keepalive = initiator.keepalive_interval();
+        let now = 1_000.0;
+
+        initiator.record_inbound(now - 0.1);
+        initiator.record_outbound(now - keepalive - 0.1, false);
+
+        assert!(initiator.needs_keepalive(now));
+    }
+
+    #[test]
+    fn initiator_probes_when_inbound_is_quiet_despite_recent_outbound() {
+        let (mut initiator, _, _) = active_link_pair();
+        let keepalive = initiator.keepalive_interval();
+        let now = 1_000.0;
+
+        initiator.record_inbound(now - keepalive - 0.1);
+        initiator.record_outbound(now - 0.1, false);
+
+        assert!(initiator.needs_keepalive(now));
+    }
+
+    #[test]
+    fn initiator_does_not_probe_when_both_directions_are_recent() {
+        let (mut initiator, _, _) = active_link_pair();
+        let now = 1_000.0;
+
+        initiator.record_inbound(now - 0.1);
+        initiator.record_outbound(now - 0.1, false);
+
+        assert!(!initiator.needs_keepalive(now));
+    }
+
+    #[test]
     fn test_needs_keepalive_responder() {
         let mut rng_id = make_rng(0x01);
         let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
@@ -951,9 +1046,34 @@ mod tests {
         responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
 
         let ka = responder.keepalive_interval();
-        // Responder should also send keepalives
+        // Only the initiator emits probes. The responder replies to probes.
         assert!(!responder.needs_keepalive(101.0 + ka - 1.0));
-        assert!(responder.needs_keepalive(101.0 + ka + 1.0));
+        assert!(!responder.needs_keepalive(101.0 + ka + 1.0));
+    }
+
+    #[test]
+    fn responder_replies_only_to_probe_and_only_when_outbound_is_quiet() {
+        let (_, mut responder, _) = active_link_pair();
+        let keepalive = responder.keepalive_interval();
+        let now = 1_000.0;
+
+        responder.record_outbound(now - keepalive - 0.1, false);
+        assert!(responder.should_reply_keepalive(&[0xff], now));
+        assert!(!responder.should_reply_keepalive(&[0xfe], now));
+        assert!(!responder.should_reply_keepalive(&[], now));
+
+        responder.record_outbound(now - 0.1, false);
+        assert!(!responder.should_reply_keepalive(&[0xff], now));
+    }
+
+    #[test]
+    fn initiator_never_replies_to_keepalive_probe() {
+        let (mut initiator, _, _) = active_link_pair();
+        let keepalive = initiator.keepalive_interval();
+        let now = 1_000.0;
+        initiator.record_outbound(now - keepalive - 0.1, false);
+
+        assert!(!initiator.should_reply_keepalive(&[0xff], now));
     }
 
     #[test]

@@ -875,6 +875,8 @@ impl LinkManager {
             Keepalive {
                 link_id: LinkId,
                 inbound_actions: Vec<LinkAction>,
+                reply: bool,
+                received_at: f64,
             },
             LinkClose {
                 link_id: LinkId,
@@ -999,11 +1001,17 @@ impl LinkManager {
                     }
                 }
                 constants::CONTEXT_KEEPALIVE => {
-                    let inbound_actions = link.engine.record_inbound(time::now());
+                    let received_at = time::now();
+                    let reply = link
+                        .engine
+                        .should_reply_keepalive(&packet.data, received_at);
+                    let inbound_actions = link.engine.record_inbound(received_at);
                     let link_id = *link.engine.link_id();
                     LinkDataResult::Keepalive {
                         link_id,
                         inbound_actions,
+                        reply,
+                        received_at,
                     }
                 }
                 constants::CONTEXT_LINKCLOSE => match link.engine.decrypt(&packet.data) {
@@ -1175,13 +1183,36 @@ impl LinkManager {
             LinkDataResult::Keepalive {
                 link_id,
                 inbound_actions,
+                reply,
+                received_at,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                // record_inbound() already updated last_inbound, so the link
-                // won't go stale.  The regular tick() keepalive mechanism will
-                // send keepalives when needs_keepalive() returns true.
-                // Do NOT reply here — unconditional replies create an infinite
-                // ping-pong loop between the two link endpoints.
+                if reply {
+                    let flags = PacketFlags {
+                        header_type: constants::HEADER_1,
+                        context_flag: constants::FLAG_UNSET,
+                        transport_type: constants::TRANSPORT_BROADCAST,
+                        destination_type: constants::DESTINATION_LINK,
+                        packet_type: constants::PACKET_TYPE_DATA,
+                    };
+                    if let Ok((raw, _)) = RawPacket::pack_raw_with_hash(
+                        flags,
+                        0,
+                        &link_id,
+                        None,
+                        constants::CONTEXT_KEEPALIVE,
+                        &[0xfe],
+                    ) {
+                        actions.push(LinkManagerAction::SendPacket {
+                            raw,
+                            dest_type: constants::DESTINATION_LINK,
+                            attached_interface: None,
+                        });
+                        if let Some(link) = self.links.get_mut(&link_id) {
+                            link.engine.record_outbound(received_at, true);
+                        }
+                    }
+                }
             }
             LinkDataResult::LinkClose {
                 link_id,
@@ -3052,7 +3083,8 @@ impl LinkManager {
                 None => continue,
             };
             if link.engine.needs_keepalive(now) {
-                // Send keepalive packet (empty data with CONTEXT_KEEPALIVE)
+                // Only initiators reach this branch. Send the upstream 0xff
+                // probe; responders conditionally return 0xfe on receipt.
                 let flags = PacketFlags {
                     header_type: constants::HEADER_1,
                     context_flag: constants::FLAG_UNSET,
@@ -3066,7 +3098,7 @@ impl LinkManager {
                     link_id,
                     None,
                     constants::CONTEXT_KEEPALIVE,
-                    &[],
+                    &[0xff],
                 ) {
                     all_actions.push(LinkManagerAction::SendPacket {
                         raw,
@@ -4259,6 +4291,125 @@ mod tests {
         assert_eq!(resp_mgr.link_state(&link_id), Some(LinkState::Active));
 
         (init_mgr, resp_mgr, link_id)
+    }
+
+    fn packed_keepalive(link_id: &LinkId, payload: &[u8]) -> (Vec<u8>, RawPacket) {
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let (raw, _) = RawPacket::pack_raw_with_hash(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_KEEPALIVE,
+            payload,
+        )
+        .unwrap();
+        let packet = RawPacket::unpack(&raw).unwrap();
+        (raw, packet)
+    }
+
+    fn keepalive_packets(actions: &[LinkManagerAction]) -> Vec<RawPacket> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw).ok(),
+                _ => None,
+            })
+            .filter(|packet| packet.context == constants::CONTEXT_KEEPALIVE)
+            .collect()
+    }
+
+    #[test]
+    fn initiator_tick_emits_ff_keepalive_probe_when_outbound_is_quiet() {
+        let (mut initiator, _, link_id) = setup_active_link();
+        let now = time::now();
+        let keepalive = initiator.links[&link_id].engine.keepalive_interval();
+        let engine = &mut initiator.links.get_mut(&link_id).unwrap().engine;
+        engine.record_inbound(now);
+        engine.record_outbound(now - keepalive - 1.0, true);
+
+        let packets = keepalive_packets(&initiator.tick(&mut OsRng));
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].data, [0xff]);
+    }
+
+    #[test]
+    fn responder_tick_never_originates_keepalive_probe() {
+        let (_, mut responder, link_id) = setup_active_link();
+        let now = time::now();
+        let keepalive = responder.links[&link_id].engine.keepalive_interval();
+        let engine = &mut responder.links.get_mut(&link_id).unwrap().engine;
+        engine.record_inbound(now - keepalive - 1.0);
+        engine.record_outbound(now - keepalive - 1.0, false);
+
+        assert!(keepalive_packets(&responder.tick(&mut OsRng)).is_empty());
+    }
+
+    #[test]
+    fn responder_acknowledges_ff_probe_after_outbound_silence() {
+        let (_, mut responder, link_id) = setup_active_link();
+        let now = time::now();
+        let keepalive = responder.links[&link_id].engine.keepalive_interval();
+        responder
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .record_outbound(now - keepalive - 1.0, false);
+        let (raw, packet) = packed_keepalive(&link_id, &[0xff]);
+
+        let actions = responder.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut OsRng,
+        );
+        let packets = keepalive_packets(&actions);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].data, [0xfe]);
+    }
+
+    #[test]
+    fn recent_responder_traffic_suppresses_keepalive_ack() {
+        let (_, mut responder, link_id) = setup_active_link();
+        responder
+            .links
+            .get_mut(&link_id)
+            .unwrap()
+            .engine
+            .record_outbound(time::now(), false);
+        let (raw, packet) = packed_keepalive(&link_id, &[0xff]);
+
+        let actions = responder.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut OsRng,
+        );
+        assert!(keepalive_packets(&actions).is_empty());
+    }
+
+    #[test]
+    fn keepalive_ack_does_not_create_ping_pong_reply() {
+        let (mut initiator, _, link_id) = setup_active_link();
+        let (raw, packet) = packed_keepalive(&link_id, &[0xfe]);
+
+        let actions = initiator.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut OsRng,
+        );
+        assert!(keepalive_packets(&actions).is_empty());
     }
 
     // ====================================================================
