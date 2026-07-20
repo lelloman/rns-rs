@@ -40,7 +40,7 @@ pub const CHANNEL: u8 = 0x0E;
 pub const APP_NAME: &str = "rnstransport";
 
 /// Default stamp value for interface discovery
-pub const DEFAULT_STAMP_VALUE: u8 = 14;
+pub const DEFAULT_STAMP_VALUE: u8 = 16;
 
 /// Workblock expand rounds for interface discovery
 pub const WORKBLOCK_EXPAND_ROUNDS: u32 = 20;
@@ -85,7 +85,7 @@ pub struct DiscoveryConfig {
     pub discovery_name: String,
     /// Announce interval in seconds (default 21600 = 6h, min 300 = 5min).
     pub announce_interval: u64,
-    /// Stamp cost for discovery PoW (default 14).
+    /// Stamp cost for discovery PoW (default 16).
     pub stamp_value: u8,
     /// IP/hostname this interface is reachable on.
     pub reachable_on: Option<String>,
@@ -865,6 +865,11 @@ mod tests {
             insufficient_stamp_diagnostic(7),
             "Ignored discovered interface with insufficient stamp value 7"
         );
+    }
+
+    #[test]
+    fn default_discovery_stamp_value_matches_upstream_1_4_0() {
+        assert_eq!(DEFAULT_STAMP_VALUE, 16);
     }
 
     #[test]
