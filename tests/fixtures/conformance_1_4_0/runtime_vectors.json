@@ -1,0 +1,93 @@
+{
+  "baseline": {
+    "version": "1.4.0",
+    "commit": "122f17fad69a483503cc5c1d8d81046712d78c96"
+  },
+  "vectors": {
+    "packet_hops": [
+      {
+        "hops": 127,
+        "raw": "087f1111111111111111111111111111111100686f70",
+        "unpack_ok": true
+      },
+      {
+        "hops": 128,
+        "raw": "08801111111111111111111111111111111100686f70",
+        "unpack_ok": false
+      },
+      {
+        "hops": 255,
+        "raw": "08ff1111111111111111111111111111111100686f70",
+        "unpack_ok": false
+      }
+    ],
+    "held_announce": [
+      {
+        "hops": 126,
+        "retained": true
+      },
+      {
+        "hops": 127,
+        "retained": false
+      }
+    ],
+    "expected_hops": {
+      "initiator_known": 3,
+      "initiator_unknown": 128,
+      "responder_lrrtt": 5
+    },
+    "link_accounting": [
+      {
+        "context": "data",
+        "plaintext": "73686f7274",
+        "ciphertext": "01010101010101010101010101010101adbeece33413ec3ab300780b6dbc94074c4b9e6e3618a9b5a2ed73712a88bec7a0f9d516c107d02a54d1d809e3781738",
+        "accounted_bytes": 64
+      },
+      {
+        "context": "request",
+        "plaintext": "72657175657374",
+        "ciphertext": "02020202020202020202020202020202439f3a1edbbd9d16aeb0555208319b9f0416f32e9f45c96d3e83e3ec995b3b42adec1f3df344f548627805d18296b93b",
+        "accounted_bytes": 64
+      },
+      {
+        "context": "resource",
+        "plaintext": "70617274",
+        "ciphertext": "030303030303030303030303030303038ab8d68fdc40f0a4aa9aed9bc4692793772b73147a2b7a4bc434882c6bb08554433b58eb05d7737b636513dfc7f53d4f",
+        "accounted_bytes": 64
+      }
+    ],
+    "ax25": [
+      {
+        "callsign": "N0CALL",
+        "ssid": 7,
+        "payload": "726e73",
+        "ui_frame": "82a0b4a49ca6609c60868298986f03f0726e73"
+      },
+      {
+        "callsign": "ABC",
+        "ssid": 0,
+        "payload": "c0db",
+        "ui_frame": "82a0b4a49ca6608284862020206103f0c0db"
+      }
+    ],
+    "rnode": [
+      {
+        "vport": 7,
+        "payload": "7669727475616c2d706f7274",
+        "outbound_frame": "c01f07c0c0007669727475616c2d706f7274c0"
+      }
+    ],
+    "wdcl": [
+      {
+        "description": "endpoint_command",
+        "frame": "a1b2c3d40200010102030405060708726e732d6f7665722d7765617665",
+        "hdlc": "7ea1b2c3d40200010102030405060708726e732d6f7665722d77656176657e"
+      },
+      {
+        "description": "board_init_log",
+        "frame": "112233440300000004d202000301",
+        "event": 3
+      }
+    ]
+  }
+}

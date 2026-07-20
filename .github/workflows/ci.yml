@@ -62,8 +62,8 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
-  reticulum-1-3-9-interop:
-    name: Reticulum 1.3.9 Interop
+  reticulum-1-4-0-interop:
+    name: Reticulum 1.4.0 Interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -74,12 +74,9 @@ jobs:
       - name: Checkout exact Reticulum baseline
         run: |
           git clone https://github.com/markqvist/Reticulum.git reticulum-upstream
-          git -C reticulum-upstream checkout de0f399a1696895dcb95ad1efa19f3b21a7886ab
-          test "$(git -C reticulum-upstream rev-parse HEAD)" = "de0f399a1696895dcb95ad1efa19f3b21a7886ab"
-          git -C reticulum-upstream apply "$GITHUB_WORKSPACE/tests/upstream/reticulum-1.3.9-runtime.patch"
-          git -C reticulum-upstream add RNS
-          candidate_tree="$(git -C reticulum-upstream write-tree)"
-          test "$(git -C reticulum-upstream rev-parse "${candidate_tree}:RNS")" = "ac7772853b49d02e786b6eeb573e5aa23d060384"
+          git -C reticulum-upstream checkout 122f17fad69a483503cc5c1d8d81046712d78c96
+          test "$(git -C reticulum-upstream rev-parse HEAD)" = "122f17fad69a483503cc5c1d8d81046712d78c96"
+          test "$(git -C reticulum-upstream rev-parse HEAD:RNS)" = "5e1b42cb553f6cdd34145dc2bcbf93f653705368"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
@@ -89,7 +86,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
           RETICULUM_UPSTREAM_DIR: ${{ github.workspace }}/reticulum-upstream
         run: |
-          python3 -c 'import RNS; assert RNS.__version__ == "1.3.9", RNS.__version__'
+          python3 -c 'import RNS; assert RNS.__version__ == "1.4.0", RNS.__version__'
           cargo test -p rns-net --test python_interop -- --nocapture
 
   cargo-test-hooks:
@@ -117,7 +114,7 @@ jobs:
 
       - name: Run built-in hook integration tests
         run: |
-          cargo test -p rns-net --features rns-hooks-builtin --test e2e_hooks builtin
+          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin --test e2e_hooks builtin
           cargo test -p rns-ctl --features rns-hooks-builtin test_hook_api_loads_reloads_lists_and_unloads_builtin_hook
 
   cargo-test-rns-ctl-tls:
