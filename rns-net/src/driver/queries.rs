@@ -38,6 +38,7 @@ impl Driver {
                 pr_burst_activated: self.engine.pr_burst_activated(&interface_id),
                 clients: None,
                 blocked_ips: None,
+                blocked_ip_list: None,
                 announce_rate_target: entry.info.announce_rate_target,
                 announce_rate_grace: entry.info.announce_rate_grace,
                 announce_rate_penalty: entry.info.announce_rate_penalty,
@@ -51,10 +52,13 @@ impl Driver {
                 .into_iter()
                 .map(|entry| entry.connected_count as u64)
                 .sum();
-            let blocked_ips =
+            let blocked_ip_list =
                 recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
-                    .blocked_ip_count(&handle.fast_flap, std::time::Instant::now())
-                    as u64;
+                    .blocked_ip_list(&handle.fast_flap, std::time::Instant::now())
+                    .into_iter()
+                    .map(|peer_ip| peer_ip.to_string())
+                    .collect::<Vec<_>>();
+            let blocked_ips = blocked_ip_list.len() as u64;
             interfaces.push(SingleInterfaceStat {
                 id: handle.interface_id.0,
                 name: handle.interface_name.clone(),
@@ -84,6 +88,7 @@ impl Driver {
                 pr_burst_activated: 0.0,
                 clients: Some(clients),
                 blocked_ips: Some(blocked_ips),
+                blocked_ip_list: Some(blocked_ip_list),
                 announce_rate_target: None,
                 announce_rate_grace: 0,
                 announce_rate_penalty: 0.0,

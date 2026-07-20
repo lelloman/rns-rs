@@ -181,6 +181,25 @@ impl BackboneFastFlapMonitor {
             .count()
     }
 
+    pub fn blocked_ip_list(
+        &mut self,
+        config: &BackboneFastFlapConfig,
+        now: Instant,
+    ) -> Vec<IpAddr> {
+        if !config.enabled {
+            return Vec::new();
+        }
+        self.expire_all(config, now);
+        let mut blocked: Vec<_> = self
+            .peers
+            .iter()
+            .filter(|(_, state)| state.flap_count > config.grace)
+            .map(|(peer_ip, _)| *peer_ip)
+            .collect();
+        blocked.sort_unstable();
+        blocked
+    }
+
     pub fn flap_count(&self, peer_ip: IpAddr) -> u64 {
         self.peers
             .get(&peer_ip)
@@ -1873,6 +1892,30 @@ mod tests {
             monitor.blocked_ip_count(&config, now + Duration::from_secs(2)),
             1
         );
+    }
+
+    #[test]
+    fn blocked_ip_list_is_sorted_current_and_empty_when_disabled() {
+        let mut config = test_fast_flap_config();
+        config.grace = 0;
+        config.block_duration = Duration::from_secs(60);
+        let mut monitor = BackboneFastFlapMonitor::new();
+        let first: IpAddr = "203.0.113.20".parse().unwrap();
+        let second: IpAddr = "192.0.2.10".parse().unwrap();
+        let now = Instant::now();
+        monitor
+            .record_disconnect(first, Duration::from_secs(1), &config, now)
+            .unwrap();
+        monitor
+            .record_disconnect(second, Duration::from_secs(1), &config, now)
+            .unwrap();
+
+        assert_eq!(monitor.blocked_ip_list(&config, now), vec![second, first]);
+        assert!(monitor
+            .blocked_ip_list(&config, now + Duration::from_secs(61))
+            .is_empty());
+        config.enabled = false;
+        assert!(monitor.blocked_ip_list(&config, now).is_empty());
     }
 
     #[test]
