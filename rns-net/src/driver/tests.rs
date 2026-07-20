@@ -6095,6 +6095,85 @@ fn known_destinations_cleanup_respects_ttl() {
 }
 
 #[test]
+fn known_destinations_cleanup_is_incremental_and_bounded_per_tick() {
+    let mut driver = new_test_driver();
+    driver.known_destinations_ttl = 1.0;
+    driver.known_destinations_cleanup_interval_ticks = 1;
+    let stale_at = time::now() - 60.0;
+    for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
+        let mut dest = [0u8; 16];
+        dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        driver.known_destinations.insert(
+            dest,
+            make_known_destination_state(dest, stale_at, InterfaceId(1)),
+        );
+    }
+
+    driver.handle_tick_event();
+    assert_eq!(driver.known_destinations.len(), 1);
+    assert!(driver.known_destination_cleanup.is_some());
+
+    driver.handle_tick_event();
+    assert!(driver.known_destinations.is_empty());
+    assert!(driver.known_destination_cleanup.is_none());
+}
+
+#[test]
+fn incremental_cleanup_rechecks_entries_changed_after_snapshot() {
+    let mut driver = new_test_driver();
+    driver.known_destinations_ttl = 1.0;
+    driver.known_destinations_cleanup_interval_ticks = 1;
+    let stale_at = time::now() - 60.0;
+    for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
+        let mut dest = [0u8; 16];
+        dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        driver.known_destinations.insert(
+            dest,
+            make_known_destination_state(dest, stale_at, InterfaceId(1)),
+        );
+    }
+
+    driver.handle_tick_event();
+    let remaining = *driver.known_destinations.keys().next().unwrap();
+    driver
+        .known_destinations
+        .get_mut(&remaining)
+        .unwrap()
+        .announced
+        .received_at = time::now();
+    driver.handle_tick_event();
+
+    assert!(driver.known_destinations.contains_key(&remaining));
+    assert!(driver.known_destination_cleanup.is_none());
+}
+
+#[test]
+fn incremental_cleanup_does_not_remove_destinations_added_mid_pass() {
+    let mut driver = new_test_driver();
+    driver.known_destinations_ttl = 1.0;
+    driver.known_destinations_cleanup_interval_ticks = 1;
+    let stale_at = time::now() - 60.0;
+    for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
+        let mut dest = [0u8; 16];
+        dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        driver.known_destinations.insert(
+            dest,
+            make_known_destination_state(dest, stale_at, InterfaceId(1)),
+        );
+    }
+
+    driver.handle_tick_event();
+    let added = [0xFA; 16];
+    driver.known_destinations.insert(
+        added,
+        make_known_destination_state(added, stale_at, InterfaceId(1)),
+    );
+    driver.handle_tick_event();
+
+    assert!(driver.known_destinations.contains_key(&added));
+}
+
+#[test]
 fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
