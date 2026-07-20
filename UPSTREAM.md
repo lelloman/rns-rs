@@ -8,23 +8,22 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.3.9`
-- Version metadata commit: `406b141370fe69a347ab2cbf59eb7f5391f23fb2`
-- Normative commit: `cf6010da591e9361e26672b6917081a153f1f2c3`
-- Commit date: `2026-07-17 11:43:14 +0200`
-- Subject: `Enable discovery for internal-mode interfaces`
+- Version: `1.4.0`
+- Version metadata commit: `032b1aa3b2808dc5aca0aebada0776c8ee7c6b20`
+- Normative commit: `122f17fad69a483503cc5c1d8d81046712d78c96`
+- Commit date: `2026-07-20 19:11:35 +0200`
+- Subject: `Prepare release`
 
-The normative 1.3.9 commit is on Reticulum's rgit repository and is not yet in
-the GitHub release mirror. Since GitHub-hosted runners cannot reliably reach an
-RNS remote, the interop lane checks out mirrored parent `de0f399a`, applies the
-audited runtime delta in `tests/upstream/reticulum-1.3.9-runtime.patch`, and
-requires the resulting `RNS` tree object to equal upstream tree
-`ac7772853b49d02e786b6eeb573e5aa23d060384` before executing Python code.
+The normative 1.4.0 commit is available from both the rgit repository and the
+GitHub release mirror. The interop lane checks out the exact commit directly,
+requires its `RNS` tree object to equal
+`5e1b42cb553f6cdd34145dc2bcbf93f653705368`, asserts the Python version, and
+only then executes live Python/Rust interop.
 
 The tracked subsystem and commit audit is in
-[`docs/reticulum-1.3.9-parity.md`](docs/reticulum-1.3.9-parity.md). The PR CI
+[`docs/reticulum-1.4.0-parity.md`](docs/reticulum-1.4.0-parity.md). The PR CI
 matrix is the final software acceptance authority for this promotion. Physical
-Weave HIL remains the documented follow-up caveat from 1.3.8 because the 1.3.9
+Weave HIL remains the documented follow-up caveat from 1.3.8 because the 1.4.0
 range contains no Weave changes.
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
@@ -55,6 +54,42 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.3.9..1.4.0 Porting Queue
+
+The 28 commits after the previous normative baseline
+`cf6010da591e9361e26672b6917081a153f1f2c3` were audited through the shared
+rgit/GitHub tip `122f17fad69a483503cc5c1d8d81046712d78c96` on 2026-07-20.
+The `1.4.0` tag points to `be36abd85715afd9dd7dccdda29d024d3d0f2353`;
+the normative tip is the following generated release-artifact commit and has
+the same runtime `RNS` tree as the tag.
+
+Rust-applicable changes were ported with focused regression coverage. The range
+adds one-way link keepalives, richer LRPROOF diagnostics, cached interface
+hashes, invalid and valid discovery-stamp caches, Python-compatible low-priority
+transport persistence, incremental known-destination cleanup, blocked Backbone
+IP lists in interface statistics, and a default discovery work value of 16.
+Existing ports for resource bounds, pathing logs, Backbone fast-flap protection,
+bounded HDLC, and rnsh configuration separation were verified in-range. Python
+exception-shape fixes, obsolete recombination cleanup, version metadata,
+changelog text, and generated manual/release files do not require Rust runtime
+ports. Rust crate versions remain independently versioned and were not bumped.
+
+Key local commits for this range include:
+
+- `ab0d8fa` Document Backbone fast-flap protection
+- `e6729ba` Port upstream one-way link keepalive fix
+- `9a58b89` Port upstream LRPROOF route diagnostics
+- `29fcee3` Cache interface hashes for tunnel synthesis
+- `a96b875` Cache invalid discovery stamps
+- `4850e7f` Persist transport state at low priority
+- `2a3bfb5` Clean known destinations at background priority
+- `d91ac56` Expose blocked IP list in interface stats
+- `efbd6ca` Cache valid discovery stamps
+- `771762b` Raise default discovery stamp value to 16
+
+The exact commit-by-commit disposition and acceptance record is in
+[`docs/reticulum-1.4.0-parity.md`](docs/reticulum-1.4.0-parity.md).
 
 ## Completed 1.3.6..1.3.7 Porting Queue
 
