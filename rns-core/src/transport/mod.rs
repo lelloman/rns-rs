@@ -51,6 +51,33 @@ use self::types::{
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 
+fn lrproof_hop_mismatch_diagnostic(packet_hops: u8, entry: &LinkEntry) -> String {
+    alloc::format!(
+        "Received link request proof with hop mismatch ({}/{}:{}->{}), not transporting it",
+        packet_hops,
+        entry.remaining_hops,
+        entry.next_hop_interface.0,
+        entry.received_interface.0,
+    )
+}
+
+fn link_route_hops_match(
+    packet_hops: u8,
+    entry: &LinkEntry,
+    receiving_interface: InterfaceId,
+) -> bool {
+    if entry.next_hop_interface == entry.received_interface {
+        packet_hops == entry.remaining_hops || packet_hops == entry.taken_hops
+    } else if receiving_interface == entry.next_hop_interface {
+        packet_hops == entry.remaining_hops
+    } else if receiving_interface == entry.received_interface {
+        packet_hops == entry.taken_hops
+    } else {
+        // The routing failure is the interface, not a hop mismatch.
+        true
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RxMetadata {
     pub rssi: Option<i16>,
@@ -1522,6 +1549,15 @@ impl TransportEngine {
                             interface: outbound_interface,
                             raw: new_raw.into(),
                         });
+                    } else if link_route_hops_match(packet.hops, &entry, ctx.iface) {
+                        log::debug!(
+                            "Link request proof received on wrong interface {}, not transporting it (expected {} or {})",
+                            ctx.iface.0,
+                            entry.next_hop_interface.0,
+                            entry.received_interface.0,
+                        );
+                    } else {
+                        log::debug!("{}", lrproof_hop_mismatch_diagnostic(packet.hops, &entry));
                     }
                 }
             } else {
@@ -2448,6 +2484,50 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn lrproof_hop_mismatch_diagnostic_contains_complete_route_context() {
+        let entry = LinkEntry {
+            timestamp: 100.0,
+            next_hop_transport_id: [0; 16],
+            next_hop_interface: InterfaceId(17),
+            remaining_hops: 3,
+            received_interface: InterfaceId(29),
+            taken_hops: 5,
+            destination_hash: [0xAA; 16],
+            validated: false,
+            proof_timeout: 200.0,
+        };
+
+        assert_eq!(
+            lrproof_hop_mismatch_diagnostic(9, &entry),
+            "Received link request proof with hop mismatch (9/3:17->29), not transporting it"
+        );
+    }
+
+    #[test]
+    fn lrproof_hop_mismatch_diagnostic_does_not_confuse_hops_with_interface_ids() {
+        let entry = LinkEntry {
+            timestamp: 100.0,
+            next_hop_transport_id: [0; 16],
+            next_hop_interface: InterfaceId(u64::MAX - 1),
+            remaining_hops: u8::MAX,
+            received_interface: InterfaceId(u64::MAX),
+            taken_hops: 0,
+            destination_hash: [0xAA; 16],
+            validated: false,
+            proof_timeout: 200.0,
+        };
+
+        assert_eq!(
+            lrproof_hop_mismatch_diagnostic(0, &entry),
+            alloc::format!(
+                "Received link request proof with hop mismatch (0/255:{}->{}), not transporting it",
+                u64::MAX - 1,
+                u64::MAX
+            )
+        );
     }
 
     #[test]
