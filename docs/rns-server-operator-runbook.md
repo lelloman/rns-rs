@@ -179,6 +179,45 @@ done
 
 After deploying, run the manual backbone smoke test below.
 
+### Backbone Fast-Flap Protection
+
+Backbone listeners automatically block clients that repeatedly connect for a
+short time and disconnect. This pattern is commonly caused by clients attempting
+to rotate interfaces while flooding announces or path requests, broken client
+implementations, or generic network scanners. Rejecting a blocked address before
+allocating a dynamic interface reduces log noise and avoids needless interface
+turnover; the normal ingress rate limits still apply independently.
+
+Fast-flap protection is enabled by default. These optional settings show the
+defaults and can be placed in any listening `BackboneInterface` section:
+
+```ini
+[[Backbone Listener]]
+  type = BackboneInterface
+  enabled = yes
+  listen_ip = 0.0.0.0
+  listen_port = 4242
+
+  # Set to no to disable both tracking and blocking.
+  block_fast_flapping = yes
+
+  # Minutes an address remains blocked after its most recent short connection.
+  fast_flapping_block_time = 720
+
+  # A connection lasting at least this many seconds is not a fast flap.
+  fast_flapping_threshold = 20
+
+  # Number of short connections allowed; the next one triggers blocking.
+  fast_flapping_grace = 5
+```
+
+With the defaults, the sixth connection lasting less than 20 seconds blocks the
+remote address for 12 hours from that connection. A connection lasting exactly
+20 seconds is not counted. Setting `block_fast_flapping = no` disables both new
+tracking and rejection based on previously recorded flaps for that listener.
+`rnstatus` reports the current number of blocked addresses as `Blocked` under
+the listener.
+
 ### Manual Backbone Smoke Test
 
 After deploying routing, path discovery or backbone config changes, run the live
