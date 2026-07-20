@@ -1268,6 +1268,15 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
                 .unwrap_or(PickleValue::None),
         ),
         (
+            PickleValue::String("blocked_ip_list".into()),
+            s.blocked_ip_list
+                .as_ref()
+                .map(|blocked| {
+                    PickleValue::List(blocked.iter().cloned().map(PickleValue::String).collect())
+                })
+                .unwrap_or(PickleValue::None),
+        ),
+        (
             PickleValue::String("announce_rate_grace".into()),
             PickleValue::Int(s.announce_rate_grace as i64),
         ),
@@ -2711,6 +2720,7 @@ mod tests {
                             oa_freq: 0.0,
                             clients: Some(2),
                             blocked_ips: None,
+                            blocked_ip_list: None,
                             announce_rate_target: Some(3600.0),
                             announce_rate_grace: 5,
                             announce_rate_penalty: 0.0,
@@ -2918,6 +2928,7 @@ mod tests {
                 oa_freq: 4.0,
                 clients: Some(3),
                 blocked_ips: Some(2),
+                blocked_ip_list: Some(vec!["192.0.2.1".into(), "203.0.113.2".into()]),
                 announce_rate_target: Some(3600.0),
                 announce_rate_grace: 5,
                 announce_rate_penalty: 0.0,
@@ -2998,6 +3009,17 @@ mod tests {
         );
         assert_eq!(ifaces[0].get("clients").unwrap().as_int().unwrap(), 3);
         assert_eq!(ifaces[0].get("blocked_ips").unwrap().as_int().unwrap(), 2);
+        assert_eq!(
+            ifaces[0]
+                .get("blocked_ip_list")
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["192.0.2.1", "203.0.113.2"]
+        );
     }
 
     #[test]

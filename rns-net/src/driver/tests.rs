@@ -4822,6 +4822,7 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     assert_eq!(public.interface_type, "BackboneInterface");
     assert_eq!(public.clients, Some(2));
     assert_eq!(public.blocked_ips, Some(1));
+    assert_eq!(public.blocked_ip_list, Some(vec![peer_ip.to_string()]));
 }
 
 #[cfg(feature = "iface-backbone")]

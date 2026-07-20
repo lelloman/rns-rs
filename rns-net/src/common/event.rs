@@ -747,6 +747,8 @@ pub struct SingleInterfaceStat {
     pub clients: Option<u64>,
     /// Fast-flapping IPs currently blocked by an aggregate server interface.
     pub blocked_ips: Option<u64>,
+    /// Sorted textual IP addresses currently blocked for fast flapping.
+    pub blocked_ip_list: Option<Vec<String>>,
     /// Target interval for outgoing announce rate control, in seconds.
     pub announce_rate_target: Option<f64>,
     /// Announce-rate control grace count.
