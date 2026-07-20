@@ -5,7 +5,7 @@
 //!
 //! Python reference: RNS/Discovery.py
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock};
@@ -203,8 +203,17 @@ fn insufficient_stamp_diagnostic(value: u32) -> String {
 #[derive(Debug, Clone)]
 pub struct DiscoveryStampCache {
     capacity: usize,
+    valid_order: VecDeque<[u8; 32]>,
+    valid_entries: BTreeMap<[u8; 32], ValidStampEntry>,
     invalid_order: VecDeque<[u8; 32]>,
     invalid_entries: BTreeSet<[u8; 32]>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidStampEntry {
+    stamp: Vec<u8>,
+    packed: Vec<u8>,
+    value: u32,
 }
 
 impl Default for DiscoveryStampCache {
@@ -217,6 +226,8 @@ impl DiscoveryStampCache {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             capacity,
+            valid_order: VecDeque::with_capacity(capacity),
+            valid_entries: BTreeMap::new(),
             invalid_order: VecDeque::with_capacity(capacity),
             invalid_entries: BTreeSet::new(),
         }
@@ -231,6 +242,23 @@ impl DiscoveryStampCache {
 
     fn contains_invalid_hash(&self, payload_hash: &[u8; 32]) -> bool {
         self.invalid_entries.contains(payload_hash)
+    }
+
+    fn valid_entry(&self, payload_hash: &[u8; 32]) -> Option<&ValidStampEntry> {
+        self.valid_entries.get(payload_hash)
+    }
+
+    fn insert_valid_hash(&mut self, payload_hash: [u8; 32], entry: ValidStampEntry) {
+        if self.capacity == 0 || self.valid_entries.contains_key(&payload_hash) {
+            return;
+        }
+        if self.valid_order.len() == self.capacity {
+            if let Some(evicted) = self.valid_order.pop_front() {
+                self.valid_entries.remove(&evicted);
+            }
+        }
+        self.valid_order.push_back(payload_hash);
+        self.valid_entries.insert(payload_hash, entry);
     }
 
     fn insert_invalid_hash(&mut self, payload_hash: [u8; 32]) {
@@ -250,9 +278,18 @@ impl DiscoveryStampCache {
         self.invalid_order.len()
     }
 
+    pub fn valid_len(&self) -> usize {
+        self.valid_order.len()
+    }
+
     pub fn contains_invalid_app_data(&self, app_data: &[u8]) -> bool {
         Self::payload_hash(app_data)
             .is_some_and(|payload_hash| self.contains_invalid_hash(&payload_hash))
+    }
+
+    pub fn contains_valid_app_data(&self, app_data: &[u8]) -> bool {
+        Self::payload_hash(app_data)
+            .is_some_and(|payload_hash| self.valid_entries.contains_key(&payload_hash))
     }
 }
 
@@ -330,26 +367,44 @@ pub fn parse_interface_announce_with_cache(
         return None;
     }
 
-    // Split stamp and packed info
-    let stamp = &payload[payload.len() - STAMP_SIZE..];
-    let packed = &payload[..payload.len() - STAMP_SIZE];
+    let (stamp, packed, stamp_value) =
+        if let Some(entry) = cache.valid_entry(&payload_hash).cloned() {
+            log::trace!(
+                target: rns_core::logging::PATHING_LOG_TARGET,
+                "Discovery announce cache hit"
+            );
+            if entry.value < required_stamp_value as u32 {
+                log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
+                return None;
+            }
+            (entry.stamp, entry.packed, entry.value)
+        } else {
+            // The driver owns this cache and processes events sequentially, so the
+            // upstream validation lock is implicit in Rust's ownership model.
+            let stamp = payload[payload.len() - STAMP_SIZE..].to_vec();
+            let packed = payload[..payload.len() - STAMP_SIZE].to_vec();
+            let infohash = sha256(&packed);
+            let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+            let value = stamp_value(&workblock, &stamp);
 
-    // Compute infohash and workblock
-    let infohash = sha256(packed);
-    let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
-
-    // Calculate the value before validation so rejected announcements can be
-    // diagnosed with the actual work they supplied.
-    let stamp_value = stamp_value(&workblock, stamp);
-
-    if !stamp_valid(stamp, required_stamp_value, &workblock) {
-        log::debug!("{}", insufficient_stamp_diagnostic(stamp_value));
-        cache.insert_invalid_hash(payload_hash);
-        return None;
-    }
+            if !stamp_valid(&stamp, required_stamp_value, &workblock) {
+                log::debug!("{}", insufficient_stamp_diagnostic(value));
+                cache.insert_invalid_hash(payload_hash);
+                return None;
+            }
+            cache.insert_valid_hash(
+                payload_hash,
+                ValidStampEntry {
+                    stamp: stamp.clone(),
+                    packed: packed.clone(),
+                    value,
+                },
+            );
+            (stamp, packed, value)
+        };
 
     // Unpack the interface info
-    let (value, _) = msgpack::unpack(packed).ok()?;
+    let (value, _) = msgpack::unpack(&packed).ok()?;
     let map = value.as_map()?;
 
     // Helper to get a value from the map by integer key
@@ -453,7 +508,7 @@ pub fn parse_interface_announce_with_cache(
         last_heard: now,
         heard_count: 0,
         status: DiscoveredStatus::Available,
-        stamp: stamp.to_vec(),
+        stamp,
         stamp_value,
         transport_id,
         network_id: *announced_identity_hash,
@@ -863,6 +918,69 @@ mod tests {
         assert!(!cache.contains_invalid_app_data(&first));
         assert!(cache.contains_invalid_app_data(&second));
         assert!(cache.contains_invalid_app_data(&third));
+    }
+
+    #[test]
+    fn valid_stamp_cache_short_circuits_repeat_work_and_preserves_dynamic_metadata() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut cache = DiscoveryStampCache::with_capacity(8);
+        let first =
+            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache).unwrap();
+        assert_eq!(cache.valid_len(), 1);
+
+        let second =
+            parse_interface_announce_with_cache(&app_data, &[0x22; 16], 7, 0, &mut cache).unwrap();
+        assert_eq!(cache.valid_len(), 1);
+        assert_eq!(second.stamp, first.stamp);
+        assert_eq!(second.stamp_value, first.stamp_value);
+        assert_eq!(second.network_id, [0x22; 16]);
+        assert_eq!(second.hops, 7);
+    }
+
+    #[test]
+    fn valid_stamp_cache_is_bounded_fifo_and_keys_payload_like_invalid_cache() {
+        let first = build_discovery_app_data("BackboneInterface", Some("first.example"));
+        let second = build_discovery_app_data("BackboneInterface", Some("second.example"));
+        let third = build_discovery_app_data("BackboneInterface", Some("third.example"));
+        let mut cache = DiscoveryStampCache::with_capacity(2);
+
+        for app_data in [&first, &second, &third] {
+            assert!(
+                parse_interface_announce_with_cache(app_data, &[0x11; 16], 1, 0, &mut cache,)
+                    .is_some()
+            );
+        }
+        assert_eq!(cache.valid_len(), 2);
+        assert!(!cache.contains_valid_app_data(&first));
+        assert!(cache.contains_valid_app_data(&second));
+        assert!(cache.contains_valid_app_data(&third));
+
+        let mut different_flags = second.clone();
+        different_flags[0] ^= 0x01;
+        assert!(cache.contains_valid_app_data(&different_flags));
+        let mut different_stamp = second.clone();
+        *different_stamp.last_mut().unwrap() ^= 0x01;
+        assert!(!cache.contains_valid_app_data(&different_stamp));
+    }
+
+    #[test]
+    fn cached_stamp_value_is_rechecked_if_requirement_increases() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut cache = DiscoveryStampCache::with_capacity(8);
+        assert!(
+            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache,)
+                .is_some()
+        );
+        assert!(parse_interface_announce_with_cache(
+            &app_data,
+            &[0x11; 16],
+            1,
+            u8::MAX,
+            &mut cache,
+        )
+        .is_none());
+        assert_eq!(cache.valid_len(), 1);
+        assert_eq!(cache.invalid_len(), 0);
     }
 
     #[test]
