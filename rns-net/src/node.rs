@@ -478,7 +478,7 @@ pub struct NodeConfig {
     pub hooks: Vec<config::ParsedHook>,
     /// Enable interface discovery.
     pub discover_interfaces: bool,
-    /// Minimum stamp value for accepting discovered interfaces (default: 14).
+    /// Minimum stamp value for accepting discovered interfaces (default: 16).
     pub discovery_required_value: Option<u8>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
     pub respond_to_probes: bool,
@@ -3228,6 +3228,22 @@ mod tests {
         let err = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap_err();
 
         assert!(err.contains("ic_burst_hold"));
+    }
+
+    #[test]
+    fn discovery_stamp_default_is_16_but_explicit_override_is_preserved() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("discoverable".to_string(), "yes".to_string());
+        let defaults =
+            super::extract_discovery_config("Discovery Test", "BackboneInterface", &params)
+                .unwrap();
+        assert_eq!(defaults.stamp_value, 16);
+
+        params.insert("discovery_stamp_value".to_string(), "14".to_string());
+        let overridden =
+            super::extract_discovery_config("Discovery Test", "BackboneInterface", &params)
+                .unwrap();
+        assert_eq!(overridden.stamp_value, 14);
     }
 
     #[test]
