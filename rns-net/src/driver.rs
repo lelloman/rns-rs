@@ -705,6 +705,8 @@ pub struct Driver {
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
     pub(crate) discovery_required_value: u8,
+    /// Bounded cache of discovery payloads with previously rejected stamps.
+    pub(crate) discovery_stamp_cache: crate::discovery::DiscoveryStampCache,
     /// Name hash for interface discovery announces ("rnstransport.discovery.interface").
     pub(crate) discovery_name_hash: [u8; 10],
     /// Destination hash for the probe responder (if respond_to_probes is enabled).
@@ -875,6 +877,7 @@ impl Driver {
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
             discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
+            discovery_stamp_cache: crate::discovery::DiscoveryStampCache::default(),
             discovery_name_hash,
             probe_responder_hash: None,
             discover_interfaces: false,

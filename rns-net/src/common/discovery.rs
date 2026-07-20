@@ -5,6 +5,8 @@
 //!
 //! Python reference: RNS/Discovery.py
 
+use std::collections::{BTreeSet, VecDeque};
+
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock};
 use rns_crypto::sha256::sha256;
@@ -45,6 +47,9 @@ pub const WORKBLOCK_EXPAND_ROUNDS: u32 = 20;
 
 /// Stamp size in bytes
 pub const STAMP_SIZE: usize = 32;
+
+/// Maximum number of known-invalid discovery payloads retained by default.
+pub const DISCOVERY_STAMP_CACHE_MAX_ENTRIES: usize = 2048;
 
 /// Interface types accepted from discovery announces.
 pub const DISCOVERABLE_TYPES: [&str; 6] = [
@@ -190,6 +195,67 @@ fn insufficient_stamp_diagnostic(value: u32) -> String {
     format!("Ignored discovered interface with insufficient stamp value {value}")
 }
 
+/// Bounded FIFO cache for discovery payloads with invalid proof-of-work stamps.
+///
+/// The key is the full SHA-256 hash of the discovery payload after its flags
+/// byte, matching upstream Reticulum. It therefore includes the stamp itself,
+/// while harmless changes to the flags byte do not bypass the cache.
+#[derive(Debug, Clone)]
+pub struct DiscoveryStampCache {
+    capacity: usize,
+    invalid_order: VecDeque<[u8; 32]>,
+    invalid_entries: BTreeSet<[u8; 32]>,
+}
+
+impl Default for DiscoveryStampCache {
+    fn default() -> Self {
+        Self::with_capacity(DISCOVERY_STAMP_CACHE_MAX_ENTRIES)
+    }
+}
+
+impl DiscoveryStampCache {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            capacity,
+            invalid_order: VecDeque::with_capacity(capacity),
+            invalid_entries: BTreeSet::new(),
+        }
+    }
+
+    fn payload_hash(app_data: &[u8]) -> Option<[u8; 32]> {
+        app_data
+            .get(1..)
+            .filter(|payload| !payload.is_empty())
+            .map(sha256)
+    }
+
+    fn contains_invalid_hash(&self, payload_hash: &[u8; 32]) -> bool {
+        self.invalid_entries.contains(payload_hash)
+    }
+
+    fn insert_invalid_hash(&mut self, payload_hash: [u8; 32]) {
+        if self.capacity == 0 || self.invalid_entries.contains(&payload_hash) {
+            return;
+        }
+        if self.invalid_order.len() == self.capacity {
+            if let Some(evicted) = self.invalid_order.pop_front() {
+                self.invalid_entries.remove(&evicted);
+            }
+        }
+        self.invalid_order.push_back(payload_hash);
+        self.invalid_entries.insert(payload_hash);
+    }
+
+    pub fn invalid_len(&self) -> usize {
+        self.invalid_order.len()
+    }
+
+    pub fn contains_invalid_app_data(&self, app_data: &[u8]) -> bool {
+        Self::payload_hash(app_data)
+            .is_some_and(|payload_hash| self.contains_invalid_hash(&payload_hash))
+    }
+}
+
 impl DiscoveredInterface {
     /// Compute the current status based on last_heard timestamp
     pub fn compute_status(&self) -> DiscoveredStatus {
@@ -220,6 +286,25 @@ pub fn parse_interface_announce(
     hops: u8,
     required_stamp_value: u8,
 ) -> Option<DiscoveredInterface> {
+    let mut cache = DiscoveryStampCache::with_capacity(0);
+    parse_interface_announce_with_cache(
+        app_data,
+        announced_identity_hash,
+        hops,
+        required_stamp_value,
+        &mut cache,
+    )
+}
+
+/// Parse an interface discovery announcement while retaining invalid stamp
+/// results across calls.
+pub fn parse_interface_announce_with_cache(
+    app_data: &[u8],
+    announced_identity_hash: &[u8; 16],
+    hops: u8,
+    required_stamp_value: u8,
+    cache: &mut DiscoveryStampCache,
+) -> Option<DiscoveredInterface> {
     // Need at least: 1 byte flags + some data + STAMP_SIZE
     if app_data.len() <= STAMP_SIZE + 1 {
         return None;
@@ -228,6 +313,15 @@ pub fn parse_interface_announce(
     // Extract flags and payload
     let flags = app_data[0];
     let payload = &app_data[1..];
+    let payload_hash = sha256(payload);
+
+    if cache.contains_invalid_hash(&payload_hash) {
+        log::trace!(
+            target: rns_core::logging::PATHING_LOG_TARGET,
+            "Ignored previously discovered interface with insufficient stamp value"
+        );
+        return None;
+    }
 
     // Check encryption flag (we don't support encrypted discovery yet)
     let encrypted = (flags & 0x02) != 0;
@@ -250,6 +344,7 @@ pub fn parse_interface_announce(
 
     if !stamp_valid(stamp, required_stamp_value, &workblock) {
         log::debug!("{}", insufficient_stamp_diagnostic(stamp_value));
+        cache.insert_invalid_hash(payload_hash);
         return None;
     }
 
@@ -715,6 +810,95 @@ mod tests {
             insufficient_stamp_diagnostic(7),
             "Ignored discovered interface with insufficient stamp value 7"
         );
+    }
+
+    #[test]
+    fn invalid_stamp_cache_short_circuits_repeat_validation() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut cache = DiscoveryStampCache::with_capacity(8);
+
+        assert!(parse_interface_announce_with_cache(
+            &app_data,
+            &[0x11; 16],
+            1,
+            u8::MAX,
+            &mut cache,
+        )
+        .is_none());
+        assert_eq!(cache.invalid_len(), 1);
+
+        // A zero requirement would accept this stamp if validation ran again.
+        // The cached invalid payload must be rejected before that work occurs.
+        assert!(
+            parse_interface_announce_with_cache(&app_data, &[0x11; 16], 1, 0, &mut cache,)
+                .is_none()
+        );
+        assert!(parse_interface_announce(&app_data, &[0x11; 16], 1, 0).is_some());
+        assert_eq!(
+            cache.invalid_len(),
+            1,
+            "cache hits must not duplicate entries"
+        );
+    }
+
+    #[test]
+    fn invalid_stamp_cache_is_bounded_fifo() {
+        let first = build_discovery_app_data("BackboneInterface", Some("first.example"));
+        let second = build_discovery_app_data("BackboneInterface", Some("second.example"));
+        let third = build_discovery_app_data("BackboneInterface", Some("third.example"));
+        let mut cache = DiscoveryStampCache::with_capacity(2);
+
+        for app_data in [&first, &second, &third] {
+            assert!(parse_interface_announce_with_cache(
+                app_data,
+                &[0x11; 16],
+                1,
+                u8::MAX,
+                &mut cache,
+            )
+            .is_none());
+        }
+
+        assert_eq!(cache.invalid_len(), 2);
+        assert!(!cache.contains_invalid_app_data(&first));
+        assert!(cache.contains_invalid_app_data(&second));
+        assert!(cache.contains_invalid_app_data(&third));
+    }
+
+    #[test]
+    fn invalid_stamp_cache_keys_payload_including_stamp_but_excluding_flags() {
+        let original = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut cache = DiscoveryStampCache::with_capacity(8);
+        assert!(parse_interface_announce_with_cache(
+            &original,
+            &[0x11; 16],
+            1,
+            u8::MAX,
+            &mut cache,
+        )
+        .is_none());
+
+        let mut different_flags = original.clone();
+        different_flags[0] ^= 0x01;
+        assert!(cache.contains_invalid_app_data(&different_flags));
+
+        let mut different_stamp = original.clone();
+        *different_stamp.last_mut().unwrap() ^= 0x01;
+        assert!(!cache.contains_invalid_app_data(&different_stamp));
+    }
+
+    #[test]
+    fn malformed_discovery_payload_is_not_added_to_invalid_stamp_cache() {
+        let mut cache = DiscoveryStampCache::with_capacity(8);
+        assert!(parse_interface_announce_with_cache(
+            &[0x00, 0x01, 0x02],
+            &[0x11; 16],
+            1,
+            u8::MAX,
+            &mut cache,
+        )
+        .is_none());
+        assert_eq!(cache.invalid_len(), 0);
     }
 
     #[test]

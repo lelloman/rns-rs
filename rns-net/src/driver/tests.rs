@@ -210,6 +210,65 @@ fn new_test_driver() -> Driver {
     driver
 }
 
+#[test]
+fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.discovery_required_value = u8::MAX;
+
+    let packed = rns_core::msgpack::pack(&rns_core::msgpack::Value::Map(vec![
+        (
+            rns_core::msgpack::Value::UInt(crate::discovery::INTERFACE_TYPE as u64),
+            rns_core::msgpack::Value::Str("BackboneInterface".into()),
+        ),
+        (
+            rns_core::msgpack::Value::UInt(crate::discovery::TRANSPORT as u64),
+            rns_core::msgpack::Value::Bool(true),
+        ),
+        (
+            rns_core::msgpack::Value::UInt(crate::discovery::NAME as u64),
+            rns_core::msgpack::Value::Str("cached-invalid".into()),
+        ),
+        (
+            rns_core::msgpack::Value::UInt(crate::discovery::TRANSPORT_ID as u64),
+            rns_core::msgpack::Value::Bin(vec![0x42; 16]),
+        ),
+        (
+            rns_core::msgpack::Value::UInt(crate::discovery::REACHABLE_ON as u64),
+            rns_core::msgpack::Value::Str("example.com".into()),
+        ),
+    ]));
+    let mut app_data = Vec::with_capacity(1 + packed.len() + crate::discovery::STAMP_SIZE);
+    app_data.push(0);
+    app_data.extend_from_slice(&packed);
+    app_data.extend_from_slice(&[0; crate::discovery::STAMP_SIZE]);
+
+    let announce = TransportAction::AnnounceReceived {
+        destination_hash: [0x31; 16],
+        identity_hash: [0x32; 16],
+        public_key: [0x33; 64],
+        name_hash: driver.discovery_name_hash,
+        random_hash: [0x34; 10],
+        ratchet: None,
+        app_data: Some(app_data.clone()),
+        hops: 1,
+        receiving_interface: InterfaceId(9),
+        rx: rns_core::transport::RxMetadata::default(),
+    };
+
+    driver.dispatch_all(vec![announce.clone()]);
+    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+    assert!(driver
+        .discovery_stamp_cache
+        .contains_invalid_app_data(&app_data));
+
+    // Even if the requirement changes, the repeated payload is rejected from
+    // the driver's persistent cache before proof-of-work validation is retried.
+    driver.discovery_required_value = 0;
+    driver.dispatch_all(vec![announce]);
+    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+}
+
 fn make_announced_identity(
     dest_hash: [u8; 16],
     received_at: f64,
