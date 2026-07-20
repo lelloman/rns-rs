@@ -637,11 +637,12 @@ impl Driver {
                         if self.discover_interfaces {
                             if let Some(ref app_data) = app_data {
                                 if let Some(mut discovered) =
-                                    crate::discovery::parse_interface_announce(
+                                    crate::discovery::parse_interface_announce_with_cache(
                                         app_data,
                                         &identity_hash,
                                         hops,
                                         self.discovery_required_value,
+                                        &mut self.discovery_stamp_cache,
                                     )
                                 {
                                     crate::discovery::apply_transport_autoconnect_mode(
