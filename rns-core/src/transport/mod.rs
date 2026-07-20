@@ -156,6 +156,7 @@ pub struct TransportEngine {
     rate_limiter: AnnounceRateLimiter,
     path_states: BTreeMap<[u8; 16], u8>,
     interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
+    interface_hashes: BTreeMap<InterfaceId, [u8; 32]>,
     local_destinations: BTreeMap<[u8; 16], u8>,
     blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
     announce_queues: AnnounceQueues,
@@ -192,6 +193,7 @@ impl TransportEngine {
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
             interfaces: BTreeMap::new(),
+            interface_hashes: BTreeMap::new(),
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
             announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
@@ -211,11 +213,14 @@ impl TransportEngine {
     // =========================================================================
 
     pub fn register_interface(&mut self, info: InterfaceInfo) {
+        self.interface_hashes
+            .insert(info.id, hash::full_hash(info.name.as_bytes()));
         self.interfaces.insert(info.id, info);
     }
 
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
+        self.interface_hashes.remove(&id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
@@ -503,12 +508,12 @@ impl TransportEngine {
     ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
 
-        // Compute interface hash from the interface name
-        let interface_hash = if let Some(info) = self.interfaces.get(&interface_id) {
-            hash::full_hash(info.name.as_bytes())
+        let interface_hash = if let Some(interface_hash) = self.interface_hashes.get(&interface_id)
+        {
+            *interface_hash
         } else {
             log::warn!(
-                "Cannot synthesize tunnel on {:?}: unknown interface",
+                "Cannot synthesize tunnel on {:?}: unknown interface or missing cached hash",
                 interface_id
             );
             return actions;
@@ -4076,6 +4081,73 @@ mod tests {
             }
             _ => panic!("Expected TunnelSynthesize"),
         }
+    }
+
+    fn synthesized_interface_hash(actions: &[TransportAction]) -> [u8; 32] {
+        let data = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::TunnelSynthesize { data, .. } => Some(data),
+                _ => None,
+            })
+            .expect("tunnel synthesis action");
+        let mut interface_hash = [0u8; 32];
+        interface_hash.copy_from_slice(&data[64..96]);
+        interface_hash
+    }
+
+    #[test]
+    fn tunnel_synthesis_uses_hash_cached_at_interface_registration() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut interface = make_tunnel_interface(1);
+        interface.name = String::from("registered-name");
+        engine.register_interface(interface);
+
+        // Interface display names are immutable in normal operation. Mutating
+        // the stored metadata here distinguishes a registration-time cache
+        // from a hash recalculated by every synthesis.
+        engine.interfaces.get_mut(&InterfaceId(1)).unwrap().name = String::from("later-name");
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let actions = engine.synthesize_tunnel(
+            &identity,
+            InterfaceId(1),
+            &mut rns_crypto::FixedRng::new(&[0x11; 32]),
+        );
+
+        assert_eq!(
+            synthesized_interface_hash(&actions),
+            hash::full_hash(b"registered-name")
+        );
+    }
+
+    #[test]
+    fn replacing_interface_id_refreshes_cached_tunnel_hash() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut first = make_tunnel_interface(1);
+        first.name = String::from("first-name");
+        engine.register_interface(first);
+        let mut replacement = make_tunnel_interface(1);
+        replacement.name = String::from("replacement-name");
+        engine.register_interface(replacement);
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let actions = engine.synthesize_tunnel(
+            &identity,
+            InterfaceId(1),
+            &mut rns_crypto::FixedRng::new(&[0x11; 32]),
+        );
+
+        assert_eq!(
+            synthesized_interface_hash(&actions),
+            hash::full_hash(b"replacement-name")
+        );
+        assert_ne!(
+            synthesized_interface_hash(&actions),
+            hash::full_hash(b"first-name")
+        );
     }
 
     #[test]
