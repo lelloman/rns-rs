@@ -149,15 +149,20 @@ impl TransportEngine {
             return Vec::new();
         };
 
-        let should_discover = recursive_prs || constants::DISCOVER_PATHS_FOR.contains(&mode);
-        if !should_discover {
+        let search_mode_filter: Option<&[u8]> = if recursive_prs
+            || constants::DISCOVER_PATHS_FOR.contains(&mode)
+        {
+            None
+        } else if mode == constants::MODE_BOUNDARY {
+            Some(&constants::BOUNDARY_SEARCH_MODES)
+        } else {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Not discovering path to {:02x?}: recursive path discovery is disabled on interface {}",
                 &ctx.destination_hash[..4],
                 ctx.interface_id.0,
             );
             return Vec::new();
-        }
+        };
 
         if self.ingress_control.should_ingress_limit_pr(
             ctx.interface_id,
@@ -178,6 +183,7 @@ impl TransportEngine {
             .interfaces
             .values()
             .filter(|info| info.id != ctx.interface_id && info.out_capable)
+            .filter(|info| search_mode_filter.map_or(true, |modes| modes.contains(&info.mode)))
             .map(|info| {
                 (
                     info.id,

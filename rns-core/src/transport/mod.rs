@@ -4295,6 +4295,61 @@ mod tests {
     }
 
     #[test]
+    fn boundary_path_request_searches_only_boundary_and_gateway_interfaces() {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_BOUNDARY));
+        engine.register_interface(make_interface(2, constants::MODE_BOUNDARY));
+        engine.register_interface(make_interface(3, constants::MODE_GATEWAY));
+        engine.register_interface(make_interface(4, constants::MODE_FULL));
+        engine.register_interface(make_interface(5, constants::MODE_ACCESS_POINT));
+        engine.register_interface(make_interface(6, constants::MODE_INTERNAL));
+
+        let dest = [0xBC; 16];
+        let tag = [0x21; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        let interfaces: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                TransportAction::SendOnInterface { interface, raw } => {
+                    assert_recursive_path_request_packet(raw.as_ref(), &dest, &tag);
+                    Some(*interface)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(interfaces, vec![InterfaceId(2), InterfaceId(3)]);
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
+    fn recursive_prs_on_boundary_keeps_unfiltered_egress_behavior() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let mut ingress = make_interface(1, constants::MODE_BOUNDARY);
+        ingress.recursive_prs = true;
+        engine.register_interface(ingress);
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+        let dest = [0xBD; 16];
+        let tag = [0x22; 16];
+        let data = make_path_request_data(&dest, &tag);
+
+        let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, InterfaceId(2));
+                assert_recursive_path_request_packet(raw.as_ref(), &dest, &tag);
+            }
+            _ => panic!("expected SendOnInterface for recursive path request"),
+        }
+        assert!(engine.discovery_path_requests.contains_key(&dest));
+    }
+
+    #[test]
     fn test_path_request_not_forwarded_on_full() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_interface(1, constants::MODE_FULL));
