@@ -768,12 +768,21 @@ the option is set. It defaults to enabled. Disabling it only affects announce
 propagation; destinations behind internal-mode interfaces may still be resolved
 through path requests.
 
+The per-interface `announces_to_internal` option provides the inverse override.
+Setting it to `yes` allows announces received on that interface to propagate to
+internal-mode interfaces even when its mode would normally prohibit that
+direction. Leaving it unset, or setting it to `no`, preserves the normal mode
+matrix.
+
 For announce propagation, internal interfaces designate networks that belong to
 a network different from any marked as boundary. Announces from boundary
 interfaces do not propagate to internal interfaces, but announces from roaming
 and internal interfaces can propagate to internal interfaces. Announces from
 internal interfaces can propagate to boundary interfaces unless the outbound
 interface disables `announces_from_internal`.
+
+For an interactive view of these rules, see the
+[Announce Propagation Simulator](https://rns.moscow/announce-sim.html).
 
 When transport is disabled, nodes use an ephemeral transport-facing identity by
 default while retaining the configured/stored identity for local state. The

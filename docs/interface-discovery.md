@@ -1,5 +1,29 @@
 # Interface discovery locations
 
+## Auto-connect policy
+
+Discovery-origin Backbone peer-pool connections normally use gateway mode when
+transport is enabled and full mode otherwise. Two optional `[reticulum]`
+settings provide finer control:
+
+```ini
+[reticulum]
+  autoconnect_discovered_mode = boundary
+  autoconnect_announces_to_internal = yes
+```
+
+`autoconnect_discovered_mode` selects the mode assigned to automatically
+connected discovered interfaces. It accepts the same mode names and aliases as
+`interface_mode`. `autoconnect_announces_to_internal = yes` allows announces
+received through those interfaces to propagate to internal-mode interfaces,
+even when their selected mode would normally block that direction.
+
+In rns-rs these settings apply to discovery-origin members of the bounded
+Backbone peer pool. They do not modify statically configured interfaces or
+configured peer-pool members.
+
+## Advertised locations
+
 Discoverable Backbone and TCP server interfaces can advertise a static
 location with `latitude`, `longitude`, and `height`. Alternatively,
 `location_cmd` can resolve a changing location immediately before every due
