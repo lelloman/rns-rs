@@ -638,6 +638,7 @@ fn start_transport_node_with_limits(
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -742,6 +743,7 @@ fn start_client_node_with_packet_hashlist(
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -1246,6 +1248,7 @@ fn test_direct_link_no_transport() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -1855,6 +1858,7 @@ fn test_plain_message_delivery() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -2097,6 +2101,7 @@ fn test_group_message_delivery() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -2221,6 +2226,7 @@ fn test_group_wrong_key_fails() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -3456,6 +3462,7 @@ fn test_udp_announce_and_message() {
                     ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -3535,6 +3542,7 @@ fn test_udp_announce_and_message() {
                     ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -3708,6 +3716,7 @@ fn discovery_announce_received_by_client() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -3803,6 +3812,7 @@ fn discovery_announce_received_by_client() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -3931,6 +3941,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4019,6 +4030,7 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4350,6 +4362,7 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4509,6 +4522,7 @@ fn discovery_announce_through_relay() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4598,6 +4612,7 @@ fn discovery_announce_through_relay() {
                         ..Default::default()
                     }),
                     mode: MODE_FULL,
+                    gravity: 0,
                     recursive_prs: false,
                     announces_from_internal: true,
                     announces_to_internal: None,
@@ -4617,6 +4632,7 @@ fn discovery_announce_through_relay() {
                         ..TcpServerConfig::default()
                     }),
                     mode: MODE_FULL,
+                    gravity: 0,
                     recursive_prs: false,
                     announces_from_internal: true,
                     announces_to_internal: None,
@@ -4700,6 +4716,7 @@ fn discovery_announce_through_relay() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4824,6 +4841,7 @@ fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> 
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -4952,6 +4970,7 @@ fn start_managed_transport_client(
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,

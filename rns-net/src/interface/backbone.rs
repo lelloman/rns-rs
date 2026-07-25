@@ -43,6 +43,7 @@ pub struct BackboneConfig {
     pub listen_port: u16,
     pub interface_id: InterfaceId,
     pub mode: u8,
+    pub gravity: i64,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -265,6 +266,7 @@ pub struct BackbonePeerStateHandle {
     pub interface_id: InterfaceId,
     pub interface_name: String,
     pub mode: u8,
+    pub gravity: i64,
     pub announces_to_internal: Option<bool>,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
     pub fast_flap: BackboneFastFlapConfig,
@@ -279,6 +281,7 @@ impl Default for BackboneConfig {
             listen_port: 0,
             interface_id: InterfaceId(0),
             mode: constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,
@@ -451,6 +454,7 @@ fn start_with_template(
     let fast_flap_state = Arc::clone(&config.fast_flap_state);
     let ingress_control = config.ingress_control;
     let accepted_peer_mode = config.mode;
+    let accepted_peer_gravity = config.gravity;
     let accepted_peer_recursive_prs = config.recursive_prs;
     let accepted_peer_announces_from_internal = config.announces_from_internal;
     let accepted_peer_announces_to_internal = config.announces_to_internal;
@@ -474,6 +478,7 @@ fn start_with_template(
                 fast_flap_state,
                 ingress_control,
                 accepted_peer_mode,
+                accepted_peer_gravity,
                 accepted_peer_recursive_prs,
                 accepted_peer_announces_from_internal,
                 accepted_peer_announces_to_internal,
@@ -634,6 +639,7 @@ fn poll_loop(
     fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
     ingress_control: IngressControlConfig,
     accepted_peer_mode: u8,
+    accepted_peer_gravity: i64,
     accepted_peer_recursive_prs: bool,
     accepted_peer_announces_from_internal: bool,
     accepted_peer_announces_to_internal: Option<bool>,
@@ -794,6 +800,7 @@ fn poll_loop(
                                 id: client_id,
                                 name: format!("BackboneInterface/{}", client_id.0),
                                 mode: accepted_peer_mode,
+                                gravity: accepted_peer_gravity,
                                 recursive_prs: accepted_peer_recursive_prs,
                                 announces_from_internal: accepted_peer_announces_from_internal,
                                 announces_to_internal: accepted_peer_announces_to_internal,
@@ -1584,6 +1591,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 listen_port,
                 interface_id: id,
                 mode: constants::MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -1628,6 +1636,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     id,
                     name,
                     mode: ctx.mode,
+                    gravity: ctx.gravity,
                     recursive_prs: ctx.recursive_prs,
                     announces_from_internal: ctx.announces_from_internal,
                     announces_to_internal: ctx.announces_to_internal,
@@ -1662,6 +1671,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             BackboneMode::Server(mut cfg) => {
                 cfg.ingress_control = ctx.ingress_control;
                 cfg.mode = ctx.mode;
+                cfg.gravity = ctx.gravity;
                 cfg.recursive_prs = ctx.recursive_prs;
                 cfg.announces_from_internal = ctx.announces_from_internal;
                 cfg.announces_to_internal = ctx.announces_to_internal;
@@ -1675,6 +1685,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                         interface_type: "BackboneInterfacePeer".into(),
                         ifac: ctx.ifac,
                         mode: ctx.mode,
+                        gravity: ctx.gravity,
                         recursive_prs: ctx.recursive_prs,
                         announces_from_internal: ctx.announces_from_internal,
                         announces_to_internal: ctx.announces_to_internal,
@@ -1703,6 +1714,7 @@ pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<Backbon
             interface_id: config.interface_id,
             interface_name: config.name.clone(),
             mode: config.mode,
+            gravity: config.gravity,
             announces_to_internal: config.announces_to_internal,
             peer_state: Arc::clone(&config.peer_state),
             fast_flap: config.fast_flap,
@@ -1985,6 +1997,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(interface_id),
             mode: constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,

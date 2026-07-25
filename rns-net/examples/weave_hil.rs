@@ -45,6 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             state: Arc::clone(&state),
         }),
         mode: MODE_FULL,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,

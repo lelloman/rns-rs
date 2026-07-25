@@ -516,6 +516,7 @@ fn make_pool_candidate_with_priority(
     BackbonePeerPoolCandidateConfig {
         client,
         mode: constants::MODE_FULL,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,
@@ -1154,6 +1155,7 @@ fn register_test_backbone(driver: &mut Driver, name: &str) {
         interface_id: InterfaceId(1),
         interface_name: name.to_string(),
         mode: rns_core::constants::MODE_FULL,
+        gravity: 0,
         announces_to_internal: None,
         peer_state,
         fast_flap: crate::interface::backbone::BackboneFastFlapConfig::default(),
@@ -1496,6 +1498,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         id: InterfaceId(id),
         name: format!("test-{}", id),
         mode: constants::MODE_FULL,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,
@@ -5497,6 +5500,31 @@ fn runtime_config_sets_generic_interface_values() {
         panic!("expected reset ok");
     };
     assert_eq!(entry.value, RuntimeConfigValue::String("full".into()));
+
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "interface.public.gravity".into(),
+        value: RuntimeConfigValue::Int(-7),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected set ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Int(-7));
+    assert_eq!(
+        driver
+            .engine
+            .interface_info(&InterfaceId(1))
+            .unwrap()
+            .gravity,
+        -7
+    );
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "interface.public.gravity".into(),
+    });
+    let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+        panic!("expected reset ok");
+    };
+    assert_eq!(entry.value, RuntimeConfigValue::Int(0));
 
     let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
         key: "interface.public.ic_max_held_announces".into(),

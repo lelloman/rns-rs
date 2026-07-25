@@ -53,6 +53,7 @@ mod tests {
             id,
             name: "TestInterface".into(),
             mode: constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,

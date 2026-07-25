@@ -79,6 +79,7 @@ pub fn start_direct_interface(
         id: interface_id,
         name: name.clone(),
         mode: rns_core::constants::MODE_FULL,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,

@@ -135,6 +135,7 @@ fn main() {
                     ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -220,6 +221,7 @@ fn main() {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,

@@ -290,6 +290,7 @@ pub struct StartContext {
     pub tx: EventSender,
     pub next_dynamic_id: Arc<AtomicU64>,
     pub mode: u8,
+    pub gravity: i64,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -315,6 +316,7 @@ pub struct DynamicInterfaceTemplate {
     pub interface_type: String,
     pub ifac: Option<IfacState>,
     pub mode: u8,
+    pub gravity: i64,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -326,6 +328,7 @@ impl DynamicInterfaceTemplate {
         mut info: InterfaceInfo,
     ) -> crate::event::DynamicInterfaceRegistration {
         info.mode = self.mode;
+        info.gravity = self.gravity;
         info.recursive_prs = self.recursive_prs;
         info.announces_from_internal = self.announces_from_internal;
         info.announces_to_internal = self.announces_to_internal;
@@ -433,6 +436,7 @@ mod tests {
                 id: InterfaceId(1),
                 name: String::new(),
                 mode: constants::MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,
@@ -478,6 +482,7 @@ mod tests {
             interface_type: "dynamic-test".into(),
             ifac: None,
             mode: constants::MODE_GATEWAY,
+            gravity: -3,
             recursive_prs: true,
             announces_from_internal: false,
             announces_to_internal: Some(true),
@@ -486,6 +491,7 @@ mod tests {
             id: InterfaceId(8),
             name: "child".into(),
             mode: constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,
@@ -512,6 +518,7 @@ mod tests {
         let registration = template.registration(info);
 
         assert_eq!(registration.info.mode, constants::MODE_GATEWAY);
+        assert_eq!(registration.info.gravity, -3);
         assert!(registration.info.recursive_prs);
         assert!(!registration.info.announces_from_internal);
         assert_eq!(registration.info.announces_to_internal, Some(true));

@@ -41,6 +41,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         id: InterfaceId(id),
         name: format!("bench-{id}"),
         mode,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,

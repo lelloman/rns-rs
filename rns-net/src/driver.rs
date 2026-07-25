@@ -272,6 +272,7 @@ pub(crate) const BACKBONE_PEER_POOL_DISCOVERED_PRIORITY: u8 = 40;
 pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) client: BackboneClientConfig,
     pub(crate) mode: u8,
+    pub(crate) gravity: i64,
     pub(crate) recursive_prs: bool,
     pub(crate) announces_from_internal: bool,
     pub(crate) announces_to_internal: Option<bool>,

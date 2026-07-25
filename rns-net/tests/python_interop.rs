@@ -288,6 +288,7 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
                     ..Default::default()
                 }),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,

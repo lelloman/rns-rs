@@ -295,6 +295,7 @@ impl InterfaceFactory for PipeFactory {
             id,
             name: pipe_config.name.clone(),
             mode: ctx.mode,
+            gravity: ctx.gravity,
             recursive_prs: ctx.recursive_prs,
             announces_from_internal: ctx.announces_from_internal,
             announces_to_internal: ctx.announces_to_internal,
