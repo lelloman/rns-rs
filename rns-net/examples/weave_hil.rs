@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mode: MODE_FULL,
         recursive_prs: false,
         announces_from_internal: true,
+        announces_to_internal: None,
         ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
         ifac: None,
         discovery: None,

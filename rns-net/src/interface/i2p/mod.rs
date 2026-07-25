@@ -365,6 +365,7 @@ fn outbound_peer_loop(
                     mode: constants::MODE_FULL,
                     recursive_prs: false,
                     announces_from_internal: true,
+                    announces_to_internal: None,
                     out_capable: true,
                     in_capable: true,
                     bitrate: Some(BITRATE_GUESS),
@@ -469,6 +470,7 @@ fn acceptor_loop(
                     mode: constants::MODE_FULL,
                     recursive_prs: false,
                     announces_from_internal: true,
+                    announces_to_internal: None,
                     out_capable: true,
                     in_capable: true,
                     bitrate: Some(BITRATE_GUESS),
@@ -648,6 +650,7 @@ impl InterfaceFactory for I2pFactory {
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
+                announces_to_internal: ctx.announces_to_internal,
             }),
         )?;
         Ok(StartResult::Listener { control: None })

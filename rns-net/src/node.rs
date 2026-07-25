@@ -600,6 +600,7 @@ pub struct InterfaceConfig {
     pub mode: u8,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
+    pub announces_to_internal: Option<bool>,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub ifac: Option<IfacConfig>,
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
@@ -757,6 +758,10 @@ impl RnsNode {
                 .get("announces_from_internal")
                 .and_then(|v| config::parse_bool_pub(v))
                 .unwrap_or(true);
+            let announces_to_internal = iface
+                .params
+                .get("announces_to_internal")
+                .and_then(|v| config::parse_bool_pub(v));
 
             // Inject storage_dir for I2P (and any future factories that need it)
             let mut params = iface.params.clone();
@@ -795,6 +800,7 @@ impl RnsNode {
                 mode: iface_mode,
                 recursive_prs,
                 announces_from_internal,
+                announces_to_internal,
                 ingress_control,
                 ifac: ifac_config,
                 discovery: discovery_config,
@@ -1416,6 +1422,7 @@ impl RnsNode {
                             mode: iface_config.mode,
                             recursive_prs: iface_config.recursive_prs,
                             announces_from_internal: iface_config.announces_from_internal,
+                            announces_to_internal: iface_config.announces_to_internal,
                             ingress_control: iface_config.ingress_control,
                             ifac_runtime: ifac_runtime.clone(),
                             ifac_enabled: ifac_state.is_some(),
@@ -1443,6 +1450,7 @@ impl RnsNode {
                 mode: iface_config.mode,
                 recursive_prs: iface_config.recursive_prs,
                 announces_from_internal: iface_config.announces_from_internal,
+                announces_to_internal: iface_config.announces_to_internal,
                 ingress_control: iface_config.ingress_control,
                 ifac: ifac_state.clone(),
             };
@@ -2892,6 +2900,7 @@ mod tests {
             mode: rns_core::constants::MODE_FULL,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             out_capable: true,
             in_capable: true,
             bitrate: None,
@@ -4117,6 +4126,41 @@ enable_transport = True
         assert!(!parsed.interfaces[1]
             .params
             .contains_key("announces_from_internal"));
+    }
+
+    #[test]
+    fn config_parser_preserves_announces_to_internal_tristate() {
+        let config = r#"
+[interfaces]
+  [[Allowed Boundary]]
+    type = TCPClientInterface
+    target_host = 127.0.0.1
+    target_port = 4242
+    announces_to_internal = yes
+
+  [[Blocked Boundary]]
+    type = TCPClientInterface
+    target_host = 127.0.0.1
+    target_port = 4243
+    announces_to_internal = no
+
+  [[Default Boundary]]
+    type = TCPClientInterface
+    target_host = 127.0.0.1
+    target_port = 4244
+"#;
+
+        let parsed = config::parse(config).unwrap();
+        let parsed_value = |index: usize| {
+            parsed.interfaces[index]
+                .params
+                .get("announces_to_internal")
+                .and_then(|value| config::parse_bool_pub(value))
+        };
+
+        assert_eq!(parsed_value(0), Some(true));
+        assert_eq!(parsed_value(1), Some(false));
+        assert_eq!(parsed_value(2), None);
     }
 
     #[test]

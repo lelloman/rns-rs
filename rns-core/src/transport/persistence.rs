@@ -286,6 +286,7 @@ mod tests {
             mode: constants::MODE_FULL,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             out_capable: true,
             in_capable: true,
             bitrate: None,

@@ -221,6 +221,7 @@ fn listener_loop(
             mode: constants::MODE_FULL,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             out_capable: true,
             in_capable: true,
             bitrate: None,
@@ -398,6 +399,7 @@ impl InterfaceFactory for TcpServerFactory {
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
+                announces_to_internal: ctx.announces_to_internal,
             }),
         )?;
         Ok(StartResult::Listener {
@@ -518,6 +520,7 @@ mod tests {
             mode: constants::MODE_GATEWAY,
             recursive_prs: true,
             announces_from_internal: false,
+            announces_to_internal: None,
         };
         start_with_template(
             make_server_config(port, 77, None),

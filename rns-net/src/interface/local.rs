@@ -533,6 +533,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         mode: constants::MODE_FULL,
         recursive_prs: false,
         announces_from_internal: true,
+        announces_to_internal: None,
         out_capable: true,
         in_capable: true,
         bitrate: Some(1_000_000_000), // 1 Gbps
@@ -786,6 +787,7 @@ impl InterfaceFactory for LocalServerFactory {
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
+                announces_to_internal: ctx.announces_to_internal,
             }),
         )?;
         Ok(StartResult::Listener {
@@ -845,6 +847,7 @@ impl InterfaceFactory for LocalClientFactory {
             mode: ctx.mode,
             recursive_prs: ctx.recursive_prs,
             announces_from_internal: ctx.announces_from_internal,
+            announces_to_internal: ctx.announces_to_internal,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1_000_000_000),

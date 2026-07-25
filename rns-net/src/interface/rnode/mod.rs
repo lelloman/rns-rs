@@ -938,6 +938,7 @@ impl InterfaceFactory for RNodeFactory {
                 mode: ctx.mode,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
+                announces_to_internal: ctx.announces_to_internal,
                 out_capable: rnode_config.subinterfaces[index].outgoing,
                 in_capable: true,
                 bitrate: sub_bitrates.get(index).copied(),

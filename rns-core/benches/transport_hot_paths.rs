@@ -43,6 +43,7 @@ fn make_interface(id: u64, mode: u8, is_local_client: bool) -> InterfaceInfo {
         mode,
         recursive_prs: false,
         announces_from_internal: true,
+        announces_to_internal: None,
         out_capable: true,
         in_capable: true,
         bitrate: None,

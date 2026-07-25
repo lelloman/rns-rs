@@ -712,6 +712,8 @@ pub struct SingleInterfaceStat {
     pub name: String,
     pub status: bool,
     pub mode: u8,
+    /// Whether boundary ingress announces may propagate to internal interfaces.
+    pub announces_to_internal: Option<bool>,
     pub rxb: u64,
     pub txb: u64,
     pub rx_packets: u64,
