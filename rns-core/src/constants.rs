@@ -285,6 +285,9 @@ pub const MODE_INTERNAL: u8 = 0x07;
 pub const DISCOVER_PATHS_FOR: [u8; 4] =
     [MODE_ACCESS_POINT, MODE_GATEWAY, MODE_ROAMING, MODE_INTERNAL];
 
+/// Interface modes searched for an unknown path request received on a boundary interface.
+pub const BOUNDARY_SEARCH_MODES: [u8; 2] = [MODE_BOUNDARY, MODE_GATEWAY];
+
 /// Discovery path request expiry (seconds) — requests older than this are culled.
 pub const DISCOVERY_PATH_REQUEST_TIMEOUT: f64 = 15.0;
 
