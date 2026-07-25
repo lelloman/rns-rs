@@ -33,6 +33,22 @@ impl TransportEngine {
             .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
+    pub(crate) fn upsert_primary_path_destination(
+        &mut self,
+        dest_hash: [u8; 16],
+        entry: PathEntry,
+        now: f64,
+    ) {
+        let max_paths = self.config.max_paths_per_destination;
+        if let Some(path_set) = self.path_table.get_mut(&dest_hash) {
+            path_set.upsert_primary(entry);
+            return;
+        }
+        self.enforce_path_destination_cap(now);
+        self.path_table
+            .insert(dest_hash, PathSet::from_single(entry, max_paths));
+    }
+
     pub(crate) fn enforce_path_destination_cap(&mut self, now: f64) {
         if self.config.max_path_destinations == usize::MAX {
             return;

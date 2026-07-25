@@ -39,8 +39,7 @@ use self::inbound::{
 use self::ingress_control::IngressControl;
 use self::outbound::{route_outbound_with_options, should_transmit_announce, OutboundRouteOptions};
 use self::pathfinder::{
-    decide_announce_multipath, extract_random_blob, timebase_from_random_blob,
-    timebase_from_random_blobs, MultiPathDecision,
+    extract_random_blob, timebase_from_random_blob, timebase_from_random_blobs, MultiPathDecision,
 };
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
@@ -1317,7 +1316,15 @@ impl TransportEngine {
         // Multi-path aware decision
         let is_unresponsive = self.path_is_unresponsive(&ctx.packet.destination_hash);
 
-        let mp_decision = decide_announce_multipath(
+        let current_gravity = existing_set
+            .and_then(|path_set| path_set.primary())
+            .and_then(|path| self.interfaces.get(&path.receiving_interface))
+            .map(|interface| interface.gravity);
+        let announce_gravity = self
+            .interfaces
+            .get(&ctx.iface)
+            .map(|interface| interface.gravity);
+        let mp_decision = pathfinder::decide_announce_multipath_with_gravity(
             existing_set,
             ctx.packet.hops,
             ctx.announce_emitted,
@@ -1326,6 +1333,8 @@ impl TransportEngine {
             is_unresponsive,
             ctx.now,
             self.config.prefer_shorter_path,
+            current_gravity,
+            announce_gravity,
         );
 
         if mp_decision == MultiPathDecision::Reject {
@@ -1407,7 +1416,17 @@ impl TransportEngine {
         });
 
         // Store path via upsert into PathSet
-        self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now);
+        match mp_decision {
+            MultiPathDecision::ReplacePrimary => self.upsert_primary_path_destination(
+                ctx.packet.destination_hash,
+                path_entry,
+                ctx.now,
+            ),
+            MultiPathDecision::AddAlternative => {
+                self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now)
+            }
+            MultiPathDecision::Reject => unreachable!("rejected decisions returned above"),
+        }
 
         // If receiving interface has a tunnel_id, store path in tunnel table too
         if let Some(tunnel_id) = self.interfaces.get(&ctx.iface).and_then(|i| i.tunnel_id) {
@@ -2335,6 +2354,34 @@ mod tests {
             .and_then(|set| set.primary())
             .expect("first announce should install a path");
         assert_eq!(path.receiving_interface, InterfaceId(1));
+
+        let mut higher_gravity = make_interface(2, constants::MODE_FULL);
+        higher_gravity.gravity = 1;
+        engine.register_interface(higher_gravity);
+        let third_actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(2),
+                now: 1000.2,
+                rx: RxMetadata::default(),
+            },
+            &mut rng,
+        );
+
+        assert!(third_actions.iter().any(|action| matches!(
+            action,
+            TransportAction::PathUpdated {
+                destination_hash,
+                interface,
+                ..
+            } if *destination_hash == dest_hash && *interface == InterfaceId(2)
+        )));
+        let path = engine
+            .path_table
+            .get(&dest_hash)
+            .and_then(|set| set.primary())
+            .expect("higher-gravity reception should become primary");
+        assert_eq!(path.receiving_interface, InterfaceId(2));
     }
 
     #[test]
