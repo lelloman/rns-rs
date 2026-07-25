@@ -67,6 +67,19 @@ fn parse_interface_mode(mode: &str) -> u8 {
     }
 }
 
+fn parse_optional_interface_mode(mode: &str) -> Option<u8> {
+    match mode.to_lowercase().as_str() {
+        "full" => Some(rns_core::constants::MODE_FULL),
+        "access_point" | "accesspoint" | "ap" => Some(rns_core::constants::MODE_ACCESS_POINT),
+        "pointtopoint" | "ptp" => Some(rns_core::constants::MODE_POINT_TO_POINT),
+        "roaming" => Some(rns_core::constants::MODE_ROAMING),
+        "boundary" => Some(rns_core::constants::MODE_BOUNDARY),
+        "gateway" | "gw" => Some(rns_core::constants::MODE_GATEWAY),
+        "internal" => Some(rns_core::constants::MODE_INTERNAL),
+        _ => None,
+    }
+}
+
 /// Apply Reticulum's mode normalization for discoverable interfaces.
 fn normalize_discovery_mode(
     interface_type: &str,
@@ -478,6 +491,10 @@ pub struct NodeConfig {
     pub hooks: Vec<config::ParsedHook>,
     /// Enable interface discovery.
     pub discover_interfaces: bool,
+    /// Mode assigned to auto-connected discovered interfaces, when configured.
+    pub autoconnect_interface_mode: Option<u8>,
+    /// Allow auto-connected interfaces to propagate announces to internal interfaces.
+    pub autoconnect_announces_to_internal: bool,
     /// Minimum stamp value for accepting discovered interfaces (default: 16).
     pub discovery_required_value: Option<u8>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
@@ -554,6 +571,8 @@ impl Default for NodeConfig {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            autoconnect_interface_mode: None,
+            autoconnect_announces_to_internal: false,
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,
@@ -915,6 +934,14 @@ impl RnsNode {
             device: rns_config.reticulum.device.clone(),
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
+            autoconnect_interface_mode: rns_config
+                .reticulum
+                .autoconnect_discovered_mode
+                .as_deref()
+                .and_then(parse_optional_interface_mode),
+            autoconnect_announces_to_internal: rns_config
+                .reticulum
+                .autoconnect_announces_to_internal,
             discovery_required_value: rns_config.reticulum.required_discovery_value,
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
@@ -1260,6 +1287,9 @@ impl RnsNode {
 
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
+        driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
+        driver.autoconnect_announces_to_internal =
+            config.autoconnect_announces_to_internal.then_some(true);
         if let Some(val) = config.discovery_required_value {
             driver.discovery_required_value = val;
         }
@@ -3279,6 +3309,8 @@ mod tests {
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -3594,6 +3626,8 @@ share_instance = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -3657,6 +3691,8 @@ share_instance = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4446,6 +4482,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4518,6 +4556,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4586,6 +4626,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4651,6 +4693,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4756,6 +4800,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4829,6 +4875,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4900,6 +4948,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -4984,6 +5034,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,
@@ -5058,6 +5110,8 @@ enable_transport = False
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
+                autoconnect_interface_mode: None,
+                autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
                 prefer_shorter_path: false,

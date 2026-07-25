@@ -648,6 +648,7 @@ impl Driver {
                                     crate::discovery::apply_transport_autoconnect_mode(
                                         &mut discovered,
                                         self.engine.transport_enabled(),
+                                        self.autoconnect_interface_mode,
                                     );
                                     if let Err(e) =
                                         self.discovered_interfaces.store_received(&mut discovered)

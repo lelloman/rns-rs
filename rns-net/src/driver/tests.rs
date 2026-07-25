@@ -653,6 +653,42 @@ fn backbone_peer_pool_discovered_fill_target_after_configured() {
 
 #[cfg(feature = "iface-backbone")]
 #[test]
+fn discovered_peer_pool_candidate_uses_autoconnect_overrides() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut driver = new_test_driver();
+    driver.discover_interfaces = true;
+    driver.autoconnect_interface_mode = Some(constants::MODE_BOUNDARY);
+    driver.autoconnect_announces_to_internal = Some(true);
+    driver.configure_backbone_peer_pool(
+        BackbonePeerPoolSettings {
+            max_connected: 1,
+            failure_threshold: 3,
+            failure_window: Duration::from_secs(60),
+            cooldown: Duration::from_secs(60),
+        },
+        vec![],
+    );
+
+    assert!(
+        driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
+            "discovered",
+            "127.0.0.1",
+            Some(port),
+            0x7a,
+            1,
+            20,
+            time::now(),
+        ))
+    );
+
+    let pool = driver.backbone_peer_pool.as_ref().unwrap();
+    assert_eq!(pool.candidates[0].config.mode, constants::MODE_BOUNDARY);
+    assert_eq!(pool.candidates[0].config.announces_to_internal, Some(true));
+}
+
+#[cfg(feature = "iface-backbone")]
+#[test]
 fn backbone_peer_pool_prefers_configured_over_discovered() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let configured_port = listener.local_addr().unwrap().port();

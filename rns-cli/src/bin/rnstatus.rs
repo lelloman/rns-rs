@@ -367,15 +367,11 @@ fn print_status(
                 .and_then(|v| v.as_float())
                 .unwrap_or(0.0);
 
-            let mode_str = match mode {
-                rns_net::MODE_FULL => "Full",
-                rns_net::MODE_ACCESS_POINT => "Access Point",
-                rns_net::MODE_POINT_TO_POINT => "Point-to-Point",
-                rns_net::MODE_ROAMING => "Roaming",
-                rns_net::MODE_BOUNDARY => "Boundary",
-                rns_net::MODE_GATEWAY => "Gateway",
-                _ => "Unknown",
-            };
+            let announces_to_internal = iface
+                .get("announces_to_internal")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let mode_str = interface_mode_label(mode, announces_to_internal);
 
             println!(" {}", name);
             println!("    Status    : {}", if status { "Up" } else { "Down" });
@@ -467,6 +463,24 @@ fn print_status(
             size_str(total_rxb),
         );
         println!();
+    }
+}
+
+fn interface_mode_label(mode: u8, announces_to_internal: bool) -> String {
+    let base = match mode {
+        rns_net::MODE_FULL => "Full",
+        rns_net::MODE_ACCESS_POINT => "Access Point",
+        rns_net::MODE_POINT_TO_POINT => "Point-to-Point",
+        rns_net::MODE_ROAMING => "Roaming",
+        rns_net::MODE_BOUNDARY => "Boundary",
+        rns_net::MODE_GATEWAY => "Gateway",
+        rns_net::MODE_INTERNAL => "Internal",
+        _ => "Unknown",
+    };
+    if announces_to_internal {
+        format!("{base} (a>i)")
+    } else {
+        base.into()
     }
 }
 
@@ -1074,6 +1088,18 @@ mod tests {
             vec!["    Clients   : 3"]
         );
         assert!(client_status_lines(&PickleValue::Dict(Vec::new())).is_empty());
+    }
+
+    #[test]
+    fn mode_label_marks_announces_to_internal_override() {
+        assert_eq!(
+            interface_mode_label(rns_net::MODE_BOUNDARY, true),
+            "Boundary (a>i)"
+        );
+        assert_eq!(
+            interface_mode_label(rns_net::MODE_BOUNDARY, false),
+            "Boundary"
+        );
     }
 
     #[test]

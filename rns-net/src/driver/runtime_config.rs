@@ -465,6 +465,14 @@ impl Driver {
             candidate.config.client.target_host = remote;
             candidate.config.client.target_port = port;
             candidate.config.client.transport_identity = Some(transport_identity);
+            candidate.config.mode = self.autoconnect_interface_mode.unwrap_or_else(|| {
+                if iface.transport && self.engine.transport_enabled() {
+                    rns_core::constants::MODE_GATEWAY
+                } else {
+                    rns_core::constants::MODE_FULL
+                }
+            });
+            candidate.config.announces_to_internal = self.autoconnect_announces_to_internal;
             if candidate.active_id.is_none() {
                 candidate.config.client.name = Self::discovered_pool_candidate_name(&iface);
             }
@@ -500,18 +508,20 @@ impl Driver {
             size: 16,
         };
         let ifac_enabled = ifac_runtime.netname.is_some() || ifac_runtime.netkey.is_some();
-        let mode = if iface.transport && self.engine.transport_enabled() {
-            rns_core::constants::MODE_GATEWAY
-        } else {
-            rns_core::constants::MODE_FULL
-        };
+        let mode = self.autoconnect_interface_mode.unwrap_or_else(|| {
+            if iface.transport && self.engine.transport_enabled() {
+                rns_core::constants::MODE_GATEWAY
+            } else {
+                rns_core::constants::MODE_FULL
+            }
+        });
         pool.candidates.push(BackbonePeerPoolCandidate {
             config: BackbonePeerPoolCandidateConfig {
                 client,
                 mode,
                 recursive_prs: false,
                 announces_from_internal: true,
-                announces_to_internal: None,
+                announces_to_internal: self.autoconnect_announces_to_internal,
                 ingress_control: self.ingress_control_defaults,
                 ifac_runtime,
                 ifac_enabled,

@@ -262,6 +262,12 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   instance_control_port = 37429
   panic_on_interface_error = false
 
+  # Optional mode for interfaces created from discovery announces.
+  # autoconnect_discovered_mode = gateway
+
+  # Allow auto-connected interfaces to propagate announces to internal mode.
+  # autoconnect_announces_to_internal = yes
+
 [logging]
   # Valid log levels are 0 through 8:
   #   0: Critical information only
