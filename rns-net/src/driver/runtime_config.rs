@@ -519,6 +519,7 @@ impl Driver {
             config: BackbonePeerPoolCandidateConfig {
                 client,
                 mode,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: self.autoconnect_announces_to_internal,
@@ -768,6 +769,7 @@ impl Driver {
         let id = client.interface_id;
         let name = client.name.clone();
         let mode = candidate.config.mode;
+        let gravity = candidate.config.gravity;
         let recursive_prs = candidate.config.recursive_prs;
         let announces_from_internal = candidate.config.announces_from_internal;
         let announces_to_internal = candidate.config.announces_to_internal;
@@ -782,6 +784,7 @@ impl Driver {
             id,
             name: name.clone(),
             mode,
+            gravity,
             recursive_prs,
             announces_from_internal,
             announces_to_internal,
@@ -2774,6 +2777,7 @@ impl Driver {
             for suffix in [
                 "enabled",
                 "mode",
+                "gravity",
                 "announce_rate_target",
                 "announce_rate_grace",
                 "announce_rate_penalty",
@@ -2906,6 +2910,15 @@ impl Driver {
                     RuntimeConfigValue::String(Self::interface_mode_name(startup.mode)),
                     RuntimeConfigApplyMode::Immediate,
                     "Routing mode for this interface.",
+                ))
+            }
+            "gravity" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Int(current.gravity),
+                    RuntimeConfigValue::Int(startup.gravity),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Signed path-selection preference for this interface.",
                 ))
             }
             "announce_rate_target" => {
@@ -3232,6 +3245,7 @@ impl Driver {
                     message: format!("{} must be a valid interface mode", key),
                 })?;
             }
+            "gravity" => entry.info.gravity = Self::expect_i64(value, key)?,
             "announce_rate_target" => {
                 entry.info.announce_rate_target = match value {
                     RuntimeConfigValue::Null => None,
@@ -3383,6 +3397,7 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "mode" => entry.info.mode = startup.mode,
+            "gravity" => entry.info.gravity = startup.gravity,
             "announce_rate_target" => {
                 entry.info.announce_rate_target = startup.announce_rate_target
             }

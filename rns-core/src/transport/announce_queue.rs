@@ -387,6 +387,7 @@ mod tests {
             id: InterfaceId(id),
             name: String::from("test"),
             mode: crate::constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,

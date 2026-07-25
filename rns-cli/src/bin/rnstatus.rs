@@ -362,6 +362,10 @@ fn print_status(
                 .and_then(|v| v.as_int())
                 .map(|n| n as u64);
             let mode = iface.get("mode").and_then(|v| v.as_int()).unwrap_or(0) as u8;
+            let gravity = iface
+                .get("gravity")
+                .and_then(|value| value.as_int())
+                .unwrap_or(0);
             let started = iface
                 .get("started")
                 .and_then(|v| v.as_float())
@@ -374,7 +378,10 @@ fn print_status(
             let mode_str = interface_mode_label(mode, announces_to_internal);
 
             println!(" {}", name);
-            println!("    Status    : {}", if status { "Up" } else { "Down" });
+            println!(
+                "    Status    : {}",
+                interface_status_label(status, gravity)
+            );
             println!("    Mode      : {}", mode_str);
             if let Some(br) = bitrate {
                 println!("    Rate      : {}", speed_str(br));
@@ -481,6 +488,15 @@ fn interface_mode_label(mode: u8, announces_to_internal: bool) -> String {
         format!("{base} (a>i)")
     } else {
         base.into()
+    }
+}
+
+fn interface_status_label(status: bool, gravity: i64) -> String {
+    let base = if status { "Up" } else { "Down" };
+    if gravity == 0 {
+        base.into()
+    } else {
+        format!("{base}, gravity {gravity}")
     }
 }
 
@@ -1100,6 +1116,13 @@ mod tests {
             interface_mode_label(rns_net::MODE_BOUNDARY, false),
             "Boundary"
         );
+    }
+
+    #[test]
+    fn status_label_includes_only_nonzero_gravity() {
+        assert_eq!(interface_status_label(true, 4), "Up, gravity 4");
+        assert_eq!(interface_status_label(false, -2), "Down, gravity -2");
+        assert_eq!(interface_status_label(true, 0), "Up");
     }
 
     #[test]

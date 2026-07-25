@@ -113,6 +113,7 @@ fn main() {
                 type_name: "RNodeInterface".to_string(),
                 config_data: Box::new(rnode),
                 mode: MODE_FULL,
+                gravity: 0,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: None,

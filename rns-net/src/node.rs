@@ -80,6 +80,10 @@ fn parse_optional_interface_mode(mode: &str) -> Option<u8> {
     }
 }
 
+fn parse_interface_gravity(value: Option<&str>) -> i64 {
+    value.and_then(|value| value.parse().ok()).unwrap_or(0)
+}
+
 /// Apply Reticulum's mode normalization for discoverable interfaces.
 fn normalize_discovery_mode(
     interface_type: &str,
@@ -617,6 +621,7 @@ pub struct InterfaceConfig {
     pub type_name: String,
     pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
     pub mode: u8,
+    pub gravity: i64,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     pub announces_to_internal: Option<bool>,
@@ -777,6 +782,7 @@ impl RnsNode {
                 .get("announces_from_internal")
                 .and_then(|v| config::parse_bool_pub(v))
                 .unwrap_or(true);
+            let gravity = parse_interface_gravity(iface.params.get("gravity").map(String::as_str));
             let announces_to_internal = iface
                 .params
                 .get("announces_to_internal")
@@ -817,6 +823,7 @@ impl RnsNode {
                 type_name: iface.interface_type.clone(),
                 config_data,
                 mode: iface_mode,
+                gravity,
                 recursive_prs,
                 announces_from_internal,
                 announces_to_internal,
@@ -1450,6 +1457,7 @@ impl RnsNode {
                         backbone_peer_pool_candidates.push(BackbonePeerPoolCandidateConfig {
                             client,
                             mode: iface_config.mode,
+                            gravity: iface_config.gravity,
                             recursive_prs: iface_config.recursive_prs,
                             announces_from_internal: iface_config.announces_from_internal,
                             announces_to_internal: iface_config.announces_to_internal,
@@ -1478,6 +1486,7 @@ impl RnsNode {
                 tx: tx.clone(),
                 next_dynamic_id: next_dynamic_id.clone(),
                 mode: iface_config.mode,
+                gravity: iface_config.gravity,
                 recursive_prs: iface_config.recursive_prs,
                 announces_from_internal: iface_config.announces_from_internal,
                 announces_to_internal: iface_config.announces_to_internal,
@@ -2928,6 +2937,7 @@ mod tests {
             id: rns_core::transport::types::InterfaceId(id),
             name: format!("test-{id}"),
             mode: rns_core::constants::MODE_FULL,
+            gravity: 0,
             recursive_prs: false,
             announces_from_internal: true,
             announces_to_internal: None,
@@ -4197,6 +4207,13 @@ enable_transport = True
         assert_eq!(parsed_value(0), Some(true));
         assert_eq!(parsed_value(1), Some(false));
         assert_eq!(parsed_value(2), None);
+    }
+
+    #[test]
+    fn interface_gravity_parser_accepts_signed_values_and_defaults_to_zero() {
+        assert_eq!(parse_interface_gravity(Some("7")), 7);
+        assert_eq!(parse_interface_gravity(Some("-4")), -4);
+        assert_eq!(parse_interface_gravity(None), 0);
     }
 
     #[test]

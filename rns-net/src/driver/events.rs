@@ -571,6 +571,7 @@ impl Driver {
             .get(&registration.parent_id)
             .and_then(|parent| {
                 registration.info.mode = parent.info.mode;
+                registration.info.gravity = parent.info.gravity;
                 registration.info.recursive_prs = parent.info.recursive_prs;
                 registration.info.announces_from_internal = parent.info.announces_from_internal;
                 registration.info.announces_to_internal = parent.info.announces_to_internal;

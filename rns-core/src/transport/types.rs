@@ -139,6 +139,8 @@ pub struct InterfaceInfo {
     pub id: InterfaceId,
     pub name: String,
     pub mode: u8,
+    /// Signed interface preference used by path selection.
+    pub gravity: i64,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
     /// Allow announces received here to propagate to internal-mode interfaces.

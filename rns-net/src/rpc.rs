@@ -1168,6 +1168,10 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.mode as i64),
         ),
         (
+            PickleValue::String("gravity".into()),
+            PickleValue::Int(s.gravity),
+        ),
+        (
             PickleValue::String("announces_to_internal".into()),
             s.announces_to_internal
                 .map(PickleValue::Bool)
@@ -2702,6 +2706,7 @@ mod tests {
                             name: "TestInterface".into(),
                             status: true,
                             mode: 1,
+                            gravity: -2,
                             announces_to_internal: Some(true),
                             rxb: 1000,
                             txb: 2000,
@@ -2911,6 +2916,7 @@ mod tests {
                 name: "TCP".into(),
                 status: true,
                 mode: 1,
+                gravity: -2,
                 announces_to_internal: Some(true),
                 rxb: 100,
                 txb: 200,
@@ -2963,6 +2969,7 @@ mod tests {
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);
         assert!(ifaces[0]
             .get("announces_to_internal")
             .unwrap()

@@ -1162,6 +1162,7 @@ fn add_peer(
             name, peer_key.link_local_addr, peer_key.if_index
         ),
         mode: rns_core::constants::MODE_FULL,
+        gravity: 0,
         recursive_prs: false,
         announces_from_internal: true,
         announces_to_internal: None,
@@ -1478,6 +1479,7 @@ impl InterfaceFactory for AutoFactory {
                 interface_type: "AutoInterfacePeer".into(),
                 ifac: ctx.ifac,
                 mode: ctx.mode,
+                gravity: ctx.gravity,
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,

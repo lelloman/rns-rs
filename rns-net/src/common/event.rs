@@ -712,6 +712,8 @@ pub struct SingleInterfaceStat {
     pub name: String,
     pub status: bool,
     pub mode: u8,
+    /// Signed interface preference used by path selection.
+    pub gravity: i64,
     /// Whether boundary ingress announces may propagate to internal interfaces.
     pub announces_to_internal: Option<bool>,
     pub rxb: u64,
