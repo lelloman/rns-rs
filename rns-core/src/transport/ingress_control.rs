@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_held_announces_deactivates_burst_after_penalty() {
+    fn short_burst_releases_without_waiting_for_another_announce() {
         let mut ic = IngressControl::new();
         let started = 0.0;
         let now = 10000.0;
@@ -544,14 +544,7 @@ mod tests {
         );
         assert!(released.is_some());
         assert_eq!(released.unwrap().hops, 3);
-
-        assert!(!ic.should_ingress_limit(
-            iface(1),
-            &IngressControlConfig::enabled(),
-            1.0,
-            started,
-            now + constants::IC_BURST_HOLD + 1.0
-        ));
+        assert!(!ic.burst_active(&iface(1)));
     }
 
     #[test]
