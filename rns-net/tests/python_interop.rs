@@ -309,6 +309,8 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
+            autoconnect_interface_mode: None,
+            autoconnect_announces_to_internal: false,
             discovery_required_value: None,
             respond_to_probes: false,
             prefer_shorter_path: false,

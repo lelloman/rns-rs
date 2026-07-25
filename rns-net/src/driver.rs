@@ -722,6 +722,10 @@ pub struct Driver {
     pub(crate) probe_responder_hash: Option<[u8; 16]>,
     /// Whether interface discovery is enabled.
     pub(crate) discover_interfaces: bool,
+    /// Explicit mode for interfaces created from discovery announces.
+    pub(crate) autoconnect_interface_mode: Option<u8>,
+    /// Internal announce propagation override for discovered interfaces.
+    pub(crate) autoconnect_announces_to_internal: Option<bool>,
     /// Announcer for discoverable interfaces (None if nothing to announce).
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Shared async announce verification queue.
@@ -894,6 +898,8 @@ impl Driver {
             discovery_name_hash,
             probe_responder_hash: None,
             discover_interfaces: false,
+            autoconnect_interface_mode: None,
+            autoconnect_announces_to_internal: None,
             interface_announcer: None,
             announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(
                 announce_queue_max_entries,

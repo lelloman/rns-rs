@@ -543,10 +543,14 @@ pub fn compute_discovery_hash(transport_id: &[u8; 16], name: &str) -> [u8; 32] {
 pub fn apply_transport_autoconnect_mode(
     iface: &mut DiscoveredInterface,
     local_transport_enabled: bool,
+    configured_mode: Option<u8>,
 ) {
-    if !local_transport_enabled || !iface.transport {
+    let mode = configured_mode.or_else(|| {
+        (local_transport_enabled && iface.transport).then_some(rns_core::constants::MODE_GATEWAY)
+    });
+    let Some(mode) = mode else {
         return;
-    }
+    };
     let Some(config_entry) = iface.config_entry.as_mut() else {
         return;
     };
@@ -558,9 +562,27 @@ pub fn apply_transport_autoconnect_mode(
     }
     if let Some(pos) = config_entry.find("  enabled = yes\n") {
         let insert_at = pos + "  enabled = yes\n".len();
-        config_entry.insert_str(insert_at, "  interface_mode = gateway\n");
+        config_entry.insert_str(
+            insert_at,
+            &format!("  interface_mode = {}\n", interface_mode_name(mode)),
+        );
     } else {
-        config_entry.push_str("\n  interface_mode = gateway");
+        config_entry.push_str(&format!(
+            "\n  interface_mode = {}",
+            interface_mode_name(mode)
+        ));
+    }
+}
+
+fn interface_mode_name(mode: u8) -> &'static str {
+    match mode {
+        rns_core::constants::MODE_ACCESS_POINT => "access_point",
+        rns_core::constants::MODE_POINT_TO_POINT => "pointtopoint",
+        rns_core::constants::MODE_ROAMING => "roaming",
+        rns_core::constants::MODE_BOUNDARY => "boundary",
+        rns_core::constants::MODE_GATEWAY => "gateway",
+        rns_core::constants::MODE_INTERNAL => "internal",
+        _ => "full",
     }
 }
 
@@ -1139,10 +1161,25 @@ mod tests {
         let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
         let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
 
-        apply_transport_autoconnect_mode(&mut parsed, true);
+        apply_transport_autoconnect_mode(&mut parsed, true, None);
 
         let config_entry = parsed.config_entry.unwrap();
         assert!(config_entry.contains("  enabled = yes\n  interface_mode = gateway\n"));
+    }
+
+    #[test]
+    fn configured_autoconnect_mode_overrides_transport_fallback() {
+        let app_data = build_discovery_app_data("BackboneInterface", Some("example.com"));
+        let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        apply_transport_autoconnect_mode(
+            &mut parsed,
+            true,
+            Some(rns_core::constants::MODE_BOUNDARY),
+        );
+
+        let config_entry = parsed.config_entry.unwrap();
+        assert!(config_entry.contains("  enabled = yes\n  interface_mode = boundary\n"));
     }
 
     #[test]
@@ -1151,7 +1188,7 @@ mod tests {
         let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
         let original = parsed.config_entry.clone();
 
-        apply_transport_autoconnect_mode(&mut parsed, false);
+        apply_transport_autoconnect_mode(&mut parsed, false, None);
 
         assert_eq!(parsed.config_entry, original);
     }
@@ -1165,7 +1202,7 @@ mod tests {
         let mut parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
         let original = parsed.config_entry.clone();
 
-        apply_transport_autoconnect_mode(&mut parsed, true);
+        apply_transport_autoconnect_mode(&mut parsed, true, None);
 
         assert_eq!(parsed.config_entry, original);
     }
@@ -1178,7 +1215,7 @@ mod tests {
         config_entry.push_str("\n  interface_mode = access_point");
         let original = parsed.config_entry.clone();
 
-        apply_transport_autoconnect_mode(&mut parsed, true);
+        apply_transport_autoconnect_mode(&mut parsed, true, None);
 
         assert_eq!(parsed.config_entry, original);
     }

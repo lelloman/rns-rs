@@ -56,6 +56,10 @@ pub struct ReticulumSection {
     /// Enable interface discovery (advertise discoverable interfaces and
     /// listen for discovery announces from the network).
     pub discover_interfaces: bool,
+    /// Transitional 1.4.1 name for the mode assigned to auto-connected interfaces.
+    pub autoconnect_discovered_mode: Option<String>,
+    /// Allow auto-connected interfaces to propagate announces to internal interfaces.
+    pub autoconnect_announces_to_internal: bool,
     /// Minimum stamp value for accepting discovered interfaces.
     pub required_discovery_value: Option<u8>,
     /// Accept an announce with strictly fewer hops even when the random_blob
@@ -172,6 +176,8 @@ impl Default for ReticulumSection {
             probe_protocol: None,
             device: None,
             discover_interfaces: false,
+            autoconnect_discovered_mode: None,
+            autoconnect_announces_to_internal: false,
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
@@ -741,6 +747,16 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             key: "discover_interfaces".into(),
             value: v.clone(),
         })?;
+    }
+    if let Some(v) = kvs.get("autoconnect_discovered_mode") {
+        section.autoconnect_discovered_mode = Some(v.to_lowercase());
+    }
+    if let Some(v) = kvs.get("autoconnect_announces_to_internal") {
+        section.autoconnect_announces_to_internal =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "autoconnect_announces_to_internal".into(),
+                value: v.clone(),
+            })?;
     }
     if let Some(v) = kvs.get("required_discovery_value") {
         section.required_discovery_value =
@@ -1320,6 +1336,24 @@ default_ar_grace = 7
         assert_eq!(config.reticulum.default_ar_target, Some(7200.0));
         assert_eq!(config.reticulum.default_ar_penalty, 15.0);
         assert_eq!(config.reticulum.default_ar_grace, 7);
+    }
+
+    #[test]
+    fn parse_autoconnect_discovery_options() {
+        let config = parse(
+            r#"
+[reticulum]
+autoconnect_discovered_mode = boundary
+autoconnect_announces_to_internal = yes
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.reticulum.autoconnect_discovered_mode.as_deref(),
+            Some("boundary")
+        );
+        assert!(config.reticulum.autoconnect_announces_to_internal);
     }
 
     #[test]
