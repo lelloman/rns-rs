@@ -131,6 +131,34 @@ pub fn decide_announce_multipath(
     now: f64,
     prefer_shorter_path: bool,
 ) -> MultiPathDecision {
+    decide_announce_multipath_with_gravity(
+        existing_set,
+        announce_hops,
+        announce_emitted_ts,
+        random_blob,
+        next_hop,
+        path_is_unresponsive,
+        now,
+        prefer_shorter_path,
+        None,
+        None,
+    )
+}
+
+/// Multi-path announce decision with interface gravity context.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_announce_multipath_with_gravity(
+    existing_set: Option<&PathSet>,
+    announce_hops: u8,
+    announce_emitted_ts: u64,
+    random_blob: &[u8; 10],
+    next_hop: &[u8; 16],
+    path_is_unresponsive: bool,
+    now: f64,
+    prefer_shorter_path: bool,
+    current_gravity: Option<i64>,
+    announce_gravity: Option<i64>,
+) -> MultiPathDecision {
     // Hop limit
     if announce_hops > constants::PATHFINDER_M {
         return MultiPathDecision::Reject;
@@ -141,6 +169,18 @@ pub fn decide_announce_multipath(
         Some(ps) if ps.is_empty() => return MultiPathDecision::ReplacePrimary,
         Some(ps) => ps,
     };
+
+    if let (Some(primary), Some(current_gravity), Some(announce_gravity)) =
+        (path_set.primary(), current_gravity, announce_gravity)
+    {
+        let primary_timebase = timebase_from_random_blobs(&primary.random_blobs);
+        if announce_hops <= primary.hops
+            && announce_emitted_ts == primary_timebase
+            && announce_gravity > current_gravity
+        {
+            return MultiPathDecision::ReplacePrimary;
+        }
+    }
 
     // Check if there's already a path with the same next_hop
     if let Some(existing_path) = path_set.find_by_next_hop(next_hop) {
@@ -541,5 +581,33 @@ mod tests {
             decide_announce_multipath(None, 129, 100, &blob, &[0xBB; 16], false, 1000.0, false),
             MultiPathDecision::Reject
         );
+    }
+
+    #[test]
+    fn same_emission_prefers_strictly_higher_gravity() {
+        let blob = make_blob(100);
+        let entry = make_path_entry(3, &[blob], 9999.0);
+        let ps = PathSet::from_single(entry, 3);
+
+        let decide = |current, incoming, hops| {
+            decide_announce_multipath_with_gravity(
+                Some(&ps),
+                hops,
+                100,
+                &blob,
+                &[0xCC; 16],
+                false,
+                1000.0,
+                false,
+                Some(current),
+                Some(incoming),
+            )
+        };
+
+        assert_eq!(decide(0, 1, 3), MultiPathDecision::ReplacePrimary);
+        assert_eq!(decide(-5, -2, 3), MultiPathDecision::ReplacePrimary);
+        assert_eq!(decide(1, 1, 3), MultiPathDecision::Reject);
+        assert_eq!(decide(2, 1, 3), MultiPathDecision::Reject);
+        assert_eq!(decide(0, 1, 4), MultiPathDecision::Reject);
     }
 }

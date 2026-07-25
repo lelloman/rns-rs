@@ -139,6 +139,20 @@ impl PathSet {
         self.paths.truncate(self.capacity);
     }
 
+    /// Insert or update a path and make it primary among otherwise equal paths.
+    pub fn upsert_primary(&mut self, entry: PathEntry) {
+        if let Some(pos) = self
+            .paths
+            .iter()
+            .position(|path| path.next_hop == entry.next_hop)
+        {
+            self.paths.remove(pos);
+        }
+        self.paths.insert(0, entry);
+        self.sort();
+        self.paths.truncate(self.capacity);
+    }
+
     /// Promote the next-best path after the current primary becomes
     /// unresponsive.
     ///
@@ -222,6 +236,32 @@ mod tests {
         };
         assert_eq!(entry.hops, 3);
         assert_eq!(entry.receiving_interface, InterfaceId(1));
+    }
+
+    #[test]
+    fn upsert_primary_preserves_alternative_and_wins_equal_rank_tie() {
+        let first = PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0xAA; 16],
+            hops: 3,
+            expires: 2000.0,
+            random_blobs: vec![[1; 10]],
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0x11; 32],
+            announce_raw: None,
+        };
+        let preferred = PathEntry {
+            next_hop: [0xBB; 16],
+            receiving_interface: InterfaceId(2),
+            packet_hash: [0x22; 32],
+            ..first.clone()
+        };
+        let mut paths = PathSet::from_single(first, 3);
+
+        paths.upsert_primary(preferred);
+
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.primary().unwrap().receiving_interface, InterfaceId(2));
     }
 
     #[test]
