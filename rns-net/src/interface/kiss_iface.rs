@@ -510,6 +510,7 @@ impl InterfaceFactory for KissFactory {
             mode: ctx.mode,
             recursive_prs: ctx.recursive_prs,
             announces_from_internal: ctx.announces_from_internal,
+            announces_to_internal: ctx.announces_to_internal,
             out_capable: true,
             in_capable: true,
             bitrate: Some(1200),

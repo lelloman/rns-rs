@@ -45,6 +45,7 @@ pub struct BackboneConfig {
     pub mode: u8,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
+    pub announces_to_internal: Option<bool>,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
     pub write_stall_timeout: Option<Duration>,
@@ -264,6 +265,7 @@ pub struct BackbonePeerStateHandle {
     pub interface_id: InterfaceId,
     pub interface_name: String,
     pub mode: u8,
+    pub announces_to_internal: Option<bool>,
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
     pub fast_flap: BackboneFastFlapConfig,
     pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
@@ -279,6 +281,7 @@ impl Default for BackboneConfig {
             mode: constants::MODE_FULL,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             max_connections: None,
             idle_timeout: None,
             write_stall_timeout: None,
@@ -450,6 +453,7 @@ fn start_with_template(
     let accepted_peer_mode = config.mode;
     let accepted_peer_recursive_prs = config.recursive_prs;
     let accepted_peer_announces_from_internal = config.announces_from_internal;
+    let accepted_peer_announces_to_internal = config.announces_to_internal;
     let ifac_size = dynamic_template
         .as_ref()
         .and_then(|template| template.ifac.as_ref())
@@ -472,6 +476,7 @@ fn start_with_template(
                 accepted_peer_mode,
                 accepted_peer_recursive_prs,
                 accepted_peer_announces_from_internal,
+                accepted_peer_announces_to_internal,
                 dynamic_template,
                 ifac_size,
             ) {
@@ -631,6 +636,7 @@ fn poll_loop(
     accepted_peer_mode: u8,
     accepted_peer_recursive_prs: bool,
     accepted_peer_announces_from_internal: bool,
+    accepted_peer_announces_to_internal: Option<bool>,
     dynamic_template: Option<DynamicInterfaceTemplate>,
     ifac_size: usize,
 ) -> io::Result<()> {
@@ -790,6 +796,7 @@ fn poll_loop(
                                 mode: accepted_peer_mode,
                                 recursive_prs: accepted_peer_recursive_prs,
                                 announces_from_internal: accepted_peer_announces_from_internal,
+                                announces_to_internal: accepted_peer_announces_to_internal,
                                 out_capable: true,
                                 in_capable: true,
                                 bitrate: Some(1_000_000_000), // 1 Gbps guess
@@ -1579,6 +1586,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 mode: constants::MODE_FULL,
                 recursive_prs: false,
                 announces_from_internal: true,
+                announces_to_internal: None,
                 max_connections,
                 idle_timeout,
                 write_stall_timeout,
@@ -1622,6 +1630,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     mode: ctx.mode,
                     recursive_prs: ctx.recursive_prs,
                     announces_from_internal: ctx.announces_from_internal,
+                    announces_to_internal: ctx.announces_to_internal,
                     out_capable: true,
                     in_capable: true,
                     bitrate: Some(1_000_000_000),
@@ -1654,6 +1663,8 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 cfg.ingress_control = ctx.ingress_control;
                 cfg.mode = ctx.mode;
                 cfg.recursive_prs = ctx.recursive_prs;
+                cfg.announces_from_internal = ctx.announces_from_internal;
+                cfg.announces_to_internal = ctx.announces_to_internal;
                 let parent_id = cfg.interface_id;
                 start_with_template(
                     cfg,
@@ -1666,6 +1677,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                         mode: ctx.mode,
                         recursive_prs: ctx.recursive_prs,
                         announces_from_internal: ctx.announces_from_internal,
+                        announces_to_internal: ctx.announces_to_internal,
                     }),
                 )?;
                 Ok(StartResult::Listener { control: None })
@@ -1691,6 +1703,7 @@ pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<Backbon
             interface_id: config.interface_id,
             interface_name: config.name.clone(),
             mode: config.mode,
+            announces_to_internal: config.announces_to_internal,
             peer_state: Arc::clone(&config.peer_state),
             fast_flap: config.fast_flap,
             fast_flap_state: Arc::clone(&config.fast_flap_state),
@@ -1974,6 +1987,7 @@ mod tests {
             mode: constants::MODE_FULL,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             max_connections,
             idle_timeout,
             write_stall_timeout,

@@ -141,6 +141,8 @@ pub struct InterfaceInfo {
     pub mode: u8,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
+    /// Allow announces received here to propagate to internal-mode interfaces.
+    pub announces_to_internal: Option<bool>,
     pub out_capable: bool,
     pub in_capable: bool,
     pub bitrate: Option<u64>,

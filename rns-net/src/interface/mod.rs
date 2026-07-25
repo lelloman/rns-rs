@@ -292,6 +292,7 @@ pub struct StartContext {
     pub mode: u8,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
+    pub announces_to_internal: Option<bool>,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub ifac: Option<IfacState>,
 }
@@ -316,6 +317,7 @@ pub struct DynamicInterfaceTemplate {
     pub mode: u8,
     pub recursive_prs: bool,
     pub announces_from_internal: bool,
+    pub announces_to_internal: Option<bool>,
 }
 
 impl DynamicInterfaceTemplate {
@@ -326,6 +328,7 @@ impl DynamicInterfaceTemplate {
         info.mode = self.mode;
         info.recursive_prs = self.recursive_prs;
         info.announces_from_internal = self.announces_from_internal;
+        info.announces_to_internal = self.announces_to_internal;
         crate::event::DynamicInterfaceRegistration {
             info,
             interface_type: self.interface_type.clone(),
@@ -432,6 +435,7 @@ mod tests {
                 mode: constants::MODE_FULL,
                 recursive_prs: false,
                 announces_from_internal: true,
+                announces_to_internal: None,
                 out_capable: true,
                 in_capable: true,
                 bitrate: None,
@@ -465,6 +469,52 @@ mod tests {
         assert_eq!(entry.id, InterfaceId(1));
         assert!(!entry.online);
         assert!(!entry.dynamic);
+    }
+
+    #[test]
+    fn dynamic_registration_inherits_announces_to_internal() {
+        let template = DynamicInterfaceTemplate {
+            parent_id: InterfaceId(7),
+            interface_type: "dynamic-test".into(),
+            ifac: None,
+            mode: constants::MODE_GATEWAY,
+            recursive_prs: true,
+            announces_from_internal: false,
+            announces_to_internal: Some(true),
+        };
+        let info = InterfaceInfo {
+            id: InterfaceId(8),
+            name: "child".into(),
+            mode: constants::MODE_FULL,
+            recursive_prs: false,
+            announces_from_internal: true,
+            announces_to_internal: None,
+            out_capable: true,
+            in_capable: true,
+            bitrate: None,
+            airtime_profile: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            announce_cap: constants::ANNOUNCE_CAP,
+            is_local_client: false,
+            wants_tunnel: false,
+            tunnel_id: None,
+            mtu: constants::MTU as u32,
+            ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+            ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            started: 0.0,
+        };
+
+        let registration = template.registration(info);
+
+        assert_eq!(registration.info.mode, constants::MODE_GATEWAY);
+        assert!(registration.info.recursive_prs);
+        assert!(!registration.info.announces_from_internal);
+        assert_eq!(registration.info.announces_to_internal, Some(true));
     }
 
     #[test]

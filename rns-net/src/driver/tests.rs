@@ -518,6 +518,7 @@ fn make_pool_candidate_with_priority(
         mode: constants::MODE_FULL,
         recursive_prs: false,
         announces_from_internal: true,
+        announces_to_internal: None,
         ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         ifac_runtime: IfacRuntimeConfig {
             netname: None,
@@ -1117,6 +1118,7 @@ fn register_test_backbone(driver: &mut Driver, name: &str) {
         interface_id: InterfaceId(1),
         interface_name: name.to_string(),
         mode: rns_core::constants::MODE_FULL,
+        announces_to_internal: None,
         peer_state,
         fast_flap: crate::interface::backbone::BackboneFastFlapConfig::default(),
         fast_flap_state: Arc::new(std::sync::Mutex::new(
@@ -1460,6 +1462,7 @@ fn make_interface_info(id: u64) -> InterfaceInfo {
         mode: constants::MODE_FULL,
         recursive_prs: false,
         announces_from_internal: true,
+        announces_to_internal: None,
         out_capable: true,
         in_capable: true,
         bitrate: None,

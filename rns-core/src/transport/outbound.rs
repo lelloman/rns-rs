@@ -290,7 +290,10 @@ pub(crate) fn should_transmit_announce(
             if local_destination {
                 return true;
             }
-            !from_interface.is_some_and(|from_iface| from_iface.mode == constants::MODE_BOUNDARY)
+            !from_interface.is_some_and(|from_iface| {
+                from_iface.mode == constants::MODE_BOUNDARY
+                    && from_iface.announces_to_internal != Some(true)
+            })
         }
         _ => {
             // FULL, POINT_TO_POINT, GATEWAY — always allow
@@ -312,6 +315,7 @@ mod tests {
             mode,
             recursive_prs: false,
             announces_from_internal: true,
+            announces_to_internal: None,
             out_capable: true,
             in_capable: true,
             bitrate: None,
@@ -1203,6 +1207,31 @@ mod tests {
         let internal_iface = &interfaces[&InterfaceId(2)];
 
         assert!(!should_transmit_announce(
+            internal_iface,
+            &dest,
+            2,
+            &local_dests,
+            &paths,
+            &interfaces,
+        ));
+    }
+
+    #[test]
+    fn test_internal_allows_boundary_announce_with_explicit_override() {
+        let dest = [0xBA; 16];
+        let mut interfaces = BTreeMap::new();
+        let mut boundary = make_interface(1, constants::MODE_BOUNDARY);
+        boundary.announces_to_internal = Some(true);
+        interfaces.insert(InterfaceId(1), boundary);
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_INTERNAL));
+
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+
+        let local_dests = BTreeMap::new();
+        let internal_iface = &interfaces[&InterfaceId(2)];
+
+        assert!(should_transmit_announce(
             internal_iface,
             &dest,
             2,

@@ -573,6 +573,7 @@ impl Driver {
                 registration.info.mode = parent.info.mode;
                 registration.info.recursive_prs = parent.info.recursive_prs;
                 registration.info.announces_from_internal = parent.info.announces_from_internal;
+                registration.info.announces_to_internal = parent.info.announces_to_internal;
                 registration.info.announce_rate_target = parent.info.announce_rate_target;
                 registration.info.announce_rate_grace = parent.info.announce_rate_grace;
                 registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
