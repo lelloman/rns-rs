@@ -150,6 +150,7 @@ pub enum LinkManagerAction {
     LinkEstablished {
         link_id: LinkId,
         dest_hash: [u8; 16],
+        hops: u8,
         rtt: f64,
         is_initiator: bool,
     },
@@ -796,17 +797,19 @@ impl LinkManager {
         };
 
         let now = time::now();
-        let (lrrtt_encrypted, link_actions) =
-            match link
-                .engine
-                .handle_lrproof(&packet.data, &dest_sig_pub_bytes, now, rng)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    log::debug!("LRPROOF validation failed: {}", e);
-                    return Vec::new();
-                }
-            };
+        let (lrrtt_encrypted, link_actions) = match link.engine.handle_lrproof_with_hops(
+            &packet.data,
+            &dest_sig_pub_bytes,
+            Some(packet.hops),
+            now,
+            rng,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                log::debug!("LRPROOF validation failed: {}", e);
+                return Vec::new();
+            }
+        };
 
         let link_id = *link.engine.link_id();
         let mut actions = Vec::new();
@@ -3422,9 +3425,15 @@ impl LinkManager {
                         .get(link_id)
                         .map(|l| l.dest_hash)
                         .unwrap_or([0u8; 16]);
+                    let hops = self
+                        .links
+                        .get(link_id)
+                        .map(|link| link.engine.expected_hops())
+                        .unwrap_or(rns_core::constants::PATHFINDER_M);
                     result.push(LinkManagerAction::LinkEstablished {
                         link_id: *link_id,
                         dest_hash,
+                        hops,
                         rtt: *rtt,
                         is_initiator: *is_initiator,
                     });

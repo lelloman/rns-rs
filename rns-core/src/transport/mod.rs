@@ -340,6 +340,101 @@ impl TransportEngine {
         self.link_table.remove(link_id);
     }
 
+    /// Return the destination whose unvalidated link route can be rebalanced
+    /// by a mismatched-hop LRPROOF received from its recorded next hop.
+    pub fn link_rebalance_destination(
+        &self,
+        link_id: &[u8; 16],
+        packet_hops: u8,
+        receiving_interface: InterfaceId,
+    ) -> Option<[u8; 16]> {
+        let entry = self.link_table.get(link_id)?;
+        (self.config.transport_enabled
+            && !entry.validated
+            && packet_hops != entry.remaining_hops
+            && receiving_interface == entry.next_hop_interface)
+            .then_some(entry.destination_hash)
+    }
+
+    /// Parse and filter an inbound frame before offering it for LRPROOF path
+    /// rebalancing. The returned hops are the post-ingress metric used by the
+    /// normal transport pipeline.
+    pub fn inbound_lrproof_rebalance_candidate(
+        &self,
+        raw: &[u8],
+        receiving_interface: InterfaceId,
+    ) -> Option<([u8; 16], [u8; 16], u8, Vec<u8>)> {
+        let ctx = self.prepare_inbound_packet(InboundFrame {
+            raw,
+            iface: receiving_interface,
+            now: 0.0,
+            rx: RxMetadata::default(),
+        })?;
+        if ctx.packet.flags.packet_type != constants::PACKET_TYPE_PROOF
+            || ctx.packet.context != constants::CONTEXT_LRPROOF
+        {
+            return None;
+        }
+        let link_id = ctx.packet.destination_hash;
+        let destination_hash =
+            self.link_rebalance_destination(&link_id, ctx.packet.hops, receiving_interface)?;
+        Some((link_id, destination_hash, ctx.packet.hops, ctx.packet.data))
+    }
+
+    /// Validate a mismatched-hop LRPROOF and update the relay link route and
+    /// destination path atomically enough for normal proof routing to resume.
+    pub fn rebalance_link_path_from_lrproof(
+        &mut self,
+        link_id: &[u8; 16],
+        packet_hops: u8,
+        receiving_interface: InterfaceId,
+        proof_data: &[u8],
+        destination_sig_pub_bytes: &[u8; 32],
+    ) -> bool {
+        if self
+            .link_rebalance_destination(link_id, packet_hops, receiving_interface)
+            .is_none()
+        {
+            return false;
+        }
+
+        let destination_sig_pub =
+            rns_crypto::ed25519::Ed25519PublicKey::from_bytes(destination_sig_pub_bytes);
+        if crate::link::handshake::validate_lrproof(
+            proof_data,
+            link_id,
+            &destination_sig_pub,
+            destination_sig_pub_bytes,
+        )
+        .is_err()
+        {
+            return false;
+        }
+
+        let destination_hash = match self.link_table.get_mut(link_id) {
+            Some(entry) if !entry.validated => {
+                entry.remaining_hops = packet_hops;
+                entry.destination_hash
+            }
+            _ => return false,
+        };
+        if let Some(paths) = self.path_table.get_mut(&destination_hash) {
+            paths.update_primary_hops(packet_hops);
+        }
+        true
+    }
+
+    /// Update the current path metric after a terminus validates an LRPROOF.
+    pub fn rebalance_destination_path_hops(
+        &mut self,
+        destination_hash: &[u8; 16],
+        packet_hops: u8,
+    ) -> bool {
+        self.path_table
+            .get_mut(destination_hash)
+            .is_some_and(|paths| paths.update_primary_hops(packet_hops))
+    }
+
     // =========================================================================
     // Blackhole management
     // =========================================================================
@@ -1587,9 +1682,15 @@ impl TransportEngine {
                 }
             } else {
                 // Could be for a local pending link - deliver locally
+                let mut delivery_raw = packet.raw.clone();
+                // LinkManager must see the same post-ingress hop metric that
+                // was authenticated and considered by transport.
+                if delivery_raw.len() >= 2 {
+                    delivery_raw[1] = packet.hops;
+                }
                 actions.push(TransportAction::DeliverLocal {
                     destination_hash: packet.destination_hash,
-                    raw: PacketBytes::from(packet.raw.clone()),
+                    raw: PacketBytes::from(delivery_raw),
                     packet_hash: packet.packet_hash,
                     receiving_interface: ctx.iface,
                 });
@@ -2541,6 +2642,164 @@ mod tests {
         )));
     }
 
+    fn lrproof_rebalance_fixture() -> (TransportEngine, [u8; 16], [u8; 16], [u8; 32], Vec<u8>) {
+        use rns_crypto::ed25519::Ed25519PrivateKey;
+
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        let link_id = [0x44; 16];
+        let destination_hash = [0xBB; 16];
+        engine.register_link(
+            link_id,
+            LinkEntry {
+                timestamp: 100.0,
+                next_hop_transport_id: [0xAA; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 3,
+                received_interface: InterfaceId(1),
+                taken_hops: 1,
+                destination_hash,
+                validated: false,
+                proof_timeout: 200.0,
+            },
+        );
+        engine.inject_path(
+            destination_hash,
+            PathEntry {
+                timestamp: 99.0,
+                next_hop: [0xAA; 16],
+                hops: 3,
+                expires: 999.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(2),
+                packet_hash: [0xCC; 32],
+                announce_raw: None,
+            },
+        );
+
+        let mut key_rng = rns_crypto::FixedRng::new(&[0x51; 128]);
+        let signing_key = Ed25519PrivateKey::generate(&mut key_rng);
+        let signing_public = signing_key.public_key().public_bytes();
+        let proof = crate::link::handshake::build_lrproof(
+            &link_id,
+            &[0x22; 32],
+            &signing_public,
+            &signing_key,
+            None,
+            crate::link::LinkMode::Aes256Cbc,
+        );
+        (engine, link_id, destination_hash, signing_public, proof)
+    }
+
+    #[test]
+    fn valid_lrproof_rebalances_relay_link_and_destination_path() {
+        let (mut engine, link_id, destination_hash, signing_public, proof) =
+            lrproof_rebalance_fixture();
+
+        assert!(engine.rebalance_link_path_from_lrproof(
+            &link_id,
+            5,
+            InterfaceId(2),
+            &proof,
+            &signing_public,
+        ));
+
+        assert_eq!(engine.link_table[&link_id].remaining_hops, 5);
+        assert_eq!(engine.hops_to(&destination_hash), Some(5));
+
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            },
+            4,
+            &link_id,
+            None,
+            constants::CONTEXT_LRPROOF,
+            &proof,
+        )
+        .unwrap();
+        let mut inbound_rng = rns_crypto::FixedRng::new(&[0x61; 32]);
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(2),
+                now: 101.0,
+                rx: RxMetadata::default(),
+            },
+            &mut inbound_rng,
+        );
+        assert!(engine.link_table[&link_id].validated);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TransportAction::SendOnInterface {
+                interface: InterfaceId(1),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn relay_rebalance_rejects_invalid_signature_wrong_interface_and_validated_link() {
+        let (mut engine, link_id, destination_hash, signing_public, mut proof) =
+            lrproof_rebalance_fixture();
+        proof[0] ^= 0x01;
+        assert!(!engine.rebalance_link_path_from_lrproof(
+            &link_id,
+            5,
+            InterfaceId(2),
+            &proof,
+            &signing_public,
+        ));
+        assert_eq!(engine.link_table[&link_id].remaining_hops, 3);
+        assert_eq!(engine.hops_to(&destination_hash), Some(3));
+
+        let (_, _, _, _, valid_proof) = lrproof_rebalance_fixture();
+        assert!(!engine.rebalance_link_path_from_lrproof(
+            &link_id,
+            5,
+            InterfaceId(1),
+            &valid_proof,
+            &signing_public,
+        ));
+        engine.validate_link(&link_id);
+        assert!(!engine.rebalance_link_path_from_lrproof(
+            &link_id,
+            5,
+            InterfaceId(2),
+            &valid_proof,
+            &signing_public,
+        ));
+    }
+
+    #[test]
+    fn relay_rebalance_candidate_rejects_proof_addressed_to_another_transport() {
+        let (engine, link_id, _, _, proof) = lrproof_rebalance_fixture();
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_2,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_TRANSPORT,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            },
+            4,
+            &link_id,
+            Some(&[0x43; 16]),
+            constants::CONTEXT_LRPROOF,
+            &proof,
+        )
+        .unwrap();
+
+        assert!(engine
+            .inbound_lrproof_rebalance_candidate(&packet.raw, InterfaceId(2))
+            .is_none());
+    }
+
     #[test]
     fn lrproof_hop_mismatch_diagnostic_contains_complete_route_context() {
         let entry = LinkEntry {
@@ -3489,6 +3748,47 @@ mod tests {
         assert_eq!(&**deliver.1, packet.raw.as_slice());
         assert_eq!(*deliver.2, packet.packet_hash);
         assert_eq!(*deliver.3, InterfaceId(1));
+    }
+
+    #[test]
+    fn local_lrproof_delivery_carries_post_ingress_hops() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        let link_id = [0x4C; 16];
+        let packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_LINK,
+                packet_type: constants::PACKET_TYPE_PROOF,
+            },
+            4,
+            &link_id,
+            None,
+            constants::CONTEXT_LRPROOF,
+            &[0xAA; 96],
+        )
+        .unwrap();
+        let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
+
+        let actions = engine.handle_inbound(
+            InboundFrame {
+                raw: &packet.raw,
+                iface: InterfaceId(1),
+                now: 1000.0,
+                rx: RxMetadata::default(),
+            },
+            &mut rng,
+        );
+        let delivered_raw = actions
+            .iter()
+            .find_map(|action| match action {
+                TransportAction::DeliverLocal { raw, .. } => Some(&**raw),
+                _ => None,
+            })
+            .expect("LRPROOF should be delivered to the pending link manager");
+        assert_eq!(RawPacket::unpack(delivered_raw).unwrap().hops, 5);
     }
 
     #[test]

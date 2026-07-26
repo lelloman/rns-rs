@@ -101,6 +101,16 @@ impl PathSet {
         self.paths.first_mut()
     }
 
+    /// Update the current primary path's hop metric and restore path ranking.
+    pub fn update_primary_hops(&mut self, hops: u8) -> bool {
+        let Some(primary) = self.paths.first_mut() else {
+            return false;
+        };
+        primary.hops = hops;
+        self.sort();
+        true
+    }
+
     /// Whether the set contains any paths.
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
