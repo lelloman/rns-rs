@@ -1381,6 +1381,17 @@ impl Driver {
                         metadata,
                     );
                 }
+                LinkManagerAction::RequestFailed {
+                    link_id,
+                    request_id,
+                    reason,
+                } => {
+                    self.callbacks.on_request_failed(
+                        rns_core::types::LinkId(link_id),
+                        request_id,
+                        reason,
+                    );
+                }
                 LinkManagerAction::LinkRequestReceived {
                     link_id,
                     receiving_interface,

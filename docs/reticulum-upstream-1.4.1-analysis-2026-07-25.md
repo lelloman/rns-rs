@@ -76,7 +76,7 @@ audited so advancing the baseline cannot silently skip them.
 | 22 | `e46b012e954ef632f68d21fa83a30649182b8233` | Allow loglevels above LOG_DEBUG, cleaned up logging | Partially covered; needs decision |
 | 23 | `a29a08716fc76afe9867fd16b61f80b3c79ced1e` | Cleaned up channel class logging and deprecated code | Needs port |
 | 24 | `1ecf845ceafd0d0154ea6657a3ea958d7cac944f` | Added set_max_request_size to Destination API | Integrated |
-| 25 | `6a761a768cc118e2e70c1f8d76a0563975d78377` | Added max_response_size parameter to Link request API | Needs port |
+| 25 | `6a761a768cc118e2e70c1f8d76a0563975d78377` | Added max_response_size parameter to Link request API | Integrated |
 | 26 | `12c21d4e252d6b49b0e7e0acc5249af77be8f1ec` | Cleanup | Non-runtime upstream test cleanup |
 | 27 | `e29b839429b8aa98265a4146d85e888374037c33` | Ensure historical interface discoveries are cleaned according to blackholed identities | Needs port |
 | 28 | `224124aac7d1e2aded3c781b783c009419efabf3` | Updated version | Non-runtime |
@@ -488,12 +488,15 @@ They do not retain a response limit or an explicit receipt failure reason, and
 both packet/resource response paths accept any size allowed by lower transport
 limits.
 
-**Disposition:** needs port, high priority and coordinated with commit 24.
-Replace the pending-request value with structured state, expose an optional
-limit in the public request API, reject before buffering large resources, and
-emit a deterministic failure action/callback while cleaning pending and split
-state. Test packet and resource responses, exact/over limits, timeouts, split
-resources and late responses after rejection.
+**Disposition:** integrated. Pending request state now retains both its deadline
+and optional response limit. `LinkManager` and `NodeHandle` expose compatible
+request methods with an optional maximum while their existing methods remain
+unlimited. Packet responses are checked before delivery, resource responses are
+checked against the advertisement's uncompressed `data_size` before transfer,
+and rejection removes the pending request and emits `RequestFailed` with a
+typed `ResponseTooLarge` reason through the application callback. Tests cover
+unset behavior, exact packet/resource boundaries, one byte over, failure
+details, cleanup, and compressed-resource-safe declared-size enforcement.
 
 ### 26. `12c21d4e` — Update upstream Channel test outlet type
 

@@ -60,7 +60,7 @@ struct ManagedLink {
     /// Active outgoing resource transfers.
     outgoing_resources: Vec<ResourceSender>,
     /// Request IDs awaiting a packet or resource response.
-    pending_requests: HashMap<[u8; 16], Option<f64>>,
+    pending_requests: HashMap<[u8; 16], PendingRequest>,
     /// Logical incoming split transfers, keyed by original resource hash.
     incoming_splits: HashMap<[u8; 32], IncomingSplitTransfer>,
     /// Logical outgoing split transfers, keyed by original resource hash.
@@ -98,6 +98,11 @@ struct OutgoingSplitTransfer {
     current_total_parts: usize,
 }
 
+struct PendingRequest {
+    deadline: Option<f64>,
+    max_response_size: Option<usize>,
+}
+
 /// A registered link destination that can accept incoming LINKREQUEST.
 struct LinkDestination {
     sig_prv: Ed25519PrivateKey,
@@ -117,6 +122,13 @@ pub enum RequestResponse {
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
     },
+}
+
+/// Reason an outbound request failed before receiving an accepted response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestFailure {
+    /// The peer advertised or sent a response larger than the configured limit.
+    ResponseTooLarge { size: u64, maximum: usize },
 }
 
 impl From<Vec<u8>> for RequestResponse {
@@ -225,6 +237,12 @@ pub enum LinkManagerAction {
         request_id: [u8; 16],
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
+    },
+    /// An outbound request failed.
+    RequestFailed {
+        link_id: LinkId,
+        request_id: [u8; 16],
+        reason: RequestFailure,
     },
     /// A link request was received (for hook notification).
     LinkRequestReceived {
@@ -1639,6 +1657,18 @@ impl LinkManager {
         data: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        self.send_request_with_max_response_size(link_id, path, data, None, rng)
+    }
+
+    /// Send a request with an optional maximum accepted response size.
+    pub fn send_request_with_max_response_size(
+        &mut self,
+        link_id: &LinkId,
+        path: &str,
+        data: &[u8],
+        max_response_size: Option<usize>,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
 
         let link = match self.links.get_mut(link_id) {
@@ -1684,7 +1714,13 @@ impl LinkManager {
             };
             // Resource request response timing starts once the remote proves
             // receipt of the final request-resource segment.
-            link.pending_requests.insert(request_id, None);
+            link.pending_requests.insert(
+                request_id,
+                PendingRequest {
+                    deadline: None,
+                    max_response_size,
+                },
+            );
             let adv_actions = Self::start_resource_senders(link, senders, now);
             let _ = link;
             return self.process_resource_actions(link_id, adv_actions, rng);
@@ -1717,7 +1753,13 @@ impl LinkManager {
             let mut request_id = [0u8; 16];
             request_id.copy_from_slice(&packet_hash[..16]);
             let deadline = Self::request_response_deadline(link, time::now());
-            link.pending_requests.insert(request_id, Some(deadline));
+            link.pending_requests.insert(
+                request_id,
+                PendingRequest {
+                    deadline: Some(deadline),
+                    max_response_size,
+                },
+            );
             actions.push(LinkManagerAction::SendPacket {
                 raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1911,8 +1953,8 @@ impl LinkManager {
             Some((request_id, msgpack::pack(&arr[1])))
         });
 
-        let (request_id, response_data) = match packet_response {
-            Some(response) => response,
+        let (request_id, response_data, check_size) = match packet_response {
+            Some((request_id, response_data)) => (request_id, response_data, true),
             None => {
                 let Some(request_id) = resource_request_id else {
                     return Vec::new();
@@ -1920,6 +1962,7 @@ impl LinkManager {
                 (
                     request_id,
                     msgpack::pack(&msgpack::Value::Bin(plaintext.to_vec())),
+                    false,
                 )
             }
         };
@@ -1927,9 +1970,34 @@ impl LinkManager {
         let Some(link) = self.links.get_mut(link_id) else {
             return Vec::new();
         };
-        if link.pending_requests.remove(&request_id).is_none() {
+        let Some(pending) = link.pending_requests.get(&request_id) else {
             return Vec::new();
+        };
+        if check_size {
+            // Upstream excludes the two-byte MessagePack binary wrapper from
+            // packet response sizes. Resource responses are checked from the
+            // advertisement before their transfer is accepted.
+            let response_size = response_data.len().saturating_sub(2) as u64;
+            if let Some(maximum) = pending.max_response_size {
+                if response_size > maximum as u64 {
+                    link.pending_requests.remove(&request_id);
+                    log::debug!(
+                        "rejected response with excessive size {} bytes on link {:02x?}",
+                        response_size,
+                        &link_id[..4]
+                    );
+                    return vec![LinkManagerAction::RequestFailed {
+                        link_id: *link_id,
+                        request_id,
+                        reason: RequestFailure::ResponseTooLarge {
+                            size: response_size,
+                            maximum,
+                        },
+                    }];
+                }
+            }
         }
+        link.pending_requests.remove(&request_id);
 
         vec![LinkManagerAction::ResponseReceived {
             link_id: *link_id,
@@ -2227,8 +2295,34 @@ impl LinkManager {
             let Some(request_id) = Self::response_request_id(&receiver.request_id) else {
                 return Vec::new();
             };
-            if !link.pending_requests.contains_key(&request_id) {
+            let Some(pending) = link.pending_requests.get(&request_id) else {
                 return Vec::new();
+            };
+            if let Some(maximum) = pending.max_response_size {
+                if receiver.data_size > maximum as u64 {
+                    let response_size = receiver.data_size;
+                    link.pending_requests.remove(&request_id);
+                    log::debug!(
+                        "rejected response with excessive size {} bytes on link {:02x?}",
+                        response_size,
+                        &link_id[..4]
+                    );
+                    let reject_actions = {
+                        let mut receiver = receiver;
+                        receiver.reject()
+                    };
+                    let _ = link;
+                    let mut actions = self.process_resource_actions(link_id, reject_actions, rng);
+                    actions.push(LinkManagerAction::RequestFailed {
+                        link_id: *link_id,
+                        request_id,
+                        reason: RequestFailure::ResponseTooLarge {
+                            size: response_size,
+                            maximum,
+                        },
+                    });
+                    return actions;
+                }
             }
             if is_split {
                 link.incoming_splits.insert(
@@ -2714,7 +2808,7 @@ impl LinkManager {
         if let Some(request_id) = completed_request_id {
             let deadline = Self::request_response_deadline(link, now);
             if let Some(entry) = link.pending_requests.get_mut(&request_id) {
-                *entry = Some(deadline);
+                entry.deadline = Some(deadline);
             }
         }
         if let Some(request_id) = failed_request_id {
@@ -3212,7 +3306,7 @@ impl LinkManager {
                 link.pending_requests.remove(&request_id);
             }
             link.pending_requests
-                .retain(|_, deadline| deadline.is_none_or(|expires_at| now <= expires_at));
+                .retain(|_, request| request.deadline.is_none_or(|expires_at| now <= expires_at));
 
             // Clean up completed/failed resources
             link.outgoing_resources
@@ -4081,6 +4175,117 @@ mod tests {
     }
 
     #[test]
+    fn packet_response_at_exact_size_limit_is_accepted() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let payload = vec![0xA5; 64];
+        let response_value =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload.clone()));
+        resp_mgr.register_request_handler("/bounded-response", None, {
+            let response_value = response_value.clone();
+            move |_, _, _, _| Some(response_value.clone())
+        });
+
+        let request_actions = init_mgr.send_request_with_max_response_size(
+            &link_id,
+            "/bounded-response",
+            b"\xc0",
+            Some(payload.len()),
+            &mut rng,
+        );
+        let request_raw = extract_any_send_packet(&request_actions);
+        let request = RawPacket::unpack(&request_raw).unwrap();
+        let response_actions = resp_mgr.handle_local_delivery(
+            request.destination_hash,
+            &request_raw,
+            request.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        let response_raw = extract_any_send_packet(&response_actions);
+        let response = RawPacket::unpack(&response_raw).unwrap();
+        let actions = init_mgr.handle_local_delivery(
+            response.destination_hash,
+            &response_raw,
+            response.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            LinkManagerAction::ResponseReceived { data, .. } if data == &response_value
+        )));
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::RequestFailed { .. })));
+    }
+
+    #[test]
+    fn packet_response_one_byte_over_size_limit_fails_request() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let payload = vec![0xA5; 64];
+        let response_value =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload.clone()));
+        resp_mgr.register_request_handler("/bounded-response", None, {
+            let response_value = response_value.clone();
+            move |_, _, _, _| Some(response_value.clone())
+        });
+
+        let request_actions = init_mgr.send_request_with_max_response_size(
+            &link_id,
+            "/bounded-response",
+            b"\xc0",
+            Some(payload.len() - 1),
+            &mut rng,
+        );
+        let request_raw = extract_any_send_packet(&request_actions);
+        let request = RawPacket::unpack(&request_raw).unwrap();
+        let request_id = request.get_truncated_hash();
+        let response_actions = resp_mgr.handle_local_delivery(
+            request.destination_hash,
+            &request_raw,
+            request.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        let response_raw = extract_any_send_packet(&response_actions);
+        let response = RawPacket::unpack(&response_raw).unwrap();
+        let actions = init_mgr.handle_local_delivery(
+            response.destination_hash,
+            &response_raw,
+            response.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            LinkManagerAction::RequestFailed {
+                request_id: failed_id,
+                reason: RequestFailure::ResponseTooLarge { size: 64, maximum: 63 },
+                ..
+            } if failed_id == &request_id
+        )));
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::ResponseReceived { .. })));
+        assert!(!init_mgr.links[&link_id]
+            .pending_requests
+            .contains_key(&request_id));
+        assert!(init_mgr
+            .handle_local_delivery(
+                response.destination_hash,
+                &response_raw,
+                response.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            )
+            .is_empty());
+    }
+
+    #[test]
     fn test_request_acl_deny_unidentified() {
         let mut rng = OsRng;
         let dest_hash = [0xDD; 16];
@@ -4654,10 +4859,16 @@ mod tests {
         assert_eq!(adv.request_id.as_ref().map(Vec::len), Some(16));
         let request_id = LinkManager::response_request_id(&adv.request_id).unwrap();
         assert_eq!(
-            init_mgr.links[&link_id].pending_requests.get(&request_id),
-            Some(&None),
+            init_mgr.links[&link_id]
+                .pending_requests
+                .get(&request_id)
+                .and_then(|request| request.deadline),
+            None,
             "resource request timeout must wait for delivery proof"
         );
+        assert!(init_mgr.links[&link_id]
+            .pending_requests
+            .contains_key(&request_id));
 
         let has_request_packet = actions.iter().any(|action| match action {
             LinkManagerAction::SendPacket { raw, .. } => RawPacket::unpack(raw)
@@ -4678,14 +4889,16 @@ mod tests {
         assert!(init_mgr.links[&link_id]
             .pending_requests
             .get(&request_id)
-            .is_some_and(Option::is_some));
+            .is_some_and(|request| request.deadline.is_some()));
 
         init_mgr
             .links
             .get_mut(&link_id)
             .unwrap()
             .pending_requests
-            .insert(request_id, Some(time::now() - 1.0));
+            .get_mut(&request_id)
+            .unwrap()
+            .deadline = Some(time::now() - 1.0);
         init_mgr.tick(&mut rng);
 
         assert!(!init_mgr.links[&link_id]
@@ -6877,6 +7090,129 @@ mod tests {
         });
         assert_eq!(received_request_id, request_id);
         assert_eq!(received_data, response_value);
+    }
+
+    #[test]
+    fn response_resource_at_exact_declared_size_limit_is_accepted() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let payload = deterministic_bytes(4096);
+        let response_value =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload.clone()));
+        let expected_size = rns_core::msgpack::pack(&rns_core::msgpack::Value::Array(vec![
+            rns_core::msgpack::Value::Bin(vec![0; 16]),
+            rns_core::msgpack::Value::Bin(payload),
+        ]))
+        .len();
+        resp_mgr.register_request_handler_response("/bounded-resource", None, {
+            let response_value = response_value.clone();
+            move |_, _, _, _| {
+                Some(RequestResponse::Resource {
+                    data: response_value.clone(),
+                    metadata: None,
+                    auto_compress: false,
+                })
+            }
+        });
+
+        let request_actions = init_mgr.send_request_with_max_response_size(
+            &link_id,
+            "/bounded-resource",
+            b"\xc0",
+            Some(expected_size),
+            &mut rng,
+        );
+        let request_raw = extract_any_send_packet(&request_actions);
+        let request = RawPacket::unpack(&request_raw).unwrap();
+        let response_actions = resp_mgr.handle_local_delivery(
+            request.destination_hash,
+            &request_raw,
+            request.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        let adv = first_resource_advertisement(&resp_mgr, &link_id, &response_actions);
+        assert_eq!(adv.data_size as usize, expected_size);
+        let adv_raw = extract_any_send_packet(&response_actions);
+        let adv_packet = RawPacket::unpack(&adv_raw).unwrap();
+        let actions = init_mgr.handle_local_delivery(
+            adv_packet.destination_hash,
+            &adv_raw,
+            adv_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, LinkManagerAction::RequestFailed { .. })));
+        assert_eq!(init_mgr.links[&link_id].incoming_resources.len(), 1);
+    }
+
+    #[test]
+    fn response_resource_one_byte_over_declared_size_limit_is_rejected() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let payload = deterministic_bytes(4096);
+        let response_value =
+            rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload.clone()));
+        let expected_size = rns_core::msgpack::pack(&rns_core::msgpack::Value::Array(vec![
+            rns_core::msgpack::Value::Bin(vec![0; 16]),
+            rns_core::msgpack::Value::Bin(payload),
+        ]))
+        .len();
+        resp_mgr.register_request_handler_response("/bounded-resource", None, {
+            let response_value = response_value.clone();
+            move |_, _, _, _| {
+                Some(RequestResponse::Resource {
+                    data: response_value.clone(),
+                    metadata: None,
+                    auto_compress: false,
+                })
+            }
+        });
+
+        let request_actions = init_mgr.send_request_with_max_response_size(
+            &link_id,
+            "/bounded-resource",
+            b"\xc0",
+            Some(expected_size - 1),
+            &mut rng,
+        );
+        let request_raw = extract_any_send_packet(&request_actions);
+        let request = RawPacket::unpack(&request_raw).unwrap();
+        let request_id = request.get_truncated_hash();
+        let response_actions = resp_mgr.handle_local_delivery(
+            request.destination_hash,
+            &request_raw,
+            request.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        let adv_raw = extract_any_send_packet(&response_actions);
+        let adv_packet = RawPacket::unpack(&adv_raw).unwrap();
+        let actions = init_mgr.handle_local_delivery(
+            adv_packet.destination_hash,
+            &adv_raw,
+            adv_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            LinkManagerAction::RequestFailed {
+                request_id: failed_id,
+                reason: RequestFailure::ResponseTooLarge { size, maximum },
+                ..
+            } if failed_id == &request_id
+                && *size == expected_size as u64
+                && *maximum == expected_size - 1
+        )));
+        assert!(init_mgr.links[&link_id].incoming_resources.is_empty());
+        assert!(!init_mgr.links[&link_id]
+            .pending_requests
+            .contains_key(&request_id));
     }
 
     #[test]

@@ -2165,12 +2165,24 @@ impl RnsNode {
         path: &str,
         data: &[u8],
     ) -> Result<(), SendError> {
+        self.send_request_with_max_response_size(link_id, path, data, None)
+    }
+
+    /// Send a request with an optional maximum accepted response size.
+    pub fn send_request_with_max_response_size(
+        &self,
+        link_id: [u8; 16],
+        path: &str,
+        data: &[u8],
+        max_response_size: Option<usize>,
+    ) -> Result<(), SendError> {
         self.reject_new_work_if_draining()?;
         self.tx
             .send(Event::SendRequest {
                 link_id,
                 path: path.to_string(),
                 data: data.to_vec(),
+                max_response_size,
             })
             .map_err(|_| SendError)
     }
