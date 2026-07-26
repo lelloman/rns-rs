@@ -329,7 +329,7 @@ fn init_rnsh_logging(opts: &CliOptions) -> Result<(), RnshError> {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(rnsh_log_path(&dir))?;
+        .open(rnsh_log_path(&dir, opts.listen))?;
     let mut builder = env_logger::Builder::new();
     builder
         .filter_level(rnsh_log_level(opts.listen, opts.verbose, opts.quiet))
@@ -382,8 +382,12 @@ fn resolve_rns_config_dir(explicit: Option<&str>, home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join(".reticulum"))
 }
 
-fn rnsh_log_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("logfile")
+fn rnsh_log_path(config_dir: &Path, listen: bool) -> PathBuf {
+    config_dir.join(if listen {
+        "logfile"
+    } else {
+        "logfile.initiator"
+    })
 }
 
 fn rnsh_log_level(listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
@@ -2332,7 +2336,11 @@ mod tests {
         let allowed = load_allowed_identities(&opts, &selected).unwrap();
 
         assert!(allowed.contains(&[0x11; 16]));
-        assert_eq!(rnsh_log_path(&selected), selected.join("logfile"));
+        assert_eq!(rnsh_log_path(&selected, true), selected.join("logfile"));
+        assert_eq!(
+            rnsh_log_path(&selected, false),
+            selected.join("logfile.initiator")
+        );
     }
 
     #[test]
