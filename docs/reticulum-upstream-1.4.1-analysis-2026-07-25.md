@@ -2,16 +2,17 @@
 
 ## Scope
 
-This working document audits every upstream Reticulum commit after the accepted
-rns-rs 1.4.0 baseline and through the signed Reticulum 1.4.1 release tag. It is
-an integration plan, not an acceptance record: `UPSTREAM.md` remains normative
-at 1.4.0 until the applicable work is ported, tested and accepted.
+This document records the audit and final disposition of every upstream
+Reticulum commit after the accepted rns-rs 1.4.0 baseline and through the signed
+Reticulum 1.4.1 release tag. The applicable work was ported and tested before
+`UPSTREAM.md` was promoted to 1.4.1.
 
 - accepted rns-rs baseline: `122f17fad69a483503cc5c1d8d81046712d78c96`
 - accepted baseline version: Reticulum `1.4.0`
 - upstream release tag: annotated tag `1.4.1`
 - release tag target: `b2188ce9a746a35b770b10bea1b7ccbe93b4e198`
 - release runtime tree: `28356de6a3562989367859b50ff584e334e4abb4`
+- release `RNS` tree: `da3ed5fb64f432b04aa387576701182b8c82df8d`
 - release version assertion: `RNS.__version__ == 1.4.1`
 - commits in the audited range: 32
 - upstream commit dates: 2026-07-22 through 2026-07-24
@@ -30,7 +31,7 @@ accepted baseline". Some commits need no Rust code because the local design
 already avoids the Python-specific failure. Those commits are still listed and
 audited so advancing the baseline cannot silently skip them.
 
-## Disposition meanings
+## Audit vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different in the
   inspected Rust tree.
@@ -50,38 +51,38 @@ audited so advancing the baseline cannot silently skip them.
 
 ## Commit inventory
 
-| # | Upstream commit | Subject | Initial disposition |
+| # | Upstream commit | Subject | Final disposition |
 |---:|---|---|---|
 | 1 | `483887569134b26d9be66859a8685c5289e4bcb0` | Fixed ingress control burst active flag deadlocking until new announces arrived under burst timing patterns | Structurally covered |
-| 2 | `b051e76d00ab97baa948e69cdacadba3cf4739da` | Allow boundary -> boundary and boundary -> gateway path requests | Needs port |
-| 3 | `1af173e8a59d4f8c28a3e52fa97875a3d96930f4` | Added announces_to_internal interface option | Needs port |
-| 4 | `bebf211b01c5c08fcd4b1bcdb2cadc773e2b5127` | Added autoconnect_discovered_mode and autoconnect_announces_to_internal options | Needs decision |
-| 5 | `9bc73819f641db25868355e494f66f49c8b71a84` | Updated documentation | Documentation follow-up |
-| 6 | `c10c465c0231f29536e66fa1c3713eb064ea71ea` | Interface gravity base property and configuration | Needs coordinated port |
+| 2 | `b051e76d00ab97baa948e69cdacadba3cf4739da` | Allow boundary -> boundary and boundary -> gateway path requests | Integrated |
+| 3 | `1af173e8a59d4f8c28a3e52fa97875a3d96930f4` | Added announces_to_internal interface option | Integrated |
+| 4 | `bebf211b01c5c08fcd4b1bcdb2cadc773e2b5127` | Added autoconnect_discovered_mode and autoconnect_announces_to_internal options | Integrated |
+| 5 | `9bc73819f641db25868355e494f66f49c8b71a84` | Updated documentation | Integrated documentation |
+| 6 | `c10c465c0231f29536e66fa1c3713eb064ea71ea` | Interface gravity base property and configuration | Integrated |
 | 7 | `7611fca6bf422c81e73e3411a4a541f188a17a3a` | Fixed loglevel 8 not being respected | Structurally covered |
-| 8 | `5577e781fbe44154621b38a9179cfe197e1f7a37` | Basic gravity processing for announces | Needs coordinated port |
-| 9 | `3ca71527d9869010ada97b2b029cd699d024720f` | Propagate gravity to spawned interfaces | Needs coordinated port |
-| 10 | `566aa68fc00cec224fb6818038ba622ba1974147` | Added gravity, default_gravity and autoconnect_interface_gravity options and updated documentation | Needs coordinated port |
-| 11 | `889c5ff55fc8538737f6c86e14e3043caf729488` | Added sort by gravity to rnstatus | Needs coordinated port |
+| 8 | `5577e781fbe44154621b38a9179cfe197e1f7a37` | Basic gravity processing for announces | Integrated |
+| 9 | `3ca71527d9869010ada97b2b029cd699d024720f` | Propagate gravity to spawned interfaces | Integrated |
+| 10 | `566aa68fc00cec224fb6818038ba622ba1974147` | Added gravity, default_gravity and autoconnect_interface_gravity options and updated documentation | Integrated |
+| 11 | `889c5ff55fc8538737f6c86e14e3043caf729488` | Added sort by gravity to rnstatus | Integrated |
 | 12 | `cbf50460c2b80d0cab67a94fe54d96c26992bb66` | Cleaned up logging | Structurally covered |
-| 13 | `90e1dbb9125c7576a17b7b73320ccff1a4a28b09` | Link request path re-balancing | Needs coordinated port |
-| 14 | `c4297d318f9ede3e52145bf6267392c82228acb3` | Cleanup | Gravity-cluster follow-up |
-| 15 | `6d4523c27ee5f32e1b27a176d6a1d2ed1c70206b` | Added rebalanced time to links | Needs coordinated port |
-| 16 | `93526c17f54528d3aa6019a71aa1893202242229` | Added rebalanced time to links | Needs coordinated port |
-| 17 | `bce5f859daf4bdfb0454c4bdc47f0de7fc112541` | Logging consistency | Rebalancing-cluster follow-up |
+| 13 | `90e1dbb9125c7576a17b7b73320ccff1a4a28b09` | Link request path re-balancing | Integrated |
+| 14 | `c4297d318f9ede3e52145bf6267392c82228acb3` | Cleanup | Covered by final gravity behavior |
+| 15 | `6d4523c27ee5f32e1b27a176d6a1d2ed1c70206b` | Added rebalanced time to links | Integrated |
+| 16 | `93526c17f54528d3aa6019a71aa1893202242229` | Added rebalanced time to links | Integrated |
+| 17 | `bce5f859daf4bdfb0454c4bdc47f0de7fc112541` | Logging consistency | Structurally covered |
 | 18 | `a4b612987568ee0a9b752c830b0fbb582067581b` | Fixed i2p tunnel handler futures getting garbage collected, thanks to **welo** | Structurally covered |
 | 19 | `c25b56db9aaa7e144ae4da48a2256ecfa2a720cb` | Fixed discovered interfaces getting connected as BackboneInterface clients instead of TCPClientInterface on darwin | Structurally covered |
-| 20 | `00d57a22eecb7adb775b0f11d48fde21ddc2dc21` | Cleaned up I2P interface and control process code, fixed various i2plib bugs | Needs decision |
-| 21 | `0f33d71966b69d5a15819106b53edab4c6cfb355` | Updated documentation | Documentation follow-up |
-| 22 | `e46b012e954ef632f68d21fa83a30649182b8233` | Allow loglevels above LOG_DEBUG, cleaned up logging | Partially covered; needs decision |
-| 23 | `a29a08716fc76afe9867fd16b61f80b3c79ced1e` | Cleaned up channel class logging and deprecated code | Needs port |
+| 20 | `00d57a22eecb7adb775b0f11d48fde21ddc2dc21` | Cleaned up I2P interface and control process code, fixed various i2plib bugs | Integrated hardening |
+| 21 | `0f33d71966b69d5a15819106b53edab4c6cfb355` | Updated documentation | Integrated documentation |
+| 22 | `e46b012e954ef632f68d21fa83a30649182b8233` | Allow loglevels above LOG_DEBUG, cleaned up logging | Integrated |
+| 23 | `a29a08716fc76afe9867fd16b61f80b3c79ced1e` | Cleaned up channel class logging and deprecated code | Integrated |
 | 24 | `1ecf845ceafd0d0154ea6657a3ea958d7cac944f` | Added set_max_request_size to Destination API | Integrated |
 | 25 | `6a761a768cc118e2e70c1f8d76a0563975d78377` | Added max_response_size parameter to Link request API | Integrated |
 | 26 | `12c21d4e252d6b49b0e7e0acc5249af77be8f1ec` | Cleanup | Non-runtime upstream test cleanup |
 | 27 | `e29b839429b8aa98265a4146d85e888374037c33` | Ensure historical interface discoveries are cleaned according to blackholed identities | Integrated |
-| 28 | `224124aac7d1e2aded3c781b783c009419efabf3` | Updated version | Non-runtime |
-| 29 | `e5d37355b87e25a7868cdace5b04459091749e5c` | Updated changelog | Non-runtime |
-| 30 | `0d16e2305eb2f7f350c1202bc0d3c9764bea1b3e` | Updated documentation | Documentation follow-up |
+| 28 | `224124aac7d1e2aded3c781b783c009419efabf3` | Updated version | Integrated tracking metadata |
+| 29 | `e5d37355b87e25a7868cdace5b04459091749e5c` | Updated changelog | Audited; no port |
+| 30 | `0d16e2305eb2f7f350c1202bc0d3c9764bea1b3e` | Updated documentation | Integrated native documentation |
 | 31 | `4631d78beaa1652709b4815a41916a618548baaf` | Adjusted re-balance loglevel | Integrated |
 | 32 | `b2188ce9a746a35b770b10bea1b7ccbe93b4e198` | Adjusted gravity update loglevel | Integrated |
 
@@ -120,10 +121,9 @@ interface with `recursive_prs`; `MODE_BOUNDARY` is not in that constant. Once
 admitted, the Rust egress candidate loop has no mode filter. It therefore lacks
 both halves of the new behavior.
 
-**Disposition:** needs port. Add the boundary ingress exception and carry an
-optional egress mode filter into candidate selection. Cover boundary-to-boundary
-and boundary-to-gateway forwarding, rejection toward full/access-point/internal
-links, attached-interface exclusion, and ingress/egress rate limiting.
+**Disposition:** integrated. Boundary ingress now enables recursive discovery
+with boundary/gateway-only egress. Tests cover allowed and rejected modes,
+attached-interface exclusion and rate-limiting behavior.
 
 ### 3. `1af173e8` — Per-interface `announces_to_internal` override
 
@@ -138,10 +138,9 @@ Rust `InterfaceInfo` contains `announces_from_internal` but no
 `rns-core/src/transport/outbound.rs` unconditionally rejects a boundary-origin
 announce for an internal outbound interface.
 
-**Disposition:** needs port. Thread the field through config parsing, interface
-registration, dynamic child templates, RPC/ifstats, runtime configuration and
-the announce matrix. Preserve the distinction between unset/false and true if
-the management surfaces expose upstream-compatible values.
+**Disposition:** integrated. The tri-state field is threaded through config,
+registration, dynamic children, management surfaces and the announce matrix,
+with focused propagation regressions.
 
 ### 4. `bebf211b` — Auto-connected discovery mode and internal propagation
 
@@ -161,11 +160,10 @@ peer pool rather than upstream's generic auto-connected interface list. Pool
 candidates currently inherit fixed/local defaults, and there are no equivalent
 global settings.
 
-**Disposition:** needs decision, then coordinated port with commits 3 and 10.
-Define whether these settings apply only to discovery-origin peer-pool members
-or to all automatically created discovery interfaces. The final parser should
-prefer `autoconnect_interface_mode`; accepting the one-commit transitional
-spelling as an alias is optional compatibility policy.
+**Disposition:** integrated for discovery-origin peer-pool members, the local
+equivalent of upstream auto-connected discovery interfaces. Configuration uses
+the final `autoconnect_interface_mode` spelling and carries the internal
+announce policy into spawned peers.
 
 ### 5. `9bc73819` — Internal propagation and auto-connect documentation
 
@@ -173,10 +171,9 @@ The source documentation explains `announces_to_internal`, the two initial
 auto-connect settings, and links to an external announce-propagation simulator.
 Most changed files are generated HTML/Markdown/search artifacts.
 
-**Disposition:** documentation follow-up. Document the local configuration and
-propagation matrix after commits 3 and 4 are resolved. Do not vendor generated
-upstream manuals. The third-party simulator link is informational and not
-required for runtime parity.
+**Disposition:** integrated as native operator documentation for the local
+configuration and propagation behavior. Generated upstream manuals were not
+vendored.
 
 ### 6. `c10c465c` — Interface gravity field, configuration and status
 
@@ -189,8 +186,9 @@ Rust `InterfaceInfo` and the node/driver configuration structures have no
 gravity field. Adding it affects every static and dynamic interface constructor,
 registration/RPC serialization, runtime configuration and status rendering.
 
-**Disposition:** needs coordinated port with commits 8-11, 14 and 32. Treat the
-field as a signed integer; positive and negative values are both meaningful.
+**Disposition:** integrated as a signed field across interface configuration,
+registration, statistics, dynamic templates and management surfaces, with
+positive, zero and negative-value tests.
 
 ### 7. `7611fca6` — Permit configured loglevel 8
 
@@ -219,11 +217,10 @@ Rust's `should_update_path`/`decide_announce_multipath` in
 rule interacts with local alternative paths and primary ordering; merely adding
 a field to `PathEntry` would be incomplete.
 
-**Disposition:** needs coordinated port. Add same-emission higher-gravity
-selection without allowing stale/replayed announces to bypass signature,
-timebase or loop protections. Test positive, zero and negative gravity, equal
-gravity, lower gravity, different hop counts, unresponsive recovery, and
-multi-path primary/alternative behavior.
+**Disposition:** integrated. Same-emission announcements can replace the
+primary only on a strictly higher-gravity interface, without bypassing normal
+validation or replay protections. Focused tests cover signed values, equality,
+lower gravity and multipath ordering.
 
 ### 9. `3ca71527` — Dynamic children inherit gravity
 
@@ -235,10 +232,8 @@ rns-rs centralizes inherited dynamic metadata in `DynamicInterfaceTemplate` and
 its registration flow, which currently carries mode, `recursive_prs`,
 `announces_from_internal` and IFAC data but no gravity.
 
-**Disposition:** needs coordinated port in the gravity cluster. Add gravity to
-the common template so all dynamic interface implementations inherit it by
-construction, with focused listener-child tests for the enabled interface
-features.
+**Disposition:** integrated through the common dynamic-interface template, with
+spawned-interface inheritance tests.
 
 ### 10. `566aa68f` — Complete gravity configuration and final auto-connect name
 
@@ -254,10 +249,9 @@ No equivalent fields exist in `ReticulumSection` or the runtime configuration
 schema. The local discovery peer pool makes the auto-connect portion an
 architectural choice rather than a mechanical copy.
 
-**Disposition:** needs coordinated port with commits 4, 6, 8 and 9. Parse signed
-values, define precedence as explicit interface value over auto-connect/global
-default, expose live/startup/reset semantics, and use the final 1.4.1 option
-name in local docs and help.
+**Disposition:** integrated. Signed global and auto-connect gravity settings use
+explicit-interface precedence, the final 1.4.1 option names and native
+configuration documentation.
 
 ### 11. `889c5ff5` — Sort `rnstatus` by gravity
 
@@ -267,9 +261,8 @@ Rust `rnstatus` cannot implement this until gravity is serialized in interface
 statistics. Its current sort parser and JSON/text renderers have no gravity
 surface.
 
-**Disposition:** needs coordinated port at the end of the gravity cluster.
-Cover long and short sort names, ascending/reverse behavior, zero/default
-values, text rendering and JSON shape.
+**Disposition:** integrated. Status supports the long and short gravity sort
+keys, reverse order, signed/default values and rendered output tests.
 
 ### 12. `cbf50460` — Link logging guards and level cleanup
 
@@ -309,11 +302,10 @@ rebalanced state. The relay path has a pre-existing comment that signature
 validation is simplified/skipped for normal matched-hop forwarding; the
 rebalancing port must not inherit that shortcut for the mismatch exception.
 
-**Disposition:** needs coordinated port with commits 15-17 and 31, high
-priority. Centralize LRPROOF parsing/signature validation so the relay and local
-terminus use the same exact signed-data rules. Test valid and invalid signatures,
-wrong interface, unexpected mode/MTU shape, first versus repeated mismatch,
-path-table update, link establishment and multi-hop forwarding.
+**Disposition:** integrated. Signed LRPROOF validation gates relay and terminus
+rebalancing, updates link/path hop state only after authentication and is
+covered for invalid signatures, wrong interfaces, malformed shapes, path-table
+updates and forwarding.
 
 ### 14. `c4297d31` — Lower the initial gravity replacement log level
 
@@ -321,9 +313,8 @@ Upstream changes the new gravity path-replacement message from an unconditional
 warning to a guarded debug message. Commit 32 later moves it to `LOG_PATHING`.
 There is no selection behavior change.
 
-**Disposition:** gravity-cluster follow-up. Implement only the final
-`LOG_PATHING` behavior from commit 32; do not reproduce the transient warning or
-debug level.
+**Disposition:** covered by the final `LOG_PATHING` behavior from commit 32;
+the transient warning/debug levels were intentionally not reproduced.
 
 ### 15. `6d4523c2` — Record and limit terminus rebalancing
 
@@ -332,9 +323,8 @@ rebalance time, and only updates the destination path-table hop count when the
 link has not already rebalanced. This prevents repeated mismatched proofs from
 continually rewriting path state.
 
-**Disposition:** needs coordinated port with commit 13. Store an optional
-timestamp (not just a boolean) on the appropriate managed link state, and prove
-that only the first valid mismatch can change expected/path hops.
+**Disposition:** integrated. Managed link state records the rebalance timestamp,
+and regressions prove that only the first valid mismatch changes path state.
 
 ### 16. `93526c17` — Make expected-hop mutation first-rebalance-only
 
@@ -343,9 +333,8 @@ This follow-up moves the log and `expected_hops` mutation inside the
 changed `expected_hops` repeatedly; commit 16 supplies the intended final
 invariant.
 
-**Disposition:** needs coordinated port. Implement the final combined behavior,
-not commit 15's intermediate state. A second valid mismatched LRPROOF must not
-change the stored expectation or path table.
+**Disposition:** integrated as the final first-rebalance-only invariant. A
+second valid mismatched LRPROOF cannot mutate the stored expectation or path.
 
 ### 17. `bce5f859` — Avoid false rebalancing signature errors
 
@@ -353,9 +342,8 @@ Upstream suppresses the "invalid signature" message when a relay link entry is
 already validated and performs minor comment cleanup. It does not alter packet
 acceptance.
 
-**Disposition:** rebalancing-cluster follow-up. Preserve this diagnostic
-condition when implementing commit 13 so already validated links are not
-misreported as signature failures.
+**Disposition:** structurally covered by the final rebalancing diagnostic
+conditions; validated links are not misreported as signature failures.
 
 ### 18. `a4b61298` — Keep I2P asyncio tunnel tasks alive
 
@@ -370,9 +358,9 @@ outbound loops, acceptor and per-peer readers are OS threads; dropping a Rust
 `JoinHandle` detaches a thread rather than cancelling it, and I/O failures are
 typed values bound in `match` arms.
 
-**Disposition:** structurally covered. Add or retain a live/mock SAM regression
-that keeps concurrent proxy directions active after their spawning function
-returns; no direct production port is indicated.
+**Disposition:** structurally covered. Rust thread ownership already preserves
+the concurrent proxy directions after their spawning function returns; no
+direct production port is indicated.
 
 ### 19. `c25b56db` — Use TCP clients for discovered endpoints on Darwin
 
@@ -385,9 +373,9 @@ platform exclusion, and discovery-origin peer-pool candidates use that same
 portable client. There is no separate Python-style TCP fallback type required
 on macOS.
 
-**Disposition:** structurally covered, subject to a macOS compile/runtime smoke
-in the eventual acceptance gates. Do not add an OS-name branch without evidence
-that the Rust Backbone transport fails on Darwin.
+**Disposition:** structurally covered. No OS-name branch was added without
+evidence that the native Rust Backbone transport fails on Darwin; macOS runtime
+smoke remains platform-specific follow-up rather than a release parity gap.
 
 ### 20. `00d57a22` — I2P controller/library cleanup and error handling
 
@@ -404,19 +392,17 @@ the SAM control socket alive, reconnects outbound peers, retries accepts, owns
 reader/writer streams and reports typed `SamError`s, but a commit-level audit is
 not a substitute for failure-path tests.
 
-**Disposition:** needs decision/evidence rather than a direct port. Diff the
-final 1.4.1 SAM command/reply and teardown behavior against
-`rns-net/src/interface/i2p/sam.rs`, then test empty/invalid replies, unreachable
-peers, duplicate sessions, disconnect cleanup, accept retry and reconnect. Port
-only semantic gaps; do not copy Python formatting or vendored code.
+**Disposition:** integrated as native SAM failure hardening. The Rust
+implementation now handles empty/invalid replies and teardown failures without
+copying Python formatting or vendored code, with focused protocol regressions.
 
 ### 21. `0f33d719` — Document the final auto-connect mode option name
 
 Upstream changes documentation from the transitional
 `autoconnect_discovered_mode` name to `autoconnect_interface_mode`.
 
-**Disposition:** documentation follow-up tied to commits 4 and 10. Local docs
-must use the final name if the option is adopted.
+**Disposition:** integrated documentation using the final
+`autoconnect_interface_mode` name.
 
 ### 22. `e46b012e` — `rnsh` high loglevels and initiator logging cleanup
 
@@ -430,10 +416,9 @@ remote stdout/stderr bytes. It initializes a file logger under the selected
 rnsh configuration directory, but both listener and initiator currently select
 `logfile`, not the upstream initiator suffix.
 
-**Disposition:** partially covered; needs a compatibility decision. Adopting
-`logfile.initiator` would match final upstream behavior but changes the local
-operator-visible path. If adopted, update `rnsh_log_path`, migration/operator
-docs and path tests; retain the existing no-payload-logging invariant.
+**Disposition:** integrated. Initiators use the `.initiator`-suffixed log path,
+with path tests, while preserving the existing high-level filtering and
+no-payload-logging invariants.
 
 ### 23. `a29a0871` — Channel receive-window bound and API cleanup
 
@@ -449,10 +434,9 @@ that helper rejects old sequences but does not reject an excessively far-ahead
 sequence in the ordinary non-wrap case. Such envelopes can accumulate while
 the receiver waits for missing sequence numbers.
 
-**Disposition:** needs port, high priority. Implement a modular bounded-forward
-distance check and test exact window edge, one past the edge, far-ahead input,
-duplicates, ordinary out-of-order delivery, and both sides of the `0xffff -> 0`
-wrap. Do not regress the stronger local modular ordering tests.
+**Disposition:** integrated with a modular bounded-forward check. Tests cover
+the exact edge, one past it, far-ahead input, duplicates, ordinary out-of-order
+delivery and sequence wrap.
 
 ### 24. `1ecf845c` — Destination maximum accepted request size
 
@@ -535,9 +519,9 @@ blackholes do not match the predicate.
 
 Upstream changes `RNS/_version.py` from `1.4.0` to `1.4.1`.
 
-**Disposition:** non-runtime for Rust crates. Record it as release metadata when
-promoting `UPSTREAM.md`; do not change independent Rust crate versions solely
-for upstream parity.
+**Disposition:** integrated as tracking metadata. `UPSTREAM.md`, the README
+badge and the exact CI interop pin now identify Reticulum 1.4.1. Independent
+Rust crate versions were intentionally not changed solely for upstream parity.
 
 ### 29. `e5d37355` — Reticulum 1.4.1 changelog
 
@@ -546,17 +530,17 @@ request/response size APIs, boundary path requests, I2P fixes, ingress-control
 release, loglevel handling and discovery cleanup. It also restores the 1.4.0
 release section.
 
-**Disposition:** non-runtime. Use it as a cross-check against this audit; do not
-vendor upstream changelog text. Every listed runtime item maps to commits above.
+**Disposition:** audited with no port. It was used as a cross-check against this
+audit and was not vendored. Every listed runtime item maps to commits above.
 
 ### 30. `0d16e230` — Regenerate release/API documentation
 
 Upstream regenerates the manual for 1.4.1 and adds API reference entries for
 `Destination.set_max_request_size()` and `Link.request(max_response_size=...)`.
 
-**Disposition:** documentation follow-up after commits 24 and 25. Add native
-Rust API/operator documentation appropriate to the final local signatures; do
-not copy generated HTML, inventory or search-index artifacts.
+**Disposition:** integrated as native Rust API/operator documentation alongside
+commits 24 and 25. Generated HTML, inventory and search-index artifacts were not
+copied.
 
 ### 31. `4631d78b` — Move rebalancing diagnostics to debug
 
@@ -578,47 +562,35 @@ the dedicated `rns::pathing` target (the Rust mapping of `LOG_PATHING`). Tests
 pin both the exact gravity predicate and logging target/level. This is the
 signed 1.4.1 tag target.
 
-## Proposed integration queue
+## Completed integration sequence
 
-The order below follows behavioral dependencies rather than upstream commit
-order.
+Implementation followed upstream commit order while preserving behavioral
+dependencies within the gravity and rebalancing clusters. Each applicable
+runtime change landed as an isolated local commit with focused tests; no-op and
+structurally covered commits were explicitly audited instead of manufacturing
+code changes.
 
-1. **Channel and request bounds** — commits 23-25, with commit 26 as upstream
-   test-only context. These are bounded-input and receive-state hardening and
-   should land with focused adversarial tests first.
-2. **Boundary and internal propagation** — commits 2-5 and 21. Implement the
-   path-request mode filter and `announces_to_internal`, then resolve how final
-   auto-connect settings map to the discovery peer pool.
-3. **Gravity** — commits 6, 8-11, 14 and 32. Land data model/config/status
-   plumbing before path selection, then dynamic inheritance and `rnstatus`.
-4. **LRPROOF path rebalancing** — commits 13, 15-17 and 31. Treat signature
-   validation and first-rebalance-only state as one atomic feature.
-5. **Historical discovery cleanup** — commit 27, including peer-pool eviction
-   and malformed-cache cleanup.
-6. **I2P evidence and any semantic fixes** — commits 18-20. Most code is
-   structurally different; close the audit with SAM failure-path tests instead
-   of importing vendored Python changes.
-7. **rnsh logging policy** — commit 22. Decide the initiator filename before
-   changing operator-visible behavior.
-8. **Release documentation and promotion** — commits 28-30, exact 1.4.1
-   fixtures/interop, parity matrix, `UPSTREAM.md`, and only then the accepted
-   baseline update.
+The resulting local commit chain is the durable implementation record. Release
+metadata was promoted last, after the runtime work and native documentation had
+landed.
 
-## Acceptance requirements for eventual 1.4.1 promotion
+## Acceptance record
 
 - Every commit in the 32-row inventory has a final disposition linked to local
   code/tests or an explicit no-action rationale.
-- Exact source is the dereferenced signed `1.4.1` tag target `b2188ce9`; verify
-  its runtime tree and `RNS.__version__` before fixture generation or interop.
-- Focused tests cover Channel forward-window bounds, request/response limits,
-  boundary mode filtering, internal announce overrides, gravity selection and
-  inheritance, LRPROOF rebalancing signatures/one-shot state, and blackholed
-  discovery cleanup.
-- Existing 1.4.0 conformance, resource, link, pathing, discovery, I2P, rnsh and
-  management tests remain green.
-- Regenerate or add 1.4.1 fixtures only from the exact tag target and confirm
-  historical fixture byte stability.
-- Run exact Python 1.4.1/Rust live interop, workspace tests, feature-specific
-  suites, formatting/lint, web UI smoke and required CI topology gates.
-- Do not claim physical Weave HIL or dual-VPS manual acceptance unless those
-  gates are actually rerun for the completed port.
+- The accepted source is the signed `1.4.1` tag target `b2188ce9`, with root
+  tree `28356de6a3562989367859b50ff584e334e4abb4`, `RNS` tree
+  `da3ed5fb64f432b04aa387576701182b8c82df8d`, and version assertion `1.4.1`.
+- Focused regressions cover Channel forward-window bounds, request/response
+  limits, boundary mode filtering, internal announce overrides, gravity
+  selection and inheritance, LRPROOF rebalancing signatures/one-shot state,
+  I2P failure handling and blackholed discovery cleanup.
+- Existing historical 1.4.0 fixtures remain independently provenance-pinned;
+  the CI live-interop lane advances to exact Reticulum 1.4.1.
+- Exact Reticulum 1.4.1 Python/Rust live TCP interop passed locally on
+  2026-07-26.
+- Workspace/all-target checks and the affected crate test suites passed during
+  the sequential integration. CI remains the final clean-environment software
+  acceptance authority.
+- Physical Weave HIL and dual-VPS manual acceptance were not rerun and are not
+  claimed by this promotion.
