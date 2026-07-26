@@ -60,6 +60,8 @@ pub struct LinkEngine {
     stale_time: f64,
     establishment_timeout: f64,
     expected_hops: u8,
+    /// Time of the first authenticated terminus hop rebalance.
+    rebalanced_at: Option<f64>,
 
     // Counts packed packet data/ciphertext, matching Python Link accounting.
     tx_packets: u64,
@@ -126,6 +128,7 @@ impl LinkEngine {
             } else {
                 PATHFINDER_M
             },
+            rebalanced_at: None,
             tx_packets: 0,
             rx_packets: 0,
             tx_bytes: 0,
@@ -213,6 +216,7 @@ impl LinkEngine {
                 hops,
             ),
             expected_hops: PATHFINDER_M,
+            rebalanced_at: None,
             tx_packets: 0,
             rx_packets: 0,
             tx_bytes: 0,
@@ -263,6 +267,9 @@ impl LinkEngine {
         }
 
         if let Some(hops) = packet_hops {
+            if hops != self.expected_hops && self.rebalanced_at.is_none() {
+                self.rebalanced_at = Some(now);
+            }
             self.expected_hops = hops;
         }
 
@@ -615,6 +622,10 @@ impl LinkEngine {
         self.expected_hops
     }
 
+    pub fn rebalanced_at(&self) -> Option<f64> {
+        self.rebalanced_at
+    }
+
     pub fn tx_packets(&self) -> u64 {
         self.tx_packets
     }
@@ -835,6 +846,7 @@ mod tests {
             .unwrap();
         assert_eq!(initiator.state(), LinkState::Active);
         assert!(initiator.rtt().is_some());
+        assert_eq!(initiator.rebalanced_at(), Some(100.8));
         assert_eq!(actions.len(), 2); // StateChanged + LinkEstablished
 
         // Step 4: Responder handles LRRTT
@@ -844,6 +856,7 @@ mod tests {
         assert_eq!(responder.state(), LinkState::Active);
         assert_eq!(initiator.expected_hops(), 4);
         assert_eq!(responder.expected_hops(), 4);
+        assert_eq!(responder.rebalanced_at(), None);
 
         initiator.record_outbound_traffic(48);
         initiator.record_inbound_traffic(32);

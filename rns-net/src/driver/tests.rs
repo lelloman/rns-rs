@@ -1665,10 +1665,21 @@ fn established_initiator_rebalances_destination_path_to_authenticated_hops() {
         link_id: [0x45; 16],
         dest_hash: destination_hash,
         hops: 6,
+        rebalanced_at: Some(100.0),
         rtt: 0.25,
         is_initiator: true,
     }]);
 
+    assert_eq!(driver.engine.hops_to(&destination_hash), Some(6));
+
+    driver.dispatch_link_actions(vec![LinkManagerAction::LinkEstablished {
+        link_id: [0x46; 16],
+        dest_hash: destination_hash,
+        hops: 7,
+        rebalanced_at: None,
+        rtt: 0.25,
+        is_initiator: true,
+    }]);
     assert_eq!(driver.engine.hops_to(&destination_hash), Some(6));
 }
 

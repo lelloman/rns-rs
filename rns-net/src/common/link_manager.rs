@@ -151,6 +151,7 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         dest_hash: [u8; 16],
         hops: u8,
+        rebalanced_at: Option<f64>,
         rtt: f64,
         is_initiator: bool,
     },
@@ -3430,10 +3431,15 @@ impl LinkManager {
                         .get(link_id)
                         .map(|link| link.engine.expected_hops())
                         .unwrap_or(rns_core::constants::PATHFINDER_M);
+                    let rebalanced_at = self
+                        .links
+                        .get(link_id)
+                        .and_then(|link| link.engine.rebalanced_at());
                     result.push(LinkManagerAction::LinkEstablished {
                         link_id: *link_id,
                         dest_hash,
                         hops,
+                        rebalanced_at,
                         rtt: *rtt,
                         is_initiator: *is_initiator,
                     });
