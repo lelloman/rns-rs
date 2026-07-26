@@ -78,7 +78,7 @@ audited so advancing the baseline cannot silently skip them.
 | 24 | `1ecf845ceafd0d0154ea6657a3ea958d7cac944f` | Added set_max_request_size to Destination API | Integrated |
 | 25 | `6a761a768cc118e2e70c1f8d76a0563975d78377` | Added max_response_size parameter to Link request API | Integrated |
 | 26 | `12c21d4e252d6b49b0e7e0acc5249af77be8f1ec` | Cleanup | Non-runtime upstream test cleanup |
-| 27 | `e29b839429b8aa98265a4146d85e888374037c33` | Ensure historical interface discoveries are cleaned according to blackholed identities | Needs port |
+| 27 | `e29b839429b8aa98265a4146d85e888374037c33` | Ensure historical interface discoveries are cleaned according to blackholed identities | Integrated |
 | 28 | `224124aac7d1e2aded3c781b783c009419efabf3` | Updated version | Non-runtime |
 | 29 | `e5d37355b87e25a7868cdace5b04459091749e5c` | Updated changelog | Non-runtime |
 | 30 | `0d16e2305eb2f7f350c1202bc0d3c9764bea1b3e` | Updated documentation | Documentation follow-up |
@@ -520,11 +520,16 @@ deserializer rejects malformed identity lengths, yet corrupt files skipped by
 `list_unlocked` are not necessarily deleted. Cached discovery candidates can
 therefore outlive a later blackhole decision.
 
-**Disposition:** needs port. Give cleanup a blackhole predicate or identity set,
-delete malformed/missing-ID cache files deterministically, evict matching
-discovery-origin peer-pool candidates, and ensure active discovered connections
-follow the intended blackhole policy. Test network identity, transport identity,
-expiry, configured-source interaction, corrupt files and non-blackholed records.
+**Disposition:** integrated. Discovery cleanup now receives an active-blackhole
+predicate from the transport engine and removes records when either their
+network or transport identity is blackholed. It also deletes malformed cache
+files, including records with missing, empty, or invalid-length identity
+fields, instead of silently skipping them forever. Removed cache records are
+culled from the discovered Backbone peer pool so they cannot reconnect. The
+original predicate-free cleanup method remains available. Tests cover network
+and transport blackholes, normal retained records, missing and empty identities,
+and corrupt MessagePack; the transport engine's expiration tests ensure expired
+blackholes do not match the predicate.
 
 ### 28. `224124aa` — Set Python version to 1.4.1
 
