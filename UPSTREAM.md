@@ -8,23 +8,24 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.4.0`
-- Version metadata commit: `032b1aa3b2808dc5aca0aebada0776c8ee7c6b20`
-- Normative commit: `122f17fad69a483503cc5c1d8d81046712d78c96`
-- Commit date: `2026-07-20 19:11:35 +0200`
-- Subject: `Prepare release`
+- Version: `1.4.1`
+- Version metadata commit: `224124aac7d1e2aded3c781b783c009419efabf3`
+- Normative commit: `b2188ce9a746a35b770b10bea1b7ccbe93b4e198`
+- Commit date: `2026-07-24 21:23:42 +0200`
+- Subject: `Adjusted gravity update loglevel`
 
-The normative 1.4.0 commit is available from both the rgit repository and the
-GitHub release mirror. The interop lane checks out the exact commit directly,
-requires its `RNS` tree object to equal
-`5e1b42cb553f6cdd34145dc2bcbf93f653705368`, asserts the Python version, and
-only then executes live Python/Rust interop.
+The normative 1.4.1 commit is the target of the signed `1.4.1` tag and is
+available from both the rgit repository and the GitHub release mirror. The
+interop lane checks out the exact commit directly, requires its `RNS` tree
+object to equal `da3ed5fb64f432b04aa387576701182b8c82df8d`, asserts the Python
+version, and only then executes live Python/Rust interop.
 
-The tracked subsystem and commit audit is in
-[`docs/reticulum-1.4.0-parity.md`](docs/reticulum-1.4.0-parity.md). The PR CI
-matrix is the final software acceptance authority for this promotion. Physical
-Weave HIL remains the documented follow-up caveat from 1.3.8 because the 1.4.0
-range contains no Weave changes.
+The exact 32-commit disposition and acceptance record is in
+[`docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
+The PR CI matrix is the final software acceptance authority for this
+promotion. Historical 1.4.0 conformance fixtures retain their original source
+provenance. Physical Weave HIL and dual-VPS manual acceptance are not claimed
+by this software-only promotion.
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`
@@ -54,6 +55,27 @@ When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
 tests, then update this file to the new baseline commit.
+
+## Completed 1.4.0..1.4.1 Porting Queue
+
+All 32 commits after the previous normative baseline
+`122f17fad69a483503cc5c1d8d81046712d78c96` were audited through the signed
+`1.4.1` tag target `b2188ce9a746a35b770b10bea1b7ccbe93b4e198`.
+Applicable changes were integrated as isolated local commits with focused
+regressions. The range adds boundary path-request searches, internal announce
+controls, discovery auto-connect policy, signed interface gravity and status,
+gravity-based path preference, authenticated link-path rebalancing, bounded
+channel receive windows, request/response size limits, hardened I2P SAM failure
+handling, separated rnsh initiator logs, and blackhole-aware discovery cleanup.
+
+Python-only task ownership and Darwin interface construction fixes are
+structurally inapplicable to the Rust architecture. Upstream test refactors,
+version/changelog metadata and generated manuals were audited without vendoring
+Python artifacts; native API and operator documentation covers the applicable
+behavior. Rust crate versions remain independently versioned.
+
+The commit-by-commit implementation rationale and test evidence is recorded in
+[`docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
 
 ## Completed 1.3.9..1.4.0 Porting Queue
 
