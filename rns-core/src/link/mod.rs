@@ -269,8 +269,8 @@ impl LinkEngine {
         if let Some(hops) = packet_hops {
             if hops != self.expected_hops && self.rebalanced_at.is_none() {
                 self.rebalanced_at = Some(now);
+                self.expected_hops = hops;
             }
-            self.expected_hops = hops;
         }
 
         self.peer_pub_bytes = Some(peer_pub);
@@ -857,6 +857,22 @@ mod tests {
         assert_eq!(initiator.expected_hops(), 4);
         assert_eq!(responder.expected_hops(), 4);
         assert_eq!(responder.rebalanced_at(), None);
+
+        // A later valid proof cannot rewrite the first authenticated
+        // rebalance, even if it reports another hop metric.
+        initiator.state = LinkState::Pending;
+        let mut repeated_rng = make_rng(0x31);
+        initiator
+            .handle_lrproof_with_hops(
+                &lrproof_data,
+                &dest_sig_pub_bytes,
+                Some(6),
+                101.1,
+                &mut repeated_rng,
+            )
+            .unwrap();
+        assert_eq!(initiator.expected_hops(), 4);
+        assert_eq!(initiator.rebalanced_at(), Some(100.8));
 
         initiator.record_outbound_traffic(48);
         initiator.record_inbound_traffic(32);
