@@ -153,12 +153,42 @@ impl DiscoveredInterfaceStorage {
     /// Clean up stale entries (older than THRESHOLD_REMOVE)
     /// Returns the number of entries removed
     pub fn cleanup(&self) -> io::Result<usize> {
+        self.cleanup_with_blackholes(|_| false)
+    }
+
+    /// Clean up stale, invalid, or blackholed discovery records.
+    pub fn cleanup_with_blackholes<F>(&self, mut is_blackholed: F) -> io::Result<usize>
+    where
+        F: FnMut(&[u8; 16]) -> bool,
+    {
         let _guard = discovery_storage_guard();
         let mut removed = 0;
         let now = time::now();
 
-        let interfaces = self.list_unlocked()?;
-        for iface in interfaces {
+        let entries = match fs::read_dir(&self.base_path) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(err),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let iface = match fs::read(&path).and_then(|data| self.deserialize_interface(&data)) {
+                Ok(iface) => iface,
+                Err(err) => {
+                    log::debug!(
+                        "Removing invalid cached interface discovery {}: {}",
+                        path.display(),
+                        err
+                    );
+                    fs::remove_file(&path)?;
+                    removed += 1;
+                    continue;
+                }
+            };
             let invalid_reachable_on = iface
                 .reachable_on
                 .as_ref()
@@ -168,8 +198,10 @@ impl DiscoveredInterfaceStorage {
             if !is_discoverable_type(&iface.interface_type)
                 || invalid_reachable_on
                 || now - iface.last_heard > THRESHOLD_REMOVE
+                || is_blackholed(&iface.network_id)
+                || is_blackholed(&iface.transport_id)
             {
-                self.remove_unlocked(&iface.discovery_hash)?;
+                fs::remove_file(&path)?;
                 removed += 1;
             }
         }
@@ -884,6 +916,16 @@ impl InterfaceAnnouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn discovery_test_dir(label: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "rns-discovery-{label}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     fn test_announce_interface(name: &str, interval: u64) -> DiscoverableInterface {
         DiscoverableInterface {
@@ -1469,6 +1511,73 @@ mod tests {
         assert_eq!(loaded.heard_count, 1);
         assert_eq!(loaded.name, "CorruptDiscovery");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_removes_discoveries_for_blackholed_network_and_transport_identities() {
+        let dir = discovery_test_dir("blackholed-cleanup");
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+        let now = time::now();
+
+        let mut network_blocked = test_discovered_interface("NetworkBlocked");
+        network_blocked.last_heard = now;
+        network_blocked.network_id = [0x31; 16];
+        let mut transport_blocked = test_discovered_interface("TransportBlocked");
+        transport_blocked.last_heard = now;
+        transport_blocked.transport_id = [0x42; 16];
+        let mut retained = test_discovered_interface("Retained");
+        retained.last_heard = now;
+        retained.network_id = [0x53; 16];
+        retained.transport_id = [0x64; 16];
+        storage.store(&network_blocked).unwrap();
+        storage.store(&transport_blocked).unwrap();
+        storage.store(&retained).unwrap();
+
+        let removed = storage
+            .cleanup_with_blackholes(|identity| identity == &[0x31; 16] || identity == &[0x42; 16])
+            .unwrap();
+
+        assert_eq!(removed, 2);
+        let listed = storage.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "Retained");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_removes_cached_discoveries_with_missing_or_empty_identities() {
+        let dir = discovery_test_dir("invalid-identity-cleanup");
+        fs::create_dir_all(&dir).unwrap();
+        let storage = DiscoveredInterfaceStorage::new(dir.clone());
+        let iface = test_discovered_interface("InvalidIdentity");
+        let valid = storage.serialize_interface(&iface).unwrap();
+
+        let (mut missing_transport, _) = msgpack::unpack(&valid).unwrap();
+        if let Value::Map(entries) = &mut missing_transport {
+            entries.retain(|(key, _)| key.as_str() != Some("transport_id"));
+        }
+        fs::write(
+            dir.join("missing-transport"),
+            msgpack::pack(&missing_transport),
+        )
+        .unwrap();
+
+        let (mut empty_network, _) = msgpack::unpack(&valid).unwrap();
+        if let Value::Map(entries) = &mut empty_network {
+            for (key, value) in entries {
+                if key.as_str() == Some("network_id") {
+                    *value = Value::Bin(Vec::new());
+                }
+            }
+        }
+        fs::write(dir.join("empty-network"), msgpack::pack(&empty_network)).unwrap();
+        fs::write(dir.join("corrupt-msgpack"), b"not msgpack").unwrap();
+
+        assert_eq!(storage.cleanup().unwrap(), 3);
+        assert!(storage.list().unwrap().is_empty());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
         let _ = fs::remove_dir_all(&dir);
     }
 

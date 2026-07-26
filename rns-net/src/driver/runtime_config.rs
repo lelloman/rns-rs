@@ -545,6 +545,13 @@ impl Driver {
 
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn cull_stale_discovered_backbone_peer_pool_candidates(&mut self) {
+        let cached_discoveries: Option<std::collections::HashSet<[u8; 32]>> =
+            self.discovered_interfaces.list().ok().map(|interfaces| {
+                interfaces
+                    .into_iter()
+                    .map(|interface| interface.discovery_hash)
+                    .collect()
+            });
         let Some(pool) = self.backbone_peer_pool.as_mut() else {
             return;
         };
@@ -553,12 +560,18 @@ impl Driver {
             if candidate.config.source == BackbonePeerPoolCandidateSource::Configured {
                 return true;
             }
-            if candidate.active_id.is_some() {
-                return true;
-            }
             let Some(discovery) = candidate.config.discovery.as_ref() else {
                 return false;
             };
+            if cached_discoveries
+                .as_ref()
+                .is_some_and(|cached| !cached.contains(&discovery.discovery_hash))
+            {
+                return false;
+            }
+            if candidate.active_id.is_some() {
+                return true;
+            }
             discovery.status != crate::discovery::DiscoveredStatus::Stale
                 && now - discovery.last_heard <= crate::discovery::THRESHOLD_REMOVE
         });

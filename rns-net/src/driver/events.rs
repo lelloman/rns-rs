@@ -283,7 +283,10 @@ impl Driver {
             self.discovery_cleanup_counter += 1;
             if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
                 self.discovery_cleanup_counter = 0;
-                if let Ok(removed) = self.discovered_interfaces.cleanup() {
+                if let Ok(removed) = self
+                    .discovered_interfaces
+                    .cleanup_with_blackholes(|identity| self.engine.is_blackholed(identity, now))
+                {
                     if removed > 0 {
                         log::info!("Discovery cleanup: removed {} stale entries", removed);
                     }
