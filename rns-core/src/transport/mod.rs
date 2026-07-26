@@ -1419,6 +1419,15 @@ impl TransportEngine {
             .interfaces
             .get(&ctx.iface)
             .map(|interface| interface.gravity);
+        let higher_gravity_replacement = existing_set.is_some_and(|path_set| {
+            pathfinder::is_higher_gravity_replacement(
+                path_set,
+                ctx.packet.hops,
+                ctx.announce_emitted,
+                current_gravity,
+                announce_gravity,
+            )
+        });
         let mp_decision = pathfinder::decide_announce_multipath_with_gravity(
             existing_set,
             ctx.packet.hops,
@@ -1441,6 +1450,19 @@ impl TransportEngine {
                 ctx.packet.destination_hash[3],
             );
             return;
+        }
+        if higher_gravity_replacement {
+            log::log!(
+                target: crate::logging::PATHING_LOG_TARGET,
+                crate::logging::GRAVITY_UPDATE_LOG_LEVEL,
+                "Replacing path table entry for {:02x}{:02x}{:02x}{:02x}.. due to higher gravity ({:?}->{:?})",
+                ctx.packet.destination_hash[0],
+                ctx.packet.destination_hash[1],
+                ctx.packet.destination_hash[2],
+                ctx.packet.destination_hash[3],
+                current_gravity,
+                announce_gravity,
+            );
         }
 
         // Rate limiting
