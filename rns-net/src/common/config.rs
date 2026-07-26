@@ -56,8 +56,12 @@ pub struct ReticulumSection {
     /// Enable interface discovery (advertise discoverable interfaces and
     /// listen for discovery announces from the network).
     pub discover_interfaces: bool,
-    /// Transitional 1.4.1 name for the mode assigned to auto-connected interfaces.
-    pub autoconnect_discovered_mode: Option<String>,
+    /// Global gravity used by interfaces without an explicit override.
+    pub default_gravity: i64,
+    /// Mode assigned to auto-connected interfaces.
+    pub autoconnect_interface_mode: Option<String>,
+    /// Gravity assigned to auto-connected interfaces.
+    pub autoconnect_interface_gravity: i64,
     /// Allow auto-connected interfaces to propagate announces to internal interfaces.
     pub autoconnect_announces_to_internal: bool,
     /// Minimum stamp value for accepting discovered interfaces.
@@ -176,7 +180,9 @@ impl Default for ReticulumSection {
             probe_protocol: None,
             device: None,
             discover_interfaces: false,
-            autoconnect_discovered_mode: None,
+            default_gravity: 0,
+            autoconnect_interface_mode: None,
+            autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             required_discovery_value: None,
             prefer_shorter_path: false,
@@ -748,8 +754,26 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             value: v.clone(),
         })?;
     }
+    if let Some(v) = kvs.get("default_gravity") {
+        section.default_gravity = v.parse::<i64>().map_err(|_| ConfigError::InvalidValue {
+            key: "default_gravity".into(),
+            value: v.clone(),
+        })?;
+    }
+    // Retain the short-lived pre-release name as a compatibility alias. The
+    // final upstream option takes precedence when both are present.
     if let Some(v) = kvs.get("autoconnect_discovered_mode") {
-        section.autoconnect_discovered_mode = Some(v.to_lowercase());
+        section.autoconnect_interface_mode = Some(v.to_lowercase());
+    }
+    if let Some(v) = kvs.get("autoconnect_interface_mode") {
+        section.autoconnect_interface_mode = Some(v.to_lowercase());
+    }
+    if let Some(v) = kvs.get("autoconnect_interface_gravity") {
+        section.autoconnect_interface_gravity =
+            v.parse::<i64>().map_err(|_| ConfigError::InvalidValue {
+                key: "autoconnect_interface_gravity".into(),
+                value: v.clone(),
+            })?;
     }
     if let Some(v) = kvs.get("autoconnect_announces_to_internal") {
         section.autoconnect_announces_to_internal =
@@ -1339,21 +1363,39 @@ default_ar_grace = 7
     }
 
     #[test]
-    fn parse_autoconnect_discovery_options() {
+    fn parse_interface_gravity_defaults_and_autoconnect_options() {
         let config = parse(
             r#"
 [reticulum]
-autoconnect_discovered_mode = boundary
+default_gravity = -3
+autoconnect_discovered_mode = full
+autoconnect_interface_mode = boundary
+autoconnect_interface_gravity = 7
 autoconnect_announces_to_internal = yes
 "#,
         )
         .unwrap();
 
         assert_eq!(
-            config.reticulum.autoconnect_discovered_mode.as_deref(),
+            config.reticulum.autoconnect_interface_mode.as_deref(),
             Some("boundary")
         );
+        assert_eq!(config.reticulum.default_gravity, -3);
+        assert_eq!(config.reticulum.autoconnect_interface_gravity, 7);
         assert!(config.reticulum.autoconnect_announces_to_internal);
+    }
+
+    #[test]
+    fn interface_gravity_options_default_to_zero() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(config.reticulum.default_gravity, 0);
+        assert_eq!(config.reticulum.autoconnect_interface_gravity, 0);
+    }
+
+    #[test]
+    fn rejects_non_integer_global_gravity_options() {
+        assert!(parse("[reticulum]\ndefault_gravity = heavy\n").is_err());
+        assert!(parse("[reticulum]\nautoconnect_interface_gravity = light\n").is_err());
     }
 
     #[test]
