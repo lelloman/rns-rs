@@ -5,3 +5,6 @@
 /// Pathing records use `Trace` so a logger can expose them independently from
 /// ordinary `Debug` records at Reticulum's numeric log level 7.
 pub const PATHING_LOG_TARGET: &str = "rns::pathing";
+
+/// Runtime level for gravity-driven path replacement diagnostics.
+pub const GRAVITY_UPDATE_LOG_LEVEL: log::Level = log::Level::Trace;

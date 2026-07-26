@@ -83,7 +83,7 @@ audited so advancing the baseline cannot silently skip them.
 | 29 | `e5d37355b87e25a7868cdace5b04459091749e5c` | Updated changelog | Non-runtime |
 | 30 | `0d16e2305eb2f7f350c1202bc0d3c9764bea1b3e` | Updated documentation | Documentation follow-up |
 | 31 | `4631d78beaa1652709b4815a41916a618548baaf` | Adjusted re-balance loglevel | Integrated |
-| 32 | `b2188ce9a746a35b770b10bea1b7ccbe93b4e198` | Adjusted gravity update loglevel | Gravity-cluster follow-up |
+| 32 | `b2188ce9a746a35b770b10bea1b7ccbe93b4e198` | Adjusted gravity update loglevel | Integrated |
 
 ## Per-commit analysis
 
@@ -572,9 +572,11 @@ ensure normal debug configuration exposes the diagnostic.
 The release tag target changes gravity-driven path replacement logging from
 debug to `LOG_PATHING`. No path-selection behavior changes.
 
-**Disposition:** gravity-cluster follow-up. Emit the final message on the local
-pathing log target when commit 8 is ported. This commit is the signed 1.4.1 tag
-target and must be included in the eventual exact-source interop gate.
+**Disposition:** integrated. The gravity-only replacement condition is shared
+between selection and diagnostics, and accepted replacements emit at trace on
+the dedicated `rns::pathing` target (the Rust mapping of `LOG_PATHING`). Tests
+pin both the exact gravity predicate and logging target/level. This is the
+signed 1.4.1 tag target.
 
 ## Proposed integration queue
 

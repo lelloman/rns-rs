@@ -170,16 +170,14 @@ pub fn decide_announce_multipath_with_gravity(
         Some(ps) => ps,
     };
 
-    if let (Some(primary), Some(current_gravity), Some(announce_gravity)) =
-        (path_set.primary(), current_gravity, announce_gravity)
-    {
-        let primary_timebase = timebase_from_random_blobs(&primary.random_blobs);
-        if announce_hops <= primary.hops
-            && announce_emitted_ts == primary_timebase
-            && announce_gravity > current_gravity
-        {
-            return MultiPathDecision::ReplacePrimary;
-        }
+    if is_higher_gravity_replacement(
+        path_set,
+        announce_hops,
+        announce_emitted_ts,
+        current_gravity,
+        announce_gravity,
+    ) {
+        return MultiPathDecision::ReplacePrimary;
     }
 
     // Check if there's already a path with the same next_hop
@@ -213,6 +211,25 @@ pub fn decide_announce_multipath_with_gravity(
             MultiPathDecision::Reject
         }
     }
+}
+
+/// Whether a same-emission announce should replace the primary path solely
+/// because it arrived on an interface with higher gravity.
+pub fn is_higher_gravity_replacement(
+    path_set: &PathSet,
+    announce_hops: u8,
+    announce_emitted_ts: u64,
+    current_gravity: Option<i64>,
+    announce_gravity: Option<i64>,
+) -> bool {
+    let (Some(primary), Some(current_gravity), Some(announce_gravity)) =
+        (path_set.primary(), current_gravity, announce_gravity)
+    else {
+        return false;
+    };
+    announce_hops <= primary.hops
+        && announce_emitted_ts == timebase_from_random_blobs(&primary.random_blobs)
+        && announce_gravity > current_gravity
 }
 
 #[cfg(test)]
@@ -609,5 +626,16 @@ mod tests {
         assert_eq!(decide(1, 1, 3), MultiPathDecision::Reject);
         assert_eq!(decide(2, 1, 3), MultiPathDecision::Reject);
         assert_eq!(decide(0, 1, 4), MultiPathDecision::Reject);
+
+        assert!(is_higher_gravity_replacement(&ps, 3, 100, Some(0), Some(1)));
+        assert!(!is_higher_gravity_replacement(
+            &ps,
+            3,
+            100,
+            Some(1),
+            Some(1)
+        ));
+        assert_eq!(crate::logging::GRAVITY_UPDATE_LOG_LEVEL, log::Level::Trace);
+        assert_eq!(crate::logging::PATHING_LOG_TARGET, "rns::pathing");
     }
 }
