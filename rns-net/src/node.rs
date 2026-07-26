@@ -2057,12 +2057,31 @@ impl RnsNode {
         sig_pub_bytes: [u8; 32],
         resource_strategy: u8,
     ) -> Result<(), SendError> {
+        self.register_link_destination_with_max_request_size(
+            dest_hash,
+            sig_prv_bytes,
+            sig_pub_bytes,
+            resource_strategy,
+            None,
+        )
+    }
+
+    /// Register a link destination with an optional maximum accepted request size.
+    pub fn register_link_destination_with_max_request_size(
+        &self,
+        dest_hash: [u8; 16],
+        sig_prv_bytes: [u8; 32],
+        sig_pub_bytes: [u8; 32],
+        resource_strategy: u8,
+        max_request_size: Option<usize>,
+    ) -> Result<(), SendError> {
         self.tx
             .send(Event::RegisterLinkDestination {
                 dest_hash,
                 sig_prv_bytes,
                 sig_pub_bytes,
                 resource_strategy,
+                max_request_size,
             })
             .map_err(|_| SendError)
     }

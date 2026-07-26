@@ -23,6 +23,23 @@ pub enum GroupKeyError {
     DecryptionFailed,
 }
 
+/// Error returned when configuring a destination request-size limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxRequestSizeError {
+    /// Maximum accepted request sizes cannot be negative.
+    Negative,
+}
+
+impl core::fmt::Display for MaxRequestSizeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MaxRequestSizeError::Negative => {
+                write!(f, "maximum request size cannot be negative")
+            }
+        }
+    }
+}
+
 impl core::fmt::Display for GroupKeyError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -58,6 +75,8 @@ pub struct Destination {
     pub group_key: Option<Vec<u8>>,
     /// How to handle proofs for incoming packets.
     pub proof_strategy: ProofStrategy,
+    /// Maximum accepted decrypted request size, or no limit when unset.
+    pub max_request_size: Option<usize>,
 }
 
 impl Destination {
@@ -76,6 +95,7 @@ impl Destination {
             public_key: None,
             group_key: None,
             proof_strategy: ProofStrategy::ProveNone,
+            max_request_size: None,
         }
     }
 
@@ -94,6 +114,7 @@ impl Destination {
             public_key: Some(recalled.public_key),
             group_key: None,
             proof_strategy: ProofStrategy::ProveNone,
+            max_request_size: None,
         }
     }
 
@@ -110,6 +131,7 @@ impl Destination {
             public_key: None,
             group_key: None,
             proof_strategy: ProofStrategy::ProveNone,
+            max_request_size: None,
         }
     }
 
@@ -129,6 +151,7 @@ impl Destination {
             public_key: None,
             group_key: None,
             proof_strategy: ProofStrategy::ProveNone,
+            max_request_size: None,
         }
     }
 
@@ -175,6 +198,22 @@ impl Destination {
     pub fn set_proof_strategy(mut self, strategy: ProofStrategy) -> Self {
         self.proof_strategy = strategy;
         self
+    }
+
+    /// Set the maximum accepted request size in bytes.
+    ///
+    /// The limit applies to the complete decrypted MessagePack request for
+    /// packet requests and to the declared uncompressed size for resource
+    /// requests. A value of zero rejects every non-empty request.
+    pub fn set_max_request_size(
+        &mut self,
+        max_request_size: i64,
+    ) -> Result<(), MaxRequestSizeError> {
+        if max_request_size < 0 {
+            return Err(MaxRequestSizeError::Negative);
+        }
+        self.max_request_size = Some(max_request_size as usize);
+        Ok(())
     }
 }
 
@@ -280,6 +319,32 @@ mod tests {
     fn proof_strategy_builder() {
         let dest = Destination::plain("app", &["a"]).set_proof_strategy(ProofStrategy::ProveAll);
         assert_eq!(dest.proof_strategy, ProofStrategy::ProveAll);
+    }
+
+    #[test]
+    fn maximum_request_size_is_unlimited_by_default() {
+        let dest = Destination::single_in("app", &["requests"], test_identity_hash());
+        assert_eq!(dest.max_request_size, None);
+    }
+
+    #[test]
+    fn maximum_request_size_accepts_zero_and_positive_values() {
+        let mut dest = Destination::single_in("app", &["requests"], test_identity_hash());
+        dest.set_max_request_size(0).unwrap();
+        assert_eq!(dest.max_request_size, Some(0));
+        dest.set_max_request_size(4096).unwrap();
+        assert_eq!(dest.max_request_size, Some(4096));
+    }
+
+    #[test]
+    fn maximum_request_size_rejects_negative_values_without_changing_limit() {
+        let mut dest = Destination::single_in("app", &["requests"], test_identity_hash());
+        dest.set_max_request_size(1024).unwrap();
+        assert_eq!(
+            dest.set_max_request_size(-1),
+            Err(MaxRequestSizeError::Negative)
+        );
+        assert_eq!(dest.max_request_size, Some(1024));
     }
 
     #[test]
