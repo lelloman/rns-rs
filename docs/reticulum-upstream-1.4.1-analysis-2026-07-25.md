@@ -75,7 +75,7 @@ audited so advancing the baseline cannot silently skip them.
 | 21 | `0f33d71966b69d5a15819106b53edab4c6cfb355` | Updated documentation | Documentation follow-up |
 | 22 | `e46b012e954ef632f68d21fa83a30649182b8233` | Allow loglevels above LOG_DEBUG, cleaned up logging | Partially covered; needs decision |
 | 23 | `a29a08716fc76afe9867fd16b61f80b3c79ced1e` | Cleaned up channel class logging and deprecated code | Needs port |
-| 24 | `1ecf845ceafd0d0154ea6657a3ea958d7cac944f` | Added set_max_request_size to Destination API | Needs port |
+| 24 | `1ecf845ceafd0d0154ea6657a3ea958d7cac944f` | Added set_max_request_size to Destination API | Integrated |
 | 25 | `6a761a768cc118e2e70c1f8d76a0563975d78377` | Added max_response_size parameter to Link request API | Needs port |
 | 26 | `12c21d4e252d6b49b0e7e0acc5249af77be8f1ec` | Cleanup | Non-runtime upstream test cleanup |
 | 27 | `e29b839429b8aa98265a4146d85e888374037c33` | Ensure historical interface discoveries are cleaned according to blackholed identities | Needs port |
@@ -465,11 +465,16 @@ Rust request handlers are global/path-indexed in `LinkManager`, and
 `LinkDestination` has no maximum request size. Packet requests are unpacked and
 resource requests accepted without an application-configured bound.
 
-**Disposition:** needs port, high priority. Decide whether the limit belongs to
-each registered link destination or each handler set, then enforce it before
-MessagePack decoding/handler dispatch and before accepting request resources,
-including split-resource aggregate size. Validate zero, exact limit, one over,
-malformed input, absent handler and unlimited behavior.
+**Disposition:** integrated. The limit belongs to each registered link
+destination and is inherited by incoming links. Packet requests are checked on
+the complete decrypted MessagePack payload before decoding or dispatch;
+resource requests are checked against their declared uncompressed `data_size`
+before any receiver is accepted. The public `Destination` API rejects negative
+limits, node registration carries the optional limit into the driver, and the
+HTTP destination API accepts `max_request_size`. Tests cover unset, zero,
+positive and negative configuration, inheritance, exact packet/resource
+boundaries, one byte over, unknown destinations, and ordinary non-request
+resources.
 
 ### 25. `6a761a76` — Per-request maximum accepted response size
 

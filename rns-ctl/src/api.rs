@@ -726,7 +726,7 @@ fn handle_post_destination(
         (ih, prv, pubk)
     };
 
-    let (dest, signing_key) = match dest_type_str {
+    let (mut dest, signing_key) = match dest_type_str {
         "single" => {
             let direction = body["direction"].as_str().unwrap_or("in");
             match direction {
@@ -808,6 +808,15 @@ fn handle_post_destination(
         _ => return HttpResponse::bad_request("type must be 'single', 'plain', or 'group'"),
     };
 
+    if !body["max_request_size"].is_null() {
+        let Some(max_request_size) = body["max_request_size"].as_i64() else {
+            return HttpResponse::bad_request("max_request_size must be an integer");
+        };
+        if dest.set_max_request_size(max_request_size).is_err() {
+            return HttpResponse::bad_request("max_request_size cannot be negative");
+        }
+    }
+
     with_node(node, |n| {
         match n.register_destination_with_proof(&dest, signing_key) {
             Ok(()) => {
@@ -819,7 +828,13 @@ fn handle_post_destination(
                         sig_prv.copy_from_slice(&prv[32..64]);
                         let mut sig_pub = [0u8; 32];
                         sig_pub.copy_from_slice(&pubk[32..64]);
-                        let _ = n.register_link_destination(dest.hash.0, sig_prv, sig_pub, 0);
+                        let _ = n.register_link_destination_with_max_request_size(
+                            dest.hash.0,
+                            sig_prv,
+                            sig_pub,
+                            0,
+                            dest.max_request_size,
+                        );
                     }
                 }
 

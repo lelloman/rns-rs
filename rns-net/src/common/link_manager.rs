@@ -67,6 +67,8 @@ struct ManagedLink {
     outgoing_splits: HashMap<[u8; 32], OutgoingSplitTransfer>,
     /// Resource acceptance strategy.
     resource_strategy: ResourceStrategy,
+    /// Maximum accepted request size inherited from the local destination.
+    max_request_size: Option<usize>,
     /// Interface this link's packets should be sent on when known.
     route_interface: Option<rns_core::transport::types::InterfaceId>,
     /// Next-hop transport ID seen on inbound HEADER_2 link traffic.
@@ -101,6 +103,7 @@ struct LinkDestination {
     sig_prv: Ed25519PrivateKey,
     sig_pub_bytes: [u8; 32],
     resource_strategy: ResourceStrategy,
+    max_request_size: Option<usize>,
 }
 
 /// Response produced by an application request handler.
@@ -376,8 +379,30 @@ impl LinkManager {
                 sig_prv,
                 sig_pub_bytes,
                 resource_strategy,
+                max_request_size: None,
             },
         );
+    }
+
+    /// Configure the maximum request size for this destination.
+    ///
+    /// The new limit also applies to responder links that are already active.
+    /// Returns false when the destination is not registered.
+    pub fn set_link_destination_max_request_size(
+        &mut self,
+        dest_hash: &[u8; 16],
+        max_request_size: Option<usize>,
+    ) -> bool {
+        let Some(destination) = self.link_destinations.get_mut(dest_hash) else {
+            return false;
+        };
+        destination.max_request_size = max_request_size;
+        for link in self.links.values_mut() {
+            if link.dest_hash == *dest_hash && link.dest_sig_pub_bytes.is_none() {
+                link.max_request_size = max_request_size;
+            }
+        }
+        true
     }
 
     /// Deregister a link destination.
@@ -498,6 +523,7 @@ impl LinkManager {
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
             resource_strategy: ResourceStrategy::default(),
+            max_request_size: None,
             route_interface: None,
             route_transport_id: None,
         };
@@ -628,6 +654,7 @@ impl LinkManager {
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
             resource_strategy: ld.resource_strategy,
+            max_request_size: ld.max_request_size,
             route_interface: Some(receiving_interface),
             route_transport_id: if packet.flags.header_type == constants::HEADER_2 {
                 packet.transport_id
@@ -1259,7 +1286,20 @@ impl LinkManager {
                 request_id,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_request(&link_id, &plaintext, request_id, rng));
+                let size_ok = self
+                    .links
+                    .get(&link_id)
+                    .and_then(|link| link.max_request_size)
+                    .is_none_or(|limit| plaintext.len() <= limit);
+                if size_ok {
+                    actions.extend(self.handle_request(&link_id, &plaintext, request_id, rng));
+                } else {
+                    log::debug!(
+                        "ignored request with excessive size {} bytes on link {:02x?}",
+                        plaintext.len(),
+                        &link_id[..4]
+                    );
+                }
             }
             LinkDataResult::Response {
                 link_id,
@@ -2141,6 +2181,22 @@ impl LinkManager {
             // request handler, and request IDs are truncated hashes.
             if !has_request_handlers || Self::response_request_id(&receiver.request_id).is_none() {
                 return Vec::new();
+            }
+            if link
+                .max_request_size
+                .is_some_and(|limit| receiver.data_size > limit as u64)
+            {
+                log::debug!(
+                    "ignored request with excessive size {} bytes on link {:02x?}",
+                    receiver.data_size,
+                    &link_id[..4]
+                );
+                let reject_actions = {
+                    let mut receiver = receiver;
+                    receiver.reject()
+                };
+                let _ = link;
+                return self.process_resource_actions(link_id, reject_actions, rng);
             }
             if is_split {
                 link.incoming_splits.insert(
@@ -3869,6 +3925,79 @@ mod tests {
     }
 
     #[test]
+    fn packet_request_at_exact_size_limit_is_dispatched() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let observed = Arc::new(Mutex::new(false));
+        resp_mgr.register_request_handler("/bounded", None, {
+            let observed = Arc::clone(&observed);
+            move |_link_id, _path, _data, _remote| {
+                *observed.lock().unwrap() = true;
+                None
+            }
+        });
+
+        let request_actions = init_mgr.send_request(&link_id, "/bounded", b"\xc0", &mut rng);
+        let raw = extract_any_send_packet(&request_actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        let packed_size = resp_mgr.links[&link_id]
+            .engine
+            .decrypt(&packet.data)
+            .unwrap()
+            .len();
+        resp_mgr.links.get_mut(&link_id).unwrap().max_request_size = Some(packed_size);
+
+        resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(*observed.lock().unwrap());
+    }
+
+    #[test]
+    fn packet_request_one_byte_over_size_limit_is_ignored_before_dispatch() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let observed = Arc::new(Mutex::new(false));
+        resp_mgr.register_request_handler("/bounded", None, {
+            let observed = Arc::clone(&observed);
+            move |_link_id, _path, _data, _remote| {
+                *observed.lock().unwrap() = true;
+                None
+            }
+        });
+
+        let request_actions = init_mgr.send_request(&link_id, "/bounded", b"\xc0", &mut rng);
+        let raw = extract_any_send_packet(&request_actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        let packed_size = resp_mgr.links[&link_id]
+            .engine
+            .decrypt(&packet.data)
+            .unwrap()
+            .len();
+        resp_mgr.links.get_mut(&link_id).unwrap().max_request_size = Some(packed_size - 1);
+
+        let actions = resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(actions.is_empty());
+        assert!(!*observed.lock().unwrap());
+    }
+
+    #[test]
     fn test_send_request_wraps_invalid_msgpack_data_as_bin() {
         use std::sync::{Arc, Mutex};
 
@@ -4255,6 +4384,12 @@ mod tests {
     /// Set up two linked managers with an active link.
     /// Returns (initiator_mgr, responder_mgr, link_id).
     fn setup_active_link() -> (LinkManager, LinkManager, LinkId) {
+        setup_active_link_with_max_request_size(None)
+    }
+
+    fn setup_active_link_with_max_request_size(
+        max_request_size: Option<usize>,
+    ) -> (LinkManager, LinkManager, LinkId) {
         let mut rng = OsRng;
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
@@ -4265,6 +4400,7 @@ mod tests {
             sig_pub_bytes,
             ResourceStrategy::AcceptNone,
         );
+        assert!(resp_mgr.set_link_destination_max_request_size(&dest_hash, max_request_size));
         let mut init_mgr = LinkManager::new();
 
         let (link_id, init_actions) = init_mgr.create_link(
@@ -4306,6 +4442,26 @@ mod tests {
         assert_eq!(resp_mgr.link_state(&link_id), Some(LinkState::Active));
 
         (init_mgr, resp_mgr, link_id)
+    }
+
+    #[test]
+    fn request_size_limit_is_inherited_when_link_is_accepted() {
+        let (_init_mgr, resp_mgr, link_id) = setup_active_link_with_max_request_size(Some(321));
+        assert_eq!(resp_mgr.links[&link_id].max_request_size, Some(321));
+    }
+
+    #[test]
+    fn request_size_limit_updates_existing_responder_links() {
+        let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let dest_hash = resp_mgr.links[&link_id].dest_hash;
+        assert!(resp_mgr.set_link_destination_max_request_size(&dest_hash, Some(654)));
+        assert_eq!(resp_mgr.links[&link_id].max_request_size, Some(654));
+    }
+
+    #[test]
+    fn setting_request_size_limit_for_unknown_destination_fails() {
+        let mut mgr = LinkManager::new();
+        assert!(!mgr.set_link_destination_max_request_size(&[0xEE; 16], Some(1)));
     }
 
     fn packed_keepalive(link_id: &LinkId, payload: &[u8]) -> (Vec<u8>, RawPacket) {
@@ -4603,6 +4759,87 @@ mod tests {
             "unhandled request resource must be ignored"
         );
         assert!(resp_mgr.links[&link_id].incoming_resources.is_empty());
+    }
+
+    #[test]
+    fn request_resource_at_exact_declared_size_limit_is_accepted() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.register_request_handler("/bounded", None, |_, _, _, _| None);
+        let request = deterministic_bytes(4096);
+        let adv_actions = init_mgr.send_request(&link_id, "/bounded", &request, &mut rng);
+        let adv = first_resource_advertisement(&init_mgr, &link_id, &adv_actions);
+        resp_mgr.links.get_mut(&link_id).unwrap().max_request_size = Some(adv.data_size as usize);
+        let raw = extract_any_send_packet(&adv_actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+
+        let actions = resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(
+            !actions.is_empty(),
+            "accepted resource should request parts"
+        );
+        assert_eq!(resp_mgr.links[&link_id].incoming_resources.len(), 1);
+    }
+
+    #[test]
+    fn request_resource_one_byte_over_declared_size_limit_is_rejected() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.register_request_handler("/bounded", None, |_, _, _, _| None);
+        let adv_actions =
+            init_mgr.send_request(&link_id, "/bounded", &deterministic_bytes(4096), &mut rng);
+        let adv = first_resource_advertisement(&init_mgr, &link_id, &adv_actions);
+        resp_mgr.links.get_mut(&link_id).unwrap().max_request_size =
+            Some(adv.data_size as usize - 1);
+        let raw = extract_any_send_packet(&adv_actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+
+        let actions = resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(!actions.is_empty(), "rejected resource should send an RCL");
+        assert!(resp_mgr.links[&link_id].incoming_resources.is_empty());
+    }
+
+    #[test]
+    fn request_size_limit_does_not_reject_ordinary_resources() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let link = resp_mgr.links.get_mut(&link_id).unwrap();
+        link.max_request_size = Some(0);
+        link.resource_strategy = ResourceStrategy::AcceptAll;
+        let adv_actions = init_mgr.send_resource_with_auto_compress(
+            &link_id,
+            &deterministic_bytes(4096),
+            None,
+            false,
+            &mut rng,
+        );
+        let raw = extract_any_send_packet(&adv_actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+
+        let actions = resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        assert!(!actions.is_empty(), "ordinary resource should be accepted");
+        assert_eq!(resp_mgr.links[&link_id].incoming_resources.len(), 1);
     }
 
     #[test]

@@ -891,6 +891,7 @@ impl Driver {
                     sig_prv_bytes,
                     sig_pub_bytes,
                     resource_strategy,
+                    max_request_size,
                 } => {
                     let sig_prv =
                         rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
@@ -905,6 +906,8 @@ impl Driver {
                         sig_pub_bytes,
                         strat,
                     );
+                    self.link_manager
+                        .set_link_destination_max_request_size(&dest_hash, max_request_size);
                     // Also register in transport engine so inbound packets are delivered locally
                     self.engine
                         .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);

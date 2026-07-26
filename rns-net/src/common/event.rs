@@ -195,6 +195,7 @@ pub enum Event<W: Send> {
         sig_prv_bytes: [u8; 32],
         sig_pub_bytes: [u8; 32],
         resource_strategy: u8,
+        max_request_size: Option<usize>,
     },
     /// Register a request handler for a path on established links.
     RegisterRequestHandler {

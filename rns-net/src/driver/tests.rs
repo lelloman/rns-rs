@@ -4020,6 +4020,7 @@ fn register_link_dest_event() {
         sig_prv_bytes,
         sig_pub_bytes,
         resource_strategy: 0,
+        max_request_size: None,
     })
     .unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -8409,6 +8410,7 @@ fn query_local_destinations_tracks_link_dest() {
         sig_prv_bytes: [0x11; 32],
         sig_pub_bytes: [0x22; 32],
         resource_strategy: 0,
+        max_request_size: None,
     })
     .unwrap();
 
