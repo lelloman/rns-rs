@@ -520,7 +520,7 @@ mod tests {
             interface_type: "TCPServerClientInterface".into(),
             ifac: Some(ifac),
             mode: constants::MODE_GATEWAY,
-            gravity: 0,
+            gravity: -6,
             recursive_prs: true,
             announces_from_internal: false,
             announces_to_internal: None,
@@ -539,6 +539,7 @@ mod tests {
                 assert_eq!(registration.parent_id, InterfaceId(77));
                 assert_eq!(registration.interface_type, "TCPServerClientInterface");
                 assert_eq!(registration.info.mode, constants::MODE_GATEWAY);
+                assert_eq!(registration.info.gravity, -6);
                 assert!(registration.info.recursive_prs);
                 assert!(!registration.info.announces_from_internal);
                 assert_eq!(registration.ifac.as_ref().map(|state| state.size), Some(8));
