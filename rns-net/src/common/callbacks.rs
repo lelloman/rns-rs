@@ -87,6 +87,15 @@ pub trait Callbacks: Send {
         self.on_response(link_id, request_id, data);
     }
 
+    /// Called when a request response is rejected.
+    fn on_request_failed(
+        &mut self,
+        _link_id: LinkId,
+        _request_id: [u8; 16],
+        _reason: crate::link_manager::RequestFailure,
+    ) {
+    }
+
     /// Called when a delivery proof is received for a packet we sent.
     /// `rtt` is the round-trip time in seconds.
     fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {}

@@ -225,6 +225,7 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         path: String,
         data: Vec<u8>,
+        max_response_size: Option<usize>,
     },
     /// Identify on a link (send identity to remote peer).
     IdentifyOnLink {

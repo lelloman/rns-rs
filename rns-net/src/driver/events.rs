@@ -1002,15 +1002,20 @@ impl Driver {
                     link_id,
                     path,
                     data,
+                    max_response_size,
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send link request");
-                        let _ = (link_id, path, data);
+                        let _ = (link_id, path, data, max_response_size);
                         continue;
                     }
-                    let link_actions =
-                        self.link_manager
-                            .send_request(&link_id, &path, &data, &mut self.rng);
+                    let link_actions = self.link_manager.send_request_with_max_response_size(
+                        &link_id,
+                        &path,
+                        &data,
+                        max_response_size,
+                        &mut self.rng,
+                    );
                     self.dispatch_link_actions(link_actions);
                 }
                 Event::IdentifyOnLink {

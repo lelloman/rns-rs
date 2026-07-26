@@ -94,7 +94,7 @@ pub use interface::weave::{
 pub use interface::{
     InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
 };
-pub use link_manager::{LinkManager, LinkManagerAction, RequestResponse};
+pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
 pub use management::ManagementConfig;
 pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 #[cfg(feature = "hooks")]
