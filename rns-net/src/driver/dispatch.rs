@@ -1150,9 +1150,14 @@ impl Driver {
                 LinkManagerAction::LinkEstablished {
                     link_id,
                     dest_hash,
+                    hops,
                     rtt,
                     is_initiator,
                 } => {
+                    if is_initiator {
+                        self.engine
+                            .rebalance_destination_path_hops(&dest_hash, hops);
+                    }
                     #[cfg(feature = "hooks")]
                     {
                         let ctx = HookContext::Link {

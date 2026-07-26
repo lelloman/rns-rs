@@ -237,6 +237,18 @@ impl LinkEngine {
         now: f64,
         rng: &mut dyn Rng,
     ) -> Result<(Vec<u8>, Vec<LinkAction>), LinkError> {
+        self.handle_lrproof_with_hops(proof_data, peer_sig_pub_bytes, None, now, rng)
+    }
+
+    /// Validate an LRPROOF while recording its authenticated hop metric.
+    pub fn handle_lrproof_with_hops(
+        &mut self,
+        proof_data: &[u8],
+        peer_sig_pub_bytes: &[u8; 32],
+        packet_hops: Option<u8>,
+        now: f64,
+        rng: &mut dyn Rng,
+    ) -> Result<(Vec<u8>, Vec<LinkAction>), LinkError> {
         if self.state != LinkState::Pending || !self.is_initiator {
             return Err(LinkError::InvalidState);
         }
@@ -248,6 +260,10 @@ impl LinkEngine {
 
         if confirmed_mode != self.mode {
             return Err(LinkError::UnsupportedMode);
+        }
+
+        if let Some(hops) = packet_hops {
+            self.expected_hops = hops;
         }
 
         self.peer_pub_bytes = Some(peer_pub);
@@ -765,8 +781,57 @@ mod tests {
 
         // Step 3: Initiator validates LRPROOF
         let mut rng_lrrtt = make_rng(0x30);
+        assert!(initiator
+            .handle_lrproof_with_hops(
+                &[0xAA; 3],
+                &dest_sig_pub_bytes,
+                Some(8),
+                100.6,
+                &mut rng_lrrtt,
+            )
+            .is_err());
+        assert_eq!(initiator.expected_hops(), 1);
+        let mismatched_mode_proof = handshake::build_lrproof(
+            initiator.link_id(),
+            lrproof_data[64..96].try_into().unwrap(),
+            &dest_sig_pub_bytes,
+            &dest_sig_prv,
+            Some(500),
+            LinkMode::Aes128Cbc,
+        );
+        assert_eq!(
+            initiator
+                .handle_lrproof_with_hops(
+                    &mismatched_mode_proof,
+                    &dest_sig_pub_bytes,
+                    Some(9),
+                    100.65,
+                    &mut rng_lrrtt,
+                )
+                .unwrap_err(),
+            LinkError::UnsupportedMode,
+        );
+        assert_eq!(initiator.expected_hops(), 1);
+        let mut invalid_lrproof = lrproof_data.clone();
+        invalid_lrproof[0] ^= 0x01;
+        assert!(initiator
+            .handle_lrproof_with_hops(
+                &invalid_lrproof,
+                &dest_sig_pub_bytes,
+                Some(7),
+                100.7,
+                &mut rng_lrrtt,
+            )
+            .is_err());
+        assert_eq!(initiator.expected_hops(), 1);
         let (lrrtt_encrypted, actions) = initiator
-            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .handle_lrproof_with_hops(
+                &lrproof_data,
+                &dest_sig_pub_bytes,
+                Some(4),
+                100.8,
+                &mut rng_lrrtt,
+            )
             .unwrap();
         assert_eq!(initiator.state(), LinkState::Active);
         assert!(initiator.rtt().is_some());
@@ -777,7 +842,7 @@ mod tests {
             .handle_lrrtt_with_hops(&lrrtt_encrypted, Some(4), 101.0)
             .unwrap();
         assert_eq!(responder.state(), LinkState::Active);
-        assert_eq!(initiator.expected_hops(), 1);
+        assert_eq!(initiator.expected_hops(), 4);
         assert_eq!(responder.expected_hops(), 4);
 
         initiator.record_outbound_traffic(48);

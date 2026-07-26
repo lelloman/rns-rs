@@ -1542,6 +1542,136 @@ fn make_entry(id: u64, writer: Box<dyn Writer>, online: bool) -> InterfaceEntry 
     }
 }
 
+#[test]
+fn driver_validates_and_routes_mismatched_lrproof_using_known_identity() {
+    use rns_crypto::ed25519::Ed25519PrivateKey;
+
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+    for id in [1, 2] {
+        driver.engine.register_interface(make_interface_info(id));
+    }
+    let (outbound_writer, outbound_frames) = MockWriter::new();
+    driver.interfaces.insert(
+        InterfaceId(1),
+        make_entry(1, Box::new(outbound_writer), true),
+    );
+    let (inbound_writer, _) = MockWriter::new();
+    driver.interfaces.insert(
+        InterfaceId(2),
+        make_entry(2, Box::new(inbound_writer), true),
+    );
+
+    let link_id = [0x44; 16];
+    let destination_hash = [0xBB; 16];
+    driver.engine.register_link(
+        link_id,
+        rns_core::transport::tables::LinkEntry {
+            timestamp: 100.0,
+            next_hop_transport_id: [0xAA; 16],
+            next_hop_interface: InterfaceId(2),
+            remaining_hops: 3,
+            received_interface: InterfaceId(1),
+            taken_hops: 1,
+            destination_hash,
+            validated: false,
+            proof_timeout: 200.0,
+        },
+    );
+    driver.engine.inject_path(
+        destination_hash,
+        rns_core::transport::tables::PathEntry {
+            timestamp: 99.0,
+            next_hop: [0xAA; 16],
+            hops: 3,
+            expires: 999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(2),
+            packet_hash: [0xCC; 32],
+            announce_raw: None,
+        },
+    );
+
+    let mut key_rng = rns_crypto::FixedRng::new(&[0x71; 128]);
+    let signing_key = Ed25519PrivateKey::generate(&mut key_rng);
+    let signing_public = signing_key.public_key().public_bytes();
+    let mut public_key = [0u8; 64];
+    public_key[32..].copy_from_slice(&signing_public);
+    driver.upsert_known_destination(
+        destination_hash,
+        crate::destination::AnnouncedIdentity {
+            dest_hash: rns_core::types::DestHash(destination_hash),
+            identity_hash: rns_core::types::IdentityHash([0x99; 16]),
+            public_key,
+            app_data: None,
+            hops: 3,
+            received_at: 99.0,
+            receiving_interface: InterfaceId(2),
+            rssi: None,
+            snr: None,
+        },
+    );
+    let proof = rns_core::link::handshake::build_lrproof(
+        &link_id,
+        &[0x22; 32],
+        &signing_public,
+        &signing_key,
+        None,
+        rns_core::link::LinkMode::Aes256Cbc,
+    );
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_PROOF,
+        },
+        4,
+        &link_id,
+        None,
+        constants::CONTEXT_LRPROOF,
+        &proof,
+    )
+    .unwrap();
+
+    driver.handle_frame_event(InterfaceId(2), packet.raw, None, None);
+
+    assert_eq!(driver.engine.hops_to(&destination_hash), Some(5));
+    assert_eq!(outbound_frames.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn established_initiator_rebalances_destination_path_to_authenticated_hops() {
+    let mut driver = new_test_driver();
+    let destination_hash = [0xBC; 16];
+    driver.engine.inject_path(
+        destination_hash,
+        rns_core::transport::tables::PathEntry {
+            timestamp: 99.0,
+            next_hop: [0xAA; 16],
+            hops: 2,
+            expires: 999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0xCC; 32],
+            announce_raw: None,
+        },
+    );
+
+    driver.dispatch_link_actions(vec![LinkManagerAction::LinkEstablished {
+        link_id: [0x45; 16],
+        dest_hash: destination_hash,
+        hops: 6,
+        rtt: 0.25,
+        is_initiator: true,
+    }]);
+
+    assert_eq!(driver.engine.hops_to(&destination_hash), Some(6));
+}
+
 fn make_pending_verify_announce(dest: [u8; 16]) -> (AnnounceVerifyKey, PendingAnnounce) {
     let random_blob = [0xA1; 10];
     let received_from = [0xB2; 16];

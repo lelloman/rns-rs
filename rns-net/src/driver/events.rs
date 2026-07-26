@@ -108,6 +108,32 @@ impl Driver {
             );
         }
 
+        // A relay can only accept a hop-count change after validating the
+        // LRPROOF against the announced destination identity. Supplying the
+        // key here keeps identity lifecycle state in the driver while the
+        // transport engine owns the route mutation.
+        if let Some((link_id, destination_hash, packet_hops, proof_data)) = self
+            .engine
+            .inbound_lrproof_rebalance_candidate(&packet, interface_id)
+        {
+            if let Some(announced) = self.known_destination_announced(&destination_hash) {
+                let mut sig_pub = [0u8; 32];
+                sig_pub.copy_from_slice(&announced.public_key[32..64]);
+                if self.engine.rebalance_link_path_from_lrproof(
+                    &link_id,
+                    packet_hops,
+                    interface_id,
+                    &proof_data,
+                    &sig_pub,
+                ) {
+                    log::warn!(
+                        "Re-balanced path to {:02x?} from link-request proof",
+                        &destination_hash[..4],
+                    );
+                }
+            }
+        }
+
         let inbound_frame = InboundFrame {
             raw: &packet,
             iface: interface_id,
