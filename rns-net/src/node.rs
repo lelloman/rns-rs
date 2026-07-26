@@ -80,8 +80,10 @@ fn parse_optional_interface_mode(mode: &str) -> Option<u8> {
     }
 }
 
-fn parse_interface_gravity(value: Option<&str>) -> i64 {
-    value.and_then(|value| value.parse().ok()).unwrap_or(0)
+fn parse_interface_gravity(value: Option<&str>, default_gravity: i64) -> i64 {
+    value
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default_gravity)
 }
 
 /// Apply Reticulum's mode normalization for discoverable interfaces.
@@ -497,6 +499,8 @@ pub struct NodeConfig {
     pub discover_interfaces: bool,
     /// Mode assigned to auto-connected discovered interfaces, when configured.
     pub autoconnect_interface_mode: Option<u8>,
+    /// Gravity assigned to auto-connected discovered interfaces.
+    pub autoconnect_interface_gravity: i64,
     /// Allow auto-connected interfaces to propagate announces to internal interfaces.
     pub autoconnect_announces_to_internal: bool,
     /// Minimum stamp value for accepting discovered interfaces (default: 16).
@@ -576,6 +580,7 @@ impl Default for NodeConfig {
             hooks: Vec::new(),
             discover_interfaces: false,
             autoconnect_interface_mode: None,
+            autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             discovery_required_value: None,
             respond_to_probes: false,
@@ -782,7 +787,10 @@ impl RnsNode {
                 .get("announces_from_internal")
                 .and_then(|v| config::parse_bool_pub(v))
                 .unwrap_or(true);
-            let gravity = parse_interface_gravity(iface.params.get("gravity").map(String::as_str));
+            let gravity = parse_interface_gravity(
+                iface.params.get("gravity").map(String::as_str),
+                rns_config.reticulum.default_gravity,
+            );
             let announces_to_internal = iface
                 .params
                 .get("announces_to_internal")
@@ -943,9 +951,10 @@ impl RnsNode {
             discover_interfaces: rns_config.reticulum.discover_interfaces,
             autoconnect_interface_mode: rns_config
                 .reticulum
-                .autoconnect_discovered_mode
+                .autoconnect_interface_mode
                 .as_deref()
                 .and_then(parse_optional_interface_mode),
+            autoconnect_interface_gravity: rns_config.reticulum.autoconnect_interface_gravity,
             autoconnect_announces_to_internal: rns_config
                 .reticulum
                 .autoconnect_announces_to_internal,
@@ -1295,6 +1304,7 @@ impl RnsNode {
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
         driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
+        driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
         driver.autoconnect_announces_to_internal =
             config.autoconnect_announces_to_internal.then_some(true);
         if let Some(val) = config.discovery_required_value {
@@ -3320,6 +3330,7 @@ mod tests {
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -3637,6 +3648,7 @@ share_instance = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -3702,6 +3714,7 @@ share_instance = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4210,10 +4223,10 @@ enable_transport = True
     }
 
     #[test]
-    fn interface_gravity_parser_accepts_signed_values_and_defaults_to_zero() {
-        assert_eq!(parse_interface_gravity(Some("7")), 7);
-        assert_eq!(parse_interface_gravity(Some("-4")), -4);
-        assert_eq!(parse_interface_gravity(None), 0);
+    fn interface_gravity_parser_accepts_signed_values_and_uses_global_default() {
+        assert_eq!(parse_interface_gravity(Some("7"), -2), 7);
+        assert_eq!(parse_interface_gravity(Some("-4"), 2), -4);
+        assert_eq!(parse_interface_gravity(None, -6), -6);
     }
 
     #[test]
@@ -4500,6 +4513,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4574,6 +4588,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4644,6 +4659,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4711,6 +4727,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4818,6 +4835,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4893,6 +4911,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -4966,6 +4985,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -5052,6 +5072,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,
@@ -5128,6 +5149,7 @@ enable_transport = False
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
+                autoconnect_interface_gravity: 0,
                 autoconnect_announces_to_internal: false,
                 discovery_required_value: None,
                 respond_to_probes: false,

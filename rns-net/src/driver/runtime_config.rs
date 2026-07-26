@@ -472,6 +472,7 @@ impl Driver {
                     rns_core::constants::MODE_FULL
                 }
             });
+            candidate.config.gravity = self.autoconnect_interface_gravity;
             candidate.config.announces_to_internal = self.autoconnect_announces_to_internal;
             if candidate.active_id.is_none() {
                 candidate.config.client.name = Self::discovered_pool_candidate_name(&iface);
@@ -519,7 +520,7 @@ impl Driver {
             config: BackbonePeerPoolCandidateConfig {
                 client,
                 mode,
-                gravity: 0,
+                gravity: self.autoconnect_interface_gravity,
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: self.autoconnect_announces_to_internal,

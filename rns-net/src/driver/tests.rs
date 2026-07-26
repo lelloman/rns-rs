@@ -660,6 +660,7 @@ fn discovered_peer_pool_candidate_uses_autoconnect_overrides() {
     let mut driver = new_test_driver();
     driver.discover_interfaces = true;
     driver.autoconnect_interface_mode = Some(constants::MODE_BOUNDARY);
+    driver.autoconnect_interface_gravity = -5;
     driver.autoconnect_announces_to_internal = Some(true);
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -685,6 +686,7 @@ fn discovered_peer_pool_candidate_uses_autoconnect_overrides() {
 
     let pool = driver.backbone_peer_pool.as_ref().unwrap();
     assert_eq!(pool.candidates[0].config.mode, constants::MODE_BOUNDARY);
+    assert_eq!(pool.candidates[0].config.gravity, -5);
     assert_eq!(pool.candidates[0].config.announces_to_internal, Some(true));
 }
 

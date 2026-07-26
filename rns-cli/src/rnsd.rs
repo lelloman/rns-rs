@@ -262,8 +262,14 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   instance_control_port = 37429
   panic_on_interface_error = false
 
+  # Global gravity for interfaces without a specific gravity option.
+  # default_gravity = 0
+
   # Optional mode for interfaces created from discovery announces.
-  # autoconnect_discovered_mode = gateway
+  # autoconnect_interface_mode = gateway
+
+  # Gravity assigned to interfaces created from discovery announces.
+  # autoconnect_interface_gravity = 0
 
   # Allow auto-connected interfaces to propagate announces to internal mode.
   # autoconnect_announces_to_internal = yes

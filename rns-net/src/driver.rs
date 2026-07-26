@@ -725,6 +725,8 @@ pub struct Driver {
     pub(crate) discover_interfaces: bool,
     /// Explicit mode for interfaces created from discovery announces.
     pub(crate) autoconnect_interface_mode: Option<u8>,
+    /// Gravity for interfaces created from discovery announces.
+    pub(crate) autoconnect_interface_gravity: i64,
     /// Internal announce propagation override for discovered interfaces.
     pub(crate) autoconnect_announces_to_internal: Option<bool>,
     /// Announcer for discoverable interfaces (None if nothing to announce).
@@ -900,6 +902,7 @@ impl Driver {
             probe_responder_hash: None,
             discover_interfaces: false,
             autoconnect_interface_mode: None,
+            autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: None,
             interface_announcer: None,
             announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(

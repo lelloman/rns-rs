@@ -89,6 +89,7 @@ fn main() {
             hooks: Vec::new(),
             discover_interfaces: false,
             autoconnect_interface_mode: None,
+            autoconnect_interface_gravity: 0,
             autoconnect_announces_to_internal: false,
             discovery_required_value: None,
             respond_to_probes: false,

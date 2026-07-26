@@ -8,13 +8,18 @@ settings provide finer control:
 
 ```ini
 [reticulum]
-  autoconnect_discovered_mode = boundary
+  default_gravity = 0
+  autoconnect_interface_mode = boundary
+  autoconnect_interface_gravity = -2
   autoconnect_announces_to_internal = yes
 ```
 
-`autoconnect_discovered_mode` selects the mode assigned to automatically
-connected discovered interfaces. It accepts the same mode names and aliases as
-`interface_mode`. `autoconnect_announces_to_internal = yes` allows announces
+`default_gravity` supplies the gravity for any statically configured interface
+without its own `gravity` option. `autoconnect_interface_mode` selects the mode
+assigned to automatically connected discovered interfaces. It accepts the same mode names and aliases as
+`interface_mode`. `autoconnect_interface_gravity` sets their pathing affinity;
+positive values increase affinity and negative values decrease it.
+`autoconnect_announces_to_internal = yes` allows announces
 received through those interfaces to propagate to internal-mode interfaces,
 even when their selected mode would normally block that direction.
 
