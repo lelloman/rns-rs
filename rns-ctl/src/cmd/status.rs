@@ -216,6 +216,50 @@ fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
         .max(MONITOR_MIN_SLEEP)
 }
 
+fn sort_interfaces(iface_list: &mut Vec<&PickleValue>, sort_key: &str, reverse: bool) {
+    iface_list.sort_by(|a, b| {
+        let cmp = match sort_key {
+            "rate" => {
+                let ra = a.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
+                let rb = b.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
+                ra.cmp(&rb)
+            }
+            "traffic" => {
+                let ta = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
+                    + a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                let tb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
+                    + b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                ta.cmp(&tb)
+            }
+            "rx" => {
+                let ra = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
+                let rb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
+                ra.cmp(&rb)
+            }
+            "tx" => {
+                let ta = a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                let tb = b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
+                ta.cmp(&tb)
+            }
+            "gravity" | "g" => {
+                let ga = a.get("gravity").and_then(|v| v.as_int()).unwrap_or(0);
+                let gb = b.get("gravity").and_then(|v| v.as_int()).unwrap_or(0);
+                ga.cmp(&gb)
+            }
+            _ => {
+                let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                na.cmp(nb)
+            }
+        };
+        if reverse {
+            cmp.reverse()
+        } else {
+            cmp
+        }
+    });
+}
+
 fn print_status(
     response: &PickleValue,
     show_all: bool,
@@ -261,42 +305,7 @@ fn print_status(
 
         // Sort if requested
         if let Some(sort_key) = sort_by {
-            iface_list.sort_by(|a, b| {
-                let cmp = match sort_key {
-                    "rate" => {
-                        let ra = a.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
-                        let rb = b.get("bitrate").and_then(|v| v.as_int()).unwrap_or(0);
-                        ra.cmp(&rb)
-                    }
-                    "traffic" => {
-                        let ta = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
-                            + a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let tb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)
-                            + b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ta.cmp(&tb)
-                    }
-                    "rx" => {
-                        let ra = a.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let rb = b.get("rxb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ra.cmp(&rb)
-                    }
-                    "tx" => {
-                        let ta = a.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        let tb = b.get("txb").and_then(|v| v.as_int()).unwrap_or(0);
-                        ta.cmp(&tb)
-                    }
-                    _ => {
-                        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        na.cmp(nb)
-                    }
-                };
-                if reverse {
-                    cmp.reverse()
-                } else {
-                    cmp
-                }
-            });
+            sort_interfaces(&mut iface_list, sort_key, reverse);
         }
 
         for iface in &iface_list {
@@ -511,7 +520,7 @@ fn print_usage() {
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, gravity (g)");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -l                      Show link count");
@@ -544,5 +553,47 @@ mod tests {
             monitor_sleep_duration(1.0, Duration::from_millis(1500)),
             MONITOR_MIN_SLEEP
         );
+    }
+
+    fn interface(name: &str, gravity: Option<i64>) -> PickleValue {
+        let mut fields = vec![(
+            PickleValue::String("name".into()),
+            PickleValue::String(name.into()),
+        )];
+        if let Some(gravity) = gravity {
+            fields.push((
+                PickleValue::String("gravity".into()),
+                PickleValue::Int(gravity),
+            ));
+        }
+        PickleValue::Dict(fields)
+    }
+
+    #[test]
+    fn gravity_sort_handles_signed_and_missing_values() {
+        let values = [
+            interface("positive", Some(7)),
+            interface("missing", None),
+            interface("negative", Some(-4)),
+        ];
+        let mut interfaces: Vec<_> = values.iter().collect();
+
+        sort_interfaces(&mut interfaces, "gravity", false);
+
+        let names: Vec<_> = interfaces
+            .iter()
+            .map(|interface| interface.get("name").unwrap().as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["negative", "missing", "positive"]);
+    }
+
+    #[test]
+    fn gravity_alias_supports_reverse_sorting() {
+        let values = [interface("low", Some(-1)), interface("high", Some(3))];
+        let mut interfaces: Vec<_> = values.iter().collect();
+
+        sort_interfaces(&mut interfaces, "g", true);
+
+        assert_eq!(interfaces[0].get("name").unwrap().as_str(), Some("high"));
     }
 }
