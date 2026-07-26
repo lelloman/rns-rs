@@ -134,8 +134,10 @@ impl Channel {
             Err(_) => return Vec::new(),
         };
 
-        // Reject sequences behind our window
-        if self.is_behind_rx_window(sequence) {
+        // Reject sequences behind or more than one maximum receive window
+        // ahead. Wrapping subtraction gives the forward modular distance and
+        // handles the 0xffff -> 0 boundary without a separate branch.
+        if self.is_outside_rx_window(sequence) {
             return Vec::new();
         }
 
@@ -280,21 +282,8 @@ impl Channel {
 
     // --- Internal ---
 
-    fn is_behind_rx_window(&self, sequence: Sequence) -> bool {
-        if sequence < self.next_rx_sequence {
-            let window_overflow = (self.next_rx_sequence as u32 + CHANNEL_WINDOW_MAX_FAST as u32)
-                % CHANNEL_SEQ_MODULUS;
-            let overflow = window_overflow as u16;
-            if overflow < self.next_rx_sequence {
-                // Wrapped around — sequence is valid if > overflow
-                if sequence > overflow {
-                    return true; // actually behind
-                }
-                return false; // valid wrap-around sequence
-            }
-            return true;
-        }
-        false
+    fn is_outside_rx_window(&self, sequence: Sequence) -> bool {
+        sequence.wrapping_sub(self.next_rx_sequence) > CHANNEL_WINDOW_MAX_FAST
     }
 
     fn emplace_rx(&mut self, envelope: Envelope) {
@@ -576,6 +565,47 @@ mod tests {
             ChannelAction::MessageReceived { sequence, .. } => assert_eq!(*sequence, 1),
             _ => panic!("Expected MessageReceived"),
         }
+    }
+
+    #[test]
+    fn receive_window_accepts_exact_forward_edge_and_rejects_beyond_it() {
+        let mut ch = Channel::new(0.1);
+        let edge = CHANNEL_WINDOW_MAX_FAST;
+        let beyond = edge + 1;
+
+        assert!(ch
+            .receive(&pack_envelope(0x01, edge, b"edge"), 1.0)
+            .is_empty());
+        assert_eq!(ch.rx_ring.len(), 1);
+        assert!(ch
+            .receive(&pack_envelope(0x01, beyond, b"beyond"), 1.1)
+            .is_empty());
+        assert_eq!(ch.rx_ring.len(), 1);
+        assert!(ch
+            .receive(&pack_envelope(0x01, 40_000, b"far"), 1.2)
+            .is_empty());
+        assert_eq!(ch.rx_ring.len(), 1);
+    }
+
+    #[test]
+    fn receive_window_enforces_modular_edge_across_sequence_wrap() {
+        let mut ch = Channel::new(0.1);
+        ch.next_rx_sequence = 0xFFFE;
+        let edge = ch.next_rx_sequence.wrapping_add(CHANNEL_WINDOW_MAX_FAST);
+        let beyond = edge.wrapping_add(1);
+        let behind = ch.next_rx_sequence.wrapping_sub(1);
+
+        assert!(ch
+            .receive(&pack_envelope(0x01, edge, b"edge"), 1.0)
+            .is_empty());
+        assert_eq!(ch.rx_ring.len(), 1);
+        assert!(ch
+            .receive(&pack_envelope(0x01, beyond, b"beyond"), 1.1)
+            .is_empty());
+        assert!(ch
+            .receive(&pack_envelope(0x01, behind, b"behind"), 1.2)
+            .is_empty());
+        assert_eq!(ch.rx_ring.len(), 1);
     }
 
     #[test]
