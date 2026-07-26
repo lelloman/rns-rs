@@ -281,6 +281,9 @@ impl SamResponse {
 /// Some values (like DESTINATION) can contain spaces if they are the last param,
 /// but SAM v3.1 generally uses space-separated KEY=VALUE pairs.
 fn parse_sam_response(line: &str) -> Result<SamResponse, SamError> {
+    if line.trim().is_empty() {
+        return Err(SamError::InvalidResponse("empty response".into()));
+    }
     let mut parts = line.splitn(3, ' ');
     let command = parts
         .next()
@@ -491,6 +494,47 @@ pub fn naming_lookup_on(stream: &mut TcpStream, name: &str) -> Result<Destinatio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn read_command(stream: &mut TcpStream) {
+        let mut byte = [0u8; 1];
+        loop {
+            stream.read_exact(&mut byte).unwrap();
+            if byte[0] == b'\n' {
+                return;
+            }
+        }
+    }
+
+    fn mock_sam(
+        command_reply: &'static str,
+        data_after_reply: Option<&'static str>,
+    ) -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_command(&mut stream);
+            stream
+                .write_all(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
+                .unwrap();
+            read_command(&mut stream);
+            stream.write_all(command_reply.as_bytes()).unwrap();
+            stream.write_all(b"\n").unwrap();
+            if let Some(data) = data_after_reply {
+                stream.write_all(data.as_bytes()).unwrap();
+                stream.write_all(b"\n").unwrap();
+            }
+            stream.flush().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut byte = [0u8; 1];
+            assert_eq!(stream.read(&mut byte).unwrap(), 0);
+        });
+        (address, handle)
+    }
 
     // --- I2P base64 tests ---
 
@@ -639,6 +683,44 @@ mod tests {
         assert_eq!(resp.subcommand, "REPLY");
         assert_eq!(resp.get("RESULT"), Some("OK"));
         assert_eq!(resp.get("VERSION"), Some("3.1"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_and_whitespace_only_replies() {
+        assert!(matches!(
+            parse_sam_response(""),
+            Err(SamError::InvalidResponse(_))
+        ));
+        assert!(matches!(
+            parse_sam_response("   "),
+            Err(SamError::InvalidResponse(_))
+        ));
+    }
+
+    #[test]
+    fn session_create_reports_duplicate_id_and_closes_socket() {
+        let (address, server) = mock_sam("SESSION STATUS RESULT=DUPLICATED_ID", None);
+        let error = session_create(&address, "duplicate", "AAAA").unwrap_err();
+        assert!(matches!(error, SamError::Protocol(message) if message.contains("DUPLICATED_ID")));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn stream_connect_reports_unreachable_peer_and_closes_socket() {
+        let (address, server) = mock_sam("STREAM STATUS RESULT=CANT_REACH_PEER", None);
+        let error = stream_connect(&address, "session", "AAAA").unwrap_err();
+        assert!(
+            matches!(error, SamError::Protocol(message) if message.contains("CANT_REACH_PEER"))
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn stream_accept_rejects_invalid_remote_destination_and_closes_socket() {
+        let (address, server) = mock_sam("STREAM STATUS RESULT=OK", Some("not-base64"));
+        let error = stream_accept(&address, "session").unwrap_err();
+        assert!(matches!(error, SamError::InvalidResponse(_)));
+        server.join().unwrap();
     }
 
     #[test]
