@@ -48,7 +48,7 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
     ]);
     assert!(initiator.status.success());
     assert!(app.join("identity").is_file());
-    assert!(app.join("logfile").is_file());
+    assert!(app.join("logfile.initiator").is_file());
 
     let listener = rnsh(&[
         "-c",
