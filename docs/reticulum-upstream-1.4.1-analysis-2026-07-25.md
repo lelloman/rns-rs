@@ -82,7 +82,7 @@ audited so advancing the baseline cannot silently skip them.
 | 28 | `224124aac7d1e2aded3c781b783c009419efabf3` | Updated version | Non-runtime |
 | 29 | `e5d37355b87e25a7868cdace5b04459091749e5c` | Updated changelog | Non-runtime |
 | 30 | `0d16e2305eb2f7f350c1202bc0d3c9764bea1b3e` | Updated documentation | Documentation follow-up |
-| 31 | `4631d78beaa1652709b4815a41916a618548baaf` | Adjusted re-balance loglevel | Rebalancing-cluster follow-up |
+| 31 | `4631d78beaa1652709b4815a41916a618548baaf` | Adjusted re-balance loglevel | Integrated |
 | 32 | `b2188ce9a746a35b770b10bea1b7ccbe93b4e198` | Adjusted gravity update loglevel | Gravity-cluster follow-up |
 
 ## Per-commit analysis
@@ -563,9 +563,9 @@ not copy generated HTML, inventory or search-index artifacts.
 Upstream changes the temporary rebalancing log level from warning to debug once
 the feature is release-ready. No routing behavior changes.
 
-**Disposition:** rebalancing-cluster follow-up. Use the final debug/pathing
-target policy in the Rust port and avoid warning-level noise during normal path
-convergence.
+**Disposition:** integrated. Authenticated rebalancing events now use a named
+debug-level policy instead of warning, with a logger-filter regression test to
+ensure normal debug configuration exposes the diagnostic.
 
 ### 32. `b2188ce9` — Move gravity replacement diagnostics to pathing
 
