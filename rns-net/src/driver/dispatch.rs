@@ -1151,10 +1151,11 @@ impl Driver {
                     link_id,
                     dest_hash,
                     hops,
+                    rebalanced_at,
                     rtt,
                     is_initiator,
                 } => {
-                    if is_initiator {
+                    if is_initiator && rebalanced_at.is_some() {
                         self.engine
                             .rebalance_destination_path_hops(&dest_hash, hops);
                     }
