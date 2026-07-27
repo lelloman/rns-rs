@@ -21,7 +21,7 @@ object to equal `da3ed5fb64f432b04aa387576701182b8c82df8d`, asserts the Python
 version, and only then executes live Python/Rust interop.
 
 The exact 32-commit disposition and acceptance record is in
-[`docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
+[`docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
 The PR CI matrix is the final software acceptance authority for this
 promotion. Historical 1.4.0 conformance fixtures retain their original source
 provenance. Physical Weave HIL and dual-VPS manual acceptance are not claimed
@@ -75,7 +75,7 @@ Python artifacts; native API and operator documentation covers the applicable
 behavior. Rust crate versions remain independently versioned.
 
 The commit-by-commit implementation rationale and test evidence is recorded in
-[`docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
+[`docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
 
 ## Completed 1.3.9..1.4.0 Porting Queue
 
@@ -111,7 +111,7 @@ Key local commits for this range include:
 - `771762b` Raise default discovery stamp value to 16
 
 The exact commit-by-commit disposition and acceptance record is in
-[`docs/reticulum-1.4.0-parity.md`](docs/reticulum-1.4.0-parity.md).
+[`docs/upstream-parity/reticulum-1.4.0-parity.md`](docs/upstream-parity/reticulum-1.4.0-parity.md).
 
 ## Completed 1.3.6..1.3.7 Porting Queue
 
