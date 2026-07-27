@@ -839,7 +839,15 @@ impl StatsDb {
         }
 
         self.checkpoint_wal()?;
-        self.conn.execute_batch("PRAGMA incremental_vacuum;")?;
+        // `incremental_vacuum` produces one result row for each truncation
+        // step. Drive the statement to completion: executing only its first
+        // step can reclaim a single page while leaving the rest of the free
+        // list (and most of the physical database file) untouched.
+        {
+            let mut statement = self.conn.prepare("PRAGMA incremental_vacuum;")?;
+            let mut rows = statement.query([])?;
+            while rows.next()?.is_some() {}
+        }
         self.checkpoint_wal()
     }
 }
@@ -1329,6 +1337,44 @@ mod tests {
 
         assert_eq!(report.rows_deleted, 10);
         assert_eq!(raw_history_rows(&db), 0);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn size_retention_physically_reclaims_all_free_pages() {
+        let (path, mut db) = test_db("size-physical-reclaim");
+        db.conn
+            .execute_batch(
+                "WITH RECURSIVE seq(x) AS (
+                    VALUES(1) UNION ALL SELECT x + 1 FROM seq WHERE x < 1000
+                 )
+                 INSERT INTO packet_samples
+                    (ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes)
+                 SELECT x, hex(randomblob(8192)), NULL, 'rx', 'data', 1, 1 FROM seq;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .unwrap();
+        let before = database_file_bytes(&path);
+        assert!(before > 8 * 1024 * 1024, "fixture was only {before} bytes");
+
+        db.enforce_retention(
+            StatsRetentionPolicy {
+                max_age_days: None,
+                // Zero is an internal test-only limit; public validation has
+                // a 64 MiB minimum.
+                max_size_mb: Some(0),
+            },
+            10_000,
+        )
+        .unwrap();
+
+        let after = database_file_bytes(&path);
+        assert_eq!(raw_history_rows(&db), 0);
+        assert!(
+            after < before / 4,
+            "database did not physically shrink enough: before={before}, after={after}"
+        );
         drop(db);
         let _ = fs::remove_file(path);
     }
