@@ -20,7 +20,7 @@ impl Callbacks for DaemonCallbacks {
             Some(x) => format!(", snr:{}", x),
             None => "".to_string(),
         };
-        log::info!(
+        log::debug!(
             "Announce received for {} (hops: {}{}{})",
             hex(&announced.dest_hash.0),
             announced.hops,

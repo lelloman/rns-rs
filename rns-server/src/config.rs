@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use crate::args::Args;
+use crate::logs::{LogPolicy, DEFAULT_MAX_ARCHIVES, DEFAULT_MAX_FILE_BYTES};
 use crate::supervisor::{
     ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role,
     SupervisorConfig,
@@ -22,6 +23,7 @@ pub struct ServerConfig {
     pub server_config_file_path: PathBuf,
     pub server_config_file_present: bool,
     pub file_config: ServerConfigFile,
+    pub log_policy: LogPolicy,
     pub stats_db_path: PathBuf,
     pub rnsd_bin: PathBuf,
     pub sentineld_bin: PathBuf,
@@ -52,7 +54,18 @@ pub struct ServerConfigFile {
     #[serde(default)]
     pub statsd_bin: Option<String>,
     #[serde(default)]
+    pub logs: ServerLogConfigFile,
+    #[serde(default)]
     pub http: ServerHttpConfigFile,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerLogConfigFile {
+    #[serde(default)]
+    pub max_file_size_mb: Option<u64>,
+    #[serde(default)]
+    pub max_archives: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -174,7 +187,7 @@ impl ServerConfig {
             shared_state,
             control_rx,
             readiness: self.readiness_checks(),
-            log_dir: Some(self.resolved_config_dir.join("logs")),
+            log_dir: Some((self.resolved_config_dir.join("logs"), self.log_policy)),
             rnsd_drain: self.rnsd_drain_config(),
         }
     }
@@ -312,6 +325,22 @@ impl ServerConfig {
                     default_value: "(self-spawn via /proc/self/exe)".into(),
                     description: "Advanced override for the stats sidecar executable; unset uses self-spawn from rns-server.".into(),
                     effect: "Restarts rns-statsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "logs.max_file_size_mb".into(),
+                    field_type: "u64".into(),
+                    required: false,
+                    default_value: (DEFAULT_MAX_FILE_BYTES / (1024 * 1024)).to_string(),
+                    description: "Maximum size of each active supervised-process log before rotation.".into(),
+                    effect: "Requires restarting rns-server.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "logs.max_archives".into(),
+                    field_type: "usize".into(),
+                    required: false,
+                    default_value: DEFAULT_MAX_ARCHIVES.to_string(),
+                    description: "Number of rotated files retained per supervised process; zero disables archive retention.".into(),
+                    effect: "Requires restarting rns-server.".into(),
                 },
                 ServerConfigFieldSchema {
                     field: "http.enabled".into(),
@@ -595,6 +624,14 @@ impl ServerConfig {
             .map(PathBuf::from)
             .or_else(|| file_cfg.statsd_bin.as_ref().map(PathBuf::from))
             .unwrap_or_default();
+        let max_file_size_mb = file_cfg
+            .logs
+            .max_file_size_mb
+            .unwrap_or(DEFAULT_MAX_FILE_BYTES / (1024 * 1024));
+        let log_policy = LogPolicy {
+            max_file_bytes: max_file_size_mb.saturating_mul(1024 * 1024),
+            max_archives: file_cfg.logs.max_archives.unwrap_or(DEFAULT_MAX_ARCHIVES),
+        };
 
         let http_enabled = if args.is_some_and(|args| args.has("no-http")) {
             false
@@ -643,6 +680,7 @@ impl ServerConfig {
             server_config_file_path,
             server_config_file_present,
             file_config: file_cfg.clone(),
+            log_policy,
             stats_db_path,
             rnsd_bin,
             sentineld_bin,
@@ -685,6 +723,20 @@ impl ServerConfig {
         validate_optional_nonempty("statsd_bin", file_cfg.statsd_bin.as_deref())?;
         validate_optional_nonempty("http.host", file_cfg.http.host.as_deref())?;
         validate_optional_nonempty("http.auth_token", file_cfg.http.auth_token.as_deref())?;
+
+        if matches!(file_cfg.logs.max_file_size_mb, Some(0)) {
+            return Err("logs.max_file_size_mb must be greater than 0".into());
+        }
+        if file_cfg
+            .logs
+            .max_file_size_mb
+            .is_some_and(|value| value > 10_240)
+        {
+            return Err("logs.max_file_size_mb must not exceed 10240".into());
+        }
+        if file_cfg.logs.max_archives.is_some_and(|value| value > 100) {
+            return Err("logs.max_archives must not exceed 100".into());
+        }
 
         if matches!(file_cfg.http.enabled, Some(true)) && matches!(file_cfg.http.port, Some(0)) {
             return Err("http.port must be greater than 0 when HTTP is enabled".into());
@@ -765,9 +817,11 @@ impl ServerConfig {
 
         let control_plane_reload_required = self.http.auth_token != next.http.auth_token
             || self.http.disable_auth != next.http.disable_auth;
+        let log_policy_changed = self.log_policy != next.log_policy;
         let control_plane_restart_required = self.http.enabled != next.http.enabled
             || self.http.host != next.http.host
-            || self.http.port != next.http.port;
+            || self.http.port != next.http.port
+            || log_policy_changed;
 
         if self.stats_db_path != next.stats_db_path {
             changes.push(ServerConfigChange {
@@ -817,6 +871,22 @@ impl ServerConfig {
                 effect: "reload embedded HTTP auth".into(),
             });
         }
+        if self.log_policy.max_file_bytes != next.log_policy.max_file_bytes {
+            changes.push(ServerConfigChange {
+                field: "logs.max_file_size_mb".into(),
+                before: (self.log_policy.max_file_bytes / (1024 * 1024)).to_string(),
+                after: (next.log_policy.max_file_bytes / (1024 * 1024)).to_string(),
+                effect: "restart rns-server".into(),
+            });
+        }
+        if self.log_policy.max_archives != next.log_policy.max_archives {
+            changes.push(ServerConfigChange {
+                field: "logs.max_archives".into(),
+                before: self.log_policy.max_archives.to_string(),
+                after: next.log_policy.max_archives.to_string(),
+                effect: "restart rns-server".into(),
+            });
+        }
 
         let mut notes = Vec::new();
         if processes_to_restart.is_empty() {
@@ -828,10 +898,7 @@ impl ServerConfig {
             ));
         }
         if control_plane_restart_required {
-            notes.push(
-                "Embedded control-plane HTTP settings changed and will only take effect after restarting rns-server."
-                    .into(),
-            );
+            notes.push("One or more server-level settings changed and will only take effect after restarting rns-server.".into());
         }
         if control_plane_reload_required && !control_plane_restart_required {
             notes.push("Embedded control-plane auth settings will be reloaded in place.".into());
@@ -870,6 +937,10 @@ impl ServerConfig {
             rnsd_bin: None,
             sentineld_bin: None,
             statsd_bin: None,
+            logs: ServerLogConfigFile {
+                max_file_size_mb: Some(DEFAULT_MAX_FILE_BYTES / (1024 * 1024)),
+                max_archives: Some(DEFAULT_MAX_ARCHIVES),
+            },
             http: ServerHttpConfigFile {
                 enabled: Some(true),
                 host: Some("127.0.0.1".into()),
@@ -908,7 +979,10 @@ fn mask_token(token: &Option<String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpConfig, ServerConfig, ServerConfigFile, ServerHttpConfigFile};
+    use super::{
+        HttpConfig, LogPolicy, ServerConfig, ServerConfigFile, ServerHttpConfigFile,
+        ServerLogConfigFile,
+    };
     use crate::supervisor::{ProcessCommand, ReadinessTarget, Role};
     use std::path::PathBuf;
 
@@ -919,6 +993,7 @@ mod tests {
             server_config_file_path: PathBuf::from("/tmp/rns/rns-server.json"),
             server_config_file_present: true,
             file_config: ServerConfigFile::default(),
+            log_policy: LogPolicy::default(),
             stats_db_path: PathBuf::from("/tmp/rns/stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),
@@ -1010,6 +1085,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_plan_requires_server_restart_for_log_policy_change() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                logs: ServerLogConfigFile {
+                    max_file_size_mb: Some(32),
+                    max_archives: Some(2),
+                },
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.overall_action, "restart_server");
+        assert!(plan.control_plane_restart_required);
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.field == "logs.max_file_size_mb" && change.after == "32"));
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.field == "logs.max_archives" && change.after == "2"));
+    }
+
+    #[test]
     fn apply_plan_is_noop_when_config_does_not_change() {
         let current = test_config();
         let next = current.with_file_config(&ServerConfigFile::default(), true);
@@ -1057,6 +1160,29 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(err, "stats_db_path cannot be empty");
+    }
+
+    #[test]
+    fn validation_rejects_invalid_log_policy() {
+        let zero_size = ServerConfig::validate_file_config(&ServerConfigFile {
+            logs: ServerLogConfigFile {
+                max_file_size_mb: Some(0),
+                max_archives: None,
+            },
+            ..ServerConfigFile::default()
+        })
+        .unwrap_err();
+        assert_eq!(zero_size, "logs.max_file_size_mb must be greater than 0");
+
+        let too_many_archives = ServerConfig::validate_file_config(&ServerConfigFile {
+            logs: ServerLogConfigFile {
+                max_file_size_mb: None,
+                max_archives: Some(101),
+            },
+            ..ServerConfigFile::default()
+        })
+        .unwrap_err();
+        assert_eq!(too_many_archives, "logs.max_archives must not exceed 100");
     }
 
     #[test]
@@ -1195,6 +1321,7 @@ mod tests {
             server_config_file_path: config_dir.join("rns-server.json"),
             server_config_file_present: false,
             file_config: ServerConfigFile::default(),
+            log_policy: LogPolicy::default(),
             stats_db_path: config_dir.join("stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),

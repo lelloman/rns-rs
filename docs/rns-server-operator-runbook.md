@@ -505,6 +505,30 @@ Durable log files live under the resolved config dir:
 - `logs/rns-sentineld.log`
 - `logs/rns-statsd.log`
 
+`rns-server` bounds these files by default. Each active process log rotates at
+64 MiB and retains four archives (`.1` through `.4`), limiting durable logging
+to approximately 320 MiB per supervised process. Configure the policy in
+`rns-server.json`:
+
+```json
+{
+  "logs": {
+    "max_file_size_mb": 64,
+    "max_archives": 4
+  }
+}
+```
+
+`max_file_size_mb` must be between 1 and 10240. `max_archives` must be between
+0 and 100; zero keeps only the active file. Changing either setting requires an
+`rns-server` restart. If an active log created by an older release already
+exceeds the configured limit, it is removed on the next write instead of being
+retained as an oversized archive.
+
+Routine received-announcement messages are emitted at `DEBUG`, not `INFO`, so
+the default logging level records operational transitions without producing a
+line for every announce.
+
 ## Troubleshooting
 
 If the node is up but not converged:

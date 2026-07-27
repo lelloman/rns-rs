@@ -230,6 +230,7 @@ mod tests {
             server_config_file_path: config_dir.join("rns-server.json"),
             server_config_file_present: false,
             file_config: ServerConfigFile::default(),
+            log_policy: rns_server::logs::LogPolicy::default(),
             stats_db_path: config_dir.join("stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),
