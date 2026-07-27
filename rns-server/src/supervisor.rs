@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::logs::LogStore;
+use crate::logs::{LogPolicy, LogStore};
 use crate::self_exec::{resolve_self_exec, self_exec_display};
 use rns_ctl::state::{
     bump_process_restart_count, mark_process_failed_spawn, mark_process_running,
@@ -87,7 +87,7 @@ pub struct SupervisorConfig {
     pub shared_state: Option<SharedState>,
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
     pub readiness: Vec<ProcessReadiness>,
-    pub log_dir: Option<PathBuf>,
+    pub log_dir: Option<(PathBuf, LogPolicy)>,
     pub rnsd_drain: Option<RnsdDrainConfig>,
 }
 
@@ -127,7 +127,9 @@ impl Supervisor {
             shared_state: config.shared_state,
             control_rx: config.control_rx,
             readiness: config.readiness,
-            log_store: config.log_dir.map(LogStore::new),
+            log_store: config
+                .log_dir
+                .map(|(dir, policy)| LogStore::with_policy(dir, policy)),
             rnsd_drain: config.rnsd_drain,
         }
     }
