@@ -2547,14 +2547,15 @@ mod tests {
         let mut stdout = Vec::new();
         let mut exit = None;
         while started.elapsed() < Duration::from_secs(5) && exit.is_none() {
-            match rx.recv_timeout(Duration::from_millis(100)).unwrap() {
-                RnshEvent::ProcessOutput {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(RnshEvent::ProcessOutput {
                     stream_id: STREAM_STDOUT,
                     data,
                     ..
-                } => stdout.extend(data),
-                RnshEvent::ProcessExited { code, .. } => exit = Some(code),
-                _ => {}
+                }) => stdout.extend(data),
+                Ok(RnshEvent::ProcessExited { code, .. }) => exit = Some(code),
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
 
@@ -2623,19 +2624,20 @@ mod tests {
         let mut stderr = Vec::new();
         let mut exit = None;
         while started.elapsed() < Duration::from_secs(5) && exit.is_none() {
-            match rx.recv_timeout(Duration::from_millis(100)).unwrap() {
-                RnshEvent::ProcessOutput {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(RnshEvent::ProcessOutput {
                     stream_id: STREAM_STDOUT,
                     data,
                     ..
-                } => stdout.extend(data),
-                RnshEvent::ProcessOutput {
+                }) => stdout.extend(data),
+                Ok(RnshEvent::ProcessOutput {
                     stream_id: STREAM_STDERR,
                     data,
                     ..
-                } => stderr.extend(data),
-                RnshEvent::ProcessExited { code, .. } => exit = Some(code),
-                _ => {}
+                }) => stderr.extend(data),
+                Ok(RnshEvent::ProcessExited { code, .. }) => exit = Some(code),
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         assert_eq!(stdout, b"out");
