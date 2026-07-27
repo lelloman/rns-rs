@@ -1,15 +1,25 @@
-# Reticulum 1.3.8 Runtime Parity Matrix
+# Reticulum 1.3.8 Parity Record
 
-Normative source: Reticulum `rgit/master` commit
-`de0f399a1696895dcb95ad1efa19f3b21a7886ab` (`RNS.__version__ == 1.3.8`).
-The release tag commit is `dca2a928`; `de0f399a` contains one subsequent
-release-artifact update.
+## Baseline
+
+| Field | Value |
+|---|---|
+| Previous accepted version | `1.3.7` |
+| Accepted version | `1.3.8` |
+| Normative tag or ref | `rgit/master` at promotion time |
+| Normative commit | `de0f399a1696895dcb95ad1efa19f3b21a7886ab` |
+| Version assertion | `RNS.__version__ == "1.3.8"` |
+| Acceptance date | `2026-07-11` |
+| Detailed audit | Not retained |
+
+The release tag commit is `dca2a928`; the normative `de0f399a` commit contains
+one subsequent release-artifact update.
 
 The README badge and accepted baseline in `UPSTREAM.md` were promoted to 1.3.8
 after software acceptance. Physical Weave HIL was explicitly waived because the
 required external lab hardware was unavailable; it remains a follow-up caveat.
 
-Status values:
+## Status Vocabulary
 
 - `covered`: implemented and covered by deterministic Rust tests.
 - `interop`: covered by exact-baseline Python/Rust interop.
@@ -17,7 +27,7 @@ Status values:
 - `HIL`: implemented software requires the stated hardware acceptance run.
 - `non-runtime`: audited release, documentation, or generated artifact only.
 
-## 1.3.7..1.3.8 commit audit
+## Upstream Commit Audit
 
 | Upstream commit | Classification | Rust handling | Status |
 |---|---|---|---|
@@ -29,7 +39,7 @@ Status values:
 | `dca2a928` | Changelog/release artifacts | Not vendored | non-runtime |
 | `de0f399a` | Generated release artifacts | Not vendored | non-runtime |
 
-## Subsystem matrix
+## Compatibility Evidence
 
 | Subsystem | Compatibility surface | Evidence/status |
 |---|---|---|
@@ -55,7 +65,7 @@ Status values:
 | `rnstatus` | optional telemetry and hidden Weave peers unless `--all` | Text/JSON handling implemented (`covered`) |
 | Existing Rust CLI tools | daemon, status, path, probe, identity, HTTP/RPC | Workspace/CLI integration tests (`covered`) |
 
-## Acceptance gates
+## Acceptance Gates
 
 Software acceptance requires all `in progress` rows above to become `covered`
 or `interop`, followed by:
@@ -75,7 +85,7 @@ creation, bidirectional RNS delivery, peer expiry, and serial reconnect. This
 was not available during baseline promotion and remains outstanding; simulated
 integration is the acceptance evidence for Weave in the 1.3.8 software profile.
 
-## Software acceptance record
+## Acceptance Record
 
 The complete software acceptance run passed on Linux x86_64 on 2026-07-11:
 
@@ -89,6 +99,13 @@ The complete software acceptance run passed on Linux x86_64 on 2026-07-11:
   entry points, including announcements, identity recall, packets, links, and
   bidirectional channel messages.
 
+## Caveats and Deferred Validation
+
 Reticulum 1.3.8 was promoted with the explicit caveat that physical Weave HIL
 remains outstanding until the required switch and reachable endpoint are
 available. No physical Weave compatibility claim is made by this acceptance.
+
+## Promotion Result
+
+Reticulum 1.3.8 was accepted as the rns-rs upstream reference baseline at
+normative commit `de0f399a1696895dcb95ad1efa19f3b21a7886ab`.

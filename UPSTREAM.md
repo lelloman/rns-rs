@@ -21,7 +21,9 @@ object to equal `da3ed5fb64f432b04aa387576701182b8c82df8d`, asserts the Python
 version, and only then executes live Python/Rust interop.
 
 The exact 32-commit disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
+[`docs/upstream-parity/reticulum-1.4.1-parity.md`](docs/upstream-parity/reticulum-1.4.1-parity.md),
+with the detailed commit audit in
+[`docs/upstream-parity/reticulum-1.4.1-audit.md`](docs/upstream-parity/reticulum-1.4.1-audit.md).
 The PR CI matrix is the final software acceptance authority for this
 promotion. Historical 1.4.0 conformance fixtures retain their original source
 provenance. Physical Weave HIL and dual-VPS manual acceptance are not claimed
@@ -54,7 +56,10 @@ audited with the following local commits:
 When integrating future upstream changes, compare this baseline against the new
 Reticulum upstream commit, review protocol/runtime/utility changes, port or
 explicitly defer each relevant item, run the interop and focused regression
-tests, then update this file to the new baseline commit.
+tests, then update this file to the new baseline commit. Follow the documented
+[audit-to-parity workflow and templates](docs/upstream-parity/README.md) so the
+commit inventory, acceptance evidence, and unclaimed validation remain
+consistent between promotions.
 
 ## Completed 1.4.0..1.4.1 Porting Queue
 
@@ -75,7 +80,7 @@ Python artifacts; native API and operator documentation covers the applicable
 behavior. Rust crate versions remain independently versioned.
 
 The commit-by-commit implementation rationale and test evidence is recorded in
-[`docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md`](docs/upstream-parity/reticulum-upstream-1.4.1-analysis-2026-07-25.md).
+[`docs/upstream-parity/reticulum-1.4.1-audit.md`](docs/upstream-parity/reticulum-1.4.1-audit.md).
 
 ## Completed 1.3.9..1.4.0 Porting Queue
 

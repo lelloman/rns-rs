@@ -1,10 +1,11 @@
-# Reticulum post-baseline integration analysis (2026-07-20)
+# Reticulum 1.4.0 Upstream Audit
 
-## Scope
+## Scope and Baseline
 
-This is an untracked working document. It audits every Reticulum commit in the
-range after the accepted rns-rs baseline and through the current tips fetched on
-2026-07-20:
+This document preserves the pre-promotion audit of every Reticulum commit in
+the range after the accepted rns-rs baseline and through the tips fetched on
+2026-07-20. Its point-in-time dispositions and integration queue are superseded
+by the final [Reticulum 1.4.0 parity record](reticulum-1.4.0-parity.md):
 
 - accepted baseline: `cf6010da591e9361e26672b6917081a153f1f2c3`
 - GitHub `origin/master`: `122f17fad69a483503cc5c1d8d81046712d78c96`
@@ -20,7 +21,7 @@ The word "post-baseline" is deliberate. A commit being in this range does not
 mean its behavior is absent from rns-rs: seven local `dev` commits already port
 the main 1.3.9 runtime changes, but `UPSTREAM.md` has not yet been advanced.
 
-## Status meanings
+## Audit Vocabulary
 
 - **Integrated**: applicable behavior is present on the inspected rns-rs
   `dev` branch, normally with focused tests.
@@ -35,7 +36,7 @@ the main 1.3.9 runtime changes, but `UPSTREAM.md` has not yet been advanced.
 - **Non-runtime**: version metadata, changelog text, or generated artifacts that
   are not independently versioned or vendored by rns-rs.
 
-## Commit inventory
+## Commit Inventory
 
 | # | Upstream commit | Subject | Disposition |
 |---:|---|---|---|
@@ -68,7 +69,7 @@ the main 1.3.9 runtime changes, but `UPSTREAM.md` has not yet been advanced.
 | 27 | `be36abd85715afd9dd7dccdda29d024d3d0f2353` | Increased default discovery stamp value to 16 | Needs port |
 | 28 | `122f17fad69a483503cc5c1d8d81046712d78c96` | Prepare release | Non-runtime |
 
-## Per-commit analysis
+## Per-Commit Analysis
 
 ### 1. `3a36c367` — Improved resource handling
 
@@ -476,7 +477,7 @@ It has no source/runtime delta.
 
 **Disposition:** non-runtime generated artifacts; do not vendor.
 
-## Proposed integration queue
+## Proposed Integration Queue
 
 ### Priority 0 — compatibility and liveness
 
@@ -504,7 +505,7 @@ It has no source/runtime delta.
 9. Cache interface hashes for `ef9244f7` if profiling justifies it, or record
    the lower-frequency Rust call pattern as the reason to defer it.
 
-## Baseline promotion gate
+## Baseline Promotion Gate
 
 Do not advance `UPSTREAM.md` to Reticulum 1.4.0 solely because the raw 28-commit
 range has been enumerated. Promotion should require:
