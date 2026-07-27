@@ -1,15 +1,27 @@
-# Reticulum 1.4.0 Runtime Parity Matrix
+# Reticulum 1.4.0 Parity Record
 
-Normative source: Reticulum commit
-`122f17fad69a483503cc5c1d8d81046712d78c96` (`RNS.__version__ == 1.4.0`,
-`RNS` tree `5e1b42cb553f6cdd34145dc2bcbf93f653705368`). The `1.4.0` tag is
-`be36abd85715afd9dd7dccdda29d024d3d0f2353`; the normative tip adds generated
-release artifacts without changing that tagged runtime tree.
+## Baseline
+
+| Field | Value |
+|---|---|
+| Previous accepted version | `1.3.9` |
+| Previous normative commit | `cf6010da591e9361e26672b6917081a153f1f2c3` |
+| Accepted version | `1.4.0` |
+| Normative tag or ref | Tag `1.4.0` plus the following artifact-only tip |
+| Normative commit | `122f17fad69a483503cc5c1d8d81046712d78c96` |
+| Release tag commit | `be36abd85715afd9dd7dccdda29d024d3d0f2353` |
+| `RNS` tree | `5e1b42cb553f6cdd34145dc2bcbf93f653705368` |
+| Version assertion | `RNS.__version__ == "1.4.0"` |
+| Acceptance date | `2026-07-20` |
+| Detailed audit | [reticulum-1.4.0-audit.md](reticulum-1.4.0-audit.md) |
+
+The normative tip adds generated release artifacts without changing the tagged
+runtime tree.
 
 The README badge and accepted baseline in `UPSTREAM.md` are promoted to 1.4.0.
 The PR CI matrix remains the final software acceptance authority.
 
-## Upstream commit audit
+## Upstream Commit Audit
 
 | # | Upstream commit | Local handling and coverage |
 |---:|---|---|
@@ -42,7 +54,7 @@ The PR CI matrix remains the final software acceptance authority.
 | 27 | `be36abd8` | Ported by `771762b`; default value 16 and explicit lower override behavior are tested. |
 | 28 | `122f17fa` | Generated 1.4.0 manual/release artifacts only; selected as the normative shared remote tip. |
 
-## Fixture and interop policy
+## Compatibility Evidence
 
 - General crypto/protocol/transport/link/resource/IFAC vectors are regenerated
   only from exact commit `122f17fa`.
@@ -53,7 +65,7 @@ The PR CI matrix remains the final software acceptance authority.
 - Rust crate versions are unchanged because this is an upstream compatibility
   baseline, not a Rust crate release.
 
-## Acceptance record
+## Acceptance Record
 
 | Gate | Result |
 |---|---|
@@ -67,6 +79,13 @@ The PR CI matrix remains the final software acceptance authority.
 | ARMv7 and Docker topology gates | delegated to required PR CI |
 | Dual-VPS manual Backbone smoke | manual follow-up; not claimed by this source promotion |
 
+## Caveats and Deferred Validation
+
 The existing physical Weave HIL caveat is unchanged. No VPS deployment or Rust
 crate release is part of this integration, and no manual or CI-only gate is
 claimed as locally passed.
+
+## Promotion Result
+
+Reticulum 1.4.0 was accepted as the rns-rs upstream reference baseline at
+normative commit `122f17fad69a483503cc5c1d8d81046712d78c96`.

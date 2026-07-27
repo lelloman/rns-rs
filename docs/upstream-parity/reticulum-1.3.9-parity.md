@@ -1,13 +1,24 @@
-# Reticulum 1.3.9 Runtime Parity Matrix
+# Reticulum 1.3.9 Parity Record
 
-Normative source: Reticulum commit
-`cf6010da591e9361e26672b6917081a153f1f2c3` (`RNS.__version__ == 1.3.9`).
-This commit is on the normative rgit repository; it has not yet reached the
-GitHub release mirror.
+## Baseline
+
+| Field | Value |
+|---|---|
+| Previous accepted version | `1.3.8` |
+| Accepted version | `1.3.9` |
+| Normative tag or ref | Normative rgit repository commit |
+| Normative commit | `cf6010da591e9361e26672b6917081a153f1f2c3` |
+| `RNS` tree | `ac7772853b49d02e786b6eeb573e5aa23d060384` |
+| Version assertion | `RNS.__version__ == "1.3.9"` |
+| Acceptance date | `2026-07-17` |
+| Detailed audit | Not retained |
+
+At promotion time, the normative commit had not yet reached the GitHub release
+mirror.
 The README badge and accepted baseline in `UPSTREAM.md` are promoted to 1.3.9.
 The PR CI matrix is the final software acceptance authority.
 
-## Upstream commit audit
+## Upstream Commit Audit
 
 | Upstream commit | Local handling | Coverage |
 |---|---|---|
@@ -21,7 +32,7 @@ The `location_cmd` implementation intentionally hardens upstream behavior: it
 correctly validates longitude, rejects non-finite numbers, reports location
 errors accurately, and bounds both execution time and output size.
 
-## Fixture and interop policy
+## Compatibility Evidence
 
 - General crypto/protocol/transport/link/resource/IFAC vectors regenerate
   byte-for-byte unchanged at `cf6010da`.
@@ -34,7 +45,7 @@ errors accurately, and bounds both execution time and output size.
 - Rust crate versions are unchanged because this is an upstream compatibility
   baseline, not a Rust crate release.
 
-## Acceptance record
+## Acceptance Record
 
 | Gate | Result |
 |---|---|
@@ -48,8 +59,15 @@ errors accurately, and bounds both execution time and output size.
 | Docker topologies | delegated to required PR CI; local run was interrupted after earlier topology passes |
 | Dual-VPS manual Backbone smoke | manual follow-up; not claimed by this source promotion |
 
+## Caveats and Deferred Validation
+
 The existing physical Weave HIL caveat is unchanged because this upstream range
 contains no Weave changes. No VPS deployment or Rust crate release is part of
 this integration. Promotion does not claim the interrupted local Docker matrix
 or the manual dual-VPS smoke passed; those results must come from PR CI and the
 separate operator run respectively.
+
+## Promotion Result
+
+Reticulum 1.3.9 was accepted as the rns-rs upstream reference baseline at
+normative commit `cf6010da591e9361e26672b6917081a153f1f2c3`.

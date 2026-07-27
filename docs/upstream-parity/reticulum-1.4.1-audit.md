@@ -1,6 +1,6 @@
-# Reticulum 1.4.1 integration analysis (2026-07-25)
+# Reticulum 1.4.1 Upstream Audit
 
-## Scope
+## Scope and Baseline
 
 This document records the audit and final disposition of every upstream
 Reticulum commit after the accepted rns-rs 1.4.0 baseline and through the signed
@@ -31,7 +31,7 @@ accepted baseline". Some commits need no Rust code because the local design
 already avoids the Python-specific failure. Those commits are still listed and
 audited so advancing the baseline cannot silently skip them.
 
-## Audit vocabulary
+## Audit Vocabulary
 
 - **Needs port**: compatible behavior is absent or observably different in the
   inspected Rust tree.
@@ -49,7 +49,7 @@ audited so advancing the baseline cannot silently skip them.
 - **Non-runtime**: version metadata, changelog text, generated manuals or
   upstream-only tests with no independent local runtime change.
 
-## Commit inventory
+## Commit Inventory
 
 | # | Upstream commit | Subject | Final disposition |
 |---:|---|---|---|
@@ -86,7 +86,7 @@ audited so advancing the baseline cannot silently skip them.
 | 31 | `4631d78beaa1652709b4815a41916a618548baaf` | Adjusted re-balance loglevel | Integrated |
 | 32 | `b2188ce9a746a35b770b10bea1b7ccbe93b4e198` | Adjusted gravity update loglevel | Integrated |
 
-## Per-commit analysis
+## Per-Commit Analysis
 
 ### 1. `48388756` — Release ingress burst state with the correct sample threshold
 
@@ -562,7 +562,7 @@ the dedicated `rns::pathing` target (the Rust mapping of `LOG_PATHING`). Tests
 pin both the exact gravity predicate and logging target/level. This is the
 signed 1.4.1 tag target.
 
-## Completed integration sequence
+## Completed Integration Sequence
 
 Implementation followed upstream commit order while preserving behavioral
 dependencies within the gravity and rebalancing clusters. Each applicable
@@ -574,7 +574,7 @@ The resulting local commit chain is the durable implementation record. Release
 metadata was promoted last, after the runtime work and native documentation had
 landed.
 
-## Acceptance record
+## Acceptance Record
 
 - Every commit in the 32-row inventory has a final disposition linked to local
   code/tests or an explicit no-action rationale.
