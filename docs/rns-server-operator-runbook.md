@@ -235,14 +235,16 @@ through the live backbone fabric. See
 [docs/manual-backbone-smoke.md](manual-backbone-smoke.md) for options and
 failure interpretation.
 
+### Daily VPS Report and Upstream Drift
+
 Daily VPS checks include both per-host stats snapshots and the live manual
 backbone smoke test. The shared daily report database lives on `vps-eu` at
 `/var/lib/rns-node/vps_daily_reports.db`, with a working copy at
 `data/vps_daily_reports.db` on whichever workstation is running the report.
-Pull the shared database first, check whether upstream Reticulum moved, collect
-both host snapshots locally, run the smoke test from the same workstation, then
-push the updated database back to `vps-eu` so the next workstation starts from
-the latest history.
+Pull the shared database first, collect and review both host snapshots locally,
+run the smoke test from the same workstation, then check whether upstream
+Reticulum moved. Push the reviewed database back to `vps-eu` so the next
+workstation starts from the latest history.
 
 Run each per-host snapshot command to completion before starting another
 snapshot for the same host or the same local report database. The collector
@@ -282,6 +284,55 @@ present on either remote that are not in the accepted baseline. If either log
 prints commits, include that in the daily report as upstream Reticulum work not
 integrated yet:
 
+#### Drift-to-Parity Workflow
+
+The daily operational flow is:
+
+1. Complete and review both VPS snapshots and the live Backbone smoke test.
+2. Compare the accepted `UPSTREAM.md` normative commit with both upstream
+   remote tips.
+3. If both logs are empty, report that upstream parity is current and stop.
+4. If either log contains commits, report the baseline, both remote tips, the
+   union of commits ahead, and whether the two remotes agree.
+5. Create or update the single active
+   `docs/upstream-parity/reticulum-next-audit.md` from
+   [the audit template](upstream-parity/AUDIT-TEMPLATE.md). This is the start of
+   parity-update work; do not wait for implementation to begin the inventory.
+6. Give every commit a disposition and record local implementation commits and
+   focused evidence as the work proceeds. Follow the full
+   [audit-to-parity workflow](upstream-parity/README.md).
+7. Once the upstream version and exact promotion target are known, rename the
+   active audit to `reticulum-X.Y.Z-audit.md`.
+8. After all promotion gates are complete, create
+   `reticulum-X.Y.Z-parity.md` from
+   [the parity template](upstream-parity/PARITY-TEMPLATE.md), then update
+   `UPSTREAM.md` and the README badge. The parity record is the final acceptance
+   authority; the audit remains the detailed work record.
+
+If an active `reticulum-next-audit.md` already exists, extend it with newly
+observed commits rather than starting another dated analysis file. Never create
+the final parity record merely because commits are visible upstream: promotion
+requires completed dispositions and recorded acceptance results.
+
+Create the active audit without overwriting an existing one:
+
+```bash
+ACTIVE_AUDIT=docs/upstream-parity/reticulum-next-audit.md
+test -e "$ACTIVE_AUDIT" || cp docs/upstream-parity/AUDIT-TEMPLATE.md "$ACTIVE_AUDIT"
+```
+
+The daily report or handoff summary should include this block whenever upstream
+has moved:
+
+```text
+Upstream parity: behind
+Accepted baseline: <40-character commit>
+GitHub tip: <40-character commit>
+rgit tip: <40-character commit>
+Commits ahead: <deduplicated count>
+Active audit: docs/upstream-parity/reticulum-next-audit.md
+```
+
 Refresh the local refs first when an internet connection is available; the
 version check compares the remote binaries against the local `origin/master` and
 `origin/dev` refs by default. Build the local smoke-test binary before running
@@ -289,20 +340,6 @@ the live fabric check:
 
 ```bash
 git fetch origin
-RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
-RETICULUM_BASELINE="$(sed -n 's/^- Normative commit: `\([0-9a-f]\{40\}\)`.*/\1/p' UPSTREAM.md)"
-test -n "$RETICULUM_UPSTREAM_DIR"
-test -d "$RETICULUM_UPSTREAM_DIR/.git"
-test -n "$RETICULUM_BASELINE"
-RETICULUM_GITHUB_REMOTE="${RETICULUM_GITHUB_REMOTE:-origin}"
-RETICULUM_RGIT_REMOTE="${RETICULUM_RGIT_REMOTE:-rgit}"
-git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_GITHUB_REMOTE"
-git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_RGIT_REMOTE"
-test "$(git -C "$RETICULUM_UPSTREAM_DIR" rev-parse HEAD)" = "$RETICULUM_BASELINE"
-git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_GITHUB_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_RGIT_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_GITHUB_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_RGIT_REMOTE/master"
 cargo build --release --bin rns-server --features rns-hooks-native
 
 mkdir -p data
@@ -331,6 +368,21 @@ ORDER BY host;
 "
 
 scripts/manual-backbone-smoke.sh
+
+RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
+RETICULUM_BASELINE="$(sed -n 's/^- Normative commit: `\([0-9a-f]\{40\}\)`.*/\1/p' UPSTREAM.md)"
+test -n "$RETICULUM_UPSTREAM_DIR"
+test -d "$RETICULUM_UPSTREAM_DIR/.git"
+test -n "$RETICULUM_BASELINE"
+RETICULUM_GITHUB_REMOTE="${RETICULUM_GITHUB_REMOTE:-origin}"
+RETICULUM_RGIT_REMOTE="${RETICULUM_RGIT_REMOTE:-rgit}"
+git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_GITHUB_REMOTE"
+git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_RGIT_REMOTE"
+test "$(git -C "$RETICULUM_UPSTREAM_DIR" rev-parse HEAD)" = "$RETICULUM_BASELINE"
+git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_GITHUB_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_RGIT_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_GITHUB_REMOTE/master"
+git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_RGIT_REMOTE/master"
 
 scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 ```
