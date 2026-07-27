@@ -32,8 +32,61 @@ const HOOK_SPECS: [(&str, &str); 6] = [
     ("rns_statsd_link_established", "LinkEstablished"),
     ("rns_statsd_link_closed", "LinkClosed"),
 ];
+const DEFAULT_MAX_AGE_DAYS: u64 = 30;
+const DEFAULT_MAX_SIZE_MB: u64 = 4096;
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const PRUNE_BATCH_ROWS: usize = 10_000;
+const SIZE_TARGET_PERCENT: u64 = 90;
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StatsRetentionPolicy {
+    max_age_days: Option<u64>,
+    max_size_mb: Option<u64>,
+}
+
+impl StatsRetentionPolicy {
+    fn from_args(args: &Args) -> Result<Self, String> {
+        let max_age_days = parse_optional_limit(
+            args.get("max-age-days"),
+            DEFAULT_MAX_AGE_DAYS,
+            "--max-age-days",
+        )?;
+        let max_size_mb = parse_optional_limit(
+            args.get("max-size-mb"),
+            DEFAULT_MAX_SIZE_MB,
+            "--max-size-mb",
+        )?;
+        if max_age_days.is_some_and(|value| value > 3650) {
+            return Err("--max-age-days must not exceed 3650".into());
+        }
+        if max_size_mb.is_some_and(|value| !(64..=1_048_576).contains(&value)) {
+            return Err("--max-size-mb must be between 64 and 1048576 or 'none'".into());
+        }
+        Ok(Self {
+            max_age_days,
+            max_size_mb,
+        })
+    }
+}
+
+fn parse_optional_limit(
+    value: Option<&str>,
+    default: u64,
+    flag: &str,
+) -> Result<Option<u64>, String> {
+    match value {
+        None => Ok(Some(default)),
+        Some(value) if value.eq_ignore_ascii_case("none") => Ok(None),
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Some)
+            .ok_or_else(|| format!("{flag} must be a positive integer or 'none'")),
+    }
+}
 
 pub fn main_entry() {
     main_entry_from(Args::parse());
@@ -94,6 +147,7 @@ fn run(args: Args) -> Result<(), String> {
         .get("priority")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let retention_policy = StatsRetentionPolicy::from_args(&args)?;
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
 
     let mut db = StatsDb::open(&db_path).map_err(|e| format!("sqlite open failed: {}", e))?;
@@ -118,6 +172,7 @@ fn run(args: Args) -> Result<(), String> {
 
     let mut aggregator = StatsAggregator::default();
     let mut next_flush = Instant::now() + flush_interval;
+    let mut next_maintenance = Instant::now();
     let mut proc_monitor = ProcessMonitor::new();
 
     while !SHOULD_STOP.load(Ordering::Relaxed) {
@@ -144,6 +199,18 @@ fn run(args: Args) -> Result<(), String> {
                     .map_err(|e| format!("sqlite process sample failed: {}", e))?;
             }
             next_flush = Instant::now() + flush_interval;
+        }
+        if Instant::now() >= next_maintenance {
+            match db.enforce_retention(retention_policy, now_unix_ms()) {
+                Ok(report) if report.rows_deleted > 0 => log::info!(
+                    "stats retention pruned {} rows; database is {} bytes",
+                    report.rows_deleted,
+                    report.database_bytes
+                ),
+                Ok(_) => {}
+                Err(err) => log::warn!("stats retention maintenance failed: {}", err),
+            }
+            next_maintenance = Instant::now() + MAINTENANCE_INTERVAL;
         }
     }
 
@@ -383,6 +450,7 @@ impl StatsAggregator {
 
 struct StatsDb {
     conn: Connection,
+    path: PathBuf,
 }
 
 impl StatsDb {
@@ -391,7 +459,12 @@ impl StatsDb {
             fs::create_dir_all(parent)
                 .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         }
+        let new_database =
+            !path.exists() || path.metadata().map(|meta| meta.len() == 0).unwrap_or(true);
         let conn = Connection::open(path)?;
+        if new_database {
+            conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+        }
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(
@@ -464,9 +537,15 @@ impl StatsDb {
                 interface_id INTEGER NULL,
                 seen_at_ms INTEGER NOT NULL,
                 PRIMARY KEY (destination_hash, random_hash)
-            );",
+            );
+            CREATE INDEX IF NOT EXISTS packet_samples_ts_idx ON packet_samples(ts_ms);
+            CREATE INDEX IF NOT EXISTS link_event_samples_ts_idx ON link_event_samples(ts_ms);
+            CREATE INDEX IF NOT EXISTS seen_announces_seen_at_idx ON seen_announces(seen_at_ms);",
         )?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            path: path.to_path_buf(),
+        })
     }
 
     fn flush(&mut self, aggregator: &mut StatsAggregator) -> rusqlite::Result<()> {
@@ -601,6 +680,211 @@ impl StatsDb {
         }
         tx.commit()
     }
+
+    fn enforce_retention(
+        &mut self,
+        policy: StatsRetentionPolicy,
+        now_ms: u64,
+    ) -> rusqlite::Result<MaintenanceReport> {
+        if policy.max_age_days.is_none() && policy.max_size_mb.is_none() {
+            return Ok(MaintenanceReport {
+                rows_deleted: 0,
+                database_bytes: database_file_bytes(&self.path),
+            });
+        }
+
+        self.checkpoint_wal()?;
+        let mut rows_deleted = 0u64;
+        if let Some(max_age_days) = policy.max_age_days {
+            let age_ms = max_age_days.saturating_mul(24 * 60 * 60 * 1000);
+            let cutoff_ms = now_ms.saturating_sub(age_ms).min(i64::MAX as u64) as i64;
+            for table in HISTORY_TABLES {
+                rows_deleted += self.delete_older_than(table, cutoff_ms)?;
+            }
+        }
+
+        if rows_deleted > 0 {
+            self.reclaim_free_pages()?;
+        }
+
+        if let Some(max_size_mb) = policy.max_size_mb {
+            let max_bytes = max_size_mb.saturating_mul(1024 * 1024);
+            let target_bytes = max_bytes.saturating_mul(SIZE_TARGET_PERCENT) / 100;
+            let usage = self.database_usage()?;
+            if usage.physical_bytes > max_bytes || usage.used_bytes > max_bytes {
+                rows_deleted += self.prune_oldest_to_size(target_bytes)?;
+                self.reclaim_free_pages()?;
+            }
+        }
+
+        Ok(MaintenanceReport {
+            rows_deleted,
+            database_bytes: database_file_bytes(&self.path),
+        })
+    }
+
+    fn delete_older_than(&mut self, table: HistoryTable, cutoff_ms: i64) -> rusqlite::Result<u64> {
+        let sql = format!(
+            "DELETE FROM {} WHERE rowid IN (
+                SELECT rowid FROM {} WHERE {} < ?1 ORDER BY {} LIMIT ?2
+            )",
+            table.name, table.name, table.timestamp_column, table.timestamp_column
+        );
+        let mut deleted = 0u64;
+        loop {
+            let count = self
+                .conn
+                .execute(&sql, params![cutoff_ms, PRUNE_BATCH_ROWS as i64])?;
+            deleted += count as u64;
+            if count < PRUNE_BATCH_ROWS {
+                return Ok(deleted);
+            }
+        }
+    }
+
+    fn prune_oldest_to_size(&mut self, target_bytes: u64) -> rusqlite::Result<u64> {
+        let mut deleted = 0u64;
+        loop {
+            if self.database_usage()?.used_bytes <= target_bytes {
+                return Ok(deleted);
+            }
+            let Some((table, next_oldest_ms)) = self.oldest_history_table()? else {
+                log::warn!(
+                    "stats database remains above its configured size but has no raw history left to prune"
+                );
+                return Ok(deleted);
+            };
+            let count = if let Some(next_oldest_ms) = next_oldest_ms {
+                let sql = format!(
+                    "DELETE FROM {} WHERE rowid IN (
+                        SELECT rowid FROM {} WHERE {} <= ?1 ORDER BY {} LIMIT ?2
+                    )",
+                    table.name, table.name, table.timestamp_column, table.timestamp_column
+                );
+                self.conn
+                    .execute(&sql, params![next_oldest_ms, PRUNE_BATCH_ROWS as i64])?
+            } else {
+                let sql = format!(
+                    "DELETE FROM {} WHERE rowid IN (
+                        SELECT rowid FROM {} ORDER BY {} LIMIT ?1
+                    )",
+                    table.name, table.name, table.timestamp_column
+                );
+                self.conn.execute(&sql, params![PRUNE_BATCH_ROWS as i64])?
+            };
+            deleted += count as u64;
+            if count == 0 {
+                return Ok(deleted);
+            }
+        }
+    }
+
+    fn oldest_history_table(&self) -> rusqlite::Result<Option<(HistoryTable, Option<i64>)>> {
+        let mut oldest = Vec::new();
+        for table in HISTORY_TABLES {
+            let sql = format!("SELECT MIN({}) FROM {}", table.timestamp_column, table.name);
+            let timestamp: Option<i64> = self.conn.query_row(&sql, [], |row| row.get(0))?;
+            if let Some(timestamp) = timestamp {
+                oldest.push((timestamp, table));
+            }
+        }
+        oldest.sort_by_key(|(timestamp, _)| *timestamp);
+        Ok(oldest
+            .first()
+            .map(|(_, table)| (*table, oldest.get(1).map(|(timestamp, _)| *timestamp))))
+    }
+
+    fn checkpoint_wal(&self) -> rusqlite::Result<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    fn database_usage(&self) -> rusqlite::Result<DatabaseUsage> {
+        let page_count: i64 = self
+            .conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))?;
+        let page_size: i64 = self
+            .conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        let freelist_count: i64 = self
+            .conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        let page_count = page_count.max(0) as u64;
+        let page_size = page_size.max(0) as u64;
+        let freelist_count = freelist_count.max(0) as u64;
+        Ok(DatabaseUsage {
+            physical_bytes: page_count.saturating_mul(page_size),
+            used_bytes: page_count
+                .saturating_sub(freelist_count)
+                .saturating_mul(page_size),
+        })
+    }
+
+    fn reclaim_free_pages(&mut self) -> rusqlite::Result<()> {
+        let auto_vacuum: i64 = self
+            .conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+        if auto_vacuum == 0 {
+            self.checkpoint_wal()?;
+            self.conn
+                .pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+            self.conn.execute_batch("VACUUM;")?;
+            return self.checkpoint_wal();
+        }
+
+        let freelist_count: i64 = self
+            .conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        if freelist_count == 0 {
+            return self.checkpoint_wal();
+        }
+
+        self.checkpoint_wal()?;
+        self.conn.execute_batch("PRAGMA incremental_vacuum;")?;
+        self.checkpoint_wal()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HistoryTable {
+    name: &'static str,
+    timestamp_column: &'static str,
+}
+
+const HISTORY_TABLES: [HistoryTable; 5] = [
+    HistoryTable {
+        name: "seen_announces",
+        timestamp_column: "seen_at_ms",
+    },
+    HistoryTable {
+        name: "packet_samples",
+        timestamp_column: "ts_ms",
+    },
+    HistoryTable {
+        name: "process_samples",
+        timestamp_column: "ts_ms",
+    },
+    HistoryTable {
+        name: "provider_drop_samples",
+        timestamp_column: "ts_ms",
+    },
+    HistoryTable {
+        name: "link_event_samples",
+        timestamp_column: "ts_ms",
+    },
+];
+
+struct DatabaseUsage {
+    physical_bytes: u64,
+    used_bytes: u64,
+}
+
+struct MaintenanceReport {
+    rows_deleted: u64,
+    database_bytes: u64,
+}
+
+fn database_file_bytes(path: &Path) -> u64 {
+    path.metadata().map(|metadata| metadata.len()).unwrap_or(0)
 }
 
 struct ProcessSample {
@@ -874,6 +1158,8 @@ fn print_usage() {
     println!("  --config PATH, -c PATH      Path to config directory");
     println!("  --db PATH                   SQLite database path");
     println!("  --flush-interval SECONDS    Flush interval (default: 5)");
+    println!("  --max-age-days DAYS|none    Raw history retention (default: 30 days)");
+    println!("  --max-size-mb MIB|none      Database size ceiling (default: 4096 MiB)");
     println!("  --socket PATH               Override provider bridge socket path");
     println!("  --ready-file PATH           Write readiness contract file once operational");
     println!("  --priority N                Hook priority (default: 0)");
@@ -883,6 +1169,221 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_db(name: &str) -> (PathBuf, StatsDb) {
+        let path = std::env::temp_dir().join(format!(
+            "rns-statsd-{name}-{}-{}.db",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let _ = fs::remove_file(&path);
+        let db = StatsDb::open(&path).unwrap();
+        (path, db)
+    }
+
+    fn insert_history_fixture(db: &StatsDb, old_ms: i64, new_ms: i64) {
+        db.conn
+            .execute_batch(&format!(
+                "INSERT INTO packet_samples VALUES
+                    ({old_ms}, 'old', NULL, 'rx', 'data', 1, 1),
+                    ({new_ms}, 'new', NULL, 'rx', 'data', 1, 1);
+                 INSERT INTO process_samples VALUES
+                    ({old_ms}, 1, 1, 1, 1, 1, 1),
+                    ({new_ms}, 1, 1, 1, 1, 1, 1);
+                 INSERT INTO provider_drop_samples VALUES
+                    ({old_ms}, 1), ({new_ms}, 1);
+                 INSERT INTO link_event_samples VALUES
+                    ({old_ms}, X'01', NULL, 'old'),
+                    ({new_ms}, X'02', NULL, 'new');
+                 INSERT INTO seen_announces VALUES
+                    (X'01', X'01', X'01', X'01', 1, NULL, {old_ms}),
+                    (X'02', X'02', X'02', X'02', 1, NULL, {new_ms});"
+            ))
+            .unwrap();
+    }
+
+    fn raw_history_rows(db: &StatsDb) -> i64 {
+        HISTORY_TABLES
+            .iter()
+            .map(|table| {
+                db.conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {}", table.name), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn retention_arguments_accept_defaults_and_none() {
+        let defaults = StatsRetentionPolicy::from_args(&Args::parse_from(Vec::new())).unwrap();
+        assert_eq!(defaults.max_age_days, Some(30));
+        assert_eq!(defaults.max_size_mb, Some(4096));
+
+        let disabled = StatsRetentionPolicy::from_args(&Args::parse_from(vec![
+            "--max-age-days".into(),
+            "none".into(),
+            "--max-size-mb".into(),
+            "none".into(),
+        ]))
+        .unwrap();
+        assert_eq!(disabled.max_age_days, None);
+        assert_eq!(disabled.max_size_mb, None);
+
+        let invalid = StatsRetentionPolicy::from_args(&Args::parse_from(vec![
+            "--max-size-mb".into(),
+            "63".into(),
+        ]))
+        .unwrap_err();
+        assert!(invalid.contains("between 64 and 1048576"));
+    }
+
+    #[test]
+    fn disabled_retention_leaves_history_untouched() {
+        let (path, mut db) = test_db("disabled-retention");
+        insert_history_fixture(&db, 1_000, 9_000);
+
+        let report = db
+            .enforce_retention(
+                StatsRetentionPolicy {
+                    max_age_days: None,
+                    max_size_mb: None,
+                },
+                10_000,
+            )
+            .unwrap();
+
+        assert_eq!(report.rows_deleted, 0);
+        assert_eq!(raw_history_rows(&db), 10);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn age_retention_prunes_old_rows_from_every_history_table() {
+        let (path, mut db) = test_db("age-retention");
+        let day_ms = 24 * 60 * 60 * 1000;
+        insert_history_fixture(&db, day_ms, 9 * day_ms);
+
+        let report = db
+            .enforce_retention(
+                StatsRetentionPolicy {
+                    max_age_days: Some(3),
+                    max_size_mb: None,
+                },
+                10 * day_ms as u64,
+            )
+            .unwrap();
+
+        assert_eq!(report.rows_deleted, 5);
+        assert_eq!(raw_history_rows(&db), 5);
+        for table in HISTORY_TABLES {
+            let sql = format!("SELECT MIN({}) FROM {}", table.timestamp_column, table.name);
+            let oldest: i64 = db.conn.query_row(&sql, [], |row| row.get(0)).unwrap();
+            assert_eq!(oldest, 9 * day_ms);
+        }
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn oldest_history_selection_is_global_across_tables() {
+        let (path, db) = test_db("oldest-table");
+        db.conn
+            .execute(
+                "INSERT INTO packet_samples VALUES (20, 'packet', NULL, 'rx', 'data', 1, 1)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO link_event_samples VALUES (10, X'01', NULL, 'closed')",
+                [],
+            )
+            .unwrap();
+
+        let (oldest, next_timestamp) = db.oldest_history_table().unwrap().unwrap();
+        assert_eq!(oldest.name, "link_event_samples");
+        assert_eq!(next_timestamp, Some(20));
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn size_retention_prunes_raw_history_when_over_limit() {
+        let (path, mut db) = test_db("size-retention");
+        insert_history_fixture(&db, 1_000, 9_000);
+
+        let report = db
+            .enforce_retention(
+                StatsRetentionPolicy {
+                    max_age_days: None,
+                    // Zero is used internally to force the small fixture over its
+                    // limit; user-facing validation requires at least 64 MiB.
+                    max_size_mb: Some(0),
+                },
+                10_000,
+            )
+            .unwrap();
+
+        assert_eq!(report.rows_deleted, 10);
+        assert_eq!(raw_history_rows(&db), 0);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn new_database_uses_incremental_auto_vacuum() {
+        let (path, db) = test_db("auto-vacuum");
+        let mode: i64 = db
+            .conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, 2);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn first_legacy_prune_migrates_database_to_incremental_auto_vacuum() {
+        let path = std::env::temp_dir().join(format!(
+            "rns-statsd-legacy-{}-{}.db",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let _ = fs::remove_file(&path);
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch("CREATE TABLE legacy_marker (value INTEGER);")
+            .unwrap();
+        drop(legacy);
+
+        let mut db = StatsDb::open(&path).unwrap();
+        let before: i64 = db
+            .conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, 0);
+        insert_history_fixture(&db, 1_000, 9_000);
+
+        db.enforce_retention(
+            StatsRetentionPolicy {
+                max_age_days: Some(1),
+                max_size_mb: None,
+            },
+            2 * 24 * 60 * 60 * 1000,
+        )
+        .unwrap();
+
+        let after: i64 = db
+            .conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, 2);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
 
     #[test]
     fn packet_event_updates_interface_counter() {
