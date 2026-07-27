@@ -16,6 +16,9 @@ use crate::supervisor::{
 };
 use rns_net::RpcAddr;
 
+const DEFAULT_STATS_MAX_AGE_DAYS: u64 = 30;
+const DEFAULT_STATS_MAX_SIZE_MB: u64 = 4096;
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub config_path: Option<PathBuf>,
@@ -24,6 +27,7 @@ pub struct ServerConfig {
     pub server_config_file_present: bool,
     pub file_config: ServerConfigFile,
     pub log_policy: LogPolicy,
+    pub stats_policy: StatsPolicy,
     pub stats_db_path: PathBuf,
     pub rnsd_bin: PathBuf,
     pub sentineld_bin: PathBuf,
@@ -42,6 +46,12 @@ pub struct HttpConfig {
     pub daemon_mode: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatsPolicy {
+    pub max_age_days: Option<u64>,
+    pub max_size_mb: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfigFile {
@@ -56,6 +66,8 @@ pub struct ServerConfigFile {
     #[serde(default)]
     pub logs: ServerLogConfigFile,
     #[serde(default)]
+    pub stats: ServerStatsConfigFile,
+    #[serde(default)]
     pub http: ServerHttpConfigFile,
 }
 
@@ -66,6 +78,32 @@ pub struct ServerLogConfigFile {
     pub max_file_size_mb: Option<u64>,
     #[serde(default)]
     pub max_archives: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerStatsConfigFile {
+    #[serde(default = "default_stats_max_age_days")]
+    pub max_age_days: Option<u64>,
+    #[serde(default = "default_stats_max_size_mb")]
+    pub max_size_mb: Option<u64>,
+}
+
+impl Default for ServerStatsConfigFile {
+    fn default() -> Self {
+        Self {
+            max_age_days: default_stats_max_age_days(),
+            max_size_mb: default_stats_max_size_mb(),
+        }
+    }
+}
+
+fn default_stats_max_age_days() -> Option<u64> {
+    Some(DEFAULT_STATS_MAX_AGE_DAYS)
+}
+
+fn default_stats_max_size_mb() -> Option<u64> {
+    Some(DEFAULT_STATS_MAX_SIZE_MB)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -343,6 +381,22 @@ impl ServerConfig {
                     effect: "Requires restarting rns-server.".into(),
                 },
                 ServerConfigFieldSchema {
+                    field: "stats.max_age_days".into(),
+                    field_type: "u64|null".into(),
+                    required: false,
+                    default_value: DEFAULT_STATS_MAX_AGE_DAYS.to_string(),
+                    description: "Maximum age of raw statistics history in days; null disables time-based pruning.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
+                    field: "stats.max_size_mb".into(),
+                    field_type: "u64|null".into(),
+                    required: false,
+                    default_value: DEFAULT_STATS_MAX_SIZE_MB.to_string(),
+                    description: "Maximum SQLite database size in MiB; null disables size-based pruning.".into(),
+                    effect: "Restarts rns-statsd when changed.".into(),
+                },
+                ServerConfigFieldSchema {
                     field: "http.enabled".into(),
                     field_type: "boolean".into(),
                     required: false,
@@ -531,6 +585,10 @@ impl ServerConfig {
         let mut args = self.rnsd_args();
         args.push("--db".into());
         args.push(self.stats_db_path.display().to_string());
+        args.push("--max-age-days".into());
+        args.push(optional_limit_arg(self.stats_policy.max_age_days));
+        args.push("--max-size-mb".into());
+        args.push(optional_limit_arg(self.stats_policy.max_size_mb));
         args.push("--ready-file".into());
         args.push(self.statsd_ready_file_path().display().to_string());
         args
@@ -632,6 +690,10 @@ impl ServerConfig {
             max_file_bytes: max_file_size_mb.saturating_mul(1024 * 1024),
             max_archives: file_cfg.logs.max_archives.unwrap_or(DEFAULT_MAX_ARCHIVES),
         };
+        let stats_policy = StatsPolicy {
+            max_age_days: file_cfg.stats.max_age_days,
+            max_size_mb: file_cfg.stats.max_size_mb,
+        };
 
         let http_enabled = if args.is_some_and(|args| args.has("no-http")) {
             false
@@ -681,6 +743,7 @@ impl ServerConfig {
             server_config_file_present,
             file_config: file_cfg.clone(),
             log_policy,
+            stats_policy,
             stats_db_path,
             rnsd_bin,
             sentineld_bin,
@@ -736,6 +799,26 @@ impl ServerConfig {
         }
         if file_cfg.logs.max_archives.is_some_and(|value| value > 100) {
             return Err("logs.max_archives must not exceed 100".into());
+        }
+        if matches!(file_cfg.stats.max_age_days, Some(0)) {
+            return Err("stats.max_age_days must be greater than 0 or null".into());
+        }
+        if file_cfg
+            .stats
+            .max_age_days
+            .is_some_and(|value| value > 3650)
+        {
+            return Err("stats.max_age_days must not exceed 3650".into());
+        }
+        if file_cfg.stats.max_size_mb.is_some_and(|value| value < 64) {
+            return Err("stats.max_size_mb must be at least 64 or null".into());
+        }
+        if file_cfg
+            .stats
+            .max_size_mb
+            .is_some_and(|value| value > 1_048_576)
+        {
+            return Err("stats.max_size_mb must not exceed 1048576".into());
         }
 
         if matches!(file_cfg.http.enabled, Some(true)) && matches!(file_cfg.http.port, Some(0)) {
@@ -941,6 +1024,7 @@ impl ServerConfig {
                 max_file_size_mb: Some(DEFAULT_MAX_FILE_BYTES / (1024 * 1024)),
                 max_archives: Some(DEFAULT_MAX_ARCHIVES),
             },
+            stats: ServerStatsConfigFile::default(),
             http: ServerHttpConfigFile {
                 enabled: Some(true),
                 host: Some("127.0.0.1".into()),
@@ -958,6 +1042,12 @@ fn validate_optional_nonempty(field: &str, value: Option<&str>) -> Result<(), St
         return Err(format!("{field} cannot be empty"));
     }
     Ok(())
+}
+
+fn optional_limit_arg(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".into())
 }
 
 fn env_present(name: &str) -> bool {
@@ -981,7 +1071,8 @@ fn mask_token(token: &Option<String>) -> String {
 mod tests {
     use super::{
         HttpConfig, LogPolicy, ServerConfig, ServerConfigFile, ServerHttpConfigFile,
-        ServerLogConfigFile,
+        ServerLogConfigFile, ServerStatsConfigFile, StatsPolicy, DEFAULT_STATS_MAX_AGE_DAYS,
+        DEFAULT_STATS_MAX_SIZE_MB,
     };
     use crate::supervisor::{ProcessCommand, ReadinessTarget, Role};
     use std::path::PathBuf;
@@ -994,6 +1085,10 @@ mod tests {
             server_config_file_present: true,
             file_config: ServerConfigFile::default(),
             log_policy: LogPolicy::default(),
+            stats_policy: StatsPolicy {
+                max_age_days: Some(DEFAULT_STATS_MAX_AGE_DAYS),
+                max_size_mb: Some(DEFAULT_STATS_MAX_SIZE_MB),
+            },
             stats_db_path: PathBuf::from("/tmp/rns/stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),
@@ -1034,6 +1129,35 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.field == "stats_db_path"));
+    }
+
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
+    #[test]
+    fn apply_plan_restarts_statsd_when_retention_changes() {
+        let current = test_config();
+        let next = current.with_file_config(
+            &ServerConfigFile {
+                stats: ServerStatsConfigFile {
+                    max_age_days: None,
+                    max_size_mb: Some(2048),
+                },
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+
+        let plan = current.apply_plan(&next);
+
+        assert_eq!(plan.overall_action, "restart_children");
+        assert_eq!(plan.processes_to_restart, vec!["rns-statsd".to_string()]);
+        assert!(plan
+            .changes
+            .iter()
+            .any(|change| change.field == "rns-statsd.args"));
     }
 
     #[cfg(not(any(
@@ -1186,6 +1310,46 @@ mod tests {
     }
 
     #[test]
+    fn stats_limits_default_and_can_be_disabled_independently() {
+        let defaults = ServerConfig::parse_config_json(br#"{}"#).unwrap();
+        assert_eq!(defaults.stats.max_age_days, Some(30));
+        assert_eq!(defaults.stats.max_size_mb, Some(4096));
+
+        let disabled = ServerConfig::parse_config_json(
+            br#"{"stats":{"max_age_days":null,"max_size_mb":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(disabled.stats.max_age_days, None);
+        assert_eq!(disabled.stats.max_size_mb, None);
+    }
+
+    #[test]
+    fn validation_rejects_invalid_stats_limits() {
+        let zero_age = ServerConfig::validate_file_config(&ServerConfigFile {
+            stats: ServerStatsConfigFile {
+                max_age_days: Some(0),
+                max_size_mb: None,
+            },
+            ..ServerConfigFile::default()
+        })
+        .unwrap_err();
+        assert_eq!(
+            zero_age,
+            "stats.max_age_days must be greater than 0 or null"
+        );
+
+        let small_size = ServerConfig::validate_file_config(&ServerConfigFile {
+            stats: ServerStatsConfigFile {
+                max_age_days: None,
+                max_size_mb: Some(63),
+            },
+            ..ServerConfigFile::default()
+        })
+        .unwrap_err();
+        assert_eq!(small_size, "stats.max_size_mb must be at least 64 or null");
+    }
+
+    #[test]
     fn validation_warns_when_http_fields_are_disabled() {
         let warnings = ServerConfig::validate_file_config(&ServerConfigFile {
             http: ServerHttpConfigFile {
@@ -1224,6 +1388,48 @@ mod tests {
             .args
             .windows(2)
             .any(|pair| { pair[0] == "--ready-file" && pair[1] == "/tmp/rns/rns-statsd.ready" }));
+        assert!(statsd
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-age-days" && pair[1] == "30"));
+        assert!(statsd
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-size-mb" && pair[1] == "4096"));
+    }
+
+    #[cfg(any(
+        feature = "rns-hooks-native",
+        feature = "rns-hooks-wasm",
+        feature = "rns-hooks-builtin"
+    ))]
+    #[test]
+    fn process_specs_propagate_disabled_stats_limits() {
+        let current = test_config();
+        let config = current.with_file_config(
+            &ServerConfigFile {
+                stats: ServerStatsConfigFile {
+                    max_age_days: None,
+                    max_size_mb: None,
+                },
+                ..ServerConfigFile::default()
+            },
+            true,
+        );
+        let statsd = config
+            .process_specs()
+            .into_iter()
+            .find(|spec| spec.role == Role::Statsd)
+            .unwrap();
+
+        assert!(statsd
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-age-days" && pair[1] == "none"));
+        assert!(statsd
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-size-mb" && pair[1] == "none"));
     }
 
     #[cfg(not(any(
@@ -1322,6 +1528,10 @@ mod tests {
             server_config_file_present: false,
             file_config: ServerConfigFile::default(),
             log_policy: LogPolicy::default(),
+            stats_policy: StatsPolicy {
+                max_age_days: Some(DEFAULT_STATS_MAX_AGE_DAYS),
+                max_size_mb: Some(DEFAULT_STATS_MAX_SIZE_MB),
+            },
             stats_db_path: config_dir.join("stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),

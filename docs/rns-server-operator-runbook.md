@@ -529,6 +529,49 @@ Routine received-announcement messages are emitted at `DEBUG`, not `INFO`, so
 the default logging level records operational transitions without producing a
 line for every announce.
 
+### Statistics Database Retention
+
+`rns-statsd` independently enforces optional time and size limits on raw
+historical data. The defaults retain at most 30 days and bound `stats.db` to
+4096 MiB:
+
+```json
+{
+  "stats": {
+    "max_age_days": 30,
+    "max_size_mb": 4096
+  }
+}
+```
+
+Set either limit to `null` to disable that policy independently:
+
+```json
+{
+  "stats": {
+    "max_age_days": null,
+    "max_size_mb": 8192
+  }
+}
+```
+
+When both limits are enabled, raw records must satisfy both. Maintenance runs
+every 15 minutes. Age enforcement removes history older than the configured
+cutoff. If the database exceeds its size ceiling, the globally oldest raw
+records are removed until live database pages are below 90% of the ceiling.
+The extra headroom avoids continuous pruning at the boundary. Cumulative packet
+counters and current identity, destination, and name summaries are preserved.
+
+Pruning covers `seen_announces`, `packet_samples`, `process_samples`,
+`provider_drop_samples`, and `link_event_samples`. Timestamp indexes keep API
+queries and maintenance bounded. SQLite WAL checkpointing and incremental
+vacuum reclaim disk space; an existing database without auto-vacuum performs a
+one-time full compaction after its first successful prune. During that initial
+compaction the stats API may briefly report that the database is busy.
+
+`max_age_days` accepts 1 through 3650 or `null`. `max_size_mb` accepts 64 through
+1048576 or `null`. Changing either setting restarts `rns-statsd`.
+
 ## Troubleshooting
 
 If the node is up but not converged:

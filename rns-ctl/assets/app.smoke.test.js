@@ -209,6 +209,8 @@ function makeUiHarness() {
         server_config_file_present: true,
         server_config_file_json: JSON.stringify({
           stats_db_path: "/data/stats.db",
+          logs: { max_file_size_mb: 32, max_archives: 2 },
+          stats: { max_age_days: null, max_size_mb: 2048 },
           http: { enabled: true, host: "0.0.0.0", port: 8080, disable_auth: true },
         }, null, 2),
         stats_db_path: "/data/stats.db",
@@ -560,6 +562,17 @@ test("app.js validate, save, and apply actions hit config endpoints", async () =
   ]);
   assert.match(document.getElementById("configPlanSummary").textContent, /Action: restart_children/);
   assert.match(document.getElementById("configActionSummary").textContent, /Apply:/);
+});
+
+test("guided config builder preserves advanced log and stats policies", async () => {
+  const { document } = makeUiHarness();
+  await flushUi();
+
+  await document.getElementById("syncJsonFromBuilder").click();
+  const candidate = JSON.parse(document.getElementById("configCandidate").value);
+
+  assert.deepEqual(candidate.logs, { max_file_size_mb: 32, max_archives: 2 });
+  assert.deepEqual(candidate.stats, { max_age_days: null, max_size_mb: 2048 });
 });
 
 test("app.js process control buttons queue restart and update status", async () => {

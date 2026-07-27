@@ -921,6 +921,9 @@ function populateBuilder(config) {
 
 function buildConfigFromBuilder() {
   const config = {};
+  const advanced = parseConfigText(configCandidateEl.value || "{}");
+  if (advanced.logs !== undefined) config.logs = advanced.logs;
+  if (advanced.stats !== undefined) config.stats = advanced.stats;
   const http = {
     enabled: builderHttpEnabledEl.checked,
     disable_auth: builderHttpDisableAuthEl.checked,

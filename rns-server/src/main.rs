@@ -231,6 +231,10 @@ mod tests {
             server_config_file_present: false,
             file_config: ServerConfigFile::default(),
             log_policy: rns_server::logs::LogPolicy::default(),
+            stats_policy: rns_server::config::StatsPolicy {
+                max_age_days: Some(30),
+                max_size_mb: Some(4096),
+            },
             stats_db_path: config_dir.join("stats.db"),
             rnsd_bin: PathBuf::new(),
             sentineld_bin: PathBuf::new(),
