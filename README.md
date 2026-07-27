@@ -8,21 +8,24 @@
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
-This is a faithful port of the Python reference implementation, validated against it with 900+ interop tests. `rns-crypto` and `rns-core` are `no_std`-compatible with zero external dependencies, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
+This is a faithful port of the Python reference implementation, validated with Python-generated conformance vectors and live Python/Rust interoperability tests. `rns-crypto` and `rns-core` are `no_std`-compatible, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
 
 ## Workspace Crates
 
 | Crate | `no_std` | Description |
 |-------|----------|-------------|
-| [`rns-crypto`](https://crates.io/crates/rns-crypto) | Yes | Cryptographic primitives: X25519, Ed25519, AES-256-CBC, SHA-256/512, HMAC, HKDF, Identity |
-| [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, transport routing engine, link/channel/buffer, resource transfers, holepunch state machine |
-| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node: TCP/UDP/Serial/KISS/AX.25/RNode/Pipe/Backbone/Auto/I2P/Weave interfaces, config parsing, driver loop, DirectLink NAT hole punching |
-| [`rns-server`](https://crates.io/crates/rns-server) | No | All-in-one Reticulum node supervisor and default runtime binary |
-| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI tools: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh` |
-| [`rns-git`](https://crates.io/crates/rns-git) | No | Git-over-Reticulum utilities: `rngit` server and `git-remote-rns` helper |
-| [`rns-ctl`](https://crates.io/crates/rns-ctl) | No | Unified CLI: daemon, HTTP/WebSocket control server, status, probe, path, identity, and hook management |
-| [`rns-hooks`](https://crates.io/crates/rns-hooks) | No | Hook runtime: programmable hook points across the transport pipeline with WASM and native dynamic-library backends |
-| [`rns-hooks-sdk`](https://crates.io/crates/rns-hooks-sdk) | Yes | Guest-side SDK for writing `rns-hooks` WASM programs in `no_std` Rust |
+| [`rns-crypto`](https://crates.io/crates/rns-crypto) | Yes | Cryptographic primitives: X25519, Ed25519, AES-128/256-CBC, SHA-256/512, HMAC, HKDF, tokens, and identities |
+| [`rns-core`](https://crates.io/crates/rns-core) | Yes | Wire protocol, destinations and packets, transport routing, links, channels, buffers, resources, and the hole-punch state machine |
+| [`rns-net`](https://crates.io/crates/rns-net) | No | Network node and driver with TCP, UDP, Local, Serial, KISS, AX.25, RNode, Pipe, Backbone, Auto, I2P, and Weave interfaces, configuration, discovery, and Direct Link support |
+| [`rns-server`](https://crates.io/crates/rns-server) | No | Batteries-included node supervisor with an embedded control plane and optional hook, sentinel, and statistics sidecars |
+| [`rns-cli`](https://crates.io/crates/rns-cli) | No | CLI programs: `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, plus feature-gated `rns-sentineld` and `rns-statsd` sidecars |
+| [`rns-git`](https://crates.io/crates/rns-git) | No | Git over Reticulum: the `rngit` repository server and management client, `git-remote-rns`, and the `rngcs` signing helper |
+| [`rns-ctl`](https://crates.io/crates/rns-ctl) | No | Unified daemon and control CLI with HTTP/WebSocket APIs, status, probe, path, identity, runtime configuration, backbone, and hook management |
+| [`rns-hooks`](https://crates.io/crates/rns-hooks) | No | Programmable transport-pipeline hook runtime with sandboxed WASM, trusted native dynamic-library, and built-in backends |
+| [`rns-hooks-abi`](https://crates.io/crates/rns-hooks-abi) | Yes | Shared ABI types and constants used by hook hosts, native hooks, and WASM guests |
+| [`rns-hooks-sdk`](https://crates.io/crates/rns-hooks-sdk) | Yes | Guest-side `no_std` SDK for writing `rns-hooks` WASM programs |
+| [`rns-stats-hook`](https://crates.io/crates/rns-stats-hook) | Yes | Statistics hook used by `rns-statsd`, available as a WASM guest or built-in hook |
+| [`rns-sentinel-hook`](https://crates.io/crates/rns-sentinel-hook) | Yes | Sentinel policy hook used by `rns-sentineld`, available as a WASM guest or built-in hook |
 
 ## Building
 
@@ -30,7 +33,9 @@ This is a faithful port of the Python reference implementation, validated agains
 cargo build
 ```
 
-### Feature Flags
+### Selected Workspace Feature Flags
+
+The flags below are common selections accepted by root workspace build commands. This is not an exhaustive list: individual package manifests define additional crate-specific features, including the complete set of `rns-net` `iface-*` flags and the low-level `rns-hooks` backend features.
 
 | Flag | Effect |
 |------|--------|
@@ -50,7 +55,7 @@ cargo build --features rns-hooks-builtin   # Enable static built-in hooks
 cargo build --features tls          # Enable TLS in rns-ctl
 ```
 
-To build the WASM hook backend, add the WASM target:
+To compile WASM guest hooks, including the examples under `rns-hooks/examples/`, add the WASM target. The host-side Wasmtime backend itself does not require this target:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -58,13 +63,13 @@ rustup target add wasm32-unknown-unknown
 
 ## Running Tests
 
-Test vectors are generated from the Python RNS implementation:
+Committed conformance vectors are generated from the historical, pinned Reticulum 1.4.0 baseline. The current upstream reference is Reticulum 1.4.1, which is exercised separately by the live Python/Rust interop CI lane; see [UPSTREAM.md](UPSTREAM.md) for the exact commits and acceptance scope.
 
 ```bash
 # Generate fixtures from the pinned Reticulum 1.4.0 checkout
 RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
 
-# Run all tests
+# Run tests for the default workspace members
 cargo test
 
 # Run tests for a specific crate
@@ -96,14 +101,14 @@ machines. ESP32 validation remains separate under `rns-esp32/`.
 
 ### Docker E2E Tests
 
-There are 19 Docker-based end-to-end test suites that validate multi-node behaviour across chain, mesh, and star topologies:
+There are 20 numbered Docker-based end-to-end suites that validate multi-node behaviour across chain, mesh, and star topologies. The full runner also includes standalone shared-client reconnection and `rns-server` supervision scenarios:
 
 ```bash
 # Run all Docker e2e tests
 cd tests/docker && ./run-all.sh
 
-# Run a specific suite
-cd tests/docker && ./run.sh chain 01_health
+# Run a specific suite on the default 3-node chain
+cd tests/docker && ./run.sh --topology chain-3 --suite 01
 ```
 
 ## rns-server
@@ -149,6 +154,10 @@ ic_max_held_announces = 256
 ic_burst_hold = 60
 ic_burst_freq_new = 3.5
 ic_burst_freq = 12
+ic_pr_burst_freq_new = 3.5
+ic_pr_burst_freq = 12
+egress_control = No
+ec_pr_freq = 5
 ic_new_time = 7200
 ic_burst_penalty = 300
 ic_held_release_interval = 30
@@ -230,8 +239,8 @@ cargo run --bin rns-ctl -- path -t
 # Identity management
 cargo run --bin rns-ctl -- id -g /path/to/identity
 
-# Manage hooks
-cargo run --bin rns-ctl -- hook list
+# Manage hooks through an authenticated control server
+cargo run --bin rns-ctl -- hook list --token "replace-with-token-printed-by-rns-ctl-http"
 ```
 
 The `http` subcommand starts an HTTP/WebSocket control server:
@@ -277,7 +286,8 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 **Design principles:**
 
-- **Fail-open** — a buggy or crashing hook never takes down the node; execution continues as if the hook returned `Continue`
+- **Crash-safe WASM hooks** — WASM traps, invalid results, and fuel exhaustion are isolated by the runtime and fail open, so processing continues as if the hook returned `Continue`
+- **Trusted native hooks** — native hooks run in-process and are not crash-safe; they can block, corrupt, or terminate the node and must only load trusted code
 - **Fuel-limited WASM** — WASM invocations run with a bounded fuel budget to prevent runaway execution
 - **Instance persistence** — WASM linear memory survives across calls, so hooks can maintain counters, caches, or bloom filters
 - **Native backend** — native hooks are loaded with `dlopen`/`LoadLibrary` and run in-process for targets where Wasmtime is unavailable, such as ARMv7
@@ -324,11 +334,14 @@ rns-rs includes an eBPF-inspired programmable hook system that lets users attach
 
 **CLI management:**
 
+The hook CLI talks to the HTTP control server, which enables bearer authentication by default. Pass the token printed when `rns-ctl http` starts (or omit `--token` only when the server was explicitly started with `--disable-auth`):
+
 ```bash
-rns-ctl hook list                                                # list loaded hooks and their status
-rns-ctl hook load <path-or-builtin-id> --point <HookPoint> [--type wasm|native|builtin] [--priority N] [--name name]
-rns-ctl hook unload <name> --point <HookPoint>                   # unload a running hook
-rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> [--type wasm|native|builtin]
+RNSCTL_TOKEN="replace-with-token-printed-by-rns-ctl-http"
+rns-ctl hook list --token "$RNSCTL_TOKEN"                                                # list loaded hooks and their status
+rns-ctl hook load <path-or-builtin-id> --point <HookPoint> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin] [--priority N] [--name name]
+rns-ctl hook unload <name> --point <HookPoint> --token "$RNSCTL_TOKEN"                   # unload a running hook
+rns-ctl hook reload <name> --point <HookPoint> --path <hook_file_or_builtin_id> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin]
 ```
 
 **Writing hooks:**
@@ -346,6 +359,7 @@ Native hooks use the ABI types from `rns-hooks-abi::native` and export `rns_hook
 | `metrics` | Collect counters and statistics across hook invocations |
 | `packet_mirror` | Mirror packets to an additional destination |
 | `path_modifier` | Demonstrate the Modify verdict by prepending a marker byte to packet data |
+| `stats_scraper` | Emit packet and announce statistics for collection by the statistics sidecar |
 
 ## Interoperability
 
