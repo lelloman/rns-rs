@@ -449,6 +449,168 @@ HAS_RECENT_EVENT=$(ctl_get "$PORT" "/api/process_events" 2>/dev/null \
   2>/dev/null || echo "0")
 assert_ge "$HAS_RECENT_EVENT" "1" "rns-statsd records recent lifecycle events after apply"
 
+# ── Section 13: Statistics database retention E2E ───────────────────────────
+
+echo ""
+echo "--- Section 13: Statistics database retention E2E ---"
+
+STATS_DB="/data/stats-new.db"
+
+# Stop the real supervised sidecar so a legacy-format fixture can be prepared
+# without racing its writer connection.
+ctl_post "$PORT" "/api/processes/rns-statsd/stop" > /dev/null 2>&1
+if poll_until "$PORT" "/api/processes" \
+  '.processes[] | select(.name == "rns-statsd") | .status' \
+  "stopped" 15; then
+  pass_test "rns-statsd stopped for retention fixture setup"
+else
+  fail_test "rns-statsd stopped for retention fixture setup"
+fi
+
+# Older server builds did not refresh a stopped child's launch spec during an
+# in-place apply. Ensure the candidate database exists, then reboot the full
+# supervisor after saving each policy so this E2E follows the deployment path.
+docker exec rns-server-test sh -c \
+  "test -f '$STATS_DB' || cp /data/stats.db '$STATS_DB'"
+
+# Convert the fixture to the legacy auto_vacuum=NONE mode, preserve a
+# cumulative counter, then add large expired raw rows plus one current row.
+docker exec rns-server-test sqlite3 "$STATS_DB" \
+  "PRAGMA journal_mode=DELETE; PRAGMA auto_vacuum=NONE; VACUUM;
+   INSERT OR REPLACE INTO packet_counters
+     (interface_key, interface_id, direction, packet_type, packets, bytes, updated_at_ms)
+     VALUES ('retention-summary', NULL, 'rx', 'data', 7, 700, 1);
+   WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x < 1500)
+   INSERT INTO seen_announces
+     (destination_hash, random_hash, identity_hash, name_hash, hops, interface_id, seen_at_ms)
+   SELECT randomblob(4096), randomblob(4096), randomblob(4096), randomblob(4096), 1, NULL, 1
+   FROM seq;
+   INSERT INTO seen_announces
+     (destination_hash, random_hash, identity_hash, name_hash, hops, interface_id, seen_at_ms)
+   VALUES (X'01', X'01', X'01', X'01', 1, NULL, CAST(strftime('%s','now') AS INTEGER)*1000);" \
+  > /dev/null
+
+AGE_SIZE_BEFORE=$(docker exec rns-server-test stat -c %s "$STATS_DB")
+AGE_OLD_BEFORE=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+  "SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms = 1;")
+assert_eq "$AGE_OLD_BEFORE" "1500" "age fixture contains expired rows"
+assert_gt "$AGE_SIZE_BEFORE" "10000000" "age fixture database is physically large"
+
+AGE_APPLY=$(ctl_post "$PORT" "/api/config/apply" \
+  '{"stats_db_path":"/data/stats-new.db","stats":{"max_age_days":1,"max_size_mb":null},"http":{"host":"0.0.0.0","port":8080,"disable_auth":true}}' \
+  2>/dev/null || echo "{}")
+AGE_TARGET=$(echo "$AGE_APPLY" | jq -r '.result.apply_plan.processes_to_restart[0] // empty')
+assert_eq "$AGE_TARGET" "rns-statsd" "age policy apply targets rns-statsd"
+
+docker restart rns-server-test > /dev/null
+if poll_until "$PORT" "/api/processes" \
+  '[.processes[] | select(.ready == true)] | length | tostring' \
+  "3" 60; then
+  pass_test "supervisor restarts all processes with saved age policy"
+else
+  fail_test "supervisor restarts all processes with saved age policy"
+fi
+
+AGE_PRUNED=false
+DEADLINE=$((SECONDS + 90))
+while (( SECONDS < DEADLINE )); do
+  AGE_OLD_AFTER=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+    "SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms = 1;" 2>/dev/null || echo "-1")
+  AGE_CURRENT_AFTER=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+    "SELECT COUNT(*) FROM seen_announces WHERE seen_at_ms > 1;" 2>/dev/null || echo "0")
+  AGE_SIZE_AFTER=$(docker exec rns-server-test stat -c %s "$STATS_DB" 2>/dev/null || echo "$AGE_SIZE_BEFORE")
+  AGE_VACUUM_MODE=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+    "PRAGMA auto_vacuum;" 2>/dev/null || echo "0")
+  if [[ "$AGE_OLD_AFTER" == "0" && "$AGE_CURRENT_AFTER" == "1" \
+      && "$AGE_VACUUM_MODE" == "2" ]] && (( AGE_SIZE_AFTER < AGE_SIZE_BEFORE )); then
+    AGE_PRUNED=true
+    break
+  fi
+  sleep 1
+done
+
+if $AGE_PRUNED; then
+  pass_test "real rns-statsd prunes expired rows and physically compacts legacy database"
+else
+  fail_test "real rns-statsd prunes expired rows and physically compacts legacy database" \
+    "old=${AGE_OLD_AFTER:-unknown} current=${AGE_CURRENT_AFTER:-unknown} mode=${AGE_VACUUM_MODE:-unknown} before=${AGE_SIZE_BEFORE} after=${AGE_SIZE_AFTER:-unknown}"
+fi
+
+SUMMARY_ROWS=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+  "SELECT COUNT(*) FROM packet_counters WHERE interface_key = 'retention-summary';")
+assert_eq "$SUMMARY_ROWS" "1" "age retention preserves cumulative summary rows"
+
+# Exercise size-only enforcement against the same real process. Large current
+# packet samples force the database above 64 MiB; globally oldest raw rows must
+# be removed and physical storage reclaimed below the ceiling.
+ctl_post "$PORT" "/api/processes/rns-statsd/stop" > /dev/null 2>&1
+poll_until "$PORT" "/api/processes" \
+  '.processes[] | select(.name == "rns-statsd") | .status' \
+  "stopped" 15 > /dev/null || true
+
+docker exec rns-server-test sqlite3 "$STATS_DB" \
+  "WITH RECURSIVE seq(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM seq WHERE x < 8000)
+   INSERT INTO packet_samples
+     (ts_ms, interface_key, interface_id, direction, packet_type, packets, bytes)
+   SELECT CAST(strftime('%s','now') AS INTEGER)*1000+x,
+          hex(randomblob(8192)), NULL, 'rx', 'data', 1, 1
+   FROM seq;
+   PRAGMA wal_checkpoint(TRUNCATE);" \
+  > /dev/null
+
+SIZE_BYTES_BEFORE=$(docker exec rns-server-test stat -c %s "$STATS_DB")
+SIZE_ROWS_BEFORE=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+  "SELECT COUNT(*) FROM packet_samples;")
+assert_gt "$SIZE_BYTES_BEFORE" "67108864" "size fixture exceeds configured 64 MiB ceiling"
+assert_ge "$SIZE_ROWS_BEFORE" "8000" "size fixture contains raw packet history"
+
+SIZE_APPLY=$(ctl_post "$PORT" "/api/config/apply" \
+  '{"stats_db_path":"/data/stats-new.db","stats":{"max_age_days":null,"max_size_mb":64},"http":{"host":"0.0.0.0","port":8080,"disable_auth":true}}' \
+  2>/dev/null || echo "{}")
+SIZE_TARGET=$(echo "$SIZE_APPLY" | jq -r '.result.apply_plan.processes_to_restart[0] // empty')
+assert_eq "$SIZE_TARGET" "rns-statsd" "size policy apply targets rns-statsd"
+
+docker restart rns-server-test > /dev/null
+if poll_until "$PORT" "/api/processes" \
+  '[.processes[] | select(.ready == true)] | length | tostring' \
+  "3" 60; then
+  pass_test "supervisor restarts all processes with saved size policy"
+else
+  fail_test "supervisor restarts all processes with saved size policy"
+fi
+
+SIZE_PRUNED=false
+DEADLINE=$((SECONDS + 90))
+while (( SECONDS < DEADLINE )); do
+  SIZE_BYTES_AFTER=$(docker exec rns-server-test stat -c %s "$STATS_DB" 2>/dev/null || echo "$SIZE_BYTES_BEFORE")
+  SIZE_ROWS_AFTER=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+    "SELECT COUNT(*) FROM packet_samples;" 2>/dev/null || echo "$SIZE_ROWS_BEFORE")
+  if (( SIZE_BYTES_AFTER <= 67108864 && SIZE_ROWS_AFTER < SIZE_ROWS_BEFORE )); then
+    SIZE_PRUNED=true
+    break
+  fi
+  sleep 1
+done
+
+if $SIZE_PRUNED; then
+  pass_test "real rns-statsd prunes globally oldest history below size ceiling"
+else
+  fail_test "real rns-statsd prunes globally oldest history below size ceiling" \
+    "rows_before=${SIZE_ROWS_BEFORE} rows_after=${SIZE_ROWS_AFTER:-unknown} bytes_before=${SIZE_BYTES_BEFORE} bytes_after=${SIZE_BYTES_AFTER:-unknown}"
+fi
+
+SUMMARY_ROWS_AFTER_SIZE=$(docker exec rns-server-test sqlite3 -readonly "$STATS_DB" \
+  "SELECT COUNT(*) FROM packet_counters WHERE interface_key = 'retention-summary';")
+assert_eq "$SUMMARY_ROWS_AFTER_SIZE" "1" "size retention preserves cumulative summary rows"
+
+if poll_until "$PORT" "/api/processes" \
+  '.processes[] | select(.name == "rns-statsd") | .ready_state' \
+  "ready" 30; then
+  pass_test "rns-statsd is ready after retention E2E cycles"
+else
+  fail_test "rns-statsd is ready after retention E2E cycles"
+fi
+
 # ── Results ──────────────────────────────────────────────────────────────────
 
 suite_result "$_CURRENT_SUITE"

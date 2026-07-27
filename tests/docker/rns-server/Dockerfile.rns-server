@@ -19,7 +19,7 @@ RUN for feature in $RNS_SERVER_FEATURES; do \
 RUN cargo build --release --bin rns-server --features "$RNS_SERVER_FEATURES"
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl sqlite3 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/rns-server /usr/local/bin/rns-server
 RUN mkdir -p /etc/rns /data
 EXPOSE 8080
