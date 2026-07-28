@@ -50,3 +50,4 @@ final. The corresponding parity record records the final outcome.
 | 1.3.9 | Not retained | [Parity](reticulum-1.3.9-parity.md) |
 | 1.4.0 | [Audit](reticulum-1.4.0-audit.md) | [Parity](reticulum-1.4.0-parity.md) |
 | 1.4.1 | [Audit](reticulum-1.4.1-audit.md) | [Parity](reticulum-1.4.1-parity.md) |
+| 1.4.2 | [Audit](reticulum-1.4.2-audit.md) | [Parity](reticulum-1.4.2-parity.md) |
