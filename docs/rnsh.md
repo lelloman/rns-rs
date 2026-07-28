@@ -54,5 +54,8 @@ Useful identity and access options:
 ## Logging
 
 `rnsh` writes utility logs to the rnsh config directory. Verbosity is controlled
-with `-v` and `-q`; listener mode defaults to more useful operational logging
-than initiator mode.
+with `-v` and `-q`. Both modes default to INFO. Initiator logs include path
+requests, link establishment, the connected peer version and session
+completion. Listener logs include identity authentication or denial and remote
+command execution; an identification callback received after the version
+handshake is treated as a fatal protocol error.

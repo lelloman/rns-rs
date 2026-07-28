@@ -1361,7 +1361,20 @@ impl ListenerSession {
         if self.state == ListenerState::Closed {
             return;
         }
+        log::info!(
+            "Initiator identified {} on link {}",
+            prettyhexrep(&identity_hash.0),
+            prettyhexrep(&self.link_id)
+        );
+        if !matches!(
+            self.state,
+            ListenerState::WaitIdent | ListenerState::WaitVersion
+        ) {
+            self.protocol_error(transport, "unexpected remote identification");
+            return;
+        }
         if !self.config.allow_all && !self.config.allowed.contains(&identity_hash.0) {
+            log::info!("Identity {} not allowed", prettyhexrep(&identity_hash.0));
             let _ = send_message(
                 transport,
                 self.link_id,
@@ -1374,6 +1387,7 @@ impl ListenerSession {
             self.state = ListenerState::Closed;
             return;
         }
+        log::info!("Identity {} authenticated", prettyhexrep(&identity_hash.0));
         self.remote_identity = Some(identity_hash);
         if self.state == ListenerState::WaitIdent {
             self.state = ListenerState::WaitVersion;
@@ -1483,6 +1497,7 @@ impl ListenerSession {
             .as_ref()
             .map(|ih| prettyhexrep(&ih.0))
             .unwrap_or_default();
+        log::debug!("Remote {remote_identity} executing: {argv:?}");
         let env = [
             (
                 "TERM",
@@ -2492,6 +2507,41 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn listener_rejects_reidentification_after_version_handshake() {
+        let fake = FakeTransport::default();
+        let (tx, _rx) = mpsc::channel();
+        let mut session = ListenerSession::new(TEST_LINK, test_config());
+        let version = version_message();
+        session.handle_message(&fake, &tx, version.msgtype(), version.pack());
+        assert_eq!(session.state, ListenerState::WaitCommand);
+
+        session.remote_identified(&fake, IdentityHash([0x11; 16]));
+
+        assert_eq!(session.state, ListenerState::Closed);
+        assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+        assert!(matches!(
+            &fake.sent_messages()[1].1,
+            RnshMessage::Error { msg, fatal: true } if msg == "unexpected remote identification"
+        ));
+    }
+
+    #[test]
+    fn listener_rejects_reidentification_while_command_is_running() {
+        let fake = FakeTransport::default();
+        let mut session = ListenerSession::new(TEST_LINK, test_config());
+        session.state = ListenerState::Running;
+
+        session.remote_identified(&fake, IdentityHash([0x11; 16]));
+
+        assert_eq!(session.state, ListenerState::Closed);
+        assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+        assert!(matches!(
+            &fake.sent_messages()[0].1,
+            RnshMessage::Error { msg, fatal: true } if msg == "unexpected remote identification"
         ));
     }
 
