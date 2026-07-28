@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use rns_core::packet::RawPacket;
-use rns_core::types::{DestHash, IdentityHash, PacketHash};
+use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::{
@@ -37,6 +37,22 @@ enum RustEvent {
         raw: Vec<u8>,
         packet_hash: PacketHash,
     },
+    LinkEstablished {
+        link_id: [u8; 16],
+        is_initiator: bool,
+    },
+    LinkData {
+        link_id: [u8; 16],
+        context: u8,
+        data: Vec<u8>,
+    },
+    ResourceReceived {
+        link_id: [u8; 16],
+        data: Vec<u8>,
+    },
+    ResourceCompleted {
+        link_id: [u8; 16],
+    },
 }
 
 struct TestCallbacks {
@@ -55,6 +71,40 @@ impl Callbacks for TestCallbacks {
             raw,
             packet_hash,
         });
+    }
+
+    fn on_link_established(
+        &mut self,
+        link_id: LinkId,
+        _dest_hash: DestHash,
+        _rtt: f64,
+        is_initiator: bool,
+    ) {
+        let _ = self.tx.send(RustEvent::LinkEstablished {
+            link_id: link_id.0,
+            is_initiator,
+        });
+    }
+
+    fn on_link_data(&mut self, link_id: LinkId, context: u8, data: Vec<u8>) {
+        let _ = self.tx.send(RustEvent::LinkData {
+            link_id: link_id.0,
+            context,
+            data,
+        });
+    }
+
+    fn on_resource_received(&mut self, link_id: LinkId, data: Vec<u8>, _metadata: Option<Vec<u8>>) {
+        let _ = self.tx.send(RustEvent::ResourceReceived {
+            link_id: link_id.0,
+            data,
+        });
+    }
+
+    fn on_resource_completed(&mut self, link_id: LinkId) {
+        let _ = self
+            .tx
+            .send(RustEvent::ResourceCompleted { link_id: link_id.0 });
     }
 }
 
@@ -350,6 +400,7 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
 
 const PYTHON_INTEROP_SCRIPT: &str = r#"
 import json
+import hashlib
 import os
 import signal
 import socket
@@ -392,11 +443,41 @@ def packet_callback(data, packet):
 
 destination.set_packet_callback(packet_callback)
 
+rust_destination = None
+rust_link = None
+
+def link_packet_callback(message, packet):
+    emit("python_link_packet", data_hex=message.hex(), context=packet.context)
+
+def resource_concluded(resource):
+    if resource.status == RNS.Resource.COMPLETE:
+        resource.data.seek(0)
+        data = resource.data.read()
+        emit("python_resource_received", sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+    else:
+        emit("python_resource_failed", status=resource.status)
+
+def resource_sent(resource):
+    emit("python_resource_sent", status=resource.status)
+
+def link_established(link):
+    global rust_link
+    rust_link = link
+    link.set_packet_callback(link_packet_callback)
+    link.set_resource_strategy(RNS.Link.ACCEPT_ALL)
+    link.set_resource_concluded_callback(resource_concluded)
+    emit("python_link_established", link_id=link.link_id.hex())
+    RNS.Packet(link, b"python-to-rust over link").send()
+
+def link_closed(link):
+    emit("python_link_closed", link_id=link.link_id.hex(), status=link.status)
+
 class RustAnnounceHandler:
     aspect_filter = "interop.rust"
     receive_path_responses = True
 
     def received_announce(self, destination_hash, announced_identity, app_data, announce_packet_hash, is_path_response):
+        global rust_destination
         emit(
             "rust_announce",
             dest_hash=destination_hash.hex(),
@@ -406,6 +487,7 @@ class RustAnnounceHandler:
         )
         if not is_path_response:
             out = RNS.Destination(announced_identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "interop", "rust")
+            rust_destination = out
             RNS.Packet(out, b"python-to-rust via rust announce").send()
             emit("python_sent_packet_to_rust", dest_hash=destination_hash.hex())
 
@@ -420,6 +502,19 @@ try:
         if command == "announce_py":
             destination.announce()
             emit("python_announced", dest_hash=destination.hash.hex())
+        elif command == "link_rust":
+            if rust_destination is None:
+                emit("python_link_error", reason="rust destination is unknown")
+            else:
+                rust_link = RNS.Link(rust_destination)
+                rust_link.set_link_established_callback(link_established)
+                rust_link.set_link_closed_callback(link_closed)
+                emit("python_link_requested", link_id=rust_link.link_id.hex())
+        elif command == "send_resource_rust":
+            if rust_link is None:
+                emit("python_resource_error", reason="link is unavailable")
+            else:
+                RNS.Resource(bytes((i % 251 for i in range(100000))), rust_link, callback=resource_sent, auto_compress=False)
         elif command == "stop":
             break
         elif command:
@@ -457,6 +552,14 @@ fn python_rns_bidirectional_tcp_interop() {
     );
     node.register_destination(rust_dest.hash.0, rust_dest.dest_type.to_wire_constant())
         .expect("Rust destination registration should succeed");
+    let rust_private = rust_identity.get_private_key().unwrap();
+    let rust_public = rust_identity.get_public_key().unwrap();
+    let mut rust_sig_private = [0u8; 32];
+    let mut rust_sig_public = [0u8; 32];
+    rust_sig_private.copy_from_slice(&rust_private[32..64]);
+    rust_sig_public.copy_from_slice(&rust_public[32..64]);
+    node.register_link_destination(rust_dest.hash.0, rust_sig_private, rust_sig_public, 1)
+        .expect("Rust link destination registration should succeed");
 
     let python_live_announce =
         request_python_announce(&mut python, &rust_rx, python_dest_hash, TIMEOUT);
@@ -516,6 +619,76 @@ fn python_rns_bidirectional_tcp_interop() {
     assert_ne!(packet_hash.0, [0u8; 32]);
     let plaintext = decrypt_delivery(&raw, &rust_identity);
     assert_eq!(plaintext, PYTHON_TO_RUST_PAYLOAD);
+
+    python.command("link_rust");
+    let python_link =
+        python.wait_for_event(TIMEOUT, |event| event["event"] == "python_link_established");
+    let link_id = parse_hex_16(python_link["link_id"].as_str().unwrap());
+    let rust_link = wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::LinkEstablished {
+            link_id,
+            is_initiator,
+        } => Some((*link_id, *is_initiator)),
+        _ => None,
+    })
+    .expect("Rust responder should establish the Python-initiated link");
+    assert_eq!(rust_link, (link_id, false));
+
+    let python_link_data = wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::LinkData {
+            link_id: received_link,
+            context,
+            data,
+        } if *received_link == link_id => Some((*context, data.clone())),
+        _ => None,
+    })
+    .expect("Rust should receive Python link data");
+    assert_eq!(python_link_data, (0, b"python-to-rust over link".to_vec()));
+
+    node.send_on_link(link_id, b"rust-to-python over link".to_vec(), 0)
+        .expect("Rust should send data over the Python-initiated link");
+    let rust_link_data = python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_link_packet"
+            && event["context"] == 0
+            && event["data_hex"] == hex(b"rust-to-python over link")
+    });
+    assert_eq!(
+        decode_hex(rust_link_data["data_hex"].as_str().unwrap()),
+        b"rust-to-python over link"
+    );
+
+    python.command("send_resource_rust");
+    let python_resource = wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::ResourceReceived {
+            link_id: received_link,
+            data,
+        } if *received_link == link_id => Some(data.clone()),
+        _ => None,
+    })
+    .expect("Rust should receive a Python 100000-byte Resource");
+    assert_eq!(python_resource.len(), 100000);
+    assert!(python_resource
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| *byte == (index % 251) as u8));
+
+    let rust_resource: Vec<u8> = (0..100000).map(|index| (index % 239) as u8).collect();
+    node.send_resource(link_id, rust_resource.clone(), None)
+        .expect("Rust should send a Resource to Python 1.3.5");
+    wait_for_rust_event(&rust_rx, TIMEOUT, |event| match event {
+        RustEvent::ResourceCompleted {
+            link_id: completed_link,
+        } if *completed_link == link_id => Some(()),
+        _ => None,
+    })
+    .expect("Rust should receive proof for its 100000-byte Resource");
+    let python_received_resource = python.wait_for_event(TIMEOUT, |event| {
+        event["event"] == "python_resource_received" && event["size"] == 100000
+    });
+    assert_eq!(
+        python_received_resource["sha256"],
+        hex(&rns_core::hash::full_hash(&rust_resource))
+    );
 
     node.shutdown();
 }
