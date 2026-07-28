@@ -5331,3 +5331,145 @@ fn test_issue4_remote_peer_message_to_shared_client() {
     bob_node.shutdown();
     daemon.shutdown();
 }
+
+#[test]
+fn issue106_shared_clients_keep_link_alive_and_preserve_burst_data() {
+    let transport_port = find_free_port();
+    let shared_port_a = find_free_port();
+    let shared_port_b = find_free_port();
+    let instance_a = format!("issue106-a-{}", transport_port);
+    let instance_b = format!("issue106-b-{}", transport_port);
+    let config_a = tempfile::tempdir().unwrap();
+    let config_b = tempfile::tempdir().unwrap();
+
+    fs::write(
+        config_a.path().join("config"),
+        format!(
+            "[reticulum]\nenable_transport = Yes\nshare_instance = Yes\ninstance_name = {instance_a}\nshared_instance_port = {shared_port_a}\ninstance_control_port = 0\npanic_on_interface_error = Yes\ndiscover_interfaces = No\n\n[interfaces]\n  [[issue106 server]]\n    type = TCPServerInterface\n    enabled = Yes\n    listen_ip = 127.0.0.1\n    listen_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        config_b.path().join("config"),
+        format!(
+            "[reticulum]\nenable_transport = Yes\nshare_instance = Yes\ninstance_name = {instance_b}\nshared_instance_port = {shared_port_b}\ninstance_control_port = 0\npanic_on_interface_error = Yes\ndiscover_interfaces = No\n\n[interfaces]\n  [[issue106 client]]\n    type = TCPClientInterface\n    enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
+        ),
+    )
+    .unwrap();
+
+    let daemon_a = RnsNode::from_config(Some(config_a.path()), Box::new(TransportCallbacks))
+        .expect("issue106 daemon A should start");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match std::net::TcpStream::connect(("127.0.0.1", transport_port)) {
+            Ok(stream) => {
+                drop(stream);
+                break;
+            }
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(error) => panic!("issue106 transport listener did not start: {error}"),
+        }
+    }
+    let daemon_b = RnsNode::from_config(Some(config_b.path()), Box::new(TransportCallbacks))
+        .expect("issue106 daemon B should start");
+    std::thread::sleep(SETTLE);
+
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice = start_shared_client(
+        shared_port_a,
+        &instance_a,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob = start_shared_client(
+        shared_port_b,
+        &instance_b,
+        Box::new(TestCallbacks::new(bob_tx)),
+    );
+    wait_for_event(&alice_rx, TIMEOUT, |event| {
+        matches!(event, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice shared client did not connect");
+    wait_for_event(&bob_rx, TIMEOUT, |event| {
+        matches!(event, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob shared client did not connect");
+
+    let bob_identity = Identity::new(&mut OsRng);
+    let bob_destination = Destination::single_in(
+        APP_NAME,
+        &["issue106", "burst"],
+        IdentityHash(*bob_identity.hash()),
+    );
+    let bob_private = bob_identity.get_private_key().unwrap();
+    let bob_public = bob_identity.get_public_key().unwrap();
+    let mut bob_sig_private = [0u8; 32];
+    let mut bob_sig_public = [0u8; 32];
+    bob_sig_private.copy_from_slice(&bob_private[32..64]);
+    bob_sig_public.copy_from_slice(&bob_public[32..64]);
+    bob.register_destination(
+        bob_destination.hash.0,
+        bob_destination.dest_type.to_wire_constant(),
+    )
+    .unwrap();
+    bob.register_link_destination(bob_destination.hash.0, bob_sig_private, bob_sig_public, 0)
+        .unwrap();
+
+    let announced = announce_with_retry(
+        &bob,
+        &bob_destination,
+        &bob_identity,
+        Some(b"issue106"),
+        &alice_rx,
+    )
+    .expect("Alice should receive Bob's shared-client announce across both daemons");
+    let link_id = alice
+        .create_link(bob_destination.hash.0, bob_sig_public)
+        .unwrap();
+    let (alice_link, _, alice_initiator) = wait_for_link_established(&alice_rx, TIMEOUT)
+        .expect("Alice should establish the shared-client link");
+    let (bob_link, _, bob_initiator) = wait_for_link_established(&bob_rx, TIMEOUT)
+        .expect("Bob should accept the shared-client link");
+    assert_eq!(alice_link, link_id);
+    assert_eq!(bob_link, link_id);
+    assert!(alice_initiator);
+    assert!(!bob_initiator);
+    assert_eq!(announced.dest_hash, bob_destination.hash);
+
+    // rns-proxy reads 4096-byte TCP blocks, adds a seven-byte mux header and
+    // immediately splits the resulting 4103-byte frames into LINK_MDU chunks.
+    // Queue enough consecutive frames to exercise the same sustained burst.
+    let expected: Vec<u8> = (0..(4103 * 64)).map(|index| (index % 251) as u8).collect();
+    for chunk in expected.chunks(rns_core::constants::LINK_MDU) {
+        alice.send_on_link(link_id, chunk.to_vec(), 0).unwrap();
+    }
+    let mut received = Vec::new();
+    while received.len() < expected.len() {
+        let (received_link, context, data) = wait_for_link_data(&bob_rx, TIMEOUT)
+            .expect("Bob should receive every ordered Link packet in the burst");
+        assert_eq!(received_link, link_id);
+        assert_eq!(context, 0);
+        received.extend_from_slice(&data);
+    }
+    assert_eq!(received, expected);
+
+    // Released rns-net 0.5.10 and 0.6.0 made both endpoints originate the
+    // same empty keepalive packet. The identical packet hashes were then
+    // suppressed by the transports and this link timed out after roughly
+    // twelve seconds. Stay idle beyond that boundary, then prove the current
+    // directional 0xff/0xfe keepalive exchange kept both endpoints alive.
+    std::thread::sleep(Duration::from_secs(15));
+    let after_keepalive = b"issue106 link survived idle keepalive".to_vec();
+    bob.send_on_link(link_id, after_keepalive.clone(), 0)
+        .expect("Bob should still have an active link after the keepalive window");
+    let (received_link, context, received_data) = wait_for_link_data(&alice_rx, TIMEOUT)
+        .expect("Alice should receive Link data after the keepalive window");
+    assert_eq!(received_link, link_id);
+    assert_eq!(context, 0);
+    assert_eq!(received_data, after_keepalive);
+
+    alice.shutdown();
+    bob.shutdown();
+    daemon_b.shutdown();
+    daemon_a.shutdown();
+}
