@@ -14,7 +14,7 @@
 - audited range: `b2188ce9a746a35b770b10bea1b7ccbe93b4e198..b48b96e61676504e0a4e527b33b9a0b4495c6872`
 - commits in range: `6`
 - repositories checked: Reticulum `origin/master` and `rgit/master`
-- local branch and revision inspected: `dev@7e6242f78220c284ee94a92f4e3f4665c4982ef3`
+- local branch and revision inspected: `dev@f8711cfb9e9f60f3338d541585ee85140250e425`
 
 Both checked upstream remotes resolve to the same target commit. The annotated
 `1.4.2` tag also resolves to that commit. The tag contains an SSH signature,
@@ -43,13 +43,13 @@ earlier in the range.
 
 Every commit in the audited range appears exactly once.
 
-| # | Upstream commit | Subject | Current disposition | Local evidence |
+| # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `4760103aa660f3fdd628a8124875dda672a71ac9` | Ensure interface is online at time of recursive PR emission | Structurally covered | `rns-net/src/driver/dispatch.rs` rejects every `SendOnInterface` action when the interface is offline or disabled before invoking its writer |
+| 1 | `4760103aa660f3fdd628a8124875dda672a71ac9` | Ensure interface is online at time of recursive PR emission | Structurally covered | Local `c855c30` pins the dispatch invariant with `recursive_path_request_does_not_reach_offline_interface_writer` at the complete engine-action boundary |
 | 2 | `0416c419561f79d6cf6fd56af0bfd9eee9a7276a` | Faster blackhole filtering for discovered interfaces on mobile / over RPC | Structurally covered | Discovery cleanup and blackhole lookup execute inside one Rust driver process; RPC exposes the full blackhole set with one `GetBlackholed` query; cleanup behavior has a focused blackhole regression |
-| 3 | `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15` | Updated version | Non-runtime | Upstream package version metadata only; target version is recorded by this audit |
-| 4 | `64fee86ebc452d2eae716e4bb894df22b1c8f91d` | Cleanup | Needs port | Default-command copying is structurally covered, but initiator INFO-level lifecycle logging and its default log threshold differ locally |
-| 5 | `529a9fd460d8ff33a4506db79e641314744ab135` | Cleaned up dead imports. Improved logging. | Needs coordinated port | Rust rejects unauthenticated command execution, but listener re-identification in an invalid state is not protocol-errored and returned from; authentication/execution lifecycle logs also differ |
+| 3 | `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15` | Updated version | Non-runtime | Local `1f86012` promotes `UPSTREAM.md`, README and the exact CI interop pin to 1.4.2 without changing independent Rust crate versions |
+| 4 | `64fee86ebc452d2eae716e4bb894df22b1c8f91d` | Cleanup | Integrated | Local `5d51389` aligns the initiator INFO default and path, link, peer-version and session lifecycle logging with updated log-level coverage |
+| 5 | `529a9fd460d8ff33a4506db79e641314744ab135` | Cleaned up dead imports. Improved logging. | Integrated | Local `351dfa0` makes post-handshake re-identification fatal, adds `WaitCommand`/`Running` regressions and aligns authentication/execution lifecycle logs |
 | 6 | `b48b96e61676504e0a4e527b33b9a0b4495c6872` | Prepare release | Non-runtime | Changelog and generated upstream release/documentation artifacts |
 
 ## Per-Commit Analysis
@@ -68,11 +68,12 @@ runs.
 
 **Local handling and evidence:** `dispatch_send_on_interface()` returns before
 transmission when either flag is false. Broadcast dispatch applies the same
-guard. Driver tests already exercise online/offline dispatch behavior; a
-focused recursive-path-request regression should still be added before final
-acceptance to lock this architectural invariant to the upstream failure mode.
+guard. `recursive_path_request_does_not_reach_offline_interface_writer`
+constructs the recursive action in the transport engine, dispatches it against
+an offline interface, and proves the writer and transmit counters remain
+untouched.
 
-**Current disposition:** Structurally covered.
+**Final disposition:** Structurally covered.
 
 ### 2. `0416c419` — Faster blackhole filtering for discovered interfaces on mobile / over RPC
 
@@ -91,7 +92,7 @@ identity. Remote consumers can request the active blackhole set in one
 covers both identity fields. No equivalent cache is needed because the costly
 cross-process access pattern is absent.
 
-**Current disposition:** Structurally covered.
+**Final disposition:** Structurally covered.
 
 ### 3. `e3f1a5e7` — Updated version
 
@@ -105,7 +106,10 @@ version assertion are recorded above. Rust crate versions follow the native
 project's release process and are not expected to mirror the Python package
 version.
 
-**Current disposition:** Non-runtime.
+Tracking metadata and the exact CI interop pin now identify 1.4.2 without
+changing independently versioned Rust crates.
+
+**Final disposition:** Non-runtime.
 
 ### 4. `64fee86e` — Cleanup
 
@@ -116,15 +120,15 @@ more informative path, link, peer-version, and session lifecycle messages.
 
 **Rust applicability:** `ListenerSession::start_command()` already clones its
 `Vec<String>` default command, so sessions cannot mutate shared command state.
-The Rust initiator still defaults to ERROR logging and does not emit equivalent
-INFO lifecycle records.
+The initiator logging changes apply directly.
 
 **Local handling and evidence:** The command clone is directly visible in
-`rns-cli/src/rnsh.rs`, and rnsh tests cover the current listener/initiator log
-thresholds. The user-visible logging changes need a focused port and updated
-tests; Python module export generation is not applicable to Rust.
+`rns-cli/src/rnsh.rs`. Initiator logging now defaults to INFO and records path
+requests, link establishment, connected server version and session completion.
+`rnsh_logging_uses_file_oriented_levels` pins the new default and verbosity
+behavior. Python module export generation is not applicable to Rust.
 
-**Current disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 5. `529a9fd4` — Cleaned up dead imports. Improved logging.
 
@@ -135,18 +139,19 @@ invalid protocol state.
 
 **Rust applicability:** The Rust listener already blocks command startup unless
 the session is authenticated and in `WaitCommand`, and its shell fallback does
-not use `os.getlogin`. However, `remote_identified()` accepts callbacks in any
-non-closed state: it only changes state when currently in `WaitIdent`, but does
-not report a protocol error and return for other states. Relevant lifecycle
-logging is also absent.
+not use `os.getlogin`. The remote-identification state guard and lifecycle
+logging map directly to the Rust listener.
 
-**Local handling and evidence:** Existing tests cover denied pipelined traffic,
-authentication, and command-state enforcement. A coordinated change should add
-the invalid re-identification guard and regression first, then align the useful
-authentication/execution logs without weakening the existing state checks.
-Dead Python imports/comments require no Rust action.
+**Local handling and evidence:** `remote_identified()` now accepts callbacks
+only during `WaitIdent` and `WaitVersion`; later callbacks produce a fatal
+protocol error, tear down the link and return before authentication mutation.
+`listener_rejects_reidentification_after_version_handshake` and
+`listener_rejects_reidentification_while_command_is_running` cover both invalid
+phases. Identity authentication/denial and remote execution now emit lifecycle
+logs. Existing denied-pipeline and command-state tests continue to pass. Dead
+Python imports/comments require no Rust action.
 
-**Current disposition:** Needs coordinated port.
+**Final disposition:** Integrated.
 
 ### 6. `b48b96e6` — Prepare release
 
@@ -156,38 +161,53 @@ documentation/release artifacts.
 **Rust applicability:** No additional runtime behavior is introduced beyond the
 preceding commits.
 
-**Local handling and evidence:** This audit records the release provenance and
-tracks native documentation as part of the eventual implementation work.
+**Local handling and evidence:** This audit and the final parity record retain
+the release provenance. Generated HTML and changelog artifacts are not vendored.
 
-**Current disposition:** Non-runtime.
+**Final disposition:** Non-runtime.
 
-## Integration Plan
+## Completed Integration
 
-1. Add a focused offline recursive-path-request regression proving the driver
-   never reaches an interface writer, then retain the structural disposition.
-2. Port the rnsh initiator's INFO default and useful path, link, peer-version,
-   and session-end log messages; update logging tests.
-3. Make listener re-identification outside the permitted handshake states a
-   fatal protocol error with an immediate return, and add a regression covering
-   callbacks during `WaitCommand` and `Running`.
-4. Add authentication outcome and remote-command lifecycle logs while ensuring
-   secrets and command handling remain appropriate for native logging.
-5. Run focused suites, the full workspace gates, and exact 1.4.2 Python/Rust
-   interoperability before promoting this audit into a parity record.
+The offline recursive-path-request invariant, rnsh logging alignment and
+listener protocol-state guard are implemented with focused regressions. The
+historical fixture set remains pinned to its original 1.4.0 provenance; exact
+1.4.2 compatibility is exercised by the live interop lane.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a current disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
 - [x] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
+- `2026-07-28`: The focused recursive path-request regression and all 26 rnsh
+  unit tests passed, including the new `WaitCommand` and `Running`
+  re-identification failures and updated initiator log-level expectations.
+- `2026-07-28`: Exact-target live Python/Rust bidirectional TCP interop passed
+  against `b48b96e61676504e0a4e527b33b9a0b4495c6872`, after asserting version
+  1.4.2 and `RNS` tree `3286dd665827d2e591b47efaa5706b643e9b8d5a`.
+- `2026-07-28`: `cargo test --workspace`, the workspace native-hooks suite,
+  WASM/built-in hook tests, and the rns-ctl TLS suite passed. `cargo fmt
+  --check` and `scripts/lint-host.sh` passed; lint retained only the accepted
+  repository warning baseline.
+- `2026-07-28`: Historical 1.4.0 fixture tests passed without regeneration.
+  Docker E2E, cross-compilation and physical Weave HIL were not rerun and are
+  not claimed; the release native-hooks build and live dual-VPS smoke passed.
+- `2026-07-28`: Daily drift recheck fetched both upstream remotes; GitHub and
+  rgit still agree on `b48b96e61676504e0a4e527b33b9a0b4495c6872`, six commits
+  after the accepted 1.4.1 baseline, and the baseline remains an ancestor of
+  both tips.
+- `2026-07-28`: `cargo build --release --bin rns-server
+  --features rns-hooks-native` passed, and `scripts/manual-backbone-smoke.sh`
+  passed startup, interface-up checks, cross-identity recall, bidirectional
+  packets, and bidirectional link/channel checks through the live dual-VPS
+  fabric.
 - `2026-07-27`: Both upstream remotes were fetched and agreed on annotated tag
   `1.4.2` at `b48b96e61676504e0a4e527b33b9a0b4495c6872`, six commits after the
   accepted 1.4.1 baseline. The baseline is an ancestor of both remote tips.
