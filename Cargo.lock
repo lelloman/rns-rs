@@ -2010,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "criterion",
  "log",
@@ -2087,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "bzip2",
  "criterion",
