@@ -7019,6 +7019,57 @@ fn request_path_sends_packet() {
 }
 
 #[test]
+fn recursive_path_request_does_not_reach_offline_interface_writer() {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut config = make_transport_config(true);
+    config.identity_hash = Some([0x42; 16]);
+    let mut driver = Driver::new(config, rx, tx, Box::new(callbacks));
+
+    let mut ingress = make_interface_info(1);
+    ingress.recursive_prs = true;
+    let egress = make_interface_info(2);
+    driver.engine.register_interface(ingress);
+    driver.engine.register_interface(egress);
+
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(2), make_entry(2, Box::new(writer), false));
+
+    let destination_hash = [0xD9; 16];
+    let request_tag = [0x09; 16];
+    let mut request_data = Vec::new();
+    request_data.extend_from_slice(&destination_hash);
+    request_data.extend_from_slice(&request_tag);
+    let actions = driver
+        .engine
+        .handle_path_request(&request_data, InterfaceId(1), 1000.0);
+
+    assert_eq!(actions.len(), 1, "engine should emit one recursive request");
+    let TransportAction::SendOnInterface { interface, raw } = &actions[0] else {
+        panic!("expected recursive SendOnInterface action");
+    };
+    assert_eq!(*interface, InterfaceId(2));
+    let packet = RawPacket::unpack(raw).expect("valid recursive path request");
+    assert_eq!(packet.destination_hash, driver.path_request_dest);
+    assert_eq!(packet.data.len(), 48);
+    assert_eq!(&packet.data[..16], &destination_hash);
+    assert_eq!(&packet.data[16..32], &[0x42; 16]);
+    assert_eq!(&packet.data[32..], &request_tag);
+
+    driver.dispatch_all(actions);
+
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "offline interface writer must not receive recursive path requests"
+    );
+    let entry = driver.interfaces.get(&InterfaceId(2)).unwrap();
+    assert_eq!(entry.stats.tx_packets, 0);
+    assert_eq!(entry.stats.txb, 0);
+}
+
+#[test]
 fn request_path_includes_transport_id() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
