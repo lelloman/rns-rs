@@ -238,7 +238,10 @@ failure interpretation.
 ### Daily VPS Report and Upstream Drift
 
 Daily VPS checks include both per-host stats snapshots and the live manual
-backbone smoke test. The shared daily report database lives on `vps-eu` at
+backbone smoke test using its `--daily` stress profile. That profile adds
+Resource boundaries, concurrent Resources and links, controlled network
+impairment, and forced Backbone reconnection coverage. The shared daily report
+database lives on `vps-eu` at
 `/var/lib/rns-node/vps_daily_reports.db`, with a working copy at
 `data/vps_daily_reports.db` on whichever workstation is running the report.
 Pull the shared database first, collect and review both host snapshots locally,
@@ -367,7 +370,7 @@ WHERE rn = 1
 ORDER BY host;
 "
 
-scripts/manual-backbone-smoke.sh
+scripts/manual-backbone-smoke.sh --daily
 
 RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
 RETICULUM_BASELINE="$(sed -n 's/^- Normative commit: `\([0-9a-f]\{40\}\)`.*/\1/p' UPSTREAM.md)"
@@ -389,8 +392,9 @@ scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 
 Treat the daily VPS check as incomplete if the smoke test fails, even when both
 SQLite snapshots were collected successfully. On smoke failure, rerun with
-`scripts/manual-backbone-smoke.sh --keep` to preserve the disposable local node
-configs and logs for debugging.
+`scripts/manual-backbone-smoke.sh --daily --keep` if another reproduction is
+needed; failure diagnostics and disposable local node state are preserved
+automatically.
 
 Treat a snapshot field value of `-1` as "remote query failed or timed out", not
 as a valid zero count. In particular, `announce_24h = -1` means the collector
