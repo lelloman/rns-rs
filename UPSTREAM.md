@@ -8,26 +8,40 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.4.1`
-- Version metadata commit: `224124aac7d1e2aded3c781b783c009419efabf3`
-- Normative commit: `b2188ce9a746a35b770b10bea1b7ccbe93b4e198`
-- Commit date: `2026-07-24 21:23:42 +0200`
-- Subject: `Adjusted gravity update loglevel`
+- Version: `1.4.2`
+- Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
+- Normative commit: `b48b96e61676504e0a4e527b33b9a0b4495c6872`
+- Commit date: `2026-07-26 17:59:12 +0200`
+- Subject: `Prepare release`
 
-The normative 1.4.1 commit is the target of the signed `1.4.1` tag and is
+The normative 1.4.2 commit is the target of the signed `1.4.2` tag and is
 available from both the rgit repository and the GitHub release mirror. The
 interop lane checks out the exact commit directly, requires its `RNS` tree
-object to equal `da3ed5fb64f432b04aa387576701182b8c82df8d`, asserts the Python
+object to equal `3286dd665827d2e591b47efaa5706b643e9b8d5a`, asserts the Python
 version, and only then executes live Python/Rust interop.
 
-The exact 32-commit disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.4.1-parity.md`](docs/upstream-parity/reticulum-1.4.1-parity.md),
+The exact six-commit disposition and acceptance record is in
+[`docs/upstream-parity/reticulum-1.4.2-parity.md`](docs/upstream-parity/reticulum-1.4.2-parity.md),
 with the detailed commit audit in
-[`docs/upstream-parity/reticulum-1.4.1-audit.md`](docs/upstream-parity/reticulum-1.4.1-audit.md).
+[`docs/upstream-parity/reticulum-1.4.2-audit.md`](docs/upstream-parity/reticulum-1.4.2-audit.md).
 The PR CI matrix is the final software acceptance authority for this
 promotion. Historical 1.4.0 conformance fixtures retain their original source
-provenance. Physical Weave HIL and dual-VPS manual acceptance are not claimed
-by this software-only promotion.
+provenance. Physical Weave HIL is not claimed by this promotion. The live
+dual-VPS smoke test was completed on the acceptance date.
+
+## Completed 1.4.1..1.4.2 Porting Queue
+
+All six commits after the previous normative baseline
+`b2188ce9a746a35b770b10bea1b7ccbe93b4e198` were audited through the signed
+`1.4.2` tag target `b48b96e61676504e0a4e527b33b9a0b4495c6872`.
+The driver already rejected sends to offline interfaces; a focused recursive
+path-request regression now pins that invariant at the engine-to-writer
+boundary. The applicable `rnsh` changes align initiator logging with the
+upstream INFO default, add path/link/version/session and listener lifecycle
+diagnostics, and reject remote re-identification after the permitted handshake
+states. Version, changelog, cleanup-only and generated-documentation changes
+were audited without changing independent Rust crate versions or vendoring
+upstream artifacts.
 
 Earlier baseline history includes Reticulum `1.2.5`, with release commit
 `e8d161c0d50cc0416c98dcd1cee44807e7c52df1`. The upstream `1.2.4..1.2.5`

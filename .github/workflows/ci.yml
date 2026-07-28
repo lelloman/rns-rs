@@ -62,8 +62,8 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
-  reticulum-1-4-1-interop:
-    name: Reticulum 1.4.1 Interop
+  reticulum-1-4-2-interop:
+    name: Reticulum 1.4.2 Interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -74,9 +74,9 @@ jobs:
       - name: Checkout exact Reticulum baseline
         run: |
           git clone https://github.com/markqvist/Reticulum.git reticulum-upstream
-          git -C reticulum-upstream checkout b2188ce9a746a35b770b10bea1b7ccbe93b4e198
-          test "$(git -C reticulum-upstream rev-parse HEAD)" = "b2188ce9a746a35b770b10bea1b7ccbe93b4e198"
-          test "$(git -C reticulum-upstream rev-parse HEAD:RNS)" = "da3ed5fb64f432b04aa387576701182b8c82df8d"
+          git -C reticulum-upstream checkout b48b96e61676504e0a4e527b33b9a0b4495c6872
+          test "$(git -C reticulum-upstream rev-parse HEAD)" = "b48b96e61676504e0a4e527b33b9a0b4495c6872"
+          test "$(git -C reticulum-upstream rev-parse HEAD:RNS)" = "3286dd665827d2e591b47efaa5706b643e9b8d5a"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.96.0
@@ -86,7 +86,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/reticulum-upstream
           RETICULUM_UPSTREAM_DIR: ${{ github.workspace }}/reticulum-upstream
         run: |
-          python3 -c 'import RNS; assert RNS.__version__ == "1.4.1", RNS.__version__'
+          python3 -c 'import RNS; assert RNS.__version__ == "1.4.2", RNS.__version__'
           cargo test -p rns-net --test python_interop -- --nocapture
 
   cargo-test-hooks:
