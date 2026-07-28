@@ -109,8 +109,13 @@ pub fn main() -> i32 {
             let result = if opts.listen {
                 listen(opts).map(|_| 0)
             } else if opts.destination.is_some() {
+                let destination = opts.destination.clone().unwrap_or_default();
                 let mirror = opts.mirror_exit;
-                initiate(opts).map(|code| if mirror { code } else { 0 })
+                let result = initiate(opts).map(|code| if mirror { code } else { 0 });
+                if result.is_ok() {
+                    log::info!("Session with <{destination}> ended");
+                }
+                result
             } else {
                 print_usage();
                 Ok(1)
@@ -390,8 +395,8 @@ fn rnsh_log_path(config_dir: &Path, listen: bool) -> PathBuf {
     })
 }
 
-fn rnsh_log_level(listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
-    let base: i16 = if listen { 3 } else { 1 };
+fn rnsh_log_level(_listen: bool, verbose: u8, quiet: u8) -> log::LevelFilter {
+    let base: i16 = 3;
     match (base + verbose as i16 - quiet as i16).clamp(0, 5) {
         0 => log::LevelFilter::Off,
         1 => log::LevelFilter::Error,
@@ -1664,6 +1669,9 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
         &home,
     )?;
 
+    if !node.has_path(&DestHash(dest_hash))? {
+        log::info!("Requesting path to {}", prettyhexrep(&dest_hash));
+    }
     wait_for_path(&node, dest_hash, &event_rx, timeout)?;
     let recalled = node
         .recall_identity(&DestHash(dest_hash))?
@@ -1671,8 +1679,10 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let mut sig_pub = [0u8; 32];
     sig_pub.copy_from_slice(&recalled.public_key[32..64]);
 
+    log::info!("Establishing link with {}", prettyhexrep(&dest_hash));
     let link_id = node.create_link(dest_hash, sig_pub)?;
     wait_for_link(&event_rx, link_id, timeout)?;
+    log::info!("Link established with {}", prettyhexrep(&dest_hash));
     if !opts.no_id {
         node.identify_on_link(
             link_id,
@@ -1683,7 +1693,8 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     }
 
     send_message(&node, link_id, &version_message())?;
-    wait_for_version(&event_rx, timeout)?;
+    let (remote_version, protocol_version) = wait_for_version(&event_rx, timeout)?;
+    log::info!("Connected server version info: sw {remote_version}, proto {protocol_version}");
 
     let stdin_is_tty = io::stdin().is_terminal();
     let stdout_is_tty = io::stdout().is_terminal();
@@ -1838,7 +1849,7 @@ fn wait_for_link(
 fn wait_for_version(
     event_rx: &mpsc::Receiver<RnshEvent>,
     timeout: Duration,
-) -> Result<(), RnshError> {
+) -> Result<(String, u64), RnshError> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
@@ -1846,8 +1857,11 @@ fn wait_for_version(
                 msgtype, payload, ..
             }) => match RnshMessage::unpack(msgtype, &payload)? {
                 RnshMessage::VersionInfo {
-                    protocol_version, ..
-                } if protocol_version == PROTOCOL_VERSION => return Ok(()),
+                    sw_version,
+                    protocol_version,
+                } if protocol_version == PROTOCOL_VERSION => {
+                    return Ok((sw_version, protocol_version));
+                }
                 RnshMessage::Error { msg, .. } => return Err(RnshError::Protocol(msg)),
                 _ => {}
             },
@@ -2350,8 +2364,9 @@ mod tests {
 
     #[test]
     fn rnsh_logging_uses_file_oriented_levels() {
-        assert_eq!(rnsh_log_level(false, 0, 0), log::LevelFilter::Error);
+        assert_eq!(rnsh_log_level(false, 0, 0), log::LevelFilter::Info);
         assert_eq!(rnsh_log_level(true, 0, 0), log::LevelFilter::Info);
+        assert_eq!(rnsh_log_level(false, 1, 0), log::LevelFilter::Debug);
         assert_eq!(rnsh_log_level(true, 2, 0), log::LevelFilter::Trace);
         assert_eq!(rnsh_log_level(true, 0, 4), log::LevelFilter::Off);
     }
