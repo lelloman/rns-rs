@@ -4,7 +4,7 @@
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-server](https://img.shields.io/crates/v/rns-server.svg?label=rns-server)](https://crates.io/crates/rns-server)
-[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.4.1-blue)](UPSTREAM.md)
+[![upstream Reticulum](https://img.shields.io/badge/upstream%20Reticulum-1.4.2-blue)](UPSTREAM.md)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
@@ -63,7 +63,7 @@ rustup target add wasm32-unknown-unknown
 
 ## Running Tests
 
-Committed conformance vectors are generated from the historical, pinned Reticulum 1.4.0 baseline. The current upstream reference is Reticulum 1.4.1, which is exercised separately by the live Python/Rust interop CI lane; see [UPSTREAM.md](UPSTREAM.md) for the exact commits and acceptance scope.
+Committed conformance vectors are generated from the historical, pinned Reticulum 1.4.0 baseline. The current upstream reference is Reticulum 1.4.2, which is exercised separately by the live Python/Rust interop CI lane; see [UPSTREAM.md](UPSTREAM.md) for the exact commits and acceptance scope.
 
 ```bash
 # Generate fixtures from the pinned Reticulum 1.4.0 checkout
