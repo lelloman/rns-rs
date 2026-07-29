@@ -19,8 +19,22 @@ impl Args {
         Self::parse_from(std::env::args().skip(1).collect())
     }
 
+    /// Parse the multi-command `rns-ctl` surface, where several short options
+    /// accept values that are boolean flags in standalone tools.
+    pub fn parse_control() -> Self {
+        Self::parse_control_from(std::env::args().skip(1).collect())
+    }
+
     /// Parse from a list of argument strings.
     pub fn parse_from(args: Vec<String>) -> Self {
+        Self::parse_profile(args, false)
+    }
+
+    pub fn parse_control_from(args: Vec<String>) -> Self {
+        Self::parse_profile(args, true)
+    }
+
+    fn parse_profile(args: Vec<String>, control: bool) -> Self {
         let mut flags = HashMap::new();
         let mut positional = Vec::new();
         let mut verbosity: u8 = 0;
@@ -32,8 +46,8 @@ impl Args {
                 // Everything after -- is positional
                 positional.extend(iter);
                 break;
-            } else if arg.starts_with("--") {
-                let key = arg[2..].to_string();
+            } else if let Some(key) = arg.strip_prefix("--") {
+                let key = key.to_string();
                 // Check for --key=value syntax
                 if let Some(eq_pos) = key.find('=') {
                     let (k, v) = key.split_at(eq_pos);
@@ -44,7 +58,8 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" | "hex" | "meta" => {
+                        | "export-prv" | "pr-stats" | "burst" | "hex" | "meta" | "daemon"
+                        | "disable-auth" | "json" | "value-only" | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -64,8 +79,16 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        'a' | 'r' | 't' | 'j' | 'p' | 'P' | 'x' | 'D' | 'l' | 'f' | 'A' | 'Z' => {
+                        'a' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't' | 'p' | 'x'
+                            if !control =>
+                        {
                             flags.insert(c.to_string(), "true".into());
+                        }
+                        'a' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' if control => {
+                            flags.insert(c.to_string(), "true".into());
+                        }
+                        'h' => {
+                            flags.insert("help".into(), "true".into());
                         }
                         _ => {
                             // Short flag that may take a value: -c /path, -s rate
@@ -147,6 +170,12 @@ mod tests {
         let a = args(&["-t", "abcd1234"]);
         assert!(a.has("t"));
         assert_eq!(a.positional, vec!["abcd1234"]);
+    }
+
+    #[test]
+    fn control_profile_allows_ambiguous_short_values() {
+        let parsed = Args::parse_control_from(vec!["-t".into(), "12".into()]);
+        assert_eq!(parsed.get("t"), Some("12"));
     }
 
     #[test]

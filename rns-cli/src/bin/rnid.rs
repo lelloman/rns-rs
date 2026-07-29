@@ -47,16 +47,19 @@ enum RsgOutputFormat {
     Base64,
 }
 
+#[allow(dead_code)]
 fn main() {
-    let args = Args::parse();
+    run_with_args(Args::parse(), "rnid", "rnid");
+}
 
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if args.has("version") {
-        println!("rnid {}", VERSION);
+        println!("{} {}", version_name, VERSION);
         return;
     }
 
     if args.has("help") || args.has("h") {
-        print_usage();
+        print_usage(usage_name);
         return;
     }
 
@@ -167,7 +170,7 @@ fn main() {
     }
 
     if !operated {
-        print_usage();
+        print_usage(usage_name);
     }
 }
 
@@ -1671,8 +1674,8 @@ fn die(message: &str, code: i32) -> ! {
     process::exit(code);
 }
 
-fn print_usage() {
-    println!("Usage: rnid [OPTIONS]");
+fn print_usage(usage_name: &str) {
+    println!("Usage: {usage_name} [OPTIONS]");
     println!();
     println!("Identity:");
     println!("  -g FILE            Generate private identity and save to file");

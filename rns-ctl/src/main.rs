@@ -2,7 +2,7 @@ use rns_ctl::args::Args;
 use rns_ctl::cmd;
 
 fn main() {
-    let args = Args::parse();
+    let args = Args::parse_control();
 
     if args.has("version") {
         println!("rns-ctl {}", env!("FULL_VERSION"));

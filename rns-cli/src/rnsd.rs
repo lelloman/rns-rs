@@ -60,13 +60,17 @@ pub fn main_entry() {
 }
 
 pub fn main_entry_from(args: Args) {
+    main_entry_from_named(args, "rnsd", "rnsd");
+}
+
+pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
     if args.has("version") {
-        println!("rnsd {}", VERSION);
+        println!("{} {}", version_name, VERSION);
         return;
     }
 
     if args.has("help") || args.has("h") {
-        print_usage();
+        print_usage(usage_name);
         return;
     }
 
@@ -234,8 +238,8 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     }
 }
 
-fn print_usage() {
-    println!("Usage: rnsd [OPTIONS]");
+fn print_usage(usage_name: &str) {
+    println!("Usage: {usage_name} [OPTIONS]");
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");

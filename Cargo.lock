@@ -2040,6 +2040,7 @@ dependencies = [
  "libc",
  "log",
  "rcgen",
+ "rns-cli",
  "rns-core",
  "rns-crypto",
  "rns-hooks",
