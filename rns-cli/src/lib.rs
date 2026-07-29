@@ -8,6 +8,7 @@ pub mod remote;
 pub mod rncp;
 pub mod rnsd;
 pub mod rnsh;
+pub mod rnx;
 #[cfg(feature = "sidecars")]
 pub mod sentineld;
 #[cfg(feature = "sidecars")]
