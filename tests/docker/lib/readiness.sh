@@ -42,6 +42,30 @@ wait_for_topology_ready() {
         fi
       done
       ;;
+    star)
+      if ! wait_for_up_interfaces "${HUB_PORT:?Need HUB_PORT}" "$(( topo_n - 1 ))" "$timeout"; then
+        return 1
+      fi
+      for (( i=1; i<topo_n; i++ )); do
+        local varname="SPOKE_$(printf '%02d' "$i")_PORT"
+        local port="${!varname}"
+        if ! wait_for_up_interfaces "$port" "1" "$timeout"; then
+          return 1
+        fi
+      done
+      ;;
+    mesh)
+      local expected="$(( topo_n - 1 ))"
+      for (( i=0; i<topo_n; i++ )); do
+        local node_letter
+        node_letter=$(printf "\\$(printf '%03o' "$(( i + 97 ))")")
+        local varname="NODE_$(echo "$node_letter" | tr '[:lower:]' '[:upper:]')_PORT"
+        local port="${!varname}"
+        if ! wait_for_up_interfaces "$port" "$expected" "$timeout"; then
+          return 1
+        fi
+      done
+      ;;
   esac
 
   return 0
