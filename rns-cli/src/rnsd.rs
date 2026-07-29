@@ -8,7 +8,9 @@ use rns_net::{Callbacks, InterfaceId, RnsNode};
 
 const VERSION: &str = env!("FULL_VERSION");
 
-struct DaemonCallbacks;
+struct DaemonCallbacks {
+    announce_level: log::Level,
+}
 
 impl Callbacks for DaemonCallbacks {
     fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
@@ -20,7 +22,8 @@ impl Callbacks for DaemonCallbacks {
             Some(x) => format!(", snr:{}", x),
             None => "".to_string(),
         };
-        log::debug!(
+        log::log!(
+            self.announce_level,
             "Announce received for {} (hops: {}{}{})",
             hex(&announced.dest_hash.0),
             announced.hops,
@@ -60,10 +63,16 @@ pub fn main_entry() {
 }
 
 pub fn main_entry_from(args: Args) {
-    main_entry_from_named(args, "rnsd", "rnsd");
+    main_entry_impl(args, "rnsd", "rnsd", log::Level::Debug);
 }
 
 pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
+    // `rns-ctl daemon` historically reported received announces at INFO,
+    // while the standalone `rnsd` binary keeps them at DEBUG.
+    main_entry_impl(args, usage_name, version_name, log::Level::Info);
+}
+
+fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_level: log::Level) {
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
@@ -125,7 +134,7 @@ pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
 
     let node = RnsNode::from_config(
         config_path.as_ref().map(|s| Path::new(s.as_str())),
-        Box::new(DaemonCallbacks),
+        Box::new(DaemonCallbacks { announce_level }),
     );
 
     let node = match node {
