@@ -1,8 +1,11 @@
 # RNS Protocol Specification
 
-Status: Draft
+Status: Complete for `RNS-Compat/1`
 
-Version: 0.1
+Version: 1.0
+
+Compatibility baseline: Reticulum `1.4.2`, commit
+`b48b96e61676504e0a4e527b33b9a0b4495c6872`.
 
 This document is the normative protocol specification for the wire protocol
 implemented by `rns-rs`. It describes packet formats, cryptographic framing,
@@ -499,6 +502,23 @@ system.
 - hashmap exhaustion flag values:
   - `0x00` = not exhausted
   - `0xff` = exhausted
+- maximum efficient logical segment size: 1,048,575 bytes
+- initial/minimum receive window: 4/2 parts
+- slow/very-slow/fast maximum windows: 10/4/75 parts
+- transfer retries: 16
+- advertisement retries: 4
+
+Context values are:
+
+| Context | Value | Packet role |
+|---|---:|---|
+| `RESOURCE` | `0x01` | encrypted Resource part |
+| `RESOURCE_ADV` | `0x02` | encrypted advertisement |
+| `RESOURCE_REQ` | `0x03` | encrypted part request |
+| `RESOURCE_HMU` | `0x04` | encrypted hash-map update |
+| `RESOURCE_PRF` | `0x05` | unencrypted completion proof |
+| `RESOURCE_ICL` | `0x06` | encrypted sender cancellation |
+| `RESOURCE_RCL` | `0x07` | encrypted receiver rejection/cancellation |
 
 ### 14.2 Sender-Side Data Preparation
 
@@ -704,9 +724,77 @@ If a resource is split across multiple resource segments:
 - `total_segments` gives the total number of segments
 - `original_hash` identifies the first segment
 
-Segment coordination and higher-level reassembly are above the single-resource
-packet formats defined here, but every segment individually follows the same
-advertisement, request, part, HMU, and proof rules.
+The first segment contains metadata and as much application data as fits after
+the metadata prefix. Every later segment contains at most 1,048,575 bytes of
+application data and no metadata prefix. The first segment's `resource_hash`
+becomes `original_hash` for every segment. `data_size` reports the complete
+logical size, including the first-segment metadata prefix.
+
+Only segment 1 may be accepted without prior split state. Segment `i > 1` MUST
+be rejected unless segment `i-1` completed successfully, its `original_hash`
+matches, and its `total_segments` equals the established value. The sender MUST
+not advertise segment `i+1` until the proof for segment `i` validates. A failed
+or cancelled segment terminates the complete split transfer.
+
+Verified segment data may be written to durable storage immediately. Storage
+policy is local behavior and does not alter the wire representation.
+
+### 14.12 Sender State Machine
+
+```text
+QUEUED -> ADVERTISED -> TRANSFERRING -> AWAITING_PROOF -> COMPLETE
+                    \-> FAILED
+                    \-> REJECTED
+```
+
+- `QUEUED`: data preparation completed but no advertisement was emitted.
+- `ADVERTISED`: the sender waits for a valid request or receiver cancellation.
+- `TRANSFERRING`: requested parts and HMU segments may be emitted.
+- `AWAITING_PROOF`: all requested parts were sent and the proof timer runs.
+- `COMPLETE`: the expected proof was received; for split transfers the next
+  segment may now be advertised.
+- Retry exhaustion, timeout, cancellation, malformed state transitions, or a
+  receiver rejection enter a terminal failure state.
+
+Advertisement retries are bounded by 4 and transfer retries by 16. Timeout
+intervals derive from measured link/resource RTT using the constants in the
+compatibility implementation; these timers are interoperable heuristics rather
+than fields encoded on wire.
+
+### 14.13 Receiver State Machine
+
+```text
+ADVERTISED -> ACCEPTED -> TRANSFERRING -> ASSEMBLING -> COMPLETE
+           \-> REJECTED                 \-> CORRUPT
+                         \-> FAILED
+```
+
+Acceptance emits the first `RESOURCE_REQ`. A receiver requests only hashes in
+its known map and current window. Unknown map entries trigger the exhaustion
+form of `RESOURCE_REQ` and an HMU wait. Once every part is present, assembly and
+all hash checks MUST succeed before `RESOURCE_PRF` is emitted. Decryption,
+decompression, framing, or hash failure MUST NOT produce a completion proof.
+
+### 14.14 Requests and Responses
+
+Advertisement flags `is_request` and `is_response` associate a Resource with
+the 16-byte `request_id` in `q`. Request Resources carry the same packed request
+array used by packet requests. Response Resources carry the packed
+`[request_id, response_value]` array. They bypass independent-Resource
+application acceptance but remain subject to the request endpoint's configured
+request/response size limits.
+
+### 14.15 Validation and Failure Rules
+
+- Hashes and request identifiers MUST have their exact specified lengths.
+- Part counts MUST be non-zero and bounded by the advertised transfer size and
+  collision-guard requirements.
+- Metadata length MUST fit its 24-bit prefix and the first logical segment.
+- Uncompressed output MUST remain within the receiver's selected local policy.
+- HMU data for a different Resource, malformed HMU MessagePack, invalid proof,
+  duplicate terminal events, and out-of-order split advertisements MUST be
+  ignored or rejected without delivering application data.
+- Link teardown cancels every Resource associated with the link.
 
 ## 15. Transport Behavior
 
@@ -868,15 +956,18 @@ The following are not part of this protocol specification:
 - log message wording
 - app store distribution terms
 
-## 20. Next Steps
+## 20. Conformance and Versioning
 
-To evolve this specification into a standalone protocol standard, the next work
-items should be:
+`RNS-Compat/1` is the protocol implemented and tested by this repository. A
+change to packet layout, cryptographic ordering, context meaning, or a normative
+state transition requires a new compatibility profile or an explicitly
+backward-compatible extension. Timer tuning, storage policy, CLI behavior, and
+resource buffering strategy do not change the profile when their observable
+wire behavior remains identical.
 
-1. define resource subprotocol messages in full
-2. define a machine-readable packet and state-model appendix
-3. separate normative constants from implementation-derived heuristics
-4. publish conformance vectors derived from this document rather than from code
+Normative constants appear in Sections 3, 6, 10, 12, and 14. Transport timing,
+queue capacity, interface reconnection, and cache-retention values are local
+heuristics unless a section explicitly marks them as interoperable behavior.
 
 ## Appendix A. Conformance Vectors
 
@@ -1019,12 +1110,6 @@ Expected packed advertisement:
 
 ### A.5 Vector Policy
 
-Future revisions should add vectors for:
-
-- additional proof validation edge cases
-- timeout/retry edge cases
-- multi-segment resource request sequences
-
 Independent implementations should treat the machine-readable vector files as
 test fixtures, not as the normative source of protocol meaning. The normative
 source remains this specification.
@@ -1156,3 +1241,24 @@ Expected `RESOURCE_REQ` plaintext:
 ```text
 ff010203041111111111111111111111111111111111111111111111111111111111111111aabbccdd
 ```
+
+## Appendix B. Executable Coverage Map
+
+| Protocol area | Machine-readable evidence | Executable coverage |
+|---|---|---|
+| Flags, headers, packet hashes | `tests/fixtures/protocol/flags_vectors.json`, `packet_vectors.json`, `hash_vectors.json` | `rns-core` packet and hash suites |
+| Destination derivation | `tests/fixtures/protocol/destination_vectors.json` | destination vector tests |
+| Announces | `tests/fixtures/protocol/announce_vectors.json` | announce validation and Python interoperability suites |
+| Destination proofs | `tests/fixtures/protocol/proof_vectors.json` | proof generation/validation suites |
+| Link handshake and crypto | `tests/fixtures/link/link_handshake_vectors.json`, `link_crypto_vectors.json`, `link_identify_vectors.json` | link-engine vector and live interoperability suites |
+| Channel and stream envelopes | `tests/fixtures/link/channel_envelope_vectors.json`, `stream_data_vectors.json` | channel/buffer unit and end-to-end suites |
+| Resource advertisements and MessagePack | `tests/fixtures/resource/advertisement_vectors.json`, `msgpack_vectors.json` | advertisement and MessagePack fixture suites |
+| Resource maps, HMU, requests, and proofs | `tests/fixtures/resource/part_hash_vectors.json`, `hmu_vectors.json`, `resource_proof_vectors.json` | sender/receiver state-machine suites |
+| Split and disk-backed Resources | `tests/fixtures/resource/split_vectors.json` and deterministic generated data | `rns-net` split-boundary, retransmission, concurrent-transfer, streaming-reader, and disk-delivery tests |
+| Request/response Resources | deterministic generated data | `rns-net` large request/response and configured-limit tests |
+| Interfaces and IFAC framing | pinned runtime fixtures | IFAC, TCP, UDP, Local, KISS, RNode, Pipe, I2P, Backbone, Weave, and Python interoperability suites |
+
+The coverage map is tied to Reticulum `1.4.2` commit
+`b48b96e61676504e0a4e527b33b9a0b4495c6872`. The upstream-parity records under
+`docs/upstream-parity/` document any later observed delta before it becomes a
+new normative baseline.
