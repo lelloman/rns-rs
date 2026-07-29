@@ -3,7 +3,7 @@
 //! Wires together the driver, interfaces, and timer thread.
 
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -47,6 +47,8 @@ use crate::interface::udp::{udp_runtime_handle_from_config, UdpConfig};
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::storage;
 use crate::time;
+
+static NEXT_RESOURCE_TRANSFER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 const DEFAULT_KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
@@ -2133,6 +2135,42 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Register a request handler whose response is completed asynchronously
+    /// with [`RnsNode::send_deferred_response`].
+    pub fn register_deferred_request_handler<F>(
+        &self,
+        path: &str,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: F,
+    ) -> Result<(), SendError>
+    where
+        F: Fn([u8; 16], &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send + 'static,
+    {
+        self.tx
+            .send(Event::RegisterDeferredRequestHandler {
+                path: path.to_string(),
+                allowed_list,
+                handler: Box::new(handler),
+            })
+            .map_err(|_| SendError)
+    }
+
+    /// Complete a request accepted by a deferred request handler.
+    pub fn send_deferred_response(
+        &self,
+        link_id: [u8; 16],
+        request_id: [u8; 16],
+        data: Vec<u8>,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SendDeferredResponse {
+                link_id,
+                request_id,
+                data,
+            })
+            .map_err(|_| SendError)
+    }
+
     /// Create an outbound link to a destination.
     ///
     /// Returns the link_id on success.
@@ -2235,6 +2273,58 @@ impl RnsNode {
                 metadata,
                 auto_compress,
             })
+            .map_err(|_| SendError)
+    }
+
+    /// Send a Resource from a sequential reader without retaining the full
+    /// logical payload in memory.
+    pub fn send_resource_reader<R: Read + Send + 'static>(
+        &self,
+        link_id: [u8; 16],
+        reader: R,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    ) -> Result<crate::resource::ResourceTransferId, SendError> {
+        self.reject_new_work_if_draining()?;
+        let transfer_id = crate::resource::ResourceTransferId(
+            NEXT_RESOURCE_TRANSFER_ID.fetch_add(1, Ordering::Relaxed),
+        );
+        self.tx
+            .send(Event::SendResourceStream {
+                link_id,
+                transfer_id,
+                reader: Box::new(reader),
+                declared_length,
+                metadata,
+                auto_compress,
+            })
+            .map_err(|_| SendError)?;
+        Ok(transfer_id)
+    }
+
+    /// Send a file as a bounded-memory streaming Resource.
+    pub fn send_resource_file(
+        &self,
+        link_id: [u8; 16],
+        path: impl AsRef<Path>,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    ) -> io::Result<crate::resource::ResourceTransferId> {
+        let file = std::fs::File::open(path.as_ref())?;
+        let length = file.metadata()?.len();
+        self.send_resource_reader(link_id, file, length, metadata, auto_compress)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "RNS driver shut down"))
+    }
+
+    /// Select delivery policy for independent incoming Resources on a link.
+    pub fn set_resource_receive_mode(
+        &self,
+        link_id: [u8; 16],
+        mode: crate::resource::ResourceReceiveMode,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SetResourceReceiveMode { link_id, mode })
             .map_err(|_| SendError)
     }
 

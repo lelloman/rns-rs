@@ -7,6 +7,9 @@
 //! Python reference: Link.py, RequestReceipt.py, Resource.py
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use super::compressor::Bzip2Compressor;
 use rns_core::channel::{Channel, Sequence};
@@ -19,6 +22,9 @@ use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::{OsRng, Rng};
 
 use super::time;
+use crate::resource::{
+    ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError, ResourceTransferId,
+};
 
 /// Resource acceptance strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,8 +71,12 @@ struct ManagedLink {
     incoming_splits: HashMap<[u8; 32], IncomingSplitTransfer>,
     /// Logical outgoing split transfers, keyed by original resource hash.
     outgoing_splits: HashMap<[u8; 32], OutgoingSplitTransfer>,
+    /// Reader state for bounded-memory outgoing transfers.
+    outgoing_streams: HashMap<[u8; 32], OutgoingStreamTransfer>,
     /// Resource acceptance strategy.
     resource_strategy: ResourceStrategy,
+    /// Delivery policy for independent incoming Resources.
+    resource_receive_mode: ResourceReceiveMode,
     /// Maximum accepted request size inherited from the local destination.
     max_request_size: Option<usize>,
     /// Interface this link's packets should be sent on when known.
@@ -84,10 +94,19 @@ struct IncomingSplitTransfer {
     current_segment_index: u64,
     current_received_parts: usize,
     current_total_parts: usize,
-    data: Vec<u8>,
+    storage: IncomingSplitStorage,
     metadata: Option<Vec<u8>>,
     is_request: bool,
     is_response: bool,
+}
+
+enum IncomingSplitStorage {
+    Memory(Vec<u8>),
+    File {
+        file: File,
+        path: PathBuf,
+        size: u64,
+    },
 }
 
 struct OutgoingSplitTransfer {
@@ -96,6 +115,15 @@ struct OutgoingSplitTransfer {
     current_segment_index: u64,
     current_sent_parts: usize,
     current_total_parts: usize,
+}
+
+struct OutgoingStreamTransfer {
+    transfer_id: ResourceTransferId,
+    reader: Box<dyn Read + Send>,
+    remaining: u64,
+    declared_length: u64,
+    metadata_overhead: u64,
+    auto_compress: bool,
 }
 
 struct PendingRequest {
@@ -152,6 +180,13 @@ struct RequestHandlerEntry {
     >,
 }
 
+struct DeferredRequestHandlerEntry {
+    path: String,
+    path_hash: [u8; 16],
+    allowed_list: Option<Vec<[u8; 16]>>,
+    handler: Box<dyn Fn(LinkId, &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send>,
+}
+
 /// Actions produced by LinkManager for the driver to dispatch.
 #[derive(Debug)]
 pub enum LinkManagerAction {
@@ -202,6 +237,11 @@ pub enum LinkManagerAction {
         data: Vec<u8>,
         metadata: Option<Vec<u8>>,
     },
+    /// A disk-backed Resource is ready for application ownership.
+    ResourceFileReceived {
+        link_id: LinkId,
+        resource: ReceivedResourceFile,
+    },
     /// Resource transfer completed (proof validated on sender side).
     ResourceCompleted { link_id: LinkId },
     /// Resource transfer failed.
@@ -211,6 +251,21 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         received: usize,
         total: usize,
+    },
+    ResourceStreamCompleted {
+        link_id: LinkId,
+        transfer_id: ResourceTransferId,
+    },
+    ResourceStreamFailed {
+        link_id: LinkId,
+        transfer_id: ResourceTransferId,
+        error: ResourceTransferError,
+    },
+    ResourceStreamProgress {
+        link_id: LinkId,
+        transfer_id: ResourceTransferId,
+        transferred: u64,
+        total: u64,
     },
     /// Query application whether to accept an incoming resource (for AcceptApp strategy).
     ResourceAcceptQuery {
@@ -256,6 +311,7 @@ pub struct LinkManager {
     links: HashMap<LinkId, ManagedLink>,
     link_destinations: HashMap<[u8; 16], LinkDestination>,
     request_handlers: Vec<RequestHandlerEntry>,
+    deferred_request_handlers: Vec<DeferredRequestHandlerEntry>,
     /// Path hashes that should be handled externally (by the driver) rather than
     /// by registered handler closures. Used for management destinations.
     management_paths: Vec<[u8; 16]>,
@@ -312,6 +368,23 @@ impl LinkManager {
         Some(key)
     }
 
+    fn incoming_storage(
+        mode: &ResourceReceiveMode,
+        original_hash: &[u8; 32],
+    ) -> std::io::Result<IncomingSplitStorage> {
+        match mode {
+            ResourceReceiveMode::Memory { .. } => Ok(IncomingSplitStorage::Memory(Vec::new())),
+            ResourceReceiveMode::TemporaryFile { directory, .. } => {
+                let (file, path) = crate::resource::create_receive_file(directory, original_hash)?;
+                Ok(IncomingSplitStorage::File {
+                    file,
+                    path,
+                    size: 0,
+                })
+            }
+        }
+    }
+
     fn incoming_split_progress(split: &IncomingSplitTransfer, sdu: usize) -> (usize, usize) {
         Self::split_progress_parts(
             split.current_segment_index,
@@ -338,6 +411,7 @@ impl LinkManager {
             links: HashMap::new(),
             link_destinations: HashMap::new(),
             request_handlers: Vec::new(),
+            deferred_request_handlers: Vec::new(),
             management_paths: Vec::new(),
         }
     }
@@ -474,6 +548,24 @@ impl LinkManager {
         });
     }
 
+    /// Register a request handler that produces its response asynchronously.
+    pub fn register_deferred_request_handler<F>(
+        &mut self,
+        path: &str,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: F,
+    ) where
+        F: Fn(LinkId, &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send + 'static,
+    {
+        self.deferred_request_handlers
+            .push(DeferredRequestHandlerEntry {
+                path: path.to_string(),
+                path_hash: compute_path_hash(path),
+                allowed_list,
+                handler: Box::new(handler),
+            });
+    }
+
     /// Create an outbound link to a destination.
     ///
     /// `dest_sig_pub_bytes` is the destination's Ed25519 signing public key
@@ -540,7 +632,9 @@ impl LinkManager {
             pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
+            outgoing_streams: HashMap::new(),
             resource_strategy: ResourceStrategy::default(),
+            resource_receive_mode: ResourceReceiveMode::default(),
             max_request_size: None,
             route_interface: None,
             route_transport_id: None,
@@ -671,7 +765,9 @@ impl LinkManager {
             pending_requests: HashMap::new(),
             incoming_splits: HashMap::new(),
             outgoing_splits: HashMap::new(),
+            outgoing_streams: HashMap::new(),
             resource_strategy: ld.resource_strategy,
+            resource_receive_mode: ResourceReceiveMode::default(),
             max_request_size: ld.max_request_size,
             route_interface: Some(receiving_interface),
             route_transport_id: if packet.flags.header_type == constants::HEADER_2 {
@@ -1446,6 +1542,35 @@ impl LinkManager {
             }];
         }
 
+        if let Some(handler) = self
+            .deferred_request_handlers
+            .iter()
+            .find(|handler| handler.path_hash == path_hash)
+        {
+            let remote_identity = self
+                .links
+                .get(link_id)
+                .and_then(|link| link.remote_identity.as_ref());
+            if let Some(allowed) = &handler.allowed_list {
+                let Some((identity_hash, _)) = remote_identity else {
+                    log::debug!("Deferred request denied: peer not identified");
+                    return Vec::new();
+                };
+                if !allowed.contains(identity_hash) {
+                    log::debug!("Deferred request denied: identity not in allowed list");
+                    return Vec::new();
+                }
+            }
+            (handler.handler)(
+                *link_id,
+                &handler.path,
+                request_id,
+                &request_data,
+                remote_identity,
+            );
+            return Vec::new();
+        }
+
         // Look up handler by path_hash
         let handler_idx = self
             .request_handlers
@@ -1618,6 +1743,22 @@ impl LinkManager {
 
         let _ = link;
         self.process_resource_actions(link_id, adv_actions, rng)
+    }
+
+    /// Send the value for a previously accepted deferred request.
+    pub fn send_deferred_response(
+        &mut self,
+        link_id: &LinkId,
+        request_id: &[u8; 16],
+        response_data: &[u8],
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        let packet_actions = self.build_response_packet(link_id, request_id, response_data, rng);
+        if !packet_actions.is_empty() {
+            packet_actions
+        } else {
+            self.send_response_resource(link_id, request_id, response_data, None, true, rng)
+        }
     }
 
     /// Send a management response on a link.
@@ -2136,6 +2277,83 @@ impl LinkManager {
         Ok(senders)
     }
 
+    fn read_stream_segment(
+        stream: &mut OutgoingStreamTransfer,
+        capacity: usize,
+    ) -> Result<Vec<u8>, ResourceTransferError> {
+        let length = stream.remaining.min(capacity as u64) as usize;
+        let mut data = vec![0; length];
+        stream
+            .reader
+            .read_exact(&mut data)
+            .map_err(|error| ResourceTransferError::Source(error.to_string()))?;
+        stream.remaining -= length as u64;
+        if stream.remaining == 0 {
+            let mut trailing = [0u8; 1];
+            if stream
+                .reader
+                .read(&mut trailing)
+                .map_err(|error| ResourceTransferError::Source(error.to_string()))?
+                != 0
+            {
+                return Err(ResourceTransferError::Source(
+                    "resource source exceeds declared length".into(),
+                ));
+            }
+        }
+        Ok(data)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_stream_segment(
+        link: &ManagedLink,
+        stream: &mut OutgoingStreamTransfer,
+        metadata: Option<&[u8]>,
+        segment_index: u64,
+        total_segments: u64,
+        original_hash: Option<[u8; 32]>,
+        rng: &mut dyn Rng,
+        now: f64,
+    ) -> Result<ResourceSender, ResourceTransferError> {
+        let metadata_overhead = metadata.map(|value| 3 + value.len()).unwrap_or(0);
+        if metadata_overhead > constants::RESOURCE_MAX_EFFICIENT_SIZE {
+            return Err(ResourceTransferError::Protocol(
+                "resource metadata exceeds maximum segment size".into(),
+            ));
+        }
+        let data = Self::read_stream_segment(
+            stream,
+            constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead,
+        )?;
+        let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
+        let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
+            link.engine
+                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
+                .unwrap_or_else(|_| plaintext.to_vec())
+        };
+        let mut sender = ResourceSender::new(
+            &data,
+            metadata,
+            Self::resource_sdu_for_link(link),
+            &encrypt_fn,
+            &Bzip2Compressor,
+            rng,
+            now,
+            stream.auto_compress,
+            false,
+            None,
+            segment_index,
+            total_segments,
+            original_hash,
+            link.engine.rtt().unwrap_or(1.0),
+            6.0,
+        )
+        .map_err(|error| ResourceTransferError::Protocol(error.to_string()))?;
+        sender.data_size = (stream.declared_length + stream.metadata_overhead) as usize;
+        sender.flags.has_metadata = stream.metadata_overhead != 0;
+        Ok(sender)
+    }
+
     fn start_resource_senders(
         link: &mut ManagedLink,
         mut senders: Vec<ResourceSender>,
@@ -2172,8 +2390,9 @@ impl LinkManager {
         adv_plaintext: &[u8],
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let has_request_handlers =
-            !self.request_handlers.is_empty() || !self.management_paths.is_empty();
+        let has_request_handlers = !self.request_handlers.is_empty()
+            || !self.deferred_request_handlers.is_empty()
+            || !self.management_paths.is_empty();
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -2212,6 +2431,21 @@ impl LinkManager {
             Some(key) => key,
             None => return Vec::new(),
         };
+
+        if !is_request && !is_response {
+            let maximum = match &link.resource_receive_mode {
+                ResourceReceiveMode::Memory { max_bytes } => Some(*max_bytes),
+                ResourceReceiveMode::TemporaryFile { max_bytes, .. } => *max_bytes,
+            };
+            if maximum.is_some_and(|maximum| receiver.data_size > maximum) {
+                let reject_actions = {
+                    let mut receiver = receiver;
+                    receiver.reject()
+                };
+                let _ = link;
+                return self.process_resource_actions(link_id, reject_actions, rng);
+            }
+        }
 
         if is_split && segment_index > 1 {
             let should_accept = link
@@ -2275,7 +2509,7 @@ impl LinkManager {
                         current_segment_index: segment_index,
                         current_received_parts: 0,
                         current_total_parts: receiver.total_parts,
-                        data: Vec::new(),
+                        storage: IncomingSplitStorage::Memory(Vec::new()),
                         metadata: None,
                         is_request: true,
                         is_response: false,
@@ -2333,7 +2567,7 @@ impl LinkManager {
                         current_segment_index: segment_index,
                         current_received_parts: 0,
                         current_total_parts: receiver.total_parts,
-                        data: Vec::new(),
+                        storage: IncomingSplitStorage::Memory(Vec::new()),
                         metadata: None,
                         is_request: false,
                         is_response,
@@ -2358,6 +2592,24 @@ impl LinkManager {
             }
             ResourceStrategy::AcceptAll => {
                 if is_split {
+                    let storage =
+                        match Self::incoming_storage(&link.resource_receive_mode, &original_hash) {
+                            Ok(storage) => storage,
+                            Err(error) => {
+                                let reject_actions = {
+                                    let mut receiver = receiver;
+                                    receiver.reject()
+                                };
+                                let _ = link;
+                                let mut actions =
+                                    self.process_resource_actions(link_id, reject_actions, rng);
+                                actions.push(LinkManagerAction::ResourceFailed {
+                                    link_id: *link_id,
+                                    error: format!("resource storage failed: {error}"),
+                                });
+                                return actions;
+                            }
+                        };
                     link.incoming_splits.insert(
                         original_hash,
                         IncomingSplitTransfer {
@@ -2366,7 +2618,7 @@ impl LinkManager {
                             current_segment_index: segment_index,
                             current_received_parts: 0,
                             current_total_parts: receiver.total_parts,
-                            data: Vec::new(),
+                            storage,
                             metadata: None,
                             is_request: false,
                             is_response,
@@ -2419,19 +2671,37 @@ impl LinkManager {
             if let Some(original_hash) =
                 Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
             {
-                link.incoming_splits
-                    .entry(original_hash)
-                    .or_insert_with(|| IncomingSplitTransfer {
-                        total_segments: link.incoming_resources[idx].total_segments,
-                        completed_segments: 0,
-                        current_segment_index: link.incoming_resources[idx].segment_index,
-                        current_received_parts: 0,
-                        current_total_parts: link.incoming_resources[idx].total_parts,
-                        data: Vec::new(),
-                        metadata: None,
-                        is_request: link.incoming_resources[idx].flags.is_request,
-                        is_response: link.incoming_resources[idx].flags.is_response,
-                    });
+                if !link.incoming_splits.contains_key(&original_hash) {
+                    let storage =
+                        match Self::incoming_storage(&link.resource_receive_mode, &original_hash) {
+                            Ok(storage) => storage,
+                            Err(error) => {
+                                let resource_actions = link.incoming_resources[idx].reject();
+                                let _ = link;
+                                let mut actions =
+                                    self.process_resource_actions(link_id, resource_actions, rng);
+                                actions.push(LinkManagerAction::ResourceFailed {
+                                    link_id: *link_id,
+                                    error: format!("resource storage failed: {error}"),
+                                });
+                                return actions;
+                            }
+                        };
+                    link.incoming_splits.insert(
+                        original_hash,
+                        IncomingSplitTransfer {
+                            total_segments: link.incoming_resources[idx].total_segments,
+                            completed_segments: 0,
+                            current_segment_index: link.incoming_resources[idx].segment_index,
+                            current_received_parts: 0,
+                            current_total_parts: link.incoming_resources[idx].total_parts,
+                            storage,
+                            metadata: None,
+                            is_request: link.incoming_resources[idx].flags.is_request,
+                            is_response: link.incoming_resources[idx].flags.is_response,
+                        },
+                    );
+                }
             }
         }
 
@@ -2460,6 +2730,7 @@ impl LinkManager {
         let now = time::now();
         let mut all_actions = Vec::new();
         let mut progress_update = None;
+        let mut progress_stream_hash = None;
         for sender in &mut link.outgoing_resources {
             if sender.flags.split && sender.status == rns_core::resource::ResourceStatus::Queued {
                 continue;
@@ -2468,6 +2739,7 @@ impl LinkManager {
             let resource_actions = sender.handle_request(plaintext, now);
             if !resource_actions.is_empty() {
                 if sender.sent_parts != before_sent {
+                    progress_stream_hash = Some(sender.original_hash);
                     if sender.flags.split {
                         if let Some(split) = link.outgoing_splits.get_mut(&sender.original_hash) {
                             split.current_segment_index = sender.segment_index;
@@ -2488,11 +2760,31 @@ impl LinkManager {
         let _ = link;
         let mut out = self.process_resource_actions(link_id, all_actions, rng);
         if let Some((received, total)) = progress_update {
-            out.push(LinkManagerAction::ResourceProgress {
-                link_id: *link_id,
-                received,
-                total,
-            });
+            if let Some((stream, transferred)) = progress_stream_hash.and_then(|hash| {
+                self.links.get(link_id).and_then(|link| {
+                    link.outgoing_streams.get(&hash).map(|stream| {
+                        let transferred = if total == 0 {
+                            0
+                        } else {
+                            stream.declared_length.saturating_mul(received as u64) / total as u64
+                        };
+                        (stream, transferred.min(stream.declared_length))
+                    })
+                })
+            }) {
+                out.push(LinkManagerAction::ResourceStreamProgress {
+                    link_id: *link_id,
+                    transfer_id: stream.transfer_id,
+                    transferred,
+                    total: stream.declared_length,
+                });
+            } else {
+                out.push(LinkManagerAction::ResourceProgress {
+                    link_id: *link_id,
+                    received,
+                    total,
+                });
+            }
         }
         out
     }
@@ -2543,6 +2835,8 @@ impl LinkManager {
         let mut assembled_is_response = false;
         let mut request_request_id = None;
         let mut response_request_id = None;
+        let mut completed_file = None;
+        let mut storage_failure = None;
 
         for (idx, receiver) in link.incoming_resources.iter_mut().enumerate() {
             if receiver.status >= rns_core::resource::ResourceStatus::Complete {
@@ -2596,6 +2890,9 @@ impl LinkManager {
             let split_segment_parts = link.incoming_resources[idx].total_parts;
             let split_is_request = link.incoming_resources[idx].flags.is_request;
             let split_is_response = link.incoming_resources[idx].flags.is_response;
+            let resource_original_hash =
+                Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
+                    .unwrap_or([0; 32]);
             let resource_request_id =
                 Self::response_request_id(&link.incoming_resources[idx].request_id);
             if split_is_request {
@@ -2628,7 +2925,18 @@ impl LinkManager {
 
                 if let Some(data) = segment_data {
                     if let Some(split) = link.incoming_splits.get_mut(&key) {
-                        split.data.extend_from_slice(&data);
+                        let write_result = match &mut split.storage {
+                            IncomingSplitStorage::Memory(buffer) => {
+                                buffer.extend_from_slice(&data);
+                                Ok(())
+                            }
+                            IncomingSplitStorage::File { file, size, .. } => {
+                                file.write_all(&data).map(|()| *size += data.len() as u64)
+                            }
+                        };
+                        if let Err(error) = write_result {
+                            storage_failure = Some(error.to_string());
+                        }
                         if segment_metadata.is_some() {
                             split.metadata = segment_metadata;
                         }
@@ -2638,19 +2946,87 @@ impl LinkManager {
                         split.current_total_parts = split_segment_parts;
                     }
 
-                    if split_segment_index == split_segment_total {
+                    if storage_failure.is_none() && split_segment_index == split_segment_total {
                         if let Some(split) = link.incoming_splits.remove(&key) {
                             assembled_is_request = split.is_request;
                             assembled_is_response = split.is_response;
-                            converted_actions.push(ResourceAction::DataReceived {
-                                data: split.data,
-                                metadata: split.metadata,
-                            });
+                            match split.storage {
+                                IncomingSplitStorage::Memory(data) => {
+                                    converted_actions.push(ResourceAction::DataReceived {
+                                        data,
+                                        metadata: split.metadata,
+                                    });
+                                }
+                                IncomingSplitStorage::File { file, path, size } => {
+                                    match file.sync_all() {
+                                        Ok(()) => {
+                                            completed_file = Some(ReceivedResourceFile::new(
+                                                path,
+                                                key,
+                                                size,
+                                                split.metadata,
+                                            ));
+                                        }
+                                        Err(error) => storage_failure = Some(error.to_string()),
+                                    }
+                                }
+                            }
                             converted_actions.push(ResourceAction::Completed);
                         }
                     }
+                    if storage_failure.is_some() {
+                        link.incoming_splits.remove(&key);
+                        converted_actions.clear();
+                        converted_actions.push(ResourceAction::SendCancelReceiver(Vec::new()));
+                    }
                 }
 
+                assemble_actions = converted_actions;
+            } else if !split_is_request
+                && !split_is_response
+                && matches!(
+                    link.resource_receive_mode,
+                    ResourceReceiveMode::TemporaryFile { .. }
+                )
+            {
+                let directory = match &link.resource_receive_mode {
+                    ResourceReceiveMode::TemporaryFile { directory, .. } => directory.clone(),
+                    ResourceReceiveMode::Memory { .. } => unreachable!(),
+                };
+                let mut converted_actions = Vec::new();
+                for action in assemble_actions {
+                    match action {
+                        ResourceAction::DataReceived { data, metadata } => {
+                            match crate::resource::create_receive_file(
+                                &directory,
+                                &resource_original_hash,
+                            )
+                            .and_then(|(mut file, path)| {
+                                file.write_all(&data)?;
+                                file.sync_all()?;
+                                Ok(ReceivedResourceFile::new(
+                                    path,
+                                    resource_original_hash,
+                                    data.len() as u64,
+                                    metadata,
+                                ))
+                            }) {
+                                Ok(resource) => completed_file = Some(resource),
+                                Err(error) => storage_failure = Some(error.to_string()),
+                            }
+                        }
+                        other => converted_actions.push(other),
+                    }
+                }
+                if storage_failure.is_some() {
+                    converted_actions.retain(|action| {
+                        !matches!(
+                            action,
+                            ResourceAction::SendProof(_) | ResourceAction::Completed
+                        )
+                    });
+                    converted_actions.push(ResourceAction::SendCancelReceiver(Vec::new()));
+                }
                 assemble_actions = converted_actions;
             }
             all_actions.extend(assemble_actions);
@@ -2658,6 +3034,18 @@ impl LinkManager {
 
         let _ = link;
         let mut out = self.process_resource_actions(link_id, all_actions, rng);
+        if let Some(resource) = completed_file {
+            out.push(LinkManagerAction::ResourceFileReceived {
+                link_id: *link_id,
+                resource,
+            });
+        }
+        if let Some(error) = storage_failure {
+            out.push(LinkManagerAction::ResourceFailed {
+                link_id: *link_id,
+                error: format!("resource storage failed: {error}"),
+            });
+        }
 
         if assembled_is_request {
             let mut converted = Vec::new();
@@ -2738,10 +3126,9 @@ impl LinkManager {
                         completed_request_id = Self::response_request_id(&sender.request_id);
                     }
                 }
-                if sender.flags.split
-                    && resource_actions
-                        .iter()
-                        .any(|action| matches!(action, ResourceAction::Failed(_)))
+                if resource_actions
+                    .iter()
+                    .any(|action| matches!(action, ResourceAction::Failed(_)))
                 {
                     failed_split = Some(sender.original_hash);
                 }
@@ -2760,6 +3147,7 @@ impl LinkManager {
         // Convert to LinkManagerActions
         let mut actions = Vec::new();
         let mut advertise_next = None;
+        let mut stream_failure = None;
         for ra in result_actions {
             match ra {
                 ResourceAction::Completed => {
@@ -2772,21 +3160,61 @@ impl LinkManager {
                                 split.current_segment_index = segment_index;
                                 split.current_sent_parts = total_parts;
                                 split.current_total_parts = total_parts;
-                                if let Some(next) = link.outgoing_resources.iter_mut().find(|s| {
-                                    s.flags.split
-                                        && s.original_hash == original_hash
-                                        && s.segment_index == segment_index + 1
-                                }) {
+                            }
+                            if let Some(next) = link.outgoing_resources.iter_mut().find(|s| {
+                                s.flags.split
+                                    && s.original_hash == original_hash
+                                    && s.segment_index == segment_index + 1
+                            }) {
+                                if let Some(split) = link.outgoing_splits.get_mut(&original_hash) {
                                     split.current_segment_index = next.segment_index;
                                     split.current_sent_parts = 0;
                                     split.current_total_parts = next.total_parts();
-                                    advertise_next = Some(next.advertise(now));
+                                }
+                                advertise_next = Some(next.advertise(now));
+                            } else if let Some(mut stream) =
+                                link.outgoing_streams.remove(&original_hash)
+                            {
+                                match Self::build_stream_segment(
+                                    link,
+                                    &mut stream,
+                                    None,
+                                    segment_index + 1,
+                                    total_segments,
+                                    Some(original_hash),
+                                    rng,
+                                    now,
+                                ) {
+                                    Ok(mut next) => {
+                                        if let Some(split) =
+                                            link.outgoing_splits.get_mut(&original_hash)
+                                        {
+                                            split.current_segment_index = next.segment_index;
+                                            split.current_sent_parts = 0;
+                                            split.current_total_parts = next.total_parts();
+                                        }
+                                        advertise_next = Some(next.advertise(now));
+                                        link.outgoing_resources.push(next);
+                                        link.outgoing_streams.insert(original_hash, stream);
+                                    }
+                                    Err(error) => {
+                                        stream_failure = Some((stream.transfer_id, error));
+                                        link.outgoing_splits.remove(&original_hash);
+                                    }
                                 }
                             }
                         } else {
                             link.outgoing_splits.remove(&original_hash);
-                            actions
-                                .push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
+                            if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
+                                actions.push(LinkManagerAction::ResourceStreamCompleted {
+                                    link_id: *link_id,
+                                    transfer_id: stream.transfer_id,
+                                });
+                            } else {
+                                actions.push(LinkManagerAction::ResourceCompleted {
+                                    link_id: *link_id,
+                                });
+                            }
                         }
                     } else {
                         actions.push(LinkManagerAction::ResourceCompleted { link_id: *link_id });
@@ -2795,6 +3223,14 @@ impl LinkManager {
                 ResourceAction::Failed(e) => {
                     if let Some(original_hash) = failed_split {
                         link.outgoing_splits.remove(&original_hash);
+                        if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
+                            actions.push(LinkManagerAction::ResourceStreamFailed {
+                                link_id: *link_id,
+                                transfer_id: stream.transfer_id,
+                                error: ResourceTransferError::Protocol(e.to_string()),
+                            });
+                            continue;
+                        }
                     }
                     actions.push(LinkManagerAction::ResourceFailed {
                         link_id: *link_id,
@@ -2803,6 +3239,14 @@ impl LinkManager {
                 }
                 _ => {}
             }
+        }
+
+        if let Some((transfer_id, error)) = stream_failure {
+            actions.push(LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id,
+                error,
+            });
         }
 
         if let Some(request_id) = completed_request_id {
@@ -2880,6 +3324,13 @@ impl LinkManager {
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
         link.outgoing_splits.clear();
+        actions.extend(link.outgoing_streams.drain().map(|(_, stream)| {
+            LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id: stream.transfer_id,
+                error: ResourceTransferError::Cancelled,
+            }
+        }));
         for request_id in request_ids {
             link.pending_requests.remove(&request_id);
         }
@@ -2892,9 +3343,9 @@ impl LinkManager {
             .is_some_and(|link| link.engine.state() == LinkState::Active)
     }
 
-    fn abort_resources_on_inactive_link(&mut self, link_id: &LinkId) {
+    fn abort_resources_on_inactive_link(&mut self, link_id: &LinkId) -> Vec<LinkManagerAction> {
         let Some(link) = self.links.get_mut(link_id) else {
-            return;
+            return Vec::new();
         };
         for sender in &mut link.outgoing_resources {
             let _ = sender.cancel();
@@ -2905,8 +3356,18 @@ impl LinkManager {
         link.outgoing_resources.clear();
         link.incoming_resources.clear();
         link.outgoing_splits.clear();
+        let actions = link
+            .outgoing_streams
+            .drain()
+            .map(|(_, stream)| LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id: stream.transfer_id,
+                error: ResourceTransferError::Cancelled,
+            })
+            .collect();
         link.incoming_splits.clear();
         link.pending_requests.clear();
+        actions
     }
 
     /// Convert ResourceActions to LinkManagerActions.
@@ -2927,7 +3388,7 @@ impl LinkManager {
                     | ResourceAction::SendProof(_)
             );
             if requires_active_link && !self.resource_link_is_active(link_id) {
-                self.abort_resources_on_inactive_link(link_id);
+                result.extend(self.abort_resources_on_inactive_link(link_id));
                 continue;
             }
 
@@ -3152,10 +3613,117 @@ impl LinkManager {
         self.process_resource_actions(link_id, adv_actions, rng)
     }
 
+    /// Start a bounded-memory Resource transfer from a sequential reader.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_resource_stream(
+        &mut self,
+        link_id: &LinkId,
+        transfer_id: ResourceTransferId,
+        reader: Box<dyn Read + Send>,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        let Some(link) = self.links.get_mut(link_id) else {
+            return vec![LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id,
+                error: ResourceTransferError::Protocol("link does not exist".into()),
+            }];
+        };
+        if link.engine.state() != LinkState::Active {
+            return vec![LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id,
+                error: ResourceTransferError::Protocol("link is not active".into()),
+            }];
+        }
+
+        let metadata_overhead = metadata.as_ref().map(|value| 3 + value.len()).unwrap_or(0);
+        let Some(logical_size) = declared_length.checked_add(metadata_overhead as u64) else {
+            return vec![LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id,
+                error: ResourceTransferError::Protocol("resource length overflow".into()),
+            }];
+        };
+        if usize::try_from(logical_size).is_err()
+            || metadata_overhead > constants::RESOURCE_MAX_EFFICIENT_SIZE
+        {
+            return vec![LinkManagerAction::ResourceStreamFailed {
+                link_id: *link_id,
+                transfer_id,
+                error: ResourceTransferError::Protocol(
+                    "resource length cannot be represented by this platform".into(),
+                ),
+            }];
+        }
+
+        let first_capacity = constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead;
+        let first_length = declared_length.min(first_capacity as u64);
+        let remaining_after_first = declared_length - first_length;
+        let total_segments =
+            1 + remaining_after_first.div_ceil(constants::RESOURCE_MAX_EFFICIENT_SIZE as u64);
+        let now = time::now();
+        let mut stream = OutgoingStreamTransfer {
+            transfer_id,
+            reader,
+            remaining: declared_length,
+            declared_length,
+            metadata_overhead: metadata_overhead as u64,
+            auto_compress,
+        };
+        let mut first = match Self::build_stream_segment(
+            link,
+            &mut stream,
+            metadata.as_deref(),
+            1,
+            total_segments,
+            None,
+            rng,
+            now,
+        ) {
+            Ok(sender) => sender,
+            Err(error) => {
+                return vec![LinkManagerAction::ResourceStreamFailed {
+                    link_id: *link_id,
+                    transfer_id,
+                    error,
+                }]
+            }
+        };
+        let original_hash = first.original_hash;
+        let current_total_parts = first.total_parts();
+        let adv_actions = first.advertise(now);
+        if total_segments > 1 {
+            link.outgoing_splits.insert(
+                original_hash,
+                OutgoingSplitTransfer {
+                    total_segments,
+                    completed_segments: 0,
+                    current_segment_index: 1,
+                    current_sent_parts: 0,
+                    current_total_parts,
+                },
+            );
+        }
+        link.outgoing_streams.insert(original_hash, stream);
+        link.outgoing_resources.push(first);
+        let _ = link;
+        self.process_resource_actions(link_id, adv_actions, rng)
+    }
+
     /// Set the resource acceptance strategy for a link.
     pub fn set_resource_strategy(&mut self, link_id: &LinkId, strategy: ResourceStrategy) {
         if let Some(link) = self.links.get_mut(link_id) {
             link.resource_strategy = strategy;
+        }
+    }
+
+    pub fn set_resource_receive_mode(&mut self, link_id: &LinkId, mode: ResourceReceiveMode) {
+        if let Some(link) = self.links.get_mut(link_id) {
+            link.resource_receive_mode = mode;
         }
     }
 
@@ -3432,6 +4000,13 @@ impl LinkManager {
             link.incoming_resources
                 .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
             link.outgoing_splits.clear();
+            all_actions.extend(link.outgoing_streams.drain().map(|(_, stream)| {
+                LinkManagerAction::ResourceStreamFailed {
+                    link_id: *link_id,
+                    transfer_id: stream.transfer_id,
+                    error: ResourceTransferError::Cancelled,
+                }
+            }));
             link.incoming_splits.clear();
 
             let _ = link;
@@ -5237,6 +5812,78 @@ mod tests {
             .collect()
     }
 
+    struct CountingReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        bytes_read: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            self.bytes_read
+                .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let directory = tempfile::tempdir().unwrap();
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+        resp_mgr.set_resource_receive_mode(
+            &link_id,
+            ResourceReceiveMode::TemporaryFile {
+                directory: directory.path().to_path_buf(),
+                max_bytes: None,
+            },
+        );
+
+        let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 12345);
+        let bytes_read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = CountingReader {
+            inner: std::io::Cursor::new(data.clone()),
+            bytes_read: bytes_read.clone(),
+        };
+        let initial = init_mgr.send_resource_stream(
+            &link_id,
+            ResourceTransferId(42),
+            Box::new(reader),
+            data.len() as u64,
+            None,
+            false,
+            &mut rng,
+        );
+
+        assert_eq!(
+            bytes_read.load(std::sync::atomic::Ordering::Relaxed),
+            constants::RESOURCE_MAX_EFFICIENT_SIZE,
+            "starting a stream must not consume later segments"
+        );
+        assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 1);
+
+        let (received, completed, _progress, failures, _rounds) = drive_link_manager_packets(
+            &mut init_mgr,
+            &mut resp_mgr,
+            initial,
+            'i',
+            &mut rng,
+            30_000,
+        );
+        assert_eq!(received, Some(data));
+        assert!(completed);
+        assert!(
+            failures.is_empty(),
+            "streaming transfer failed: {failures:?}"
+        );
+        assert_eq!(
+            bytes_read.load(std::sync::atomic::Ordering::Relaxed),
+            constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 12345
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
     fn drive_link_manager_packets(
         init_mgr: &mut LinkManager,
         resp_mgr: &mut LinkManager,
@@ -5292,7 +5939,13 @@ mod tests {
                         LinkManagerAction::ResourceReceived { data, .. } => {
                             received_data = Some(data.clone());
                         }
+                        LinkManagerAction::ResourceFileReceived { resource, .. } => {
+                            received_data = Some(std::fs::read(resource.path()).unwrap());
+                        }
                         LinkManagerAction::ResourceCompleted { .. } => {
+                            sender_completed = true;
+                        }
+                        LinkManagerAction::ResourceStreamCompleted { .. } => {
                             sender_completed = true;
                         }
                         LinkManagerAction::ResourceProgress {
@@ -5302,6 +5955,9 @@ mod tests {
                         }
                         LinkManagerAction::ResourceFailed { error, .. } => {
                             failures.push((target_source, error.clone()));
+                        }
+                        LinkManagerAction::ResourceStreamFailed { error, .. } => {
+                            failures.push((target_source, format!("{error:?}")));
                         }
                         _ => {}
                     }
@@ -5891,6 +6547,40 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_stream_reports_one_terminal_failure() {
+        let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let transfer_id = ResourceTransferId(42);
+        let length = constants::RESOURCE_MAX_EFFICIENT_SIZE as u64 + 1;
+        init_mgr.send_resource_stream(
+            &link_id,
+            transfer_id,
+            Box::new(std::io::Cursor::new(vec![0x5a; length as usize])),
+            length,
+            None,
+            false,
+            &mut rng,
+        );
+
+        let actions = init_mgr.cancel_all_resources(&mut rng);
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(
+                    action,
+                    LinkManagerAction::ResourceStreamFailed {
+                        transfer_id: failed,
+                        error: ResourceTransferError::Cancelled,
+                        ..
+                    } if *failed == transfer_id
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(init_mgr.resource_transfer_count(), 0);
+    }
+
+    #[test]
     fn receiver_cancel_sends_rcl_while_active_and_closed_cleanup_is_local_only() {
         let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
@@ -6391,6 +7081,57 @@ mod tests {
             has_response_received,
             "Initiator should receive ResponseReceived"
         );
+    }
+
+    #[test]
+    fn deferred_request_response_round_trip() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        let deferred = Arc::new(Mutex::new(None));
+        resp_mgr.register_deferred_request_handler("/deferred", None, {
+            let deferred = Arc::clone(&deferred);
+            move |received_link, _, request_id, data, _| {
+                *deferred.lock().unwrap() = Some((received_link, request_id, data.to_vec()));
+            }
+        });
+
+        let request_actions = init_mgr.send_request(&link_id, "/deferred", b"\xa5hello", &mut rng);
+        let request_raw = extract_any_send_packet(&request_actions);
+        let request_packet = RawPacket::unpack(&request_raw).unwrap();
+        let immediate = resp_mgr.handle_local_delivery(
+            request_packet.destination_hash,
+            &request_raw,
+            request_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert!(
+            immediate
+                .iter()
+                .all(|action| !matches!(action, LinkManagerAction::SendPacket { .. })),
+            "deferred handlers must not send an immediate response"
+        );
+
+        let (received_link, request_id, data) = deferred.lock().unwrap().take().unwrap();
+        assert_eq!(received_link, link_id);
+        assert_eq!(data, b"\xa5hello");
+        let response_actions =
+            resp_mgr.send_deferred_response(&link_id, &request_id, b"\xa2OK", &mut rng);
+        let response_raw = extract_any_send_packet(&response_actions);
+        let response_packet = RawPacket::unpack(&response_raw).unwrap();
+        let delivered = init_mgr.handle_local_delivery(
+            response_packet.destination_hash,
+            &response_raw,
+            response_packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+        assert!(delivered.iter().any(|action| matches!(
+            action,
+            LinkManagerAction::ResponseReceived { data, .. } if data == b"\xa2OK"
+        )));
     }
 
     #[test]

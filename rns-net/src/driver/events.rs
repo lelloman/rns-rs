@@ -940,6 +940,19 @@ impl Driver {
                         move |link_id, p, data, remote| handler(link_id, p, data, remote),
                     );
                 }
+                Event::RegisterDeferredRequestHandler {
+                    path,
+                    allowed_list,
+                    handler,
+                } => {
+                    self.link_manager.register_deferred_request_handler(
+                        &path,
+                        allowed_list,
+                        move |link_id, path, request_id, data, remote| {
+                            handler(link_id, path, request_id, data, remote)
+                        },
+                    );
+                }
                 Event::CreateLink {
                     dest_hash,
                     dest_sig_pub_bytes,
@@ -1022,6 +1035,19 @@ impl Driver {
                     );
                     self.dispatch_link_actions(link_actions);
                 }
+                Event::SendDeferredResponse {
+                    link_id,
+                    request_id,
+                    data,
+                } => {
+                    let link_actions = self.link_manager.send_deferred_response(
+                        &link_id,
+                        &request_id,
+                        &data,
+                        &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
                 Event::IdentifyOnLink {
                     link_id,
                     identity_prv_key,
@@ -1062,6 +1088,33 @@ impl Driver {
                     );
                     self.dispatch_link_actions(link_actions);
                 }
+                Event::SendResourceStream {
+                    link_id,
+                    transfer_id,
+                    reader,
+                    declared_length,
+                    metadata,
+                    auto_compress,
+                } => {
+                    if self.is_draining() {
+                        self.callbacks.on_resource_stream_failed(
+                            rns_core::types::LinkId(link_id),
+                            transfer_id,
+                            crate::resource::ResourceTransferError::Cancelled,
+                        );
+                        continue;
+                    }
+                    let link_actions = self.link_manager.send_resource_stream(
+                        &link_id,
+                        transfer_id,
+                        reader,
+                        declared_length,
+                        metadata,
+                        auto_compress,
+                        &mut self.rng,
+                    );
+                    self.dispatch_link_actions(link_actions);
+                }
                 Event::SetResourceStrategy { link_id, strategy } => {
                     use crate::link_manager::ResourceStrategy;
                     let strat = match strategy {
@@ -1071,6 +1124,9 @@ impl Driver {
                         _ => ResourceStrategy::AcceptNone,
                     };
                     self.link_manager.set_resource_strategy(&link_id, strat);
+                }
+                Event::SetResourceReceiveMode { link_id, mode } => {
+                    self.link_manager.set_resource_receive_mode(&link_id, mode);
                 }
                 Event::AcceptResource {
                     link_id,

@@ -1,0 +1,15 @@
+{
+  "provenance": {
+    "profile": "RNS-Compat/1",
+    "upstream_version": "1.4.2",
+    "upstream_commit": "b48b96e61676504e0a4e527b33b9a0b4495c6872"
+  },
+  "max_efficient_size": 1048575,
+  "vectors": [
+    { "name": "empty", "data_size": 0, "metadata_size": 0, "segment_payloads": [0] },
+    { "name": "exact_boundary", "data_size": 1048575, "metadata_size": 0, "segment_payloads": [1048575] },
+    { "name": "boundary_plus_one", "data_size": 1048576, "metadata_size": 0, "segment_payloads": [1048575, 1] },
+    { "name": "metadata_boundary", "data_size": 1048563, "metadata_size": 10, "segment_payloads": [1048562, 1] },
+    { "name": "four_segments", "data_size": 3145742, "metadata_size": 0, "segment_payloads": [1048575, 1048575, 1048575, 17] }
+  ]
+}

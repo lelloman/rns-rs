@@ -24,6 +24,7 @@ pub mod md5;
 pub mod pickle;
 #[cfg(feature = "iface-local")]
 pub mod remote_management;
+pub mod resource;
 pub mod rpc;
 pub mod serial;
 pub mod storage;
@@ -101,6 +102,9 @@ pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 pub use provider_bridge::{
     HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,
     ProviderEnvelope, ProviderMessage,
+};
+pub use resource::{
+    ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError, ResourceTransferId,
 };
 pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
