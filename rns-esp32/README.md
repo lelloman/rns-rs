@@ -182,6 +182,7 @@ Build-time environment variables control the authenticated LoRa control plane an
 The ESP32 firmware now uses an explicit constrained `TransportConfig` profile instead of relying on the large desktop/server defaults from `rns-core`.
 
 - `packet_hashlist_max_entries = 1024`
+- `packet_hashlist_allocation = eager`
 - `max_discovery_pr_tags = 256`
 - `max_path_destinations = 256`
 - `max_tunnel_destinations_total = 128`

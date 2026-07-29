@@ -276,6 +276,15 @@ pub struct BlackholeEntry {
 }
 
 /// Configuration for TransportEngine.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PacketHashlistAllocation {
+    /// Touch every payload slot during construction.
+    #[default]
+    Eager,
+    /// Reserve fixed-capacity payload storage without touching its pages.
+    Lazy,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
     pub transport_enabled: bool,
@@ -293,6 +302,8 @@ pub struct TransportConfig {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Startup allocation policy for packet-hash payload storage.
+    pub packet_hashlist_allocation: PacketHashlistAllocation,
     /// Maximum number of discovery path-request tags remembered for duplicate suppression.
     pub max_discovery_pr_tags: usize,
     /// Maximum number of destination hashes retained in the live path table.
@@ -338,6 +349,7 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: crate::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: crate::constants::MAX_PR_TAGS,
             max_path_destinations: DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,

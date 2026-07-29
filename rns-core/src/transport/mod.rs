@@ -174,6 +174,7 @@ pub struct TransportEngine {
 impl TransportEngine {
     pub fn new(config: TransportConfig) -> Self {
         let packet_hashlist_max_entries = config.packet_hashlist_max_entries;
+        let packet_hashlist_allocation = config.packet_hashlist_allocation;
         let sig_cache_max = if config.announce_sig_cache_enabled {
             config.announce_sig_cache_max_entries
         } else {
@@ -188,7 +189,10 @@ impl TransportEngine {
             reverse_table: BTreeMap::new(),
             link_table: BTreeMap::new(),
             held_announces: BTreeMap::new(),
-            packet_hashlist: PacketHashlist::new(packet_hashlist_max_entries),
+            packet_hashlist: PacketHashlist::with_allocation(
+                packet_hashlist_max_entries,
+                packet_hashlist_allocation,
+            ),
             announce_sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
@@ -2055,6 +2059,7 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: crate::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
@@ -5795,6 +5800,7 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: crate::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,

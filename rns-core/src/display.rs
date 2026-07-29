@@ -77,3 +77,4 @@ mod tests {
         assert_eq!(b256_to_bytes("not/base256"), None);
     }
 }
+use alloc::vec::Vec;

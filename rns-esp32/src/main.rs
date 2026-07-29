@@ -148,6 +148,7 @@ fn main() {
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
         packet_hashlist_max_entries: 1024,
+        packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: 256,
         max_path_destinations: 256,
         max_tunnel_destinations_total: 128,

@@ -275,6 +275,11 @@ const EXAMPLE_CONFIG: &str = r#"# This is an example Reticulum config file.
   instance_control_port = 37429
   panic_on_interface_error = false
 
+  # Packet deduplication uses a fixed-size table. "eager" prefaults its
+  # payload pages at startup; "lazy" commits them as packets arrive.
+  packet_hashlist_max_entries = 250000
+  packet_hashlist_allocation = eager
+
   # Global gravity for interfaces without a specific gravity option.
   # default_gravity = 0
 
