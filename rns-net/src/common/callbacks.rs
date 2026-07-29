@@ -55,6 +55,41 @@ pub trait Callbacks: Send {
     /// Called with resource transfer progress updates.
     fn on_resource_progress(&mut self, _link_id: LinkId, _received: usize, _total: usize) {}
 
+    /// Called when a streaming Resource completes on the sender side.
+    fn on_resource_stream_completed(
+        &mut self,
+        _link_id: LinkId,
+        _transfer_id: crate::resource::ResourceTransferId,
+    ) {
+    }
+
+    /// Called when a streaming Resource fails.
+    fn on_resource_stream_failed(
+        &mut self,
+        _link_id: LinkId,
+        _transfer_id: crate::resource::ResourceTransferId,
+        _error: crate::resource::ResourceTransferError,
+    ) {
+    }
+
+    /// Called with logical-byte progress for a streaming Resource.
+    fn on_resource_stream_progress(
+        &mut self,
+        _link_id: LinkId,
+        _transfer_id: crate::resource::ResourceTransferId,
+        _transferred: u64,
+        _total: u64,
+    ) {
+    }
+
+    /// Called when a disk-backed incoming Resource is ready.
+    fn on_resource_file_received(
+        &mut self,
+        _link_id: LinkId,
+        _resource: crate::resource::ReceivedResourceFile,
+    ) {
+    }
+
     /// Called to ask whether to accept an incoming resource (for AcceptApp strategy).
     /// Return true to accept, false to reject.
     fn on_resource_accept_query(

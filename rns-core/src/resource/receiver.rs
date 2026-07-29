@@ -111,8 +111,11 @@ impl ResourceReceiver {
         if adv.random_hash.len() != RESOURCE_RANDOM_HASH_SIZE || adv.original_hash.len() != 32 {
             return Err(ResourceError::InvalidAdvertisement);
         }
+        // Split advertisements carry the logical size of the complete
+        // Resource in data_size, while each receiver only assembles one
+        // bounded segment. Aggregate receive policy is enforced by rns-net.
         if adv.transfer_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64
-            || adv.data_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64
+            || (!adv.flags.split && adv.data_size > RESOURCE_AUTO_COMPRESS_MAX_SIZE as u64)
         {
             return Err(ResourceError::TooLarge);
         }

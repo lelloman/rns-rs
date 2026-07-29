@@ -1292,6 +1292,10 @@ impl Driver {
                         metadata,
                     );
                 }
+                LinkManagerAction::ResourceFileReceived { link_id, resource } => {
+                    self.callbacks
+                        .on_resource_file_received(rns_core::types::LinkId(link_id), resource);
+                }
                 LinkManagerAction::ResourceCompleted { link_id } => {
                     self.callbacks
                         .on_resource_completed(rns_core::types::LinkId(link_id));
@@ -1309,6 +1313,39 @@ impl Driver {
                     self.callbacks.on_resource_progress(
                         rns_core::types::LinkId(link_id),
                         received,
+                        total,
+                    );
+                }
+                LinkManagerAction::ResourceStreamCompleted {
+                    link_id,
+                    transfer_id,
+                } => {
+                    self.callbacks.on_resource_stream_completed(
+                        rns_core::types::LinkId(link_id),
+                        transfer_id,
+                    );
+                }
+                LinkManagerAction::ResourceStreamFailed {
+                    link_id,
+                    transfer_id,
+                    error,
+                } => {
+                    self.callbacks.on_resource_stream_failed(
+                        rns_core::types::LinkId(link_id),
+                        transfer_id,
+                        error,
+                    );
+                }
+                LinkManagerAction::ResourceStreamProgress {
+                    link_id,
+                    transfer_id,
+                    transferred,
+                    total,
+                } => {
+                    self.callbacks.on_resource_stream_progress(
+                        rns_core::types::LinkId(link_id),
+                        transfer_id,
+                        transferred,
                         total,
                     );
                 }

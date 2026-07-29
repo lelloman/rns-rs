@@ -1,6 +1,7 @@
 //! Event types for the driver loop — generic over the writer type.
 
 use std::fmt;
+use std::io::Read;
 use std::net::IpAddr;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -214,6 +215,12 @@ pub enum Event<W: Send> {
                 + Send,
         >,
     },
+    /// Register a request handler that sends its response later.
+    RegisterDeferredRequestHandler {
+        path: String,
+        allowed_list: Option<Vec<[u8; 16]>>,
+        handler: Box<dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send>,
+    },
     /// Create an outbound link. Response sends (link_id) back.
     CreateLink {
         dest_hash: [u8; 16],
@@ -226,6 +233,12 @@ pub enum Event<W: Send> {
         path: String,
         data: Vec<u8>,
         max_response_size: Option<usize>,
+    },
+    /// Complete a request previously delivered to a deferred handler.
+    SendDeferredResponse {
+        link_id: [u8; 16],
+        request_id: [u8; 16],
+        data: Vec<u8>,
     },
     /// Identify on a link (send identity to remote peer).
     IdentifyOnLink {
@@ -241,8 +254,22 @@ pub enum Event<W: Send> {
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
     },
+    /// Send a Resource from a sequential reader without buffering the full payload.
+    SendResourceStream {
+        link_id: [u8; 16],
+        transfer_id: crate::resource::ResourceTransferId,
+        reader: Box<dyn Read + Send>,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        auto_compress: bool,
+    },
     /// Set the resource acceptance strategy for a link.
     SetResourceStrategy { link_id: [u8; 16], strategy: u8 },
+    /// Select in-memory or disk-backed delivery for independent Resources.
+    SetResourceReceiveMode {
+        link_id: [u8; 16],
+        mode: crate::resource::ResourceReceiveMode,
+    },
     /// Accept or reject a pending resource (for AcceptApp strategy).
     AcceptResource {
         link_id: [u8; 16],
@@ -946,6 +973,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("RegisterRequestHandlerResponse")
                 .field("path", path)
                 .finish(),
+            Event::RegisterDeferredRequestHandler { path, .. } => f
+                .debug_struct("RegisterDeferredRequestHandler")
+                .field("path", path)
+                .finish(),
             Event::CreateLink { dest_hash, .. } => f
                 .debug_struct("CreateLink")
                 .field("dest_hash", dest_hash)
@@ -954,6 +985,16 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("SendRequest")
                 .field("link_id", link_id)
                 .field("path", path)
+                .finish(),
+            Event::SendDeferredResponse {
+                link_id,
+                request_id,
+                data,
+            } => f
+                .debug_struct("SendDeferredResponse")
+                .field("link_id", link_id)
+                .field("request_id", request_id)
+                .field("data_len", &data.len())
                 .finish(),
             Event::IdentifyOnLink { link_id, .. } => f
                 .debug_struct("IdentifyOnLink")
@@ -968,10 +1009,26 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("link_id", link_id)
                 .field("data_len", &data.len())
                 .finish(),
+            Event::SendResourceStream {
+                link_id,
+                transfer_id,
+                declared_length,
+                ..
+            } => f
+                .debug_struct("SendResourceStream")
+                .field("link_id", link_id)
+                .field("transfer_id", transfer_id)
+                .field("declared_length", declared_length)
+                .finish(),
             Event::SetResourceStrategy { link_id, strategy } => f
                 .debug_struct("SetResourceStrategy")
                 .field("link_id", link_id)
                 .field("strategy", strategy)
+                .finish(),
+            Event::SetResourceReceiveMode { link_id, mode } => f
+                .debug_struct("SetResourceReceiveMode")
+                .field("link_id", link_id)
+                .field("mode", mode)
                 .finish(),
             Event::AcceptResource {
                 link_id, accept, ..
