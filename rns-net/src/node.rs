@@ -518,6 +518,8 @@ pub struct NodeConfig {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Startup allocation policy for the packet hashlist payload pages.
+    pub packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation,
     /// Maximum number of discovery path-request tags remembered.
     pub max_discovery_pr_tags: usize,
     /// Maximum number of destination hashes retained in the live path table.
@@ -589,6 +591,7 @@ impl Default for NodeConfig {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
@@ -965,6 +968,7 @@ impl RnsNode {
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
             packet_hashlist_max_entries: rns_config.reticulum.packet_hashlist_max_entries,
+            packet_hashlist_allocation: rns_config.reticulum.packet_hashlist_allocation,
             max_discovery_pr_tags: rns_config.reticulum.max_discovery_pr_tags,
             max_path_destinations: rns_config.reticulum.max_path_destinations,
             max_tunnel_destinations_total: rns_config.reticulum.max_tunnel_destinations_total,
@@ -1134,6 +1138,7 @@ impl RnsNode {
             prefer_shorter_path: config.prefer_shorter_path,
             max_paths_per_destination: config.max_paths_per_destination,
             packet_hashlist_max_entries: config.packet_hashlist_max_entries,
+            packet_hashlist_allocation: config.packet_hashlist_allocation,
             max_discovery_pr_tags: config.max_discovery_pr_tags,
             max_path_destinations: config.max_path_destinations,
             max_tunnel_destinations_total: config.max_tunnel_destinations_total,
@@ -1158,7 +1163,6 @@ impl RnsNode {
         );
         driver.async_announce_verification = true;
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
-        driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.known_destinations_max_entries = config.known_destinations_max_entries;
         driver.ratchet_store = config.ratchet_store.clone();
@@ -3049,6 +3053,7 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
@@ -3458,6 +3463,8 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -3776,6 +3783,8 @@ share_instance = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -3842,6 +3851,8 @@ share_instance = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -4641,6 +4652,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -4716,6 +4729,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -4787,6 +4802,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -4855,6 +4872,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -4963,6 +4982,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -5039,6 +5060,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -5113,6 +5136,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -5200,6 +5225,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,
@@ -5277,6 +5304,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+                packet_hashlist_allocation:
+                    rns_core::transport::types::PacketHashlistAllocation::Eager,
                 max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
                 max_path_destinations: usize::MAX,
                 max_tunnel_destinations_total: usize::MAX,

@@ -1207,6 +1207,7 @@ impl Driver {
         self.tick_interval_ms = tick_interval_ms;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.engine.set_packet_hashlist_max_entries(max_entries);
     }

@@ -250,7 +250,7 @@ mod tests {
     use crate::transport::tables::PathEntry;
     use crate::transport::tunnel::TunnelPath;
     use crate::transport::types::{
-        IngressControlConfig, InterfaceId, InterfaceInfo, TransportConfig,
+        IngressControlConfig, InterfaceId, InterfaceInfo, PacketHashlistAllocation, TransportConfig,
     };
     use crate::transport::TransportEngine;
     use alloc::collections::BTreeMap;
@@ -258,6 +258,13 @@ mod tests {
     use alloc::vec;
 
     fn config(hash_capacity: usize) -> TransportConfig {
+        config_with_allocation(hash_capacity, PacketHashlistAllocation::Eager)
+    }
+
+    fn config_with_allocation(
+        hash_capacity: usize,
+        allocation: PacketHashlistAllocation,
+    ) -> TransportConfig {
         TransportConfig {
             transport_enabled: true,
             identity_hash: Some([0x42; 16]),
@@ -265,6 +272,7 @@ mod tests {
             prefer_shorter_path: false,
             max_paths_per_destination: 4,
             packet_hashlist_max_entries: hash_capacity,
+            packet_hashlist_allocation: allocation,
             max_discovery_pr_tags: constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
@@ -277,6 +285,25 @@ mod tests {
             announce_queue_max_entries: 256,
             announce_queue_max_interfaces: 1024,
         }
+    }
+
+    #[test]
+    fn restore_packet_hashes_into_lazy_storage_preserves_order_and_truncates() {
+        let mut engine =
+            TransportEngine::new(config_with_allocation(3, PacketHashlistAllocation::Lazy));
+        let snapshot = TransportStateSnapshot {
+            packet_hashes: vec![[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]],
+            paths: Vec::new(),
+            tunnels: Vec::new(),
+        };
+
+        let stats = engine.restore_persistence_snapshot(snapshot, 100.0, |_| None);
+
+        assert_eq!(stats.packet_hashes, 3);
+        assert_eq!(
+            engine.persistence_snapshot().packet_hashes,
+            vec![[3; 32], [4; 32], [5; 32]]
+        );
     }
 
     fn interface(id: u64, name: &str) -> InterfaceInfo {

@@ -1353,3 +1353,4 @@ mod tests {
         assert_eq!(pt, b"AES128 test");
     }
 }
+use alloc::vec;

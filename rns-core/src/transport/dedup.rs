@@ -1,6 +1,10 @@
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
+
+use super::types::PacketHashlistAllocation;
 
 /// Bounded FIFO packet-hash deduplication.
 ///
@@ -14,9 +18,13 @@ pub struct PacketHashlist {
 
 impl PacketHashlist {
     pub fn new(max_size: usize) -> Self {
+        Self::with_allocation(max_size, PacketHashlistAllocation::Eager)
+    }
+
+    pub fn with_allocation(max_size: usize, allocation: PacketHashlistAllocation) -> Self {
         Self {
-            queue: PacketHashQueue::new(max_size),
-            set: PacketHashSet::new(max_size),
+            queue: PacketHashQueue::new(max_size, allocation),
+            set: PacketHashSet::new(max_size, allocation),
         }
     }
 
@@ -58,8 +66,51 @@ impl PacketHashlist {
     pub fn iter(&self) -> impl Iterator<Item = &[u8; 32]> {
         (0..self.queue.len).map(|offset| {
             let index = (self.queue.head + offset) % self.queue.capacity();
-            &self.queue.entries[index]
+            self.queue.entries.get(index)
         })
+    }
+}
+
+/// Fixed-capacity hash payload slots whose initialization is tracked by their owner.
+///
+/// Queue owners may read only slots in their logical FIFO range. Set owners may
+/// read only slots whose corresponding control byte is occupied. Keeping reads
+/// here confines the unsafe code required for lazy payload initialization.
+struct RawHashSlots {
+    slots: Box<[MaybeUninit<[u8; 32]>]>,
+}
+
+impl RawHashSlots {
+    fn new(capacity: usize, allocation: PacketHashlistAllocation) -> Self {
+        let mut slots = Box::<[[u8; 32]]>::new_uninit_slice(capacity);
+        if allocation == PacketHashlistAllocation::Eager {
+            for slot in &mut slots {
+                // Volatile writes make eager page prefaulting an observable side
+                // effect that release-mode optimization cannot remove.
+                unsafe { core::ptr::write_volatile(slot.as_mut_ptr(), [0; 32]) };
+            }
+        }
+        Self { slots }
+    }
+
+    fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    fn write(&mut self, index: usize, hash: [u8; 32]) {
+        self.slots[index].write(hash);
+    }
+
+    fn read(&self, index: usize) -> [u8; 32] {
+        // SAFETY: callers establish initialization through the queue's logical
+        // range or the set's occupied control byte before calling this method.
+        unsafe { self.slots[index].assume_init_read() }
+    }
+
+    fn get(&self, index: usize) -> &[u8; 32] {
+        // SAFETY: callers establish initialization through the queue's logical
+        // range or the set's occupied control byte before calling this method.
+        unsafe { self.slots[index].assume_init_ref() }
     }
 }
 
@@ -138,15 +189,15 @@ impl AnnounceSignatureCache {
 }
 
 struct PacketHashQueue {
-    entries: Vec<[u8; 32]>,
+    entries: RawHashSlots,
     head: usize,
     len: usize,
 }
 
 impl PacketHashQueue {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, allocation: PacketHashlistAllocation) -> Self {
         Self {
-            entries: vec![[0u8; 32]; capacity],
+            entries: RawHashSlots::new(capacity, allocation),
             head: 0,
             len: 0,
         }
@@ -166,7 +217,7 @@ impl PacketHashQueue {
             return;
         }
         let tail = (self.head + self.len) % self.capacity();
-        self.entries[tail] = hash;
+        self.entries.write(tail, hash);
         self.len += 1;
     }
 
@@ -174,7 +225,7 @@ impl PacketHashQueue {
         if self.len == 0 || self.capacity() == 0 {
             return None;
         }
-        let hash = self.entries[self.head];
+        let hash = self.entries.read(self.head);
         self.head = (self.head + 1) % self.capacity();
         self.len -= 1;
         if self.len == 0 {
@@ -185,14 +236,17 @@ impl PacketHashQueue {
 }
 
 struct PacketHashSet {
-    buckets: Vec<Option<[u8; 32]>>,
+    entries: RawHashSlots,
+    controls: Box<[u8]>,
     len: usize,
 }
 
 impl PacketHashSet {
-    fn new(max_entries: usize) -> Self {
+    fn new(max_entries: usize, allocation: PacketHashlistAllocation) -> Self {
+        let capacity = bucket_capacity(max_entries);
         Self {
-            buckets: vec![None; bucket_capacity(max_entries)],
+            entries: RawHashSlots::new(capacity, allocation),
+            controls: vec![0; capacity].into_boxed_slice(),
             len: 0,
         }
     }
@@ -202,70 +256,78 @@ impl PacketHashSet {
     }
 
     fn contains(&self, hash: &[u8; 32]) -> bool {
-        if self.buckets.is_empty() {
+        if self.controls.is_empty() {
             return false;
         }
 
         let mut idx = self.bucket_index(hash);
         loop {
-            match self.buckets[idx] {
-                Some(entry) if &entry == hash => return true,
-                Some(_) => idx = (idx + 1) & (self.buckets.len() - 1),
-                None => return false,
+            if self.controls[idx] == 0 {
+                return false;
             }
+            if self.entries.get(idx) == hash {
+                return true;
+            }
+            idx = (idx + 1) & (self.controls.len() - 1);
         }
     }
 
     fn insert(&mut self, hash: [u8; 32]) -> bool {
-        if self.buckets.is_empty() {
+        if self.controls.is_empty() {
             return false;
         }
 
         let mut idx = self.bucket_index(&hash);
         loop {
-            match self.buckets[idx] {
-                Some(entry) if entry == hash => return false,
-                Some(_) => idx = (idx + 1) & (self.buckets.len() - 1),
-                None => {
-                    self.buckets[idx] = Some(hash);
-                    self.len += 1;
-                    return true;
-                }
+            if self.controls[idx] == 0 {
+                // Publish occupancy only after the payload is initialized.
+                self.entries.write(idx, hash);
+                self.controls[idx] = 1;
+                self.len += 1;
+                return true;
             }
+            if self.entries.get(idx) == &hash {
+                return false;
+            }
+            idx = (idx + 1) & (self.controls.len() - 1);
         }
     }
 
     fn remove(&mut self, hash: &[u8; 32]) -> bool {
-        if self.buckets.is_empty() {
+        if self.controls.is_empty() {
             return false;
         }
 
         let mut idx = self.bucket_index(hash);
         loop {
-            match self.buckets[idx] {
-                Some(entry) if &entry == hash => break,
-                Some(_) => idx = (idx + 1) & (self.buckets.len() - 1),
-                None => return false,
+            if self.controls[idx] == 0 {
+                return false;
             }
+            if self.entries.get(idx) == hash {
+                break;
+            }
+            idx = (idx + 1) & (self.controls.len() - 1);
         }
 
-        self.buckets[idx] = None;
+        self.controls[idx] = 0;
         self.len -= 1;
 
-        let mut next = (idx + 1) & (self.buckets.len() - 1);
-        while let Some(entry) = self.buckets[next].take() {
+        let mut next = (idx + 1) & (self.controls.len() - 1);
+        while self.controls[next] != 0 {
+            let entry = self.entries.read(next);
+            self.controls[next] = 0;
             self.len -= 1;
             let inserted = self.insert(entry);
             debug_assert!(inserted, "cluster reinsert after removal must succeed");
-            next = (next + 1) & (self.buckets.len() - 1);
+            next = (next + 1) & (self.controls.len() - 1);
         }
 
         true
     }
 
     fn bucket_index(&self, hash: &[u8; 32]) -> usize {
-        debug_assert!(!self.buckets.is_empty());
-        (hash_bytes(hash) as usize) & (self.buckets.len() - 1)
+        debug_assert!(!self.controls.is_empty());
+        (hash_bytes(hash) as usize) & (self.controls.len() - 1)
     }
 }
 
@@ -297,102 +359,131 @@ mod tests {
         h
     }
 
+    fn policies() -> [PacketHashlistAllocation; 2] {
+        [
+            PacketHashlistAllocation::Eager,
+            PacketHashlistAllocation::Lazy,
+        ]
+    }
+
     #[test]
     fn test_new_hash_not_duplicate() {
-        let hl = PacketHashlist::new(100);
-        assert!(!hl.is_duplicate(&make_hash(1)));
+        for policy in policies() {
+            let hl = PacketHashlist::with_allocation(100, policy);
+            assert!(!hl.is_duplicate(&make_hash(1)));
+        }
     }
 
     #[test]
     fn test_added_hash_is_duplicate() {
-        let mut hl = PacketHashlist::new(100);
-        let h = make_hash(1);
-        hl.add(h);
-        assert!(hl.is_duplicate(&h));
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(100, policy);
+            let h = make_hash(1);
+            hl.add(h);
+            assert!(hl.is_duplicate(&h));
+        }
     }
 
     #[test]
     fn test_duplicate_insert_does_not_increase_len() {
-        let mut hl = PacketHashlist::new(2);
-        let h = make_hash(1);
-
-        hl.add(h);
-        hl.add(h);
-
-        assert_eq!(hl.len(), 1);
-        assert!(hl.is_duplicate(&h));
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(2, policy);
+            let h = make_hash(1);
+            hl.add(h);
+            hl.add(h);
+            assert_eq!(hl.len(), 1);
+            assert!(hl.is_duplicate(&h));
+        }
     }
 
     #[test]
     fn test_full_hashlist_evicts_oldest_unique_hash() {
-        let mut hl = PacketHashlist::new(3);
-        let h1 = make_hash(1);
-        let h2 = make_hash(2);
-        let h3 = make_hash(3);
-        let h4 = make_hash(4);
-
-        hl.add(h1);
-        hl.add(h2);
-        hl.add(h3);
-        hl.add(h4);
-
-        assert!(!hl.is_duplicate(&h1));
-        assert!(hl.is_duplicate(&h2));
-        assert!(hl.is_duplicate(&h3));
-        assert!(hl.is_duplicate(&h4));
-        assert_eq!(hl.len(), 3);
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(3, policy);
+            let hashes = [make_hash(1), make_hash(2), make_hash(3), make_hash(4)];
+            for hash in hashes {
+                hl.add(hash);
+            }
+            assert!(!hl.is_duplicate(&hashes[0]));
+            assert!(hashes[1..].iter().all(|hash| hl.is_duplicate(hash)));
+            assert_eq!(hl.len(), 3);
+        }
     }
 
     #[test]
     fn test_duplicate_does_not_refresh_recency() {
-        let mut hl = PacketHashlist::new(2);
-        let h1 = make_hash(1);
-        let h2 = make_hash(2);
-        let h3 = make_hash(3);
-
-        hl.add(h1);
-        hl.add(h2);
-        hl.add(h2);
-        hl.add(h3);
-
-        assert!(!hl.is_duplicate(&h1));
-        assert!(hl.is_duplicate(&h2));
-        assert!(hl.is_duplicate(&h3));
-        assert_eq!(hl.len(), 2);
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(2, policy);
+            let h1 = make_hash(1);
+            let h2 = make_hash(2);
+            let h3 = make_hash(3);
+            hl.add(h1);
+            hl.add(h2);
+            hl.add(h2);
+            hl.add(h3);
+            assert!(!hl.is_duplicate(&h1));
+            assert!(hl.is_duplicate(&h2));
+            assert!(hl.is_duplicate(&h3));
+        }
     }
 
     #[test]
     fn test_fifo_eviction_order_is_exact_across_multiple_inserts() {
-        let mut hl = PacketHashlist::new(3);
-        let h1 = make_hash(1);
-        let h2 = make_hash(2);
-        let h3 = make_hash(3);
-        let h4 = make_hash(4);
-        let h5 = make_hash(5);
-
-        hl.add(h1);
-        hl.add(h2);
-        hl.add(h3);
-        hl.add(h4);
-        hl.add(h5);
-
-        assert!(!hl.is_duplicate(&h1));
-        assert!(!hl.is_duplicate(&h2));
-        assert!(hl.is_duplicate(&h3));
-        assert!(hl.is_duplicate(&h4));
-        assert!(hl.is_duplicate(&h5));
-        assert_eq!(hl.len(), 3);
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(3, policy);
+            for seed in 1..=9 {
+                hl.add(make_hash(seed));
+            }
+            assert_eq!(
+                hl.iter().copied().collect::<Vec<_>>(),
+                vec![make_hash(7), make_hash(8), make_hash(9)]
+            );
+        }
     }
 
     #[test]
     fn test_zero_capacity_hashlist_is_noop() {
-        let mut hl = PacketHashlist::new(0);
-        let h = make_hash(1);
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(0, policy);
+            let h = make_hash(1);
+            hl.add(h);
+            assert_eq!(hl.len(), 0);
+            assert!(!hl.is_duplicate(&h));
+            assert_eq!(hl.iter().count(), 0);
+        }
+    }
 
-        hl.add(h);
+    #[test]
+    fn collision_cluster_removal_preserves_remaining_entries() {
+        for policy in policies() {
+            let mut set = PacketHashSet::new(3, policy);
+            let mut colliding = Vec::new();
+            for seed in 0..=u8::MAX {
+                let hash = make_hash(seed);
+                if hash_bytes(&hash) & 7 == 0 {
+                    colliding.push(hash);
+                    if colliding.len() == 3 {
+                        break;
+                    }
+                }
+            }
+            assert_eq!(colliding.len(), 3);
+            for hash in &colliding {
+                assert!(set.insert(*hash));
+            }
+            assert!(set.remove(&colliding[0]));
+            assert!(set.contains(&colliding[1]));
+            assert!(set.contains(&colliding[2]));
+        }
+    }
 
-        assert_eq!(hl.len(), 0);
-        assert!(!hl.is_duplicate(&h));
+    #[test]
+    fn raw_slots_read_only_after_write() {
+        for policy in policies() {
+            let mut slots = RawHashSlots::new(2, policy);
+            slots.write(1, make_hash(42));
+            assert_eq!(slots.read(1), make_hash(42));
+        }
     }
 
     // --- AnnounceSignatureCache tests ---

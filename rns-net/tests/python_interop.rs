@@ -368,6 +368,7 @@ fn start_rust_node(port: u16, tx: Sender<RustEvent>) -> RnsNode {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,

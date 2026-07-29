@@ -74,6 +74,8 @@ pub struct ReticulumSection {
     pub max_paths_per_destination: usize,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
+    /// Startup allocation policy for the packet hashlist payload pages.
+    pub packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation,
     /// Maximum number of discovery path-request tags remembered.
     pub max_discovery_pr_tags: usize,
     /// Maximum number of destinations retained in the live path table.
@@ -188,6 +190,7 @@ impl Default for ReticulumSection {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
@@ -809,6 +812,18 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.packet_hashlist_max_entries = n.max(1);
     }
+    if let Some(v) = kvs.get("packet_hashlist_allocation") {
+        section.packet_hashlist_allocation = match v.to_ascii_lowercase().as_str() {
+            "eager" => rns_core::transport::types::PacketHashlistAllocation::Eager,
+            "lazy" => rns_core::transport::types::PacketHashlistAllocation::Lazy,
+            _ => {
+                return Err(ConfigError::InvalidValue {
+                    key: "packet_hashlist_allocation".into(),
+                    value: v.clone(),
+                });
+            }
+        };
+    }
     if let Some(v) = kvs.get("max_discovery_pr_tags") {
         let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
             key: "max_discovery_pr_tags".into(),
@@ -1202,6 +1217,10 @@ mod tests {
             rns_core::constants::HASHLIST_MAXSIZE
         );
         assert_eq!(
+            config.reticulum.packet_hashlist_allocation,
+            rns_core::transport::types::PacketHashlistAllocation::Eager
+        );
+        assert_eq!(
             config.reticulum.announce_table_ttl,
             rns_core::constants::ANNOUNCE_TABLE_TTL as u64
         );
@@ -1390,6 +1409,35 @@ autoconnect_announces_to_internal = yes
         let config = parse("[reticulum]\n").unwrap();
         assert_eq!(config.reticulum.default_gravity, 0);
         assert_eq!(config.reticulum.autoconnect_interface_gravity, 0);
+    }
+
+    #[test]
+    fn parses_packet_hashlist_allocation_case_insensitively() {
+        for (value, expected) in [
+            (
+                "eager",
+                rns_core::transport::types::PacketHashlistAllocation::Eager,
+            ),
+            (
+                "LAZY",
+                rns_core::transport::types::PacketHashlistAllocation::Lazy,
+            ),
+            (
+                "LaZy",
+                rns_core::transport::types::PacketHashlistAllocation::Lazy,
+            ),
+        ] {
+            let input = format!("[reticulum]\npacket_hashlist_allocation = {value}\n");
+            assert_eq!(
+                parse(&input).unwrap().reticulum.packet_hashlist_allocation,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_packet_hashlist_allocation() {
+        assert!(parse("[reticulum]\npacket_hashlist_allocation = dynamic\n").is_err());
     }
 
     #[test]

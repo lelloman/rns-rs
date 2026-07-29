@@ -205,7 +205,8 @@ impl TransportEngine {
 
     pub fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.config.packet_hashlist_max_entries = max_entries;
-        self.packet_hashlist = PacketHashlist::new(max_entries);
+        self.packet_hashlist =
+            PacketHashlist::with_allocation(max_entries, self.config.packet_hashlist_allocation);
     }
 
     pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<PathTableRow> {
