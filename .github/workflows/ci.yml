@@ -98,6 +98,7 @@ jobs:
         run: |
           python3 -c 'import RNS; assert RNS.__version__ == "${{ matrix.reticulum.version }}", RNS.__version__'
           cargo test -p rns-net --test python_interop -- --nocapture
+          cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
 
   cargo-test-hooks:
     name: Cargo Test (rns-hooks)
