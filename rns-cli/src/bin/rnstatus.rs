@@ -18,16 +18,19 @@ use rns_net::{RpcAddr, RpcClient};
 const VERSION: &str = env!("FULL_VERSION");
 const MONITOR_MIN_SLEEP: Duration = Duration::from_millis(200);
 
+#[allow(dead_code)]
 fn main() {
-    let args = Args::parse();
+    run_with_args(Args::parse(), "rnstatus", "rnstatus");
+}
 
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if args.has("version") {
-        println!("rnstatus {}", VERSION);
+        println!("{} {}", version_name, VERSION);
         return;
     }
 
     if args.has("help") || args.has("h") {
-        print_usage();
+        print_usage(usage_name);
         return;
     }
 
@@ -1037,8 +1040,8 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
     }
 }
 
-fn print_usage() {
-    println!("Usage: rnstatus [OPTIONS] [FILTER]");
+fn print_usage(usage_name: &str) {
+    println!("Usage: {usage_name} [OPTIONS] [FILTER]");
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");

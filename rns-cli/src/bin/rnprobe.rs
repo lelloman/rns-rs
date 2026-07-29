@@ -20,16 +20,19 @@ const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_TIMEOUT: f64 = 15.0;
 const DEFAULT_PAYLOAD_SIZE: usize = 16;
 
+#[allow(dead_code)]
 fn main() {
-    let args = Args::parse();
+    run_with_args(Args::parse(), "rnprobe", "rnprobe");
+}
 
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if args.has("version") {
-        println!("rnprobe {}", VERSION);
+        println!("{} {}", version_name, VERSION);
         return;
     }
 
     if args.has("help") || args.has("h") {
-        print_usage();
+        print_usage(usage_name);
         return;
     }
 
@@ -70,7 +73,7 @@ fn main() {
         Some(h) => h.clone(),
         None => {
             eprintln!("No destination hash specified.");
-            print_usage();
+            print_usage(usage_name);
             process::exit(1);
         }
     };
@@ -510,8 +513,8 @@ fn parse_dest_hash(hex: &str) -> Option<[u8; 16]> {
     Some(result)
 }
 
-fn print_usage() {
-    println!("Usage: rnprobe [OPTIONS] <destination_hash>");
+fn print_usage(usage_name: &str) {
+    println!("Usage: {usage_name} [OPTIONS] <destination_hash>");
     println!();
     println!("Send a probe packet to a Reticulum destination and measure RTT.");
     println!();

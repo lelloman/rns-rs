@@ -17,6 +17,7 @@ rns-hooks-native = ["rns-net/rns-hooks-native"]
 rns-hooks-builtin = ["rns-net/rns-hooks-builtin"]
 
 [dependencies]
+rns-cli = { path = "../rns-cli", version = "0.3.0" }
 rns-net.workspace = true
 rns-core.workspace = true
 rns-crypto.workspace = true

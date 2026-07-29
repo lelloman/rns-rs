@@ -16,16 +16,19 @@ use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 
+#[allow(dead_code)]
 fn main() {
-    let args = Args::parse();
+    run_with_args(Args::parse(), "rnpath", "rnpath");
+}
 
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if args.has("version") {
-        println!("rnpath {}", VERSION);
+        println!("{} {}", version_name, VERSION);
         return;
     }
 
     if args.has("help") || args.has("h") {
-        print_usage();
+        print_usage(usage_name);
         return;
     }
 
@@ -150,7 +153,7 @@ fn main() {
     } else if let Some(hash_str) = args.positional.first() {
         lookup_path(&mut client, hash_str);
     } else {
-        print_usage();
+        print_usage(usage_name);
     }
 }
 
@@ -712,8 +715,8 @@ fn parse_fixed_hash(s: &str, label: &str) -> Result<[u8; 16], String> {
     Ok(out)
 }
 
-fn print_usage() {
-    println!("Usage: rnpath [OPTIONS] [DESTINATION_HASH]");
+fn print_usage(usage_name: &str) {
+    println!("Usage: {usage_name} [OPTIONS] [DESTINATION_HASH]");
     println!();
     println!("Options:");
     println!("  --config PATH, -c PATH  Path to config directory");
