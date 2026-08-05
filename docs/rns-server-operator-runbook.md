@@ -216,7 +216,8 @@ remote address for 12 hours from that connection. A connection lasting exactly
 20 seconds is not counted. Setting `block_fast_flapping = no` disables both new
 tracking and rejection based on previously recorded flaps for that listener.
 `rnstatus` reports the current number of blocked addresses as `Blocked` under
-the listener.
+the listener. Pass `-b` or `--blocked-ips` to list the blocked addresses below
+that count.
 
 ### Manual Backbone Smoke Test
 
