@@ -58,8 +58,8 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" | "hex" | "meta" | "daemon"
-                        | "disable-auth" | "json" | "value-only" | "keys-only" => {
+                        | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "hex" | "meta"
+                        | "daemon" | "disable-auth" | "json" | "value-only" | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -79,12 +79,13 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        'a' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't' | 'p' | 'x'
+                        'a' | 'b' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' | 't' | 'p'
+                        | 'x'
                             if !control =>
                         {
                             flags.insert(c.to_string(), "true".into());
                         }
-                        'a' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' if control => {
+                        'a' | 'b' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' | 'Z' if control => {
                             flags.insert(c.to_string(), "true".into());
                         }
                         'h' => {
@@ -179,6 +180,17 @@ mod tests {
     }
 
     #[test]
+    fn control_profile_treats_blocked_ips_as_boolean() {
+        let parsed = Args::parse_control_from(vec![
+            "status".into(),
+            "-b".into(),
+            "Backbone Listener".into(),
+        ]);
+        assert!(parsed.has("b"));
+        assert_eq!(parsed.positional, vec!["status", "Backbone Listener"]);
+    }
+
+    #[test]
     fn parse_short_config() {
         let a = args(&["-c", "/my/config"]);
         assert_eq!(a.config_path(), Some("/my/config"));
@@ -192,13 +204,15 @@ mod tests {
 
     #[test]
     fn parse_new_boolean_flags() {
-        let a = args(&["-l", "-f", "-m", "-A", "-P", "-Z"]);
+        let a = args(&["-l", "-f", "-m", "-A", "-P", "-Z", "-b", "filter"]);
         assert!(a.has("l"));
         assert!(a.has("f"));
         assert!(a.has("m"));
         assert!(a.has("A"));
         assert!(a.has("P"));
         assert!(a.has("Z"));
+        assert!(a.has("b"));
+        assert_eq!(a.positional, vec!["filter"]);
     }
 
     #[test]
@@ -220,6 +234,7 @@ mod tests {
             "--export-prv",
             "--pr-stats",
             "--burst",
+            "--blocked-ips",
             "--meta",
         ]);
         assert!(a.has("stdin"));
@@ -238,6 +253,7 @@ mod tests {
         assert!(a.has("export-prv"));
         assert!(a.has("pr-stats"));
         assert!(a.has("burst"));
+        assert!(a.has("blocked-ips"));
         assert!(a.has("meta"));
     }
 

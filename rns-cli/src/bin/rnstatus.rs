@@ -54,6 +54,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_announces = args.has("A");
     let show_pr_stats = args.has("P") || args.has("pr-stats");
     let show_bursts = args.has("B") || args.has("burst");
+    let show_blocked_ips = args.has("b") || args.has("blocked-ips");
     let monitor_mode = args.has("m");
     let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let remote_timeout = args
@@ -85,6 +86,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_announces,
             show_pr_stats,
             show_bursts,
+            show_blocked_ips,
         );
         return;
     }
@@ -262,6 +264,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 show_announces,
                 show_pr_stats,
                 show_bursts,
+                show_blocked_ips,
             );
         }
 
@@ -299,6 +302,7 @@ fn print_status(
     show_announces: bool,
     show_pr_stats: bool,
     show_bursts: bool,
+    show_blocked_ips: bool,
 ) {
     // Print transport info
     if let Some(PickleValue::Bool(true)) = response.get("transport_enabled").map(|v| v) {
@@ -400,7 +404,7 @@ fn print_status(
                     println!("    Uptime    : {}", prettytime(uptime));
                 }
             }
-            for line in client_status_lines(iface) {
+            for line in client_status_lines(iface, show_blocked_ips) {
                 println!("{}", line);
             }
             if show_announces {
@@ -591,7 +595,7 @@ fn interface_has_active_burst(iface: &PickleValue) -> bool {
             .unwrap_or(false)
 }
 
-fn client_status_lines(iface: &PickleValue) -> Vec<String> {
+fn client_status_lines(iface: &PickleValue, show_blocked_ips: bool) -> Vec<String> {
     let Some(clients) = iface.get("clients").and_then(|value| value.as_int()) else {
         return Vec::new();
     };
@@ -603,6 +607,19 @@ fn client_status_lines(iface: &PickleValue) -> Vec<String> {
     {
         let suffix = if blocked == 1 { "IP" } else { "IPs" };
         lines.push(format!("    Blocked   : {} {}", blocked, suffix));
+    }
+    if show_blocked_ips {
+        if let Some(blocked_ip_list) = iface
+            .get("blocked_ip_list")
+            .and_then(|value| value.as_list())
+        {
+            lines.extend(
+                blocked_ip_list
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .map(|ip| format!("                {ip}")),
+            );
+        }
     }
     lines
 }
@@ -727,6 +744,7 @@ fn remote_status(
     show_announces: bool,
     show_pr_stats: bool,
     show_bursts: bool,
+    show_blocked_ips: bool,
 ) {
     let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
         Ok(h) => h,
@@ -775,6 +793,7 @@ fn remote_status(
                         show_announces,
                         show_pr_stats,
                         show_bursts,
+                        show_blocked_ips,
                     );
                 }
                 if let Some(count) = remote.link_count {
@@ -1054,6 +1073,7 @@ fn print_usage(usage_name: &str) {
     println!("  -A                      Show announce statistics");
     println!("  -P, --pr-stats          Show path request statistics");
     println!("  -B, --burst             Only show interfaces with active burst limiting");
+    println!("  -b, --blocked-ips       Show blocked IPs per interface");
     println!("  -d                      Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
@@ -1070,7 +1090,11 @@ fn print_usage(usage_name: &str) {
 mod tests {
     use super::*;
 
-    fn client_stats(clients: i64, blocked_ips: Option<i64>) -> PickleValue {
+    fn client_stats(
+        clients: i64,
+        blocked_ips: Option<i64>,
+        blocked_ip_list: &[&str],
+    ) -> PickleValue {
         let mut fields = vec![(
             PickleValue::String("clients".into()),
             PickleValue::Int(clients),
@@ -1081,17 +1105,28 @@ mod tests {
                 PickleValue::Int(blocked),
             ));
         }
+        if !blocked_ip_list.is_empty() {
+            fields.push((
+                PickleValue::String("blocked_ip_list".into()),
+                PickleValue::List(
+                    blocked_ip_list
+                        .iter()
+                        .map(|ip| PickleValue::String((*ip).into()))
+                        .collect(),
+                ),
+            ));
+        }
         PickleValue::Dict(fields)
     }
 
     #[test]
     fn client_status_shows_blocked_ip_count_with_pluralization() {
         assert_eq!(
-            client_status_lines(&client_stats(4, Some(1))),
+            client_status_lines(&client_stats(4, Some(1), &[]), false),
             vec!["    Clients   : 4", "    Blocked   : 1 IP"]
         );
         assert_eq!(
-            client_status_lines(&client_stats(4, Some(2))),
+            client_status_lines(&client_stats(4, Some(2), &[]), false),
             vec!["    Clients   : 4", "    Blocked   : 2 IPs"]
         );
     }
@@ -1099,14 +1134,32 @@ mod tests {
     #[test]
     fn client_status_hides_zero_or_missing_blocked_count() {
         assert_eq!(
-            client_status_lines(&client_stats(0, Some(0))),
+            client_status_lines(&client_stats(0, Some(0), &[]), false),
             vec!["    Clients   : 0"]
         );
         assert_eq!(
-            client_status_lines(&client_stats(3, None)),
+            client_status_lines(&client_stats(3, None, &[]), false),
             vec!["    Clients   : 3"]
         );
-        assert!(client_status_lines(&PickleValue::Dict(Vec::new())).is_empty());
+        assert!(client_status_lines(&PickleValue::Dict(Vec::new()), false).is_empty());
+    }
+
+    #[test]
+    fn client_status_shows_blocked_ip_list_only_when_requested() {
+        let stats = client_stats(4, Some(2), &["192.0.2.1", "2001:db8::2"]);
+        assert_eq!(
+            client_status_lines(&stats, false),
+            vec!["    Clients   : 4", "    Blocked   : 2 IPs"]
+        );
+        assert_eq!(
+            client_status_lines(&stats, true),
+            vec![
+                "    Clients   : 4",
+                "    Blocked   : 2 IPs",
+                "                192.0.2.1",
+                "                2001:db8::2",
+            ]
+        );
     }
 
     #[test]
