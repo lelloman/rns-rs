@@ -14,6 +14,9 @@ filenames:
   record after the target version is known and before baseline promotion.
 - `reticulum-X.Y.Z-parity.md` — the concise, final acceptance record created
   when the baseline is promoted.
+- `reticulum-X.Y.Z-rgit-{audit,parity}.md` — qualified records used when the
+  normative rgit baseline advances without an upstream version change, so the
+  signed-release records remain immutable.
 
 Dates, commit hashes, repository tips, and local branch revisions belong inside
 the documents instead of their filenames. Historical versions without a saved
@@ -51,3 +54,4 @@ final. The corresponding parity record records the final outcome.
 | 1.4.0 | [Audit](reticulum-1.4.0-audit.md) | [Parity](reticulum-1.4.0-parity.md) |
 | 1.4.1 | [Audit](reticulum-1.4.1-audit.md) | [Parity](reticulum-1.4.1-parity.md) |
 | 1.4.2 | [Audit](reticulum-1.4.2-audit.md) | [Parity](reticulum-1.4.2-parity.md) |
+| 1.4.2 rgit `4fc8e03d` | [Audit](reticulum-1.4.2-rgit-audit.md) | [Parity](reticulum-1.4.2-rgit-parity.md) |

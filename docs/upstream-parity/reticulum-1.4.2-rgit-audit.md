@@ -1,27 +1,27 @@
-# Reticulum Next Upstream Audit
+# Reticulum 1.4.2 rgit Upstream Audit
 
 ## Scope and Baseline
 
-- audit date: `2026-08-06`
+- audit date: `2026-08-11`
 - previous accepted version: `1.4.2`
 - previous normative commit: `b48b96e61676504e0a4e527b33b9a0b4495c6872`
-- target version: pending; `RNS.__version__` remains `1.4.2` at the observed tip
-- target tag or ref: pending; observed `rgit/master`
-- target normative commit: pending; observed tip `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
-- observed target root tree: `866e71c8a6b3b2196476467d7aeede3f509d7fed`
-- observed target `RNS` tree: `8edc9d52943aa465c8f4e23debaaa9224c74eeb2`
-- version assertion at observed tip: `RNS.__version__ == "1.4.2"`
+- target version: `1.4.2`
+- target tag or ref: `rgit/master` at promotion time
+- target normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
+- target root tree: `866e71c8a6b3b2196476467d7aeede3f509d7fed`
+- target `RNS` tree: `8edc9d52943aa465c8f4e23debaaa9224c74eeb2`
+- version assertion: `RNS.__version__ == "1.4.2"`
 - audited range: `b48b96e61676504e0a4e527b33b9a0b4495c6872..4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
 - commits in range: `1`
 - repositories checked: normative `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum` and GitHub mirror `git@github.com:markqvist/Reticulum.git`
-- local branch and revision inspected: `dev@29289864fbd958e6d8a6e0ccbd032bec3502a7e3`
+- local branch and revision inspected: `dev@bf10d9ca695298a96bb86f7df591ae90c3aabcb8`
 
-On 2026-08-06, `rgit/master` was one commit ahead of the accepted baseline at
+On 2026-08-11, `rgit/master` was one commit ahead of the accepted baseline at
 `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`, while the GitHub mirror's
-`origin/master` still pointed to the accepted baseline. The observed commit is
-therefore audited here, but it is not yet promoted as a normative target.
-The 2026-08-08 daily check confirmed that both remote tips and this one-commit
-delta were unchanged.
+`origin/master` still pointed to the signed-release baseline. GitHub could serve
+the target by exact SHA, and upstream continued to assert version 1.4.2. The
+normative rgit commit is therefore promoted as a qualified 1.4.2 rgit baseline
+without rewriting the earlier signed-release acceptance.
 
 ## Audit Vocabulary
 
@@ -45,7 +45,7 @@ Every commit in the audited range appears exactly once.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45` | Added blocked IP listing to rnstatus | Integrated | `d91ac56` exposes `blocked_ip_list` through interface stats; `2928986` adds `rnstatus -b/--blocked-ips`, display logic, help text and tests |
+| 1 | `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45` | Added blocked IP listing to rnstatus | Integrated | `d91ac56` exposes `blocked_ip_list` through interface stats; `f191fc3` adds `rnstatus -b/--blocked-ips`, display logic, help text and tests |
 
 ## Per-Commit Analysis
 
@@ -61,7 +61,7 @@ user-visible `rnstatus` compatibility surface. The underlying compatible
 
 **Local handling and evidence:** Local commit `d91ac56` exposes the sorted,
 current blocked-address list through driver queries and compatible RPC stats.
-Local commit `2928986` adds the `rnstatus -b/--blocked-ips` flag, conditional
+Local commit `f191fc3` adds the `rnstatus -b/--blocked-ips` flag, conditional
 list rendering, help text and argument/display regressions. On 2026-08-06,
 `cargo test -p rns-cli blocked_ips`, `cargo test -p rns-cli --bin rnstatus
 blocked_ip`, and `cargo test -p rns-net blocked_ip` passed.
@@ -70,24 +70,32 @@ blocked_ip`, and `cargo test -p rns-net blocked_ip` passed.
 
 ## Integration Plan
 
-No implementation work is currently unresolved for the observed commit. Wait
-for the GitHub mirror and normative rgit repository to identify a stable
-promotion target and version, then rename this audit and complete the remaining
-promotion gates against that exact target.
+No implementation work is unresolved for the accepted commit. Future drift is
+measured from `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`.
 
 ## Promotion Gates
 
-- [x] Every currently observed upstream commit has a final disposition.
-- [x] Focused regressions pass for every currently observed applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [x] Native documentation is updated for the currently observed user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are unchanged; the delta is CLI-only.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for the user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
+- `2026-08-11`: Both upstream remotes were refreshed. Normative `rgit/master`
+  remained at `4fc8e03d`; GitHub `master` remained at the signed-release
+  baseline but served `4fc8e03d` by exact SHA. Root-tree, `RNS`-tree and version
+  assertions passed.
+- `2026-08-11`: Exact-target Python/Rust bidirectional TCP packet interop and
+  all five ignored `rncp`/`rnx` utility interoperability tests passed.
+- `2026-08-11`: Focused blocked-IP CLI and interface regressions passed.
+- `2026-08-11`: `cargo test --workspace`, `cargo fmt --all -- --check` and
+  `scripts/lint-host.sh` passed. Lint retained the repository's existing warning
+  baseline.
 - `2026-08-08`: Daily VPS snapshots were healthy on `vps-eu` and `vps-us`,
   with complete announce counters and no idle-timeout events in the preceding
   24 hours. Both nodes matched the configured `origin/master` binary versions.
@@ -99,5 +107,5 @@ promotion gates against that exact target.
   recall, bidirectional packets, links, Channels, concurrent Resources across
   the 1 MiB boundary, concurrent link batches, and one forced reconnect cycle.
 - `2026-08-06`: Focused blocked-IP regressions passed as listed above.
-- Promotion is not claimed: the two upstream remotes do not yet agree, the
-  target version is unknown, and the remaining promotion gates have not run.
+- Docker E2E, cross-compilation and physical Weave HIL were not rerun for this
+  CLI-only advancement and are not claimed.

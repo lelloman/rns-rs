@@ -5,7 +5,7 @@ Status: Complete for `RNS-Compat/1`
 Version: 1.0
 
 Compatibility baseline: Reticulum `1.4.2`, commit
-`b48b96e61676504e0a4e527b33b9a0b4495c6872`.
+`4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`.
 
 This document is the normative protocol specification for the wire protocol
 implemented by `rns-rs`. It describes packet formats, cryptographic framing,
@@ -1259,6 +1259,6 @@ ff010203041111111111111111111111111111111111111111111111111111111111111111aabbcc
 | Interfaces and IFAC framing | pinned runtime fixtures | IFAC, TCP, UDP, Local, KISS, RNode, Pipe, I2P, Backbone, Weave, and Python interoperability suites |
 
 The coverage map is tied to Reticulum `1.4.2` commit
-`b48b96e61676504e0a4e527b33b9a0b4495c6872`. The upstream-parity records under
+`4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`. The upstream-parity records under
 `docs/upstream-parity/` document any later observed delta before it becomes a
 new normative baseline.

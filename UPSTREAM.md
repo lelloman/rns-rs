@@ -10,24 +10,38 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `b48b96e61676504e0a4e527b33b9a0b4495c6872`
-- Commit date: `2026-07-26 17:59:12 +0200`
-- Subject: `Prepare release`
+- Normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
+- Commit date: `2026-07-28 15:36:12 +0200`
+- Subject: `Added blocked IP listing to rnstatus`
 
-The normative 1.4.2 commit is the target of the signed `1.4.2` tag and is
-available from both the rgit repository and the GitHub release mirror. The
-interop lane checks out the exact commit directly, requires its `RNS` tree
-object to equal `3286dd665827d2e591b47efaa5706b643e9b8d5a`, asserts the Python
-version, and only then executes live Python/Rust interop.
+The normative baseline is the 1.4.2 rgit `master` tip observed and accepted on
+2026-08-11. It is one commit after the signed `1.4.2` tag target
+`b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
+1.4.2. GitHub `master` remains at the signed-release target, but GitHub serves
+the accepted commit by exact SHA. The interop lane fetches and checks out that
+exact commit, requires its `RNS` tree object to equal
+`8edc9d52943aa465c8f4e23debaaa9224c74eeb2`, asserts the Python version, and
+only then executes live Python/Rust interop.
 
-The exact six-commit disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.4.2-parity.md`](docs/upstream-parity/reticulum-1.4.2-parity.md),
-with the detailed commit audit in
-[`docs/upstream-parity/reticulum-1.4.2-audit.md`](docs/upstream-parity/reticulum-1.4.2-audit.md).
-The PR CI matrix is the final software acceptance authority for this
-promotion. Historical 1.4.0 conformance fixtures retain their original source
-provenance. Physical Weave HIL is not claimed by this promotion. The live
-dual-VPS smoke test was completed on the acceptance date.
+The post-release commit disposition and acceptance record is in
+[`docs/upstream-parity/reticulum-1.4.2-rgit-parity.md`](docs/upstream-parity/reticulum-1.4.2-rgit-parity.md),
+with the detailed audit in
+[`docs/upstream-parity/reticulum-1.4.2-rgit-audit.md`](docs/upstream-parity/reticulum-1.4.2-rgit-audit.md).
+The signed-release acceptance remains preserved in the original 1.4.2 records.
+Historical conformance fixtures retain their source provenance. Docker,
+cross-build and physical Weave HIL validation were not rerun for this CLI-only
+baseline advancement.
+
+## Completed 1.4.2..1.4.2-rgit Porting Queue
+
+The normative baseline advanced one commit from the signed `1.4.2` target
+`b48b96e61676504e0a4e527b33b9a0b4495c6872` to rgit `master` commit
+`4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`. The commit adds
+`rnstatus -b/--blocked-ips` and conditionally lists addresses already exposed
+through each interface's `blocked_ip_list` statistics field. Rust implements
+the compatible statistics and CLI behavior in local commits `d91ac56` and
+`f191fc3`. Focused regressions and exact-target Python/Rust interoperability
+passed before promotion.
 
 ## Completed 1.4.1..1.4.2 Porting Queue
 
