@@ -64,7 +64,7 @@ fn lora_airtime_secs(
     }
 
     let sf = spreading_factor as f64;
-    let symbol_time = 2f64.powi(spreading_factor as i32) / bandwidth as f64;
+    let symbol_time = libm::pow(2f64, (spreading_factor as i32) as f64) / bandwidth as f64;
     let low_data_rate_optimize = spreading_factor >= 11 && bandwidth <= 125_000;
     let de = if low_data_rate_optimize { 1.0 } else { 0.0 };
     let ih = if explicit_header { 0.0 } else { 1.0 };
@@ -75,7 +75,7 @@ fn lora_airtime_secs(
     }
 
     let numerator = 8.0 * payload_len as f64 - 4.0 * sf + 28.0 + 16.0 * crc - 20.0 * ih;
-    let payload_symbols = 8.0 + (numerator / denominator).ceil().max(0.0) * coding_rate as f64;
+    let payload_symbols = 8.0 + libm::ceil(numerator / denominator).max(0.0) * coding_rate as f64;
     let preamble_time = (preamble_symbols as f64 + 4.25) * symbol_time;
     let payload_time = payload_symbols * symbol_time;
     preamble_time + payload_time

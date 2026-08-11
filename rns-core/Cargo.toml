@@ -10,11 +10,12 @@ authors.workspace = true
 
 [features]
 default = ["std"]
-std = []
+std = ["rns-crypto/std"]
 
 [dependencies]
-rns-crypto.workspace = true
+rns-crypto = { path = "../rns-crypto", default_features = false }
 log = "0.4"
+libm = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
