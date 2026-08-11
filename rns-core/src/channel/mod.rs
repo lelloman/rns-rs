@@ -229,7 +229,7 @@ impl Channel {
     ///
     /// Formula: `1.5^(tries-1) * max(rtt*2.5, 0.025) * (tx_ring.len() + 1.5)`
     pub fn get_packet_timeout(&self, tries: u8) -> f64 {
-        let base = 1.5_f64.powi((tries as i32) - 1);
+        let base = libm::pow(1.5_f64, ((tries as i32) - 1) as f64);
         let rtt_factor = (self.rtt * 2.5).max(0.025);
         let ring_factor = (self.tx_ring.len() as f64) + 1.5;
         base * rtt_factor * ring_factor

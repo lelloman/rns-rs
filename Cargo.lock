@@ -2013,6 +2013,7 @@ name = "rns-core"
 version = "0.1.16"
 dependencies = [
  "criterion",
+ "libm",
  "log",
  "rns-crypto",
  "serde_json",
