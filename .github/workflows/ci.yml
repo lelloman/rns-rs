@@ -74,17 +74,16 @@ jobs:
             commit: 50e03a24e8e10256363f6b73af7f6804ddb90e6f
             rns_tree: d49de3ba170d15ae2b6114ad3ea6053ab14300af
           - version: 1.4.2
-            commit: 4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45
-            rns_tree: 8edc9d52943aa465c8f4e23debaaa9224c74eeb2
+            commit: b48b96e61676504e0a4e527b33b9a0b4495c6872
+            rns_tree: 3286dd665827d2e591b47efaa5706b643e9b8d5a
 
     steps:
       - name: Checkout rns-rs
         uses: actions/checkout@v4
 
-      - name: Checkout exact Reticulum baseline
+      - name: Checkout mirrored Reticulum interop target
         run: |
           git clone https://github.com/markqvist/Reticulum.git reticulum-upstream
-          git -C reticulum-upstream fetch origin "${{ matrix.reticulum.commit }}"
           git -C reticulum-upstream checkout "${{ matrix.reticulum.commit }}"
           test "$(git -C reticulum-upstream rev-parse HEAD)" = "${{ matrix.reticulum.commit }}"
           test "$(git -C reticulum-upstream rev-parse HEAD:RNS)" = "${{ matrix.reticulum.rns_tree }}"

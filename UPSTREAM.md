@@ -17,11 +17,12 @@ The current upstream reference baseline is:
 The normative baseline is the 1.4.2 rgit `master` tip observed and accepted on
 2026-08-11. It is one commit after the signed `1.4.2` tag target
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
-1.4.2. GitHub `master` remains at the signed-release target, but GitHub serves
-the accepted commit by exact SHA. The interop lane fetches and checks out that
-exact commit, requires its `RNS` tree object to equal
-`8edc9d52943aa465c8f4e23debaaa9224c74eeb2`, asserts the Python version, and
-only then executes live Python/Rust interop.
+1.4.2. GitHub `master` remains at the signed-release target and a clean GitHub
+clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
+used the normative rgit checkout and asserted `RNS` tree
+`8edc9d52943aa465c8f4e23debaaa9224c74eeb2`. The CI interop lane remains pinned
+to the fetchable signed-release commit and `RNS` tree
+`3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
 The post-release commit disposition and acceptance record is in
 [`docs/upstream-parity/reticulum-1.4.2-rgit-parity.md`](docs/upstream-parity/reticulum-1.4.2-rgit-parity.md),

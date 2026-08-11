@@ -20,8 +20,9 @@
 The accepted commit is one commit after the signed `1.4.2` tag while retaining
 the same upstream version assertion. At acceptance, normative rgit `master`
 pointed to the commit and GitHub `master` remained at the signed-release target;
-GitHub nevertheless served the accepted object by exact SHA. Historical fixture
-provenance remains unchanged because this delta only affects `rnstatus` output.
+a clean GitHub clone could not fetch the accepted object by exact SHA. Historical
+fixture provenance remains unchanged because this delta only affects `rnstatus`
+output.
 
 ## Upstream Commit Audit
 
@@ -47,7 +48,7 @@ provenance remains unchanged because this delta only affects `rnstatus` output.
 | Focused regression suites | Passed locally on 2026-08-11. |
 | Fixture regeneration/provenance | Not applicable to this CLI-only delta; existing provenance was retained. |
 | Exact-target Python/Rust interop | Packet and utility interoperability passed locally on 2026-08-11 against `4fc8e03d`. |
-| Workspace and feature suites | Workspace tests passed locally; PR CI remains the clean-environment feature-suite authority. |
+| Workspace and feature suites | Workspace tests passed locally; PR CI remains the clean-environment feature-suite authority and exercises the fetchable signed-release interop target until the mirror advances. |
 | Formatting and lint | `cargo fmt --check` and host lint passed locally. |
 | Release/cross builds | Not rerun for this CLI-only advancement. |
 | Docker E2E | Not rerun and not claimed. |
@@ -56,7 +57,9 @@ provenance remains unchanged because this delta only affects `rnstatus` output.
 ## Caveats and Deferred Validation
 
 - GitHub `master` had not advanced from the signed-release target at acceptance,
-  although the accepted commit was fetchable from GitHub by exact SHA.
+  and a clean GitHub clone could not fetch the accepted commit by exact SHA. CI
+  therefore remains pinned to the signed-release interop target; exact rgit-tip
+  interop was validated locally from the normative checkout.
 - Docker E2E, cross-compilation and physical Weave HIL were not rerun.
 - Generated upstream documentation is not vendored.
 
