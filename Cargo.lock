@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "rns-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -2010,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "criterion",
  "libm",
