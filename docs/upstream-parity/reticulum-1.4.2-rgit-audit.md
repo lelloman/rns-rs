@@ -18,10 +18,11 @@
 
 On 2026-08-11, `rgit/master` was one commit ahead of the accepted baseline at
 `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`, while the GitHub mirror's
-`origin/master` still pointed to the signed-release baseline. GitHub could serve
-the target by exact SHA, and upstream continued to assert version 1.4.2. The
-normative rgit commit is therefore promoted as a qualified 1.4.2 rgit baseline
-without rewriting the earlier signed-release acceptance.
+`origin/master` still pointed to the signed-release baseline and a clean GitHub
+clone could not fetch the target by exact SHA. Upstream continued to assert
+version 1.4.2. After exact-target local validation from the normative checkout,
+the rgit commit is promoted as a qualified 1.4.2 rgit baseline without
+rewriting the earlier signed-release acceptance.
 
 ## Audit Vocabulary
 
@@ -88,8 +89,12 @@ measured from `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`.
 
 - `2026-08-11`: Both upstream remotes were refreshed. Normative `rgit/master`
   remained at `4fc8e03d`; GitHub `master` remained at the signed-release
-  baseline but served `4fc8e03d` by exact SHA. Root-tree, `RNS`-tree and version
-  assertions passed.
+  baseline. Root-tree, `RNS`-tree and version assertions passed against the
+  normative local checkout.
+- `2026-08-11`: A clean GitHub Actions clone could not fetch `4fc8e03d` by
+  exact SHA. The CI interop lane remains pinned to the signed-release commit
+  until the mirror advances; exact-target evidence comes from the local
+  normative checkout.
 - `2026-08-11`: Exact-target Python/Rust bidirectional TCP packet interop and
   all five ignored `rncp`/`rnx` utility interoperability tests passed.
 - `2026-08-11`: Focused blocked-IP CLI and interface regressions passed.
