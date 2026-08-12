@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RNS VPS History</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">RNS OPERATIONS / HISTORICAL ANALYSIS</p>
+      <h1>VPS History</h1>
+      <p id="coverage-line" class="subhead">Loading report coverage…</p>
+    </div>
+    <div id="status" class="status loading">CONNECTING</div>
+  </header>
+
+  <main>
+    <section class="controls panel" aria-label="Report filters">
+      <div class="control-group range-presets">
+        <span class="label">Window</span>
+        <button data-days="30">30 days</button>
+        <button data-days="90" class="active">90 days</button>
+        <button data-days="all">All data</button>
+      </div>
+      <label>From <input id="start-date" type="date"></label>
+      <label>To <input id="end-date" type="date"></label>
+      <fieldset id="host-filters">
+        <legend>Hosts</legend>
+      </fieldset>
+      <button id="apply" class="primary">Apply</button>
+    </section>
+
+    <div id="error" class="error hidden" role="alert"></div>
+
+    <section id="kpis" class="kpi-grid" aria-label="Summary"></section>
+
+    <section class="chart-panel panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">DAILY TREND</p>
+          <h2 id="chart-title">Announces / 24h</h2>
+        </div>
+        <label class="metric-control">Metric
+          <select id="metric">
+            <option value="announce_24h">Announces / 24h</option>
+            <option value="load1">Load average / 1m</option>
+            <option value="memory_percent">Memory used</option>
+            <option value="established_sessions_4242">Established sessions</option>
+            <option value="backbone_up_count">Backbone interfaces up</option>
+            <option value="public_interfaces_up">Public interfaces up</option>
+            <option value="packet_freshness_max_age_seconds">Packet freshness age</option>
+            <option value="idle_timeout_events_24h">Idle timeouts / 24h</option>
+            <option value="provider_bridge_dropped_24h">Provider drops / 24h</option>
+            <option value="blacklist_active_entries">Active blacklist entries</option>
+          </select>
+        </label>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="trend-chart" role="img" aria-label="Historical metric chart"></canvas>
+        <div id="chart-empty" class="empty hidden">No valid values in this window.</div>
+      </div>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <section class="panel quality-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">TRUST THE SHAPE</p>
+          <h2>Data quality</h2>
+        </div>
+      </div>
+      <div id="quality"></div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">LATEST CAPTURE PER HOST / DAY</p>
+          <h2>Daily observations</h2>
+        </div>
+        <span id="row-count" class="row-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th><th>Host</th><th>Health</th><th>Announces</th>
+              <th>Load</th><th>Memory</th><th>Sessions</th><th>Public up</th>
+              <th>Timeouts</th><th>Version</th>
+            </tr>
+          </thead>
+          <tbody id="daily-table"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>SQLite is opened read-only. Legacy <code>root@vps-*</code> keys are normalized automatically.</footer>
+  <script src="/app.js"></script>
+</body>
+</html>
