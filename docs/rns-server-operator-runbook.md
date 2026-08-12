@@ -443,6 +443,38 @@ aliases above instead of raw IP addresses. This daily report database is
 separate from each node's live `/var/lib/rns-node/stats.db`, which is read by
 the report script but is not copied between hosts.
 
+### Historical VPS Dashboard
+
+Use the local, read-only HTML dashboard to inspect trends in the accumulated
+daily report database:
+
+```bash
+python3 scripts/vps_history_dashboard.py
+```
+
+Then open `http://127.0.0.1:8765/`. The dashboard supports 30-day, 90-day and
+full-history windows, explicit date and host filters, metric charts, coverage
+and health summaries, data-quality warnings, version drift and a daily detail
+table. It automatically normalizes the older `root@vps-eu` and `root@vps-us`
+keys to their stable host names and selects the newest capture when a host has
+more than one row for a report date. Query-failure sentinel values are treated
+as missing data, not zeroes.
+
+The server binds only to localhost by default and opens SQLite in read-only
+mode. Use a different database or port when needed:
+
+```bash
+python3 scripts/vps_history_dashboard.py \
+  --db-path data/vps_daily_reports.db \
+  --port 9000
+```
+
+Validate database compatibility and coverage without starting HTTP:
+
+```bash
+python3 scripts/vps_history_dashboard.py --check
+```
+
 ## Control Plane
 
 Key endpoints:
