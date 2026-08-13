@@ -1,6 +1,11 @@
 "use strict";
 
-const state = { meta: null, rows: [], colors: ["#c9f45b", "#55d7d0", "#ff9d57", "#b899ff"] };
+const state = {
+  meta: null,
+  rows: [],
+  traffic: [],
+  colors: ["#c9f45b", "#55d7d0", "#ff9d57", "#b899ff", "#ff6b64", "#72a7ff"]
+};
 const metrics = {
   announce_24h: { label: "Announces / 24h", format: compact },
   load1: { label: "Load average / 1m", format: value => value.toFixed(2) },
@@ -38,6 +43,14 @@ function duration(seconds) {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
+function byteSize(value) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = value;
+  let unit = 0;
+  while (Math.abs(amount) >= 1000 && unit < units.length - 1) { amount /= 1000; unit++; }
+  return `${amount.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
 function isoShift(dateString, days) {
   const date = new Date(`${dateString}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
@@ -69,6 +82,9 @@ async function init() {
     $("#host-filters").insertAdjacentHTML("beforeend", state.meta.hosts.map(host =>
       `<label><input type="checkbox" value="${escapeHtml(host.host)}" checked>${escapeHtml(host.host)}</label>`
     ).join(""));
+    $("#traffic-host").innerHTML = state.meta.hosts.map(host =>
+      `<option value="${escapeHtml(host.host)}">${escapeHtml(host.host)}</option>`
+    ).join("");
     wireEvents();
     await load();
     setStatus("READY", "ready");
@@ -80,6 +96,9 @@ async function init() {
 function wireEvents() {
   $("#apply").addEventListener("click", load);
   $("#metric").addEventListener("change", renderChart);
+  $$("#traffic-host, #traffic-measure, #traffic-direction").forEach(control =>
+    control.addEventListener("change", renderTrafficChart)
+  );
   $$("[data-days]").forEach(button => button.addEventListener("click", () => {
     $$("[data-days]").forEach(item => item.classList.toggle("active", item === button));
     const value = button.dataset.days;
@@ -89,7 +108,7 @@ function wireEvents() {
       : maxDate(state.meta.first_date, isoShift(state.meta.last_date, -Number(value) + 1));
     load();
   }));
-  window.addEventListener("resize", debounce(renderChart, 120));
+  window.addEventListener("resize", debounce(() => { renderChart(); renderTrafficChart(); }, 120));
 }
 
 function maxDate(a, b) { return a > b ? a : b; }
@@ -102,8 +121,12 @@ async function load() {
   const params = new URLSearchParams({ start: $("#start-date").value, end: $("#end-date").value });
   hosts.forEach(host => params.append("host", host));
   try {
-    const result = await fetchJson(`/api/daily?${params}`);
-    state.rows = result.rows;
+    const [dailyResult, trafficResult] = await Promise.all([
+      fetchJson(`/api/daily?${params}`),
+      fetchJson(`/api/traffic?${params}`)
+    ]);
+    state.rows = dailyResult.rows;
+    state.traffic = trafficResult.rows;
     render();
     setStatus("READY", "ready");
   } catch (error) {
@@ -128,6 +151,7 @@ function hideError() { $("#error").classList.add("hidden"); }
 function render() {
   renderKpis();
   renderChart();
+  renderTrafficChart();
   renderQuality();
   renderTable();
 }
@@ -230,6 +254,99 @@ function renderChart() {
     item.points.forEach((point, pointIndex) => {
       const xx = x(point.date), yy = y(point.value);
       if (pointIndex === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+    });
+    ctx.stroke();
+    item.points.forEach(point => { ctx.beginPath(); ctx.arc(x(point.date), y(point.value), 2.2, 0, Math.PI * 2); ctx.fill(); });
+  });
+}
+
+function renderTrafficChart() {
+  const canvas = $("#traffic-chart");
+  const host = $("#traffic-host").value;
+  const measure = $("#traffic-measure").value;
+  const direction = $("#traffic-direction").value;
+  const formatter = measure === "bytes" ? byteSize : compact;
+  const rows = state.traffic.filter(row =>
+    row.host === host && row.query_ok === 1 && Number(row[measure]) >= 0
+  );
+  const grouped = new Map();
+  rows.forEach(row => {
+    if (direction !== "combined" && row.direction !== direction) return;
+    const key = `${row.report_date}|${row.packet_type}`;
+    grouped.set(key, (grouped.get(key) || 0) + Number(row[measure]));
+  });
+  const preferredOrder = ["announce", "data", "linkrequest", "proof"];
+  const packetTypes = [...new Set(rows.map(row => row.packet_type))].sort((a, b) => {
+    const ai = preferredOrder.indexOf(a), bi = preferredOrder.indexOf(b);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.localeCompare(b);
+  });
+  const series = packetTypes.map(packetType => ({
+    host: packetType,
+    points: [...grouped.entries()]
+      .filter(([key]) => key.endsWith(`|${packetType}`))
+      .map(([key, value]) => ({ date: key.split("|", 1)[0], value }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }));
+  const values = series.flatMap(item => item.points.map(point => point.value));
+  $("#traffic-title").textContent = `${measure === "bytes" ? "Bytes" : "Packets"} by packet type`;
+  $("#traffic-empty").classList.toggle("hidden", values.length > 0);
+  $("#traffic-legend").innerHTML = packetTypes.map((packetType, index) =>
+    `<span style="--legend-color:${state.colors[index]}">${escapeHtml(packetType)}</span>`
+  ).join("");
+
+  const validDates = new Set(rows.map(row => row.report_date));
+  const observedDates = new Set(state.rows.filter(row => row.host === host).map(row => row.report_date));
+  const total = rows.reduce((sum, row) => {
+    if (direction !== "combined" && row.direction !== direction) return sum;
+    return sum + Number(row[measure]);
+  }, 0);
+  const nonAnnounce = rows.reduce((sum, row) => {
+    if (row.packet_type === "announce" || (direction !== "combined" && row.direction !== direction)) return sum;
+    return sum + Number(row[measure]);
+  }, 0);
+  const share = total ? `${(nonAnnounce / total * 100).toFixed(1)}% non-announce` : "no traffic mix yet";
+  $("#traffic-coverage").textContent = `${host} · ${validDates.size}/${observedDates.size} observed days have traffic totals · ${share}`;
+
+  const box = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(box.width * ratio));
+  canvas.height = Math.max(1, Math.floor(box.height * ratio));
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+  ctx.clearRect(0, 0, box.width, box.height);
+  if (!values.length) return;
+
+  const pad = { left: 72, right: 18, top: 15, bottom: 35 };
+  const width = box.width - pad.left - pad.right;
+  const height = box.height - pad.top - pad.bottom;
+  const minDate = new Date(`${$("#start-date").value}T00:00:00Z`).getTime();
+  const maxDate = new Date(`${$("#end-date").value}T00:00:00Z`).getTime();
+  const maxValue = Math.max(...values) * 1.08 || 1;
+  const x = date => pad.left + (new Date(`${date}T00:00:00Z`).getTime() - minDate) / Math.max(1, maxDate - minDate) * width;
+  const y = value => pad.top + (maxValue - value) / maxValue * height;
+
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.lineWidth = 1;
+  for (let tick = 0; tick <= 4; tick++) {
+    const yy = pad.top + height * tick / 4;
+    const value = maxValue * (1 - tick / 4);
+    ctx.strokeStyle = "#303833";
+    ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(box.width - pad.right, yy); ctx.stroke();
+    ctx.fillStyle = "#92998e"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText(formatter(value), pad.left - 9, yy);
+  }
+  [0, .5, 1].forEach(position => {
+    const time = minDate + (maxDate - minDate) * position;
+    ctx.fillStyle = "#92998e"; ctx.textAlign = position === 0 ? "left" : position === 1 ? "right" : "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(new Date(time).toISOString().slice(0, 10), pad.left + width * position, box.height);
+  });
+  series.forEach((item, index) => {
+    ctx.strokeStyle = state.colors[index]; ctx.fillStyle = state.colors[index]; ctx.lineWidth = 2;
+    ctx.beginPath();
+    item.points.forEach((point, pointIndex) => {
+      if (pointIndex === 0) ctx.moveTo(x(point.date), y(point.value));
+      else ctx.lineTo(x(point.date), y(point.value));
     });
     ctx.stroke();
     item.points.forEach(point => { ctx.beginPath(); ctx.arc(x(point.date), y(point.value), 2.2, 0, Math.PI * 2); ctx.fill(); });

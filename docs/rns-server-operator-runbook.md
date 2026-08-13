@@ -250,6 +250,15 @@ run the smoke test from the same workstation, then check whether upstream
 Reticulum moved. Push the reviewed database back to `vps-eu` so the next
 workstation starts from the latest history.
 
+Each snapshot also records rolling 24-hour packet and byte totals from the live
+stats database, grouped by packet type (`announce`, `data`, `linkrequest`, and
+`proof`) and direction (`rx` and `tx`). These rows live in
+`packet_traffic_24h` and make traffic-mix trends available to the historical
+dashboard. Counts cover packet observations on all interfaces, so they measure
+node traffic handled rather than unique end-user payload. A row with
+`query_ok = 0` and counts of `-1` means the remote query failed; it must not be
+treated as zero traffic.
+
 Run each per-host snapshot command to completion before starting another
 snapshot for the same host or the same local report database. The collector
 performs several remote SSH queries, including reads from the live
@@ -454,8 +463,9 @@ python3 scripts/vps_history_dashboard.py
 
 Then open `http://127.0.0.1:8765/`. The dashboard supports 30-day, 90-day and
 full-history windows, explicit date and host filters, metric charts, coverage
-and health summaries, data-quality warnings, version drift and a daily detail
-table. It automatically normalizes the older `root@vps-eu` and `root@vps-us`
+and health summaries, packet-type traffic trends, data-quality warnings,
+version drift and a daily detail table. It automatically normalizes the older
+`root@vps-eu` and `root@vps-us`
 keys to their stable host names and selects the newest capture when a host has
 more than one row for a report date. Query-failure sentinel values are treated
 as missing data, not zeroes.
