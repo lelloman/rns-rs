@@ -64,6 +64,39 @@
       <div id="legend" class="legend"></div>
     </section>
 
+    <section class="chart-panel panel">
+      <div class="section-heading traffic-heading">
+        <div>
+          <p class="eyebrow">24-HOUR PACKET MIX</p>
+          <h2 id="traffic-title">Traffic by packet type</h2>
+        </div>
+        <div class="traffic-controls">
+          <label class="metric-control">Host
+            <select id="traffic-host"></select>
+          </label>
+          <label class="metric-control">Measure
+            <select id="traffic-measure">
+              <option value="bytes">Bytes</option>
+              <option value="packets">Packets</option>
+            </select>
+          </label>
+          <label class="metric-control">Direction
+            <select id="traffic-direction">
+              <option value="combined">RX + TX</option>
+              <option value="rx">RX</option>
+              <option value="tx">TX</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="traffic-chart" role="img" aria-label="Packet traffic by type chart"></canvas>
+        <div id="traffic-empty" class="empty hidden">No packet traffic totals in this window yet.</div>
+      </div>
+      <div id="traffic-legend" class="legend"></div>
+      <p id="traffic-coverage" class="chart-note"></p>
+    </section>
+
     <section class="panel quality-panel">
       <div class="section-heading">
         <div>

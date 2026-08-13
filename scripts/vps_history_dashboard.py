@@ -114,6 +114,15 @@ def validate_schema(conn: sqlite3.Connection) -> None:
         raise ValueError(f"daily_checks is missing columns: {', '.join(missing)}")
 
 
+def has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        is not None
+    )
+
+
 def load_meta(conn: sqlite3.Connection) -> dict[str, Any]:
     rows = conn.execute(
         f"""
@@ -135,11 +144,24 @@ def load_meta(conn: sqlite3.Connection) -> dict[str, Any]:
     hosts = [dict(row) for row in rows]
     if not hosts:
         return {"first_date": None, "last_date": None, "hosts": []}
-    return {
+    result: dict[str, Any] = {
         "first_date": min(row["first_date"] for row in hosts),
         "last_date": max(row["last_date"] for row in hosts),
         "hosts": hosts,
     }
+    result["packet_traffic_available"] = has_table(conn, "packet_traffic_24h")
+    if result["packet_traffic_available"]:
+        traffic_range = conn.execute(
+            """
+            SELECT MIN(d.report_date), MAX(d.report_date)
+            FROM packet_traffic_24h p
+            JOIN daily_checks d USING (capture_ts_utc)
+            WHERE p.query_ok = 1
+            """
+        ).fetchone()
+        result["packet_traffic_first_date"] = traffic_range[0]
+        result["packet_traffic_last_date"] = traffic_range[1]
+    return result
 
 
 def parse_date(value: str | None, fallback: str) -> str:
@@ -200,6 +222,53 @@ def load_daily(
         LEFT JOIN interface_totals USING (capture_ts_utc)
         WHERE ranked.rn = 1
         ORDER BY report_date, host
+        """,
+        [start, end, *selected_hosts],
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_traffic(
+    conn: sqlite3.Connection, start: str, end: str, hosts: list[str]
+) -> list[dict[str, Any]]:
+    if not has_table(conn, "packet_traffic_24h"):
+        return []
+    if start > end:
+        raise ValueError("start date must not be after end date")
+    known_hosts = {row["host"] for row in load_meta(conn)["hosts"]}
+    selected_hosts = sorted(set(hosts or known_hosts))
+    unknown = set(selected_hosts) - known_hosts
+    if unknown:
+        raise ValueError(f"unknown host: {', '.join(sorted(unknown))}")
+    if not selected_hosts:
+        return []
+    placeholders = ",".join("?" for _ in selected_hosts)
+    rows = conn.execute(
+        f"""
+        WITH ranked AS (
+          SELECT capture_ts_utc,
+                 report_date,
+                 {HOST_SQL} AS canonical_host,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY {HOST_SQL}, report_date
+                   ORDER BY capture_ts_utc DESC
+                 ) AS rn
+          FROM daily_checks
+          WHERE report_date BETWEEN ? AND ?
+            AND {HOST_SQL} IN ({placeholders})
+        )
+        SELECT ranked.canonical_host AS host,
+               ranked.report_date,
+               traffic.packet_type,
+               traffic.direction,
+               traffic.packets,
+               traffic.bytes,
+               traffic.query_ok
+        FROM ranked
+        JOIN packet_traffic_24h traffic USING (capture_ts_utc)
+        WHERE ranked.rn = 1
+        ORDER BY ranked.report_date, ranked.canonical_host,
+                 traffic.packet_type, traffic.direction
         """,
         [start, end, *selected_hosts],
     ).fetchall()
@@ -269,6 +338,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     start = parse_date(query.get("start", [None])[0], meta["first_date"])
                     end = parse_date(query.get("end", [None])[0], meta["last_date"])
                     rows = load_daily(conn, start, end, query.get("host", []))
+                    self.send_json({"start": start, "end": end, "rows": rows})
+                return
+            if parsed.path == "/api/traffic":
+                query = urllib.parse.parse_qs(parsed.query)
+                with connect_readonly(self.db_path) as conn:
+                    meta = load_meta(conn)
+                    if not meta["first_date"]:
+                        self.send_json({"rows": []})
+                        return
+                    start = parse_date(query.get("start", [None])[0], meta["first_date"])
+                    end = parse_date(query.get("end", [None])[0], meta["last_date"])
+                    rows = load_traffic(conn, start, end, query.get("host", []))
                     self.send_json({"start": start, "end": end, "rows": rows})
                 return
             if parsed.path == "/favicon.ico":

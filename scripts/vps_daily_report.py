@@ -33,6 +33,9 @@ MODE_NAMES = {
     6: "Gateway",
     7: "Internal",
 }
+EXPECTED_PACKET_TYPES = ("announce", "data", "linkrequest", "proof")
+EXPECTED_PACKET_DIRECTIONS = ("rx", "tx")
+PACKET_TRAFFIC_QUERY_FAILED = "__PACKET_TRAFFIC_QUERY_FAILED__"
 
 
 def run(cmd: list[str]) -> str:
@@ -229,6 +232,46 @@ def parse_memstats(lines: str) -> list[dict[str, object]]:
     return rows
 
 
+def parse_packet_traffic(lines: list[str]) -> list[dict[str, object]]:
+    """Parse 24-hour packet totals, preserving query failure separately from zero."""
+    query_ok = PACKET_TRAFFIC_QUERY_FAILED not in lines
+    parsed: dict[tuple[str, str], tuple[int, int]] = {}
+    if query_ok:
+        for line in lines:
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            if len(parts) != 4:
+                raise ValueError(f"invalid packet traffic row: {line!r}")
+            packet_type, direction, packets_raw, bytes_raw = parts
+            packets = int(packets_raw)
+            byte_count = int(bytes_raw)
+            if packets < 0 or byte_count < 0:
+                raise ValueError(f"negative packet traffic row: {line!r}")
+            parsed[(packet_type, direction)] = (packets, byte_count)
+
+    keys = set(parsed)
+    keys.update(
+        (packet_type, direction)
+        for packet_type in EXPECTED_PACKET_TYPES
+        for direction in EXPECTED_PACKET_DIRECTIONS
+    )
+    return [
+        {
+            "packet_type": packet_type,
+            "direction": direction,
+            "packets": parsed.get((packet_type, direction), (0, 0))[0]
+            if query_ok
+            else -1,
+            "bytes": parsed.get((packet_type, direction), (0, 0))[1]
+            if query_ok
+            else -1,
+            "query_ok": query_ok,
+        }
+        for packet_type, direction in sorted(keys)
+    ]
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     existing = {
         row[1]
@@ -351,6 +394,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             direction TEXT NOT NULL,
             updated_at_utc TEXT,
             age_seconds INTEGER NOT NULL,
+            PRIMARY KEY (capture_ts_utc, packet_type, direction),
+            FOREIGN KEY (capture_ts_utc) REFERENCES daily_checks(capture_ts_utc) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS packet_traffic_24h (
+            capture_ts_utc TEXT NOT NULL,
+            packet_type TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            packets INTEGER NOT NULL,
+            bytes INTEGER NOT NULL,
+            query_ok INTEGER NOT NULL,
             PRIMARY KEY (capture_ts_utc, packet_type, direction),
             FOREIGN KEY (capture_ts_utc) REFERENCES daily_checks(capture_ts_utc) ON DELETE CASCADE
         )
@@ -595,6 +652,19 @@ ORDER BY packet_type, direction;
 " || true""",
     ).splitlines()
 
+    packet_traffic_lines = run_ssh(
+        ssh_host,
+        f"""timeout 180s sqlite3 -readonly {shlex.quote(stats_db)} "
+SELECT packet_type || '|' || direction || '|' ||
+       COALESCE(SUM(packets), 0) || '|' || COALESCE(SUM(bytes), 0)
+FROM packet_samples
+WHERE ts_ms >= (strftime('%s', 'now') - 86400) * 1000
+GROUP BY packet_type, direction
+ORDER BY packet_type, direction;
+" || printf '%s\n' {PACKET_TRAFFIC_QUERY_FAILED!r}""",
+    ).splitlines()
+    packet_traffic_rows = parse_packet_traffic(packet_traffic_lines)
+
     capture_ts = basic["CAPTURE_TS"]
     capture_dt = parse_utc(capture_ts)
     packet_rows: list[dict[str, object]] = []
@@ -698,7 +768,7 @@ ORDER BY packet_type, direction;
         "public_interfaces_up": sum(1 for row in public_interfaces if row["status"]),
     }
     snapshot["health_state"] = classify(snapshot)
-    return snapshot, memstats, packet_rows, interface_rows
+    return snapshot, memstats, packet_rows, packet_traffic_rows, interface_rows
 
 
 def write_db(
@@ -706,6 +776,7 @@ def write_db(
     snapshot: dict[str, object],
     memstats: list[dict[str, object]],
     packet_rows: list[dict[str, object]],
+    packet_traffic_rows: list[dict[str, object]],
     interface_rows: list[dict[str, object]],
 ) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -837,6 +908,24 @@ def write_db(
         )
         conn.executemany(
             """
+            INSERT INTO packet_traffic_24h (
+                capture_ts_utc, packet_type, direction, packets, bytes, query_ok
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    capture_ts,
+                    row["packet_type"],
+                    row["direction"],
+                    row["packets"],
+                    row["bytes"],
+                    int(bool(row["query_ok"])),
+                )
+                for row in packet_traffic_rows
+            ],
+        )
+        conn.executemany(
+            """
             INSERT INTO interface_snapshots (
                 capture_ts_utc, interface_id, interface_name, interface_kind,
                 public_candidate, status, mode, mode_name, bitrate_bps, rxb, txb,
@@ -874,7 +963,7 @@ def write_db(
 def main() -> int:
     args = parse_args()
     version_refs = expected_binary_versions(args.master_ref, args.dev_ref)
-    snapshot, memstats, packet_rows, interface_rows = collect_snapshot(
+    snapshot, memstats, packet_rows, packet_traffic_rows, interface_rows = collect_snapshot(
         args.host,
         args.ssh_target,
         args.config_dir,
@@ -883,7 +972,14 @@ def main() -> int:
         version_refs,
     )
     db_path = pathlib.Path(args.db_path)
-    write_db(db_path, snapshot, memstats, packet_rows, interface_rows)
+    write_db(
+        db_path,
+        snapshot,
+        memstats,
+        packet_rows,
+        packet_traffic_rows,
+        interface_rows,
+    )
     if args.stdout_summary:
         public_interfaces = [row for row in interface_rows if row["public_candidate"]]
         print(
@@ -910,6 +1006,14 @@ def main() -> int:
                     "rns_ctl_matches_master": bool(snapshot["rns_ctl_matches_master"]),
                     "rns_ctl_matches_dev": bool(snapshot["rns_ctl_matches_dev"]),
                     "announce_24h": snapshot["announce_24h"],
+                    "packet_traffic_24h": {
+                        f"{row['packet_type']}_{row['direction']}": {
+                            "packets": row["packets"],
+                            "bytes": row["bytes"],
+                            "query_ok": row["query_ok"],
+                        }
+                        for row in packet_traffic_rows
+                    },
                     "idle_timeout_events_24h": snapshot["idle_timeout_events_24h"],
                     "primary_peer_name": snapshot["primary_peer_name"],
                     "primary_peer_up": bool(snapshot["primary_peer_up"]),

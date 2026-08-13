@@ -63,10 +63,13 @@ button.primary { margin-left: auto; border-radius: 7px; color: #11150e; backgrou
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .metric-control { color: var(--muted); font-size: 12px; }
 .metric-control select { min-width: 220px; }
+.traffic-controls { display: flex; align-items: end; gap: 12px; }
+.traffic-controls .metric-control select { min-width: 130px; }
 .chart-wrap { position: relative; height: 360px; }
 #trend-chart { width: 100%; height: 100%; display: block; }
 .legend { display: flex; gap: 20px; padding-top: 12px; font: 600 12px ui-monospace, monospace; }
 .legend span::before { content: ""; display: inline-block; width: 18px; height: 3px; margin: 0 7px 3px 0; background: var(--legend-color); }
+.chart-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
 .quality-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .quality-item { padding: 14px; background: #111614; border-left: 3px solid var(--line); }
 .quality-item.issue { border-color: var(--orange); }
@@ -98,4 +101,5 @@ footer { padding: 20px 0 32px; border-top: 1px solid var(--line); }
   button.primary { margin-left: 0; }
   .section-heading { align-items: start; flex-direction: column; }
   .metric-control, .metric-control select { width: 100%; }
+  .traffic-controls { width: 100%; flex-direction: column; align-items: stretch; }
 }
