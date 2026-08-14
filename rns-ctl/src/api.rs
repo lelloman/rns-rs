@@ -992,7 +992,7 @@ fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -1014,7 +1014,7 @@ fn handle_post_link_close(req: &HttpRequest, node: &NodeHandle) -> HttpResponse 
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -1031,7 +1031,7 @@ fn handle_post_channel(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -1055,7 +1055,7 @@ fn handle_post_resource(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };

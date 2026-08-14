@@ -118,7 +118,7 @@ pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
             artifacts: artifact_count(&release_dir)?,
         });
     }
-    releases.sort_by(|a, b| b.created.cmp(&a.created));
+    releases.sort_by_key(|release| std::cmp::Reverse(release.created));
     Ok(releases)
 }
 

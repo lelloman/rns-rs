@@ -202,7 +202,7 @@ impl ProviderBridge {
         let thread = thread::Builder::new()
             .name("provider-bridge".into())
             .spawn(move || provider_bridge_loop(listener, thread_shared))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         Ok(Self {
             shared,
@@ -549,7 +549,7 @@ fn spawn_consumer_thread(
                 }
             }
         })
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        .map_err(io::Error::other)
 }
 
 fn next_consumer_frame(

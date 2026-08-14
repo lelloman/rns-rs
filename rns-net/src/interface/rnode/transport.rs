@@ -26,7 +26,7 @@ impl Transport {
             let reader = stream.try_clone()?;
             Ok((Transport::Tcp(reader), Transport::Tcp(stream)))
         } else {
-            let port = SerialPort::open(&config)?;
+            let port = SerialPort::open(config)?;
             Ok((
                 Transport::Serial(port.reader()?),
                 Transport::Serial(port.writer()?),

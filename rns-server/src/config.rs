@@ -487,15 +487,15 @@ impl ServerConfig {
         parts.join(" ")
     }
 
-    fn command_for_override(&self, path: &PathBuf) -> ProcessCommand {
+    fn command_for_override(&self, path: &Path) -> ProcessCommand {
         if path.as_os_str().is_empty() {
             ProcessCommand::SelfInvoke
         } else {
-            ProcessCommand::External(path.clone())
+            ProcessCommand::External(path.to_path_buf())
         }
     }
 
-    fn binary_mode_label(&self, path: &PathBuf, role: &str) -> String {
+    fn binary_mode_label(&self, path: &Path, role: &str) -> String {
         if path.as_os_str().is_empty() {
             format!("self-spawn ({role})")
         } else {
@@ -1044,6 +1044,11 @@ fn validate_optional_nonempty(field: &str, value: Option<&str>) -> Result<(), St
     Ok(())
 }
 
+#[cfg(any(
+    feature = "rns-hooks-native",
+    feature = "rns-hooks-wasm",
+    feature = "rns-hooks-builtin"
+))]
 fn optional_limit_arg(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())

@@ -830,7 +830,7 @@ mod tests {
         // Programs sorted by priority desc: high first
         let mut programs = vec![high, low];
         // Sort descending by priority (as attach would do)
-        programs.sort_by(|a, b| b.priority.cmp(&a.priority));
+        programs.sort_by_key(|program| std::cmp::Reverse(program.priority));
 
         let ctx = HookContext::Tick;
         let result = mgr.run_chain(&mut programs, &ctx, &NullEngine, 0.0);
@@ -1222,7 +1222,7 @@ mod tests {
             .compile("dropper".into(), WAT_DROP.as_bytes(), 0)
             .unwrap();
         let mut programs = vec![injector, dropper];
-        programs.sort_by(|a, b| b.priority.cmp(&a.priority));
+        programs.sort_by_key(|program| std::cmp::Reverse(program.priority));
 
         let ctx = HookContext::Tick;
         let exec = mgr

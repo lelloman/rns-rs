@@ -47,7 +47,7 @@ impl Driver {
             .iter()
             .map(|(dest_hash, state)| Self::known_destination_entry(*dest_hash, state))
             .collect();
-        entries.sort_by(|a, b| a.dest_hash.cmp(&b.dest_hash));
+        entries.sort_by_key(|a| a.dest_hash);
         entries
     }
 

@@ -247,7 +247,7 @@ impl RNodeDecoder {
         let buf = &self.command_buffer;
         match self.command {
             CMD_DETECT => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::Detected(buf[0] == DETECT_RESP));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
@@ -264,14 +264,14 @@ impl RNodeDecoder {
                 }
             }
             CMD_PLATFORM => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::Platform(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_MCU => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::Mcu(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
@@ -310,42 +310,42 @@ impl RNodeDecoder {
                 }
             }
             CMD_TXPOWER => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::TxPower(buf[0] as i8));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_SF => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::SpreadingFactor(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_CR => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::CodingRate(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_RADIO_STATE => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::RadioState(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_STAT_RSSI => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::StatRssi(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
                 }
             }
             CMD_STAT_SNR => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::StatSnr(buf[0] as i8));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
@@ -373,7 +373,7 @@ impl RNodeDecoder {
                 self.in_frame = false;
             }
             CMD_SEL_INT => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     self.selected_index = buf[0];
                     events.push(RNodeEvent::SelectedInterface(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
@@ -381,7 +381,7 @@ impl RNodeDecoder {
                 }
             }
             CMD_ERROR => {
-                if buf.len() >= 1 {
+                if !buf.is_empty() {
                     events.push(RNodeEvent::Error(buf[0]));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;

@@ -588,7 +588,7 @@ impl BackbonePeerMonitor {
                 reject_count: state.reject_count,
             })
             .collect();
-        entries.sort_by(|a, b| a.peer_ip.cmp(&b.peer_ip));
+        entries.sort_by_key(|a| a.peer_ip);
         entries
     }
 

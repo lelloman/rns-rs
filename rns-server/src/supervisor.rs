@@ -254,7 +254,7 @@ impl Supervisor {
         }
     }
 
-    fn restart_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
+    fn restart_process(&self, name: &str, children: &mut [ManagedChild]) -> Result<(), String> {
         let Some(role) = role_from_name(name) else {
             return Err(format!("unknown process '{}'", name));
         };

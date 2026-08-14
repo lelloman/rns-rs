@@ -81,8 +81,7 @@ impl Writer for UdpWriter {
                 .parse::<SocketAddr>()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "UDP interface has no forward target configured",
                 ))
             }

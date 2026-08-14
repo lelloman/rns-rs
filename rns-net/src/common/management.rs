@@ -171,13 +171,14 @@ pub fn handle_status_request(
         total_rxb += stats.rxb;
         total_txb += stats.txb;
 
-        let mut ifstats: Vec<(&str, Value)> = Vec::new();
-        ifstats.push(("name", Value::Str(info.name.clone())));
-        ifstats.push(("short_name", Value::Str(info.name.clone())));
-        ifstats.push(("status", Value::Bool(entry.online())));
-        ifstats.push(("mode", Value::UInt(info.mode as u64)));
-        ifstats.push(("rxb", Value::UInt(stats.rxb)));
-        ifstats.push(("txb", Value::UInt(stats.txb)));
+        let mut ifstats: Vec<(&str, Value)> = vec![
+            ("name", Value::Str(info.name.clone())),
+            ("short_name", Value::Str(info.name.clone())),
+            ("status", Value::Bool(entry.online())),
+            ("mode", Value::UInt(info.mode as u64)),
+            ("rxb", Value::UInt(stats.rxb)),
+            ("txb", Value::UInt(stats.txb)),
+        ];
         if let Some(br) = info.bitrate {
             ifstats.push(("bitrate", Value::UInt(br)));
         } else {
@@ -223,12 +224,13 @@ pub fn handle_status_request(
     }
 
     // Build top-level stats dict
-    let mut stats: Vec<(&str, Value)> = Vec::new();
-    stats.push(("interfaces", Value::Array(iface_list)));
-    stats.push(("rxb", Value::UInt(total_rxb)));
-    stats.push(("txb", Value::UInt(total_txb)));
-    stats.push(("rxs", Value::UInt(0)));
-    stats.push(("txs", Value::UInt(0)));
+    let mut stats: Vec<(&str, Value)> = vec![
+        ("interfaces", Value::Array(iface_list)),
+        ("rxb", Value::UInt(total_rxb)),
+        ("txb", Value::UInt(total_txb)),
+        ("rxs", Value::UInt(0)),
+        ("txs", Value::UInt(0)),
+    ];
 
     if let Some(identity_hash) = engine.config().identity_hash {
         stats.push(("transport_id", Value::Bin(identity_hash.to_vec())));

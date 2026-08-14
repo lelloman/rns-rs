@@ -248,7 +248,7 @@ fn start_shared_node_connector(
                         return;
                     }
                     Err(err) => {
-                        if attempt == 1 || attempt % 10 == 0 {
+                        if attempt == 1 || attempt.is_multiple_of(10) {
                             log::warn!(
                                 "shared rnsd not ready for embedded HTTP control plane (attempt {}): {}",
                                 attempt,

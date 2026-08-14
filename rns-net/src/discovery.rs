@@ -211,44 +211,44 @@ impl DiscoveredInterfaceStorage {
 
     /// Serialize an interface to msgpack
     fn serialize_interface(&self, iface: &DiscoveredInterface) -> io::Result<Vec<u8>> {
-        let mut entries: Vec<(Value, Value)> = Vec::new();
-
-        entries.push((
-            Value::Str("type".into()),
-            Value::Str(iface.interface_type.clone()),
-        ));
-        entries.push((Value::Str("transport".into()), Value::Bool(iface.transport)));
-        entries.push((Value::Str("name".into()), Value::Str(iface.name.clone())));
-        entries.push((
-            Value::Str("discovered".into()),
-            Value::Float(iface.discovered),
-        ));
-        entries.push((
-            Value::Str("last_heard".into()),
-            Value::Float(iface.last_heard),
-        ));
-        entries.push((
-            Value::Str("heard_count".into()),
-            Value::UInt(iface.heard_count as u64),
-        ));
-        entries.push((
-            Value::Str("status".into()),
-            Value::Str(iface.status.as_str().into()),
-        ));
-        entries.push((Value::Str("stamp".into()), Value::Bin(iface.stamp.clone())));
-        entries.push((
-            Value::Str("value".into()),
-            Value::UInt(iface.stamp_value as u64),
-        ));
-        entries.push((
-            Value::Str("transport_id".into()),
-            Value::Bin(iface.transport_id.to_vec()),
-        ));
-        entries.push((
-            Value::Str("network_id".into()),
-            Value::Bin(iface.network_id.to_vec()),
-        ));
-        entries.push((Value::Str("hops".into()), Value::UInt(iface.hops as u64)));
+        let mut entries: Vec<(Value, Value)> = vec![
+            (
+                Value::Str("type".into()),
+                Value::Str(iface.interface_type.clone()),
+            ),
+            (Value::Str("transport".into()), Value::Bool(iface.transport)),
+            (Value::Str("name".into()), Value::Str(iface.name.clone())),
+            (
+                Value::Str("discovered".into()),
+                Value::Float(iface.discovered),
+            ),
+            (
+                Value::Str("last_heard".into()),
+                Value::Float(iface.last_heard),
+            ),
+            (
+                Value::Str("heard_count".into()),
+                Value::UInt(iface.heard_count as u64),
+            ),
+            (
+                Value::Str("status".into()),
+                Value::Str(iface.status.as_str().into()),
+            ),
+            (Value::Str("stamp".into()), Value::Bin(iface.stamp.clone())),
+            (
+                Value::Str("value".into()),
+                Value::UInt(iface.stamp_value as u64),
+            ),
+            (
+                Value::Str("transport_id".into()),
+                Value::Bin(iface.transport_id.to_vec()),
+            ),
+            (
+                Value::Str("network_id".into()),
+                Value::Bin(iface.network_id.to_vec()),
+            ),
+            (Value::Str("hops".into()), Value::UInt(iface.hops as u64)),
+        ];
 
         if let Some(v) = iface.latitude {
             entries.push((Value::Str("latitude".into()), Value::Float(v)));
@@ -844,24 +844,24 @@ impl InterfaceAnnouncer {
 
     /// Pack interface metadata as msgpack map with integer keys.
     fn pack_interface_info(transport_id: &[u8; 16], iface: &DiscoverableInterface) -> Vec<u8> {
-        let mut entries: Vec<(msgpack::Value, msgpack::Value)> = Vec::new();
-
-        entries.push((
-            msgpack::Value::UInt(INTERFACE_TYPE as u64),
-            msgpack::Value::Str(iface.config.interface_type.clone()),
-        ));
-        entries.push((
-            msgpack::Value::UInt(TRANSPORT as u64),
-            msgpack::Value::Bool(iface.transport_enabled),
-        ));
-        entries.push((
-            msgpack::Value::UInt(NAME as u64),
-            msgpack::Value::Str(iface.config.discovery_name.clone()),
-        ));
-        entries.push((
-            msgpack::Value::UInt(TRANSPORT_ID as u64),
-            msgpack::Value::Bin(transport_id.to_vec()),
-        ));
+        let mut entries: Vec<(msgpack::Value, msgpack::Value)> = vec![
+            (
+                msgpack::Value::UInt(INTERFACE_TYPE as u64),
+                msgpack::Value::Str(iface.config.interface_type.clone()),
+            ),
+            (
+                msgpack::Value::UInt(TRANSPORT as u64),
+                msgpack::Value::Bool(iface.transport_enabled),
+            ),
+            (
+                msgpack::Value::UInt(NAME as u64),
+                msgpack::Value::Str(iface.config.discovery_name.clone()),
+            ),
+            (
+                msgpack::Value::UInt(TRANSPORT_ID as u64),
+                msgpack::Value::Bin(transport_id.to_vec()),
+            ),
+        ];
         if let Some(ref reachable) = iface.config.reachable_on {
             entries.push((
                 msgpack::Value::UInt(REACHABLE_ON as u64),

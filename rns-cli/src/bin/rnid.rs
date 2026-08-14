@@ -424,7 +424,7 @@ fn find_identity_entry(
 }
 
 fn rpc_client(args: &Args) -> Result<RpcClient, String> {
-    let config_dir = storage::resolve_config_dir(args.config_path().map(|s| Path::new(s)));
+    let config_dir = storage::resolve_config_dir(args.config_path().map(Path::new));
     let config_file = config_dir.join("config");
     let rns_config = if config_file.exists() {
         config::parse_file(&config_file).map_err(|e| format!("Error reading config: {}", e))?
@@ -1330,7 +1330,7 @@ fn decode_rsg_data(input: &[u8]) -> Option<Vec<u8>> {
         return Some(input.to_vec());
     }
     let encoded = encoded.trim_end_matches('=').to_string();
-    if encoded.len() % 2 == 0 && encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if encoded.len().is_multiple_of(2) && encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
         if let Some(decoded) = parse_hex(&encoded) {
             return Some(decoded);
         }
@@ -1563,7 +1563,7 @@ fn parse_identity_hash(s: &str) -> Result<[u8; 16], String> {
 
 fn parse_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);
@@ -1625,7 +1625,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     if chars.len() % 4 == 1 {
         return None;
     }
-    while chars.len() % 4 != 0 {
+    while !chars.len().is_multiple_of(4) {
         chars.push('=');
     }
 

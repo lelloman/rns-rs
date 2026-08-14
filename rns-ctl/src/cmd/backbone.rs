@@ -126,8 +126,8 @@ fn print_blacklist(response: &PickleValue) {
     }
 
     println!(
-        "{:<24} {:<40} {:>5} {:>9} {:>8}  {}",
-        "Interface", "IP", "Conn", "BlkSecs", "Rejects", "Reason"
+        "{:<24} {:<40} {:>5} {:>9} {:>8}  Reason",
+        "Interface", "IP", "Conn", "BlkSecs", "Rejects"
     );
     println!("{}", "-".repeat(96));
     for entry in entries {

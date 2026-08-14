@@ -558,7 +558,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     if chars.len() % 4 == 1 {
         return None;
     }
-    while chars.len() % 4 != 0 {
+    while !chars.len().is_multiple_of(4) {
         chars.push('=');
     }
     let mut out = Vec::with_capacity(chars.len() / 4 * 3);
