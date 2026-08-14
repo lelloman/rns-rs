@@ -151,59 +151,26 @@ def parse_utc(value: str) -> dt.datetime:
     )
 
 
-def parse_status(text: str) -> dict[str, object]:
-    transport_uptime = ""
-    primary_peer_name = ""
-    primary_peer_up = False
-    backbone_up_count = 0
-    named_peer_up_count = 0
-
-    section_name: str | None = None
-    section_status: str | None = None
-    sections: list[tuple[str, str | None]] = []
-
-    for raw_line in text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        if stripped.startswith("Transport Instance "):
-            parts = stripped.split(" running for ", 1)
-            if len(parts) == 2:
-                transport_uptime = parts[1].strip()
-            continue
-        # rnstatus prints interface section names with one leading space.
-        # Transport metadata such as "Probe responder at ..." uses deeper
-        # indentation and must not be mistaken for an interface.
-        if indent == 1:
-            if section_name is not None:
-                sections.append((section_name, section_status))
-            section_name = stripped
-            section_status = None
-            continue
-        if indent >= 4 and stripped.startswith("Status") and ":" in stripped:
-            section_status = stripped.split(":", 1)[1].strip()
-    if section_name is not None:
-        sections.append((section_name, section_status))
-
-    if sections:
-        primary_peer_name = sections[0][0]
-        primary_peer_up = sections[0][1] == "Up"
-    for name, status in sections[1:]:
-        if status != "Up":
-            continue
-        if name.startswith("BackboneInterface/"):
-            backbone_up_count += 1
-        else:
-            named_peer_up_count += 1
-
-    return {
-        "transport_uptime": transport_uptime,
-        "primary_peer_name": primary_peer_name,
-        "primary_peer_up": primary_peer_up,
-        "backbone_up_count": backbone_up_count,
-        "named_peer_up_count": named_peer_up_count,
-    }
+def pretty_duration(seconds: object) -> str:
+    """Format seconds like rns-cli's prettytime()."""
+    if not isinstance(seconds, (int, float)):
+        raise ValueError("status JSON transport_uptime must be a number")
+    if seconds <= 0:
+        return "now"
+    total = int(seconds)
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs and not days:
+        parts.append(f"{secs}s")
+    return " ".join(parts) or "now"
 
 
 def parse_memstats(lines: str) -> list[dict[str, object]]:
@@ -275,7 +242,28 @@ def parse_packet_traffic(lines: list[str]) -> list[dict[str, object]]:
     ]
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
+def repair_packet_freshness_history(conn: sqlite3.Connection) -> int:
+    repaired = conn.execute(
+        "UPDATE packet_freshness SET age_seconds = 0 WHERE age_seconds < 0"
+    ).rowcount
+    conn.execute(
+        """
+        UPDATE daily_checks
+        SET packet_freshness_max_age_seconds = (
+            SELECT MAX(age_seconds)
+            FROM packet_freshness
+            WHERE packet_freshness.capture_ts_utc = daily_checks.capture_ts_utc
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM packet_freshness
+            WHERE packet_freshness.capture_ts_utc = daily_checks.capture_ts_utc
+        )
+        """
+    )
+    return repaired
+
+
+def ensure_schema(conn: sqlite3.Connection) -> int:
     existing = {
         row[1]
         for row in conn.execute("PRAGMA table_info(daily_checks)").fetchall()
@@ -442,6 +430,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    return repair_packet_freshness_history(conn)
 
 
 def interface_kind(name: str) -> str:
@@ -457,14 +446,16 @@ def parse_interface_snapshots(
     capture_dt: dt.datetime,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    interfaces = response.get("interfaces", [])
+    interfaces = response.get("interfaces")
     if not isinstance(interfaces, list):
-        return rows
+        raise ValueError("status JSON interfaces must be a list")
     capture_epoch = capture_dt.timestamp()
     for iface in interfaces:
         if not isinstance(iface, dict):
-            continue
-        name = str(iface.get("name") or "Unknown")
+            raise ValueError("status JSON interface entries must be objects")
+        if not isinstance(iface.get("name"), str) or not iface["name"]:
+            raise ValueError("status JSON interface name must be a non-empty string")
+        name = iface["name"]
         kind = interface_kind(name)
         started_epoch = iface.get("started")
         uptime_seconds = None
@@ -495,6 +486,35 @@ def parse_interface_snapshots(
             }
         )
     return rows
+
+
+def status_from_json(
+    response: dict[str, object], capture_dt: dt.datetime
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if not isinstance(response, dict):
+        raise ValueError("status JSON must be an object")
+    if "transport_uptime" not in response:
+        raise ValueError("status JSON is missing transport_uptime")
+    rows = parse_interface_snapshots(response, capture_dt)
+    public = [row for row in rows if row["public_candidate"]]
+    primary = public[0] if public else None
+    remaining = public[1:]
+    status = {
+        "transport_uptime": pretty_duration(response["transport_uptime"]),
+        "primary_peer_name": primary["interface_name"] if primary else "",
+        "primary_peer_up": bool(primary and primary["status"]),
+        "backbone_up_count": sum(
+            1
+            for row in remaining
+            if row["status"] and row["interface_kind"] == "backbone_discovered"
+        ),
+        "named_peer_up_count": sum(
+            1
+            for row in remaining
+            if row["status"] and row["interface_kind"] == "configured_public"
+        ),
+    }
+    return status, rows
 
 
 def classify(snapshot: dict[str, object]) -> str:
@@ -571,8 +591,6 @@ if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:{http_port}'; then echo 'LI
 echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {{count++}} END {{print count+0}}')"
 """
     basic = parse_kv(run_ssh(ssh_host, basic_script))
-    status_text = run_ssh(ssh_host, f"/usr/local/bin/rns-ctl --config {quoted_config} status")
-    status = parse_status(status_text)
     interface_payload = json.loads(
         run_ssh(ssh_host, f"/usr/local/bin/rns-ctl --config {quoted_config} status -j")
     )
@@ -648,7 +666,9 @@ FROM seen_announces;
         ssh_host,
         f"""timeout 180s sqlite3 {shlex.quote(stats_db)} "
 SELECT packet_type || '|' || direction || '|' ||
-       COALESCE(datetime(MAX(updated_at_ms)/1000, 'unixepoch'), '')
+       COALESCE(datetime(MAX(updated_at_ms)/1000, 'unixepoch'), '') || '|' ||
+       CASE WHEN MAX(updated_at_ms) IS NULL THEN 999999
+            ELSE MAX(0, strftime('%s','now') - CAST(MAX(updated_at_ms)/1000 AS INTEGER)) END
 FROM packet_counters
 GROUP BY packet_type, direction
 ORDER BY packet_type, direction;
@@ -672,15 +692,14 @@ ORDER BY packet_type, direction;
     capture_dt = parse_utc(capture_ts)
     packet_rows: list[dict[str, object]] = []
     for line in packet_lines:
-        packet_type, direction, updated = line.split("|", 2)
+        packet_type, direction, updated, age = line.split("|", 3)
         updated_utc = None
-        age_seconds = 999999
+        age_seconds = int(age)
         if updated:
             updated_dt = dt.datetime.strptime(updated, "%Y-%m-%d %H:%M:%S").replace(
                 tzinfo=dt.timezone.utc
             )
             updated_utc = updated_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-            age_seconds = int((capture_dt - updated_dt).total_seconds())
         packet_rows.append(
             {
                 "packet_type": packet_type,
@@ -690,7 +709,7 @@ ORDER BY packet_type, direction;
             }
         )
 
-    interface_rows = parse_interface_snapshots(interface_payload, capture_dt)
+    status, interface_rows = status_from_json(interface_payload, capture_dt)
     public_interfaces = [row for row in interface_rows if row["public_candidate"]]
 
     snapshot: dict[str, object] = {
@@ -781,11 +800,11 @@ def write_db(
     packet_rows: list[dict[str, object]],
     packet_traffic_rows: list[dict[str, object]],
     interface_rows: list[dict[str, object]],
-) -> None:
+) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
-    ensure_schema(conn)
+    repaired_freshness_rows = ensure_schema(conn)
     capture_ts = snapshot["capture_ts_utc"]
     with conn:
         conn.execute("DELETE FROM daily_checks WHERE capture_ts_utc = ?", (capture_ts,))
@@ -961,6 +980,7 @@ def write_db(
             ],
         )
     conn.close()
+    return repaired_freshness_rows
 
 
 def main() -> int:
@@ -975,7 +995,7 @@ def main() -> int:
         version_refs,
     )
     db_path = pathlib.Path(args.db_path)
-    write_db(
+    repaired_freshness_rows = write_db(
         db_path,
         snapshot,
         memstats,
@@ -992,6 +1012,7 @@ def main() -> int:
                     "report_date": snapshot["report_date"],
                     "db_path": str(db_path),
                     "health_state": snapshot["health_state"],
+                    "repaired_packet_freshness_rows": repaired_freshness_rows,
                     "version_refs": {
                         "master": snapshot["master_ref"],
                         "dev": snapshot["dev_ref"],
