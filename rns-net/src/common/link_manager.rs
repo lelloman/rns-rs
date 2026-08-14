@@ -432,6 +432,13 @@ impl LinkManager {
             .and_then(|link| link.engine.derived_key().map(|dk| dk.to_vec()))
     }
 
+    /// Return the identity hash learned from a successful LINKIDENTIFY exchange.
+    pub fn remote_identity_hash(&self, link_id: &LinkId) -> Option<[u8; 16]> {
+        self.links
+            .get(link_id)
+            .and_then(|link| link.remote_identity.as_ref().map(|(hash, _)| *hash))
+    }
+
     /// Return best-known routing hint for link packets.
     pub fn get_link_route_hint(&self, link_id: &LinkId) -> Option<LinkRouteHint> {
         self.links.get(link_id).and_then(|link| {
@@ -641,15 +648,16 @@ impl LinkManager {
         };
         self.links.insert(link_id, managed);
 
-        let mut actions = Vec::new();
-        // Register the link_id as a local destination so we can receive LRPROOF
-        actions.push(LinkManagerAction::RegisterLinkDest { link_id });
-        // Send the LINKREQUEST packet
-        actions.push(LinkManagerAction::SendPacket {
-            raw: packet.raw,
-            dest_type: constants::DESTINATION_LINK,
-            attached_interface: None,
-        });
+        let actions = vec![
+            // Register the link_id as a local destination so we can receive LRPROOF
+            LinkManagerAction::RegisterLinkDest { link_id },
+            // Send the LINKREQUEST packet
+            LinkManagerAction::SendPacket {
+                raw: packet.raw,
+                dest_type: constants::DESTINATION_LINK,
+                attached_interface: None,
+            },
+        ];
 
         (link_id, actions)
     }
@@ -1470,7 +1478,7 @@ impl LinkManager {
                 raw_data,
             } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                actions.extend(self.handle_resource_part(&link_id, &raw_data, rng));
+                actions.extend(self.handle_resource_part(&link_id, raw_data, rng));
             }
             LinkDataResult::ResourcePrf {
                 link_id,

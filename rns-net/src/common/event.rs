@@ -32,20 +32,17 @@ pub struct DynamicInterfaceRegistration {
 }
 
 /// Policy for handling incoming direct-connect proposals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HolePunchPolicy {
     /// Reject all proposals.
     Reject,
     /// Accept all proposals automatically.
+    #[default]
     AcceptAll,
+    /// Accept proposals only after the Reticulum link peer has identified itself.
+    IdentifiedOnly,
     /// Ask the application callback.
     AskApp,
-}
-
-impl Default for HolePunchPolicy {
-    fn default() -> Self {
-        HolePunchPolicy::AcceptAll
-    }
 }
 
 /// Scalar runtime-config value.

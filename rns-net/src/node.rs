@@ -493,6 +493,8 @@ pub struct NodeConfig {
     pub probe_addrs: Vec<std::net::SocketAddr>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
     pub probe_protocol: rns_core::holepunch::ProbeProtocol,
+    /// Policy for incoming direct-connect proposals.
+    pub direct_connect_policy: crate::event::HolePunchPolicy,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Hook configurations loaded from the config file.
@@ -580,6 +582,7 @@ impl Default for NodeConfig {
             probe_port: None,
             probe_addrs: vec![],
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+            direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
@@ -951,6 +954,7 @@ impl RnsNode {
             probe_port: rns_config.reticulum.probe_port,
             probe_addrs,
             probe_protocol,
+            direct_connect_policy: rns_config.reticulum.direct_connect_policy,
             device: rns_config.reticulum.device.clone(),
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
@@ -1172,6 +1176,10 @@ impl RnsNode {
         driver.set_ingress_control_defaults(config.ingress_control_defaults);
         driver.runtime_config_defaults.known_destinations_ttl =
             config.known_destinations_ttl.as_secs_f64();
+        driver
+            .holepunch_manager
+            .set_policy(config.direct_connect_policy);
+        driver.runtime_config_defaults.direct_connect_policy = config.direct_connect_policy;
         #[cfg(feature = "hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
             driver.runtime_config_defaults.provider_queue_max_events =
@@ -3452,6 +3460,7 @@ mod tests {
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -3772,6 +3781,7 @@ share_instance = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -3840,6 +3850,7 @@ share_instance = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -4641,6 +4652,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -4718,6 +4730,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -4791,6 +4804,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -4861,6 +4875,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -4971,6 +4986,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -5049,6 +5065,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -5125,6 +5142,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -5214,6 +5232,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
@@ -5293,6 +5312,7 @@ enable_transport = False
                 probe_port: None,
                 probe_addrs: vec![],
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                direct_connect_policy: Default::default(),
                 device: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,

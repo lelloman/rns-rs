@@ -123,6 +123,14 @@ Reasons B might reject:
 - B does not wish to reveal its public IP address.
 - Policy or configuration.
 
+The responder applies `direct_connect_policy` only after fully decoding the
+request. `accept_all` preserves the compatibility default, `reject` declines
+all requests, and `identified_only` accepts only when the existing link has
+completed `LINKIDENTIFY`. `ask_app` invokes the application callback once with
+the peer identity when known (or no identity otherwise) and honors its boolean
+decision; the default callback rejects. These controls are responder-side only
+and do not change initiation behavior.
+
 ### Phase 3: STUN Discovery + Address Exchange (B ↔ T, B → A)
 
 B sends a UDP probe to T (using the facilitator address from the upgrade
@@ -251,9 +259,12 @@ end-to-end encryption and identity verification would detect any man-in-the-midd
 are already encrypted. The `DirectUdpInterface` does not add or remove any
 encryption — it is a transparent transport, same as TCP or LoRa interfaces.
 
-**No authentication bypass**: The direct link upgrade negotiation happens over
-an already-authenticated Reticulum link. An attacker cannot inject upgrade
-requests without first establishing a valid Reticulum link with the target.
+**No signaling bypass**: Direct-link negotiation travels over an established,
+encrypted Reticulum link, but peer `LINKIDENTIFY` is optional. Operators who do
+not want to disclose the responder's public endpoint to anonymous link peers
+should use `direct_connect_policy = identified_only` or an identity-aware
+`ask_app` callback. Malformed requests are discarded before policy callbacks
+or hole-punch sessions are created.
 
 ## Future Considerations
 

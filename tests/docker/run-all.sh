@@ -247,6 +247,9 @@ run_standalone "${SCRIPT_DIR}/shared-client-reconnect" \
 run_standalone "${SCRIPT_DIR}/rns-server" \
   "rns-server process supervision"
 
+run_standalone "${SCRIPT_DIR}/nat-punch" \
+  "Direct Link NAT hole punching (accept_all default)"
+
 ELAPSED=$(( SECONDS - START_TIME ))
 
 # ── Summary ───────────────────────────────────────────────────────────────────

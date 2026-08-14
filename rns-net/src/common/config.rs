@@ -51,6 +51,8 @@ pub struct ReticulumSection {
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
     pub probe_protocol: Option<String>,
+    /// Policy for incoming direct-connect proposals.
+    pub direct_connect_policy: crate::event::HolePunchPolicy,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
     /// Enable interface discovery (advertise discoverable interfaces and
@@ -180,6 +182,7 @@ impl Default for ReticulumSection {
             probe_port: None,
             probe_addr: None,
             probe_protocol: None,
+            direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
             device: None,
             discover_interfaces: false,
             default_gravity: 0,
@@ -747,6 +750,20 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
     }
     if let Some(v) = kvs.get("probe_protocol") {
         section.probe_protocol = Some(v.clone());
+    }
+    if let Some(v) = kvs.get("direct_connect_policy") {
+        section.direct_connect_policy = match v.to_ascii_lowercase().as_str() {
+            "reject" => crate::event::HolePunchPolicy::Reject,
+            "accept_all" => crate::event::HolePunchPolicy::AcceptAll,
+            "identified_only" => crate::event::HolePunchPolicy::IdentifiedOnly,
+            "ask_app" => crate::event::HolePunchPolicy::AskApp,
+            _ => {
+                return Err(ConfigError::InvalidValue {
+                    key: "direct_connect_policy".into(),
+                    value: v.clone(),
+                })
+            }
+        };
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
@@ -2206,5 +2223,30 @@ probe_addr = 1.2.3.4:4343
         let config = parse(input).unwrap();
         assert_eq!(config.reticulum.probe_addr.as_deref(), Some("1.2.3.4:4343"));
         assert!(config.reticulum.probe_protocol.is_none());
+    }
+
+    #[test]
+    fn parse_direct_connect_policy() {
+        let config = parse(
+            r#"
+[reticulum]
+direct_connect_policy = identified_only
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.reticulum.direct_connect_policy,
+            crate::event::HolePunchPolicy::IdentifiedOnly
+        );
+    }
+
+    #[test]
+    fn direct_connect_policy_defaults_to_accept_all_and_rejects_invalid() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(
+            config.reticulum.direct_connect_policy,
+            crate::event::HolePunchPolicy::AcceptAll
+        );
+        assert!(parse("[reticulum]\ndirect_connect_policy = sometimes\n").is_err());
     }
 }

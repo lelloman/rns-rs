@@ -209,8 +209,20 @@ impl HolePunchManager {
                 HolePunchPolicy::AcceptAll => {
                     // Proceed
                 }
-                HolePunchPolicy::AskApp => {
-                    // For now, accept — full callback integration is in the driver
+                HolePunchPolicy::IdentifiedOnly | HolePunchPolicy::AskApp => {
+                    // Identity-aware and application decisions are made by the
+                    // driver. Direct manager users fail closed.
+                    log::debug!("Rejecting hole punch proposal pending driver authorization");
+                    match HolePunchEngine::build_reject(link_id, &payload, REJECT_POLICY) {
+                        Ok(action) => {
+                            let mgr_actions = convert_engine_actions(link_id, &[action]);
+                            return (true, mgr_actions);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to build reject for proposal: {}", e);
+                            return (true, Vec::new());
+                        }
+                    }
                 }
             }
 
