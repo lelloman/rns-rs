@@ -538,7 +538,7 @@ fn is_valid_refname(refname: &str) -> bool {
 }
 
 fn is_valid_sha(sha: &str) -> bool {
-    sha.len() >= 40 && sha.len() % 2 == 0 && sha.bytes().all(|b| b.is_ascii_hexdigit())
+    sha.len() >= 40 && sha.len().is_multiple_of(2) && sha.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn add_exclusions(cmd: &mut Command, exclusions: &[String]) {

@@ -1,0 +1,65 @@
+{
+  "rns-cli": {
+    "clippy::clone_on_copy": 2,
+    "clippy::cloned_ref_to_slice_refs": 4,
+    "clippy::identity_op": 2,
+    "clippy::large_enum_variant": 4,
+    "clippy::manual_map": 4,
+    "clippy::map_identity": 4,
+    "clippy::needless_character_iteration": 4,
+    "clippy::too_many_arguments": 4,
+    "clippy::type_complexity": 1
+  },
+  "rns-core": {
+    "clippy::assertions_on_constants": 1,
+    "clippy::items_after_test_module": 2,
+    "clippy::nonminimal_bool": 2,
+    "clippy::too_many_arguments": 2,
+    "clippy::type_complexity": 2,
+    "clippy::unnecessary_map_or": 2
+  },
+  "rns-ctl": {
+    "clippy::items_after_test_module": 1,
+    "clippy::manual_div_ceil": 2,
+    "clippy::needless_range_loop": 2,
+    "clippy::new_without_default": 4
+  },
+  "rns-git": {
+    "clippy::filter_next": 2,
+    "clippy::manual_strip": 2,
+    "clippy::needless_lifetimes": 8,
+    "clippy::question_mark": 2,
+    "clippy::too_many_arguments": 8,
+    "clippy::type_complexity": 2,
+    "clippy::useless_conversion": 2
+  },
+  "rns-net": {
+    "clippy::bool_assert_comparison": 4,
+    "clippy::clone_on_copy": 5,
+    "clippy::collapsible_if": 4,
+    "clippy::collapsible_match": 2,
+    "clippy::derivable_impls": 4,
+    "clippy::for_kv_map": 3,
+    "clippy::iter_kv_map": 2,
+    "clippy::large_enum_variant": 4,
+    "clippy::manual_contains": 4,
+    "clippy::manual_div_ceil": 4,
+    "clippy::manual_range_contains": 8,
+    "clippy::manual_unwrap_or_default": 4,
+    "clippy::map_identity": 2,
+    "clippy::needless_borrows_for_generic_args": 2,
+    "clippy::needless_return": 4,
+    "clippy::needless_update": 1,
+    "clippy::redundant_field_names": 2,
+    "clippy::redundant_pattern_matching": 1,
+    "clippy::single_match": 6,
+    "clippy::too_many_arguments": 22,
+    "clippy::type_complexity": 23,
+    "clippy::unnecessary_cast": 1,
+    "clippy::useless_vec": 6,
+    "clippy::while_let_loop": 1
+  },
+  "rns-server": {
+    "clippy::cmp_owned": 1
+  }
+}

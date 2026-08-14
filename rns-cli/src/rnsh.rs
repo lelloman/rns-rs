@@ -1973,10 +1973,10 @@ fn prepare_identity_at(path: &Path) -> Result<Identity, RnshError> {
         fs::create_dir_all(parent)?;
     }
     if path.exists() {
-        Ok(rns_net::storage::load_identity(&path)?)
+        Ok(rns_net::storage::load_identity(path)?)
     } else {
         let identity = Identity::new(&mut OsRng);
-        rns_net::storage::save_identity(&identity, &path)?;
+        rns_net::storage::save_identity(&identity, path)?;
         Ok(identity)
     }
 }

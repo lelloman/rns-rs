@@ -1605,7 +1605,7 @@ impl Driver {
                             {
                                 self.hook_slots[point_idx]
                                     .programs
-                                    .sort_by(|a, b| b.priority.cmp(&a.priority));
+                                    .sort_by_key(|program| std::cmp::Reverse(program.priority));
                                 log::info!(
                                     "Updated hook '{}' at point {} to priority {}",
                                     name,
@@ -2005,7 +2005,7 @@ impl Driver {
         let disc_dest = rns_core::destination::destination_hash(
             crate::discovery::APP_NAME,
             &["discovery", "interface"],
-            Some(&identity_hash),
+            Some(identity_hash),
         );
         let name_hash = self.discovery_name_hash;
         let mut random_hash = [0u8; 10];

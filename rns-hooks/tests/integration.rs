@@ -204,7 +204,7 @@ fn chain_filter_drop_stops_logger() {
     // Set filter to high priority so it runs first
     filter.priority = 100;
     let mut programs = vec![filter, logger];
-    programs.sort_by(|a, b| b.priority.cmp(&a.priority));
+    programs.sort_by_key(|program| std::cmp::Reverse(program.priority));
 
     // Announce with high hops → filter drops, logger should not run
     let ctx = HookContext::Announce {

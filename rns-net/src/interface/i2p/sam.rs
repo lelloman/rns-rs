@@ -66,7 +66,7 @@ pub fn i2p_base64_decode(s: &str) -> Result<Vec<u8>, SamError> {
     let table = i2p_base64_decode_table();
     let bytes = s.as_bytes();
 
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(SamError::InvalidResponse(format!(
             "invalid I2P base64 length: {}",
             bytes.len()
@@ -241,7 +241,7 @@ fn hello_connect(sam_addr: &SocketAddr) -> Result<TcpStream, SamError> {
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
 
     // Send HELLO
-    write!(stream, "HELLO VERSION MIN={v} MAX={v}\n", v = SAM_VERSION)?;
+    writeln!(stream, "HELLO VERSION MIN={v} MAX={v}", v = SAM_VERSION)?;
     stream.flush()?;
 
     // Read response
@@ -330,7 +330,7 @@ fn check_result(resp: &SamResponse) -> Result<(), SamError> {
 pub fn dest_generate(sam_addr: &SocketAddr) -> Result<KeyPair, SamError> {
     let mut stream = hello_connect(sam_addr)?;
 
-    write!(stream, "DEST GENERATE SIGNATURE_TYPE=7\n")?;
+    writeln!(stream, "DEST GENERATE SIGNATURE_TYPE=7")?;
     stream.flush()?;
 
     let line = read_line(&mut stream)?;
@@ -368,9 +368,9 @@ pub fn session_create(
 ) -> Result<TcpStream, SamError> {
     let mut stream = hello_connect(sam_addr)?;
 
-    write!(
+    writeln!(
         stream,
-        "SESSION CREATE STYLE=STREAM ID={} DESTINATION={} SIGNATURE_TYPE=7\n",
+        "SESSION CREATE STYLE=STREAM ID={} DESTINATION={} SIGNATURE_TYPE=7",
         session_id, private_key_b64,
     )?;
     stream.flush()?;
@@ -399,9 +399,9 @@ pub fn stream_connect(
 ) -> Result<TcpStream, SamError> {
     let mut stream = hello_connect(sam_addr)?;
 
-    write!(
+    writeln!(
         stream,
-        "STREAM CONNECT ID={} DESTINATION={} SILENT=false\n",
+        "STREAM CONNECT ID={} DESTINATION={} SILENT=false",
         session_id, destination,
     )?;
     stream.flush()?;
@@ -433,7 +433,7 @@ pub fn stream_accept(
 ) -> Result<(TcpStream, Destination), SamError> {
     let mut stream = hello_connect(sam_addr)?;
 
-    write!(stream, "STREAM ACCEPT ID={} SILENT=false\n", session_id,)?;
+    writeln!(stream, "STREAM ACCEPT ID={} SILENT=false", session_id,)?;
     stream.flush()?;
 
     let line = read_line(&mut stream)?;
@@ -470,7 +470,7 @@ pub fn naming_lookup(sam_addr: &SocketAddr, name: &str) -> Result<Destination, S
 /// Use this for `NAME=ME` on a session control socket, since the `ME`
 /// name requires a session context on the same connection.
 pub fn naming_lookup_on(stream: &mut TcpStream, name: &str) -> Result<Destination, SamError> {
-    write!(stream, "NAMING LOOKUP NAME={}\n", name)?;
+    writeln!(stream, "NAMING LOOKUP NAME={}", name)?;
     stream.flush()?;
 
     let line = read_line(stream)?;
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn sam_error_display() {
-        let io_err = SamError::Io(io::Error::new(io::ErrorKind::Other, "test"));
+        let io_err = SamError::Io(io::Error::other("test"));
         assert!(format!("{}", io_err).contains("test"));
 
         let proto_err = SamError::Protocol("CANT_REACH_PEER".into());

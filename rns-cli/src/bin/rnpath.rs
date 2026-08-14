@@ -159,7 +159,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
 fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);
@@ -202,8 +202,8 @@ fn render_path_table(response: &PickleValue) {
             return;
         }
         println!(
-            "{:<34} {:>6} {:<34} {:<10} {}",
-            "Destination", "Hops", "Via", "Expires", "Interface"
+            "{:<34} {:>6} {:<34} {:<10} Interface",
+            "Destination", "Hops", "Via", "Expires"
         );
         println!("{}", "-".repeat(100));
         for entry in entries {
@@ -378,7 +378,7 @@ fn render_blackholed_list(response: &PickleValue) {
             println!("Blackhole list is empty");
             return;
         }
-        println!("{:<34} {:<16} {}", "Identity Hash", "Expires", "Reason");
+        println!("{:<34} {:<16} Reason", "Identity Hash", "Expires");
         println!("{}", "-".repeat(70));
         for entry in entries {
             let hash = entry

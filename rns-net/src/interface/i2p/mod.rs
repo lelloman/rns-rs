@@ -11,7 +11,7 @@ pub mod sam;
 
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -121,7 +121,7 @@ fn sanitize_name(name: &str) -> String {
 }
 
 /// Key file path for the given interface name.
-fn key_file_path(storage_dir: &PathBuf, name: &str) -> PathBuf {
+fn key_file_path(storage_dir: &Path, name: &str) -> PathBuf {
     storage_dir.join(format!("i2p_{}.key", sanitize_name(name)))
 }
 
@@ -129,7 +129,7 @@ fn key_file_path(storage_dir: &PathBuf, name: &str) -> PathBuf {
 /// so the node keeps a stable I2P address across restarts.
 fn load_or_generate_keypair(
     sam_addr: &SocketAddr,
-    storage_dir: &PathBuf,
+    storage_dir: &Path,
     name: &str,
 ) -> Result<sam::KeyPair, SamError> {
     let key_path = key_file_path(storage_dir, name);

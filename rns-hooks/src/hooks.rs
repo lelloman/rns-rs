@@ -121,7 +121,8 @@ impl HookSlot {
     /// Attach a program to this slot. Maintains descending priority order.
     pub fn attach(&mut self, program: LoadedProgram) {
         self.programs.push(program);
-        self.programs.sort_by(|a, b| b.priority.cmp(&a.priority));
+        self.programs
+            .sort_by_key(|program| std::cmp::Reverse(program.priority));
         self.update_runner();
     }
 

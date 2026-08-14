@@ -5,7 +5,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "rns-hooks-builtin")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -540,7 +540,7 @@ fn seed_stats_db(path: &PathBuf) {
     .unwrap();
 }
 
-fn configure_stats_db(server: &TestServer, stats_db_path: &PathBuf) {
+fn configure_stats_db(server: &TestServer, stats_db_path: &Path) {
     let mut snapshot = sample_server_config_snapshot();
     snapshot.stats_db_path = stats_db_path.display().to_string();
     let mut state = server.ctx.state.write().unwrap();

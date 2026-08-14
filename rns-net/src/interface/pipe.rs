@@ -89,11 +89,11 @@ pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>>
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stdout from child"))?;
+        .ok_or_else(|| io::Error::other("no stdout from child"))?;
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stdin from child"))?;
+        .ok_or_else(|| io::Error::other("no stdin from child"))?;
 
     log::info!(
         "[{}] pipe interface started: {}",

@@ -75,7 +75,7 @@ impl RpcServer {
             .spawn(move || {
                 rpc_server_loop(listener, auth_key, event_tx, shutdown2);
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         Ok(RpcServer {
             shutdown,
