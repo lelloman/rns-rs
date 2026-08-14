@@ -107,13 +107,19 @@ impl TransportEngine {
             .and_then(|ps| ps.primary_mut())
         {
             entry.receiving_interface = interface;
+            // A redirected path is a true one-hop path to the destination.
+            // Retaining the previous transport as next_hop makes outbound
+            // routing inject a HEADER_2 transport header for that stale peer.
+            entry.next_hop = *dest_hash;
             entry.hops = 1;
+            entry.timestamp = now;
+            entry.expires = now + 3600.0;
         } else {
             self.upsert_path_destination(
                 *dest_hash,
                 PathEntry {
                     timestamp: now,
-                    next_hop: [0u8; 16],
+                    next_hop: *dest_hash,
                     hops: 1,
                     expires: now + 3600.0,
                     random_blobs: Vec::new(),
