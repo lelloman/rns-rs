@@ -11,6 +11,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  python-tools:
+    name: Python Tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile Python tools
+        run: python -m compileall -q scripts tests
+
+      - name: Run Python tool tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
   upstream-badge:
     name: Upstream Badge
     runs-on: ubuntu-latest
