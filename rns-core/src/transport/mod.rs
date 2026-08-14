@@ -5088,6 +5088,78 @@ mod tests {
     }
 
     #[test]
+    fn test_redirect_path_replaces_stale_transport_next_hop() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let original_interface = InterfaceId(1);
+        let direct_interface = InterfaceId(2);
+        engine.register_interface(make_interface(original_interface.0, constants::MODE_FULL));
+        engine.register_interface(make_interface(direct_interface.0, constants::MODE_FULL));
+
+        let link_id = [0xD1; 16];
+        let facilitator = [0xFA; 16];
+        engine.inject_path(
+            link_id,
+            make_path_entry(1000.0, 2, original_interface, facilitator),
+        );
+
+        engine.redirect_path(&link_id, direct_interface, 1001.0);
+
+        let path = engine.path_table[&link_id].primary().unwrap();
+        assert_eq!(path.receiving_interface, direct_interface);
+        assert_eq!(path.next_hop, link_id);
+        assert_eq!(path.hops, 1);
+        assert_eq!(path.timestamp, 1001.0);
+        assert_eq!(path.expires, 4601.0);
+
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_CHANNEL,
+            b"direct payload",
+        )
+        .unwrap();
+
+        let actions = engine.handle_outbound(
+            &packet,
+            constants::DESTINATION_LINK,
+            Some(direct_interface),
+            1002.0,
+        );
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, direct_interface);
+                assert_eq!(&**raw, packet.raw.as_slice());
+                assert_eq!(raw[0] >> 6, constants::HEADER_1);
+            }
+            other => panic!("expected direct interface send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_redirect_path_creates_direct_next_hop() {
+        let mut engine = TransportEngine::new(make_config(true));
+        let link_id = [0xD2; 16];
+        let direct_interface = InterfaceId(7);
+
+        engine.redirect_path(&link_id, direct_interface, 2000.0);
+
+        let path = engine.path_table[&link_id].primary().unwrap();
+        assert_eq!(path.receiving_interface, direct_interface);
+        assert_eq!(path.next_hop, link_id);
+        assert_eq!(path.hops, 1);
+    }
+
+    #[test]
     fn test_roaming_loop_prevention() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_interface(1, constants::MODE_ROAMING));
