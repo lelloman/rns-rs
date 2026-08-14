@@ -291,11 +291,18 @@ The accepted Reticulum baseline is the `Normative commit` recorded in
 and inspect upstream. Before reporting a delta, require the checkout's `HEAD`
 to equal that recorded commit. This catches a stale or accidentally advanced
 checkout instead of misreporting its distance from the remotes as unintegrated
-work. Fetch both the GitHub remote and the Reticulum `rns-git` remote, verify
-that the accepted baseline is an ancestor of both remote tips, then list commits
-present on either remote that are not in the accepted baseline. If either log
-prints commits, include that in the daily report as upstream Reticulum work not
-integrated yet:
+work. Run `scripts/check_upstream_drift.py`; it fetches both remotes (with one
+retry), classifies each tip as `at_baseline`, `behind`, `ahead`, or `diverged`,
+and deduplicates commits reachable from either tip but not the baseline. A
+remote is allowed to be behind: the currently accepted rgit commit can precede
+its GitHub mirror, so requiring the baseline to be an ancestor of both tips
+would incorrectly fail a current checkout.
+
+The command exits 0 after a successful inspection, including when drift is
+reported, and exits 1 for configuration, checkout, fetch, or Git errors. Use
+`--fail-on-drift` in automation to return 2 when unintegrated commits exist.
+Use `--json` for stable machine-readable output and `--no-fetch` only when the
+existing remote-tracking refs are intentionally being inspected offline.
 
 #### Drift-to-Parity Workflow
 
@@ -382,20 +389,7 @@ ORDER BY host;
 
 scripts/manual-backbone-smoke.sh --daily
 
-RETICULUM_UPSTREAM_DIR="$(sed -n '/^[[:space:]]*#/d; /^[[:space:]]*$/d; p; q' .local/reticulum-upstream.path)"
-RETICULUM_BASELINE="$(sed -n 's/^- Normative commit: `\([0-9a-f]\{40\}\)`.*/\1/p' UPSTREAM.md)"
-test -n "$RETICULUM_UPSTREAM_DIR"
-test -d "$RETICULUM_UPSTREAM_DIR/.git"
-test -n "$RETICULUM_BASELINE"
-RETICULUM_GITHUB_REMOTE="${RETICULUM_GITHUB_REMOTE:-origin}"
-RETICULUM_RGIT_REMOTE="${RETICULUM_RGIT_REMOTE:-rgit}"
-git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_GITHUB_REMOTE"
-git -C "$RETICULUM_UPSTREAM_DIR" fetch "$RETICULUM_RGIT_REMOTE"
-test "$(git -C "$RETICULUM_UPSTREAM_DIR" rev-parse HEAD)" = "$RETICULUM_BASELINE"
-git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_GITHUB_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" merge-base --is-ancestor "$RETICULUM_BASELINE" "$RETICULUM_RGIT_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_GITHUB_REMOTE/master"
-git -C "$RETICULUM_UPSTREAM_DIR" log --oneline "$RETICULUM_BASELINE..$RETICULUM_RGIT_REMOTE/master"
+scripts/check_upstream_drift.py
 
 scp data/vps_daily_reports.db root@vps-eu:/var/lib/rns-node/vps_daily_reports.db
 ```
@@ -413,6 +407,13 @@ timeout, so the daily report should call out that the host stats snapshot is
 incomplete even if the row was inserted. Do not push the shared DB until both
 host snapshots have been reviewed, the smoke test has passed, and any duplicate
 same-day rows are understood.
+
+Historical `primary_peer_name` and `primary_peer_up` values are preserved as
+captured. Reports before the JSON-only collector change can show a false-down
+primary because probe-responder text was once mistaken for an interface; use
+the per-interface snapshots when interpreting those rows. The migration only
+clamps negative historical packet-freshness ages to zero and recomputes their
+summary maximum.
 
 The snapshot records `/usr/local/bin/rns-server --version` and
 `/usr/local/bin/rns-ctl --version`, then reconstructs the expected binary
