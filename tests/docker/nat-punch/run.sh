@@ -46,7 +46,11 @@ fi
 # ── Build Docker image ──────────────────────────────────────────────────────
 
 echo "=== Building rns-test Docker image ==="
-docker build -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
+if [[ "${SKIP_BUILD:-false}" == "true" ]]; then
+  echo "Using existing rns-test image"
+else
+  docker build -t rns-test -f "${REPO_ROOT}/tests/docker/Dockerfile" "$REPO_ROOT"
+fi
 
 # ── Set up results file ─────────────────────────────────────────────────────
 

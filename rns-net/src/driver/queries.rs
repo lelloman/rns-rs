@@ -767,7 +767,7 @@ impl Driver {
                                 return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                                     code: RuntimeConfigErrorCode::InvalidValue,
                                     message: format!(
-                                        "{} must be one of: reject, accept_all, ask_app",
+                                        "{} must be one of: reject, accept_all, identified_only, ask_app",
                                         key
                                     ),
                                 }))

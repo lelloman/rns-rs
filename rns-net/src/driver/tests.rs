@@ -82,6 +82,7 @@ fn wait_for_sent_len(sent: &Arc<Mutex<Vec<Vec<u8>>>>, expected: usize) {
     assert_eq!(sent.lock().unwrap().len(), expected);
 }
 
+use crate::event::HolePunchPolicy;
 use rns_core::types::{DestHash, IdentityHash, LinkId as TypedLinkId, PacketHash};
 
 struct MockCallbacks {
@@ -1493,6 +1494,32 @@ impl Callbacks for MockCallbacks {
             .unwrap()
             .push((dest_hash, packet_hash));
         true
+    }
+}
+
+struct DirectConnectCallbacks {
+    proposals: Arc<Mutex<Vec<(TypedLinkId, Option<IdentityHash>)>>>,
+    accept: bool,
+}
+
+impl Callbacks for DirectConnectCallbacks {
+    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
+
+    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
+
+    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
+    }
+
+    fn on_direct_connect_proposed(
+        &mut self,
+        link_id: TypedLinkId,
+        peer_identity: Option<IdentityHash>,
+    ) -> bool {
+        self.proposals
+            .lock()
+            .unwrap()
+            .push((link_id, peer_identity));
+        self.accept
     }
 }
 
@@ -4735,6 +4762,92 @@ fn runtime_config_rejects_invalid_policy() {
         panic!("expected runtime config set failure");
     };
     assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue);
+}
+
+#[test]
+fn runtime_config_supports_identified_only_and_configured_reset_default() {
+    let mut driver = new_test_driver();
+    driver.runtime_config_defaults.direct_connect_policy = HolePunchPolicy::Reject;
+    let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+        key: "global.direct_connect_policy".into(),
+        value: RuntimeConfigValue::String("identified_only".into()),
+    });
+    let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+        panic!("expected runtime config set success");
+    };
+    assert_eq!(
+        entry.value,
+        RuntimeConfigValue::String("identified_only".into())
+    );
+    assert_eq!(
+        driver.holepunch_manager.policy(),
+        HolePunchPolicy::IdentifiedOnly
+    );
+
+    let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+        key: "global.direct_connect_policy".into(),
+    });
+    assert!(matches!(response, QueryResponse::RuntimeConfigReset(Ok(_))));
+    assert_eq!(driver.holepunch_manager.policy(), HolePunchPolicy::Reject);
+}
+
+#[test]
+fn direct_connect_policy_is_identity_aware_and_ask_app_calls_once() {
+    let proposals = Arc::new(Mutex::new(Vec::new()));
+    let callbacks = DirectConnectCallbacks {
+        proposals: proposals.clone(),
+        accept: true,
+    };
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(callbacks));
+    let link = [0x11; 16];
+    let identity = [0x22; 16];
+
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::Reject, link, Some(identity)));
+    assert!(driver.authorize_direct_connect(HolePunchPolicy::AcceptAll, link, None));
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::IdentifiedOnly, link, None));
+    assert!(driver.authorize_direct_connect(HolePunchPolicy::IdentifiedOnly, link, Some(identity)));
+    assert!(proposals.lock().unwrap().is_empty());
+
+    assert!(driver.authorize_direct_connect(HolePunchPolicy::AskApp, link, Some(identity)));
+    assert_eq!(
+        proposals.lock().unwrap().as_slice(),
+        &[(TypedLinkId(link), Some(IdentityHash(identity)))]
+    );
+
+    let proposals = Arc::new(Mutex::new(Vec::new()));
+    let callbacks = DirectConnectCallbacks {
+        proposals: proposals.clone(),
+        accept: false,
+    };
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(callbacks));
+    assert!(!driver.authorize_direct_connect(HolePunchPolicy::AskApp, link, None));
+    assert_eq!(
+        proposals.lock().unwrap().as_slice(),
+        &[(TypedLinkId(link), None)]
+    );
+}
+
+#[test]
+fn malformed_direct_connect_proposal_does_not_call_application() {
+    let proposals = Arc::new(Mutex::new(Vec::new()));
+    let callbacks = DirectConnectCallbacks {
+        proposals: proposals.clone(),
+        accept: true,
+    };
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(callbacks));
+    assert_eq!(
+        driver.authorize_direct_connect_proposal(
+            HolePunchPolicy::AskApp,
+            [0x11; 16],
+            Some([0x22; 16]),
+            &[1, 2, 3],
+        ),
+        None
+    );
+    assert!(proposals.lock().unwrap().is_empty());
 }
 
 #[test]

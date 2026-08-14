@@ -1,6 +1,38 @@
 use super::*;
 
 impl Driver {
+    pub(crate) fn authorize_direct_connect_proposal(
+        &mut self,
+        policy: crate::event::HolePunchPolicy,
+        link_id: [u8; 16],
+        peer_identity: Option<[u8; 16]>,
+        payload: &[u8],
+    ) -> Option<bool> {
+        if let Err(error) = rns_core::holepunch::HolePunchEngine::validate_upgrade_request(payload)
+        {
+            log::warn!("Dropping malformed direct-connect proposal: {}", error);
+            return None;
+        }
+        Some(self.authorize_direct_connect(policy, link_id, peer_identity))
+    }
+
+    pub(crate) fn authorize_direct_connect(
+        &mut self,
+        policy: crate::event::HolePunchPolicy,
+        link_id: [u8; 16],
+        peer_identity: Option<[u8; 16]>,
+    ) -> bool {
+        match policy {
+            crate::event::HolePunchPolicy::Reject => false,
+            crate::event::HolePunchPolicy::AcceptAll => true,
+            crate::event::HolePunchPolicy::IdentifiedOnly => peer_identity.is_some(),
+            crate::event::HolePunchPolicy::AskApp => self.callbacks.on_direct_connect_proposed(
+                rns_core::types::LinkId(link_id),
+                peer_identity.map(rns_core::types::IdentityHash),
+            ),
+        }
+    }
+
     pub(crate) fn maybe_generate_proof(&mut self, dest_hash: [u8; 16], packet_hash: &[u8; 32]) {
         use rns_core::types::ProofStrategy;
 
@@ -1377,6 +1409,23 @@ impl Driver {
                 } => {
                     // Intercept hole-punch signaling messages (0xFE00..=0xFE04)
                     if HolePunchManager::is_holepunch_message(msgtype) {
+                        let configured_policy = self.holepunch_manager.policy();
+                        if msgtype == rns_core::holepunch::UPGRADE_REQUEST {
+                            let peer_identity = self.link_manager.remote_identity_hash(&link_id);
+                            let Some(accept) = self.authorize_direct_connect_proposal(
+                                configured_policy,
+                                link_id,
+                                peer_identity,
+                                &payload,
+                            ) else {
+                                continue;
+                            };
+                            self.holepunch_manager.set_policy(if accept {
+                                crate::event::HolePunchPolicy::AcceptAll
+                            } else {
+                                crate::event::HolePunchPolicy::Reject
+                            });
+                        }
                         let derived_key = self.link_manager.get_derived_key(&link_id);
                         let tx = self.get_event_sender();
                         let (handled, hp_actions) = self.holepunch_manager.handle_signal(
@@ -1386,6 +1435,7 @@ impl Driver {
                             derived_key.as_deref(),
                             &tx,
                         );
+                        self.holepunch_manager.set_policy(configured_policy);
                         if handled {
                             self.dispatch_holepunch_actions(hp_actions);
                         }
@@ -1509,6 +1559,8 @@ impl Driver {
                     // Redirect the link's path to use the direct interface
                     self.engine
                         .redirect_path(&link_id, interface_id, time::now());
+                    self.link_manager
+                        .set_link_route_hint(&link_id, interface_id, None);
                     // Update the link's RTT and MTU to reflect the direct path
                     self.link_manager.set_link_rtt(&link_id, rtt);
                     self.link_manager.set_link_mtu(&link_id, mtu);

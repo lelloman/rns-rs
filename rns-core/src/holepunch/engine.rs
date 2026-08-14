@@ -69,6 +69,11 @@ pub struct HolePunchEngine {
 }
 
 impl HolePunchEngine {
+    /// Validate an upgrade request without creating or mutating a session.
+    pub fn validate_upgrade_request(payload: &[u8]) -> Result<(), HolePunchError> {
+        decode_upgrade_request(payload).map(|_| ())
+    }
+
     /// Create a new engine for the given link. Does not start any session.
     pub fn new(
         link_id: [u8; 16],

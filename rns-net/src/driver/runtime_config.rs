@@ -1351,6 +1351,7 @@ impl Driver {
         match policy {
             crate::event::HolePunchPolicy::Reject => "reject".to_string(),
             crate::event::HolePunchPolicy::AcceptAll => "accept_all".to_string(),
+            crate::event::HolePunchPolicy::IdentifiedOnly => "identified_only".to_string(),
             crate::event::HolePunchPolicy::AskApp => "ask_app".to_string(),
         }
     }
@@ -1362,6 +1363,9 @@ impl Driver {
             RuntimeConfigValue::String(s) => match s.to_ascii_lowercase().as_str() {
                 "reject" => Some(crate::event::HolePunchPolicy::Reject),
                 "accept_all" | "acceptall" => Some(crate::event::HolePunchPolicy::AcceptAll),
+                "identified_only" | "identifiedonly" => {
+                    Some(crate::event::HolePunchPolicy::IdentifiedOnly)
+                }
                 "ask_app" | "askapp" => Some(crate::event::HolePunchPolicy::AskApp),
                 _ => None,
             },

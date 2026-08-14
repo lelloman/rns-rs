@@ -132,6 +132,7 @@ fn main() {
             probe_port: None,
             probe_addrs: vec![],
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+            direct_connect_policy: Default::default(),
             device: None,
             hooks: Vec::new(),
             discover_interfaces: false,
