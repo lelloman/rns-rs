@@ -172,7 +172,10 @@ def parse_status(text: str) -> dict[str, object]:
             if len(parts) == 2:
                 transport_uptime = parts[1].strip()
             continue
-        if 0 < indent < 4:
+        # rnstatus prints interface section names with one leading space.
+        # Transport metadata such as "Probe responder at ..." uses deeper
+        # indentation and must not be mistaken for an interface.
+        if indent == 1:
             if section_name is not None:
                 sections.append((section_name, section_status))
             section_name = stripped
