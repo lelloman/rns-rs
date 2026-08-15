@@ -219,10 +219,10 @@ fn encode_value(buf: &mut Vec<u8>, value: &PickleValue) {
 }
 
 fn encode_int(buf: &mut Vec<u8>, n: i64) {
-    if n >= 0 && n < 256 {
+    if (0..256).contains(&n) {
         buf.push(BININT1);
         buf.push(n as u8);
-    } else if n >= 0 && n < 65536 {
+    } else if (0..65536).contains(&n) {
         buf.push(BININT2);
         buf.extend_from_slice(&(n as u16).to_le_bytes());
     } else if n >= i32::MIN as i64 && n <= i32::MAX as i64 {

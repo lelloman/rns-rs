@@ -56,6 +56,12 @@ pub struct DestinationEntry {
     pub full_name: String,
 }
 
+impl Default for CtlState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CtlState {
     pub fn new() -> Self {
         CtlState {
@@ -872,6 +878,20 @@ impl WsEvent {
     }
 }
 
+/// Helper to create an AnnounceRecord from callback data.
+pub fn make_announce_record(announced: &rns_net::AnnouncedIdentity) -> AnnounceRecord {
+    AnnounceRecord {
+        dest_hash: to_hex(&announced.dest_hash.0),
+        identity_hash: to_hex(&announced.identity_hash.0),
+        hops: announced.hops,
+        app_data: announced
+            .app_data
+            .as_ref()
+            .map(|d| crate::encode::to_base64(d)),
+        received_at: announced.received_at,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -893,19 +913,5 @@ mod tests {
         };
         assert_eq!(snapshot.drain_ack_count, 1);
         assert_eq!(snapshot.forced_kill_count, 1);
-    }
-}
-
-/// Helper to create an AnnounceRecord from callback data.
-pub fn make_announce_record(announced: &rns_net::AnnouncedIdentity) -> AnnounceRecord {
-    AnnounceRecord {
-        dest_hash: to_hex(&announced.dest_hash.0),
-        identity_hash: to_hex(&announced.identity_hash.0),
-        hops: announced.hops,
-        app_data: announced
-            .app_data
-            .as_ref()
-            .map(|d| crate::encode::to_base64(d)),
-        received_at: announced.received_at,
     }
 }

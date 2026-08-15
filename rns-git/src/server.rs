@@ -957,7 +957,7 @@ fn map_get_str<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a str> {
     })
 }
 
-fn map_get_index_str<'a>(map: &'a [(Value, Value)], key: u64) -> Option<&'a str> {
+fn map_get_index_str(map: &[(Value, Value)], key: u64) -> Option<&str> {
     map.iter().find_map(|(candidate, value)| match candidate {
         Value::UInt(candidate) if *candidate == key => value.as_str(),
         _ => None,
@@ -2455,7 +2455,7 @@ mod tests {
         let access = make_access(&config);
         let identity = Identity::new(&mut OsRng);
         let remote_hash = *identity.hash();
-        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap().try_into().unwrap();
+        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap();
         let signature = identity.sign(b"Proposal body").unwrap().to_vec();
 
         let proposed = handle_work(
@@ -2537,7 +2537,7 @@ mod tests {
         let access = make_access(&config);
         let identity = Identity::new(&mut OsRng);
         let remote_hash = *identity.hash();
-        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap().try_into().unwrap();
+        let remote_pubkey: [u8; 64] = identity.get_public_key().unwrap();
         let signature = identity.sign(b"Signed body").unwrap().to_vec();
 
         let create = handle_work(

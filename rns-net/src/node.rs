@@ -4752,7 +4752,7 @@ enable_transport = False
         let dh = rns_core::types::DestHash([0xAA; 16]);
 
         // No path should exist
-        assert_eq!(node.has_path(&dh).unwrap(), false);
+        assert!(!node.has_path(&dh).unwrap());
         assert_eq!(node.hops_to(&dh).unwrap(), None);
 
         node.shutdown();

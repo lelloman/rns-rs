@@ -183,7 +183,7 @@ impl TransportEngine {
             .interfaces
             .values()
             .filter(|info| info.id != ctx.interface_id && info.out_capable)
-            .filter(|info| search_mode_filter.map_or(true, |modes| modes.contains(&info.mode)))
+            .filter(|info| search_mode_filter.is_none_or(|modes| modes.contains(&info.mode)))
             .map(|info| {
                 (
                     info.id,

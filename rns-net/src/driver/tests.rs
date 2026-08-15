@@ -9743,7 +9743,7 @@ fn re_announce_updates_receiving_interface() {
 
     // Both should be cached with their respective interface IDs
     assert_eq!(driver.known_destinations.len(), 2);
-    for (_, announced) in &driver.known_destinations {
+    for announced in driver.known_destinations.values() {
         // We can't predict ordering, but each should have a valid non-zero interface
         assert!(
             announced.announced.receiving_interface == InterfaceId(1)

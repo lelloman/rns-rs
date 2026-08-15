@@ -663,13 +663,12 @@ fn remote_path(
             process::exit(1);
         }
     };
-    let destination_filter = match destination_filter {
-        Some(hash) => Some(parse_fixed_hash(hash, "destination").unwrap_or_else(|e| {
+    let destination_filter = destination_filter.map(|hash| {
+        parse_fixed_hash(hash, "destination").unwrap_or_else(|e| {
             eprintln!("{e}");
             process::exit(1);
-        })),
-        None => None,
-    };
+        })
+    });
     let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
     let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
         config_path.map(Path::new),

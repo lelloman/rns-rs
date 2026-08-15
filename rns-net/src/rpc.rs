@@ -2517,7 +2517,7 @@ fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
 fn default_hook_type() -> &'static str {
     #[cfg(feature = "rns-hooks-native")]
     {
-        return "native";
+        "native"
     }
     #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
     {
@@ -2962,10 +2962,7 @@ mod tests {
         // Verify it round-trips through encode/decode
         let encoded = pickle::encode(&pickle);
         let decoded = pickle::decode(&encoded).unwrap();
-        assert_eq!(
-            decoded.get("transport_enabled").unwrap().as_bool().unwrap(),
-            true
-        );
+        assert!(decoded.get("transport_enabled").unwrap().as_bool().unwrap());
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
@@ -2979,10 +2976,7 @@ mod tests {
         assert_eq!(ifaces[0].get("ip_freq").unwrap().as_float().unwrap(), 2.0);
         assert_eq!(ifaces[0].get("op_freq").unwrap().as_float().unwrap(), 3.0);
         assert_eq!(ifaces[0].get("oa_freq").unwrap().as_float().unwrap(), 4.0);
-        assert_eq!(
-            ifaces[0].get("burst_active").unwrap().as_bool().unwrap(),
-            true
-        );
+        assert!(ifaces[0].get("burst_active").unwrap().as_bool().unwrap());
         assert_eq!(
             ifaces[0]
                 .get("burst_activated")
@@ -2991,10 +2985,7 @@ mod tests {
                 .unwrap(),
             1200.0
         );
-        assert_eq!(
-            ifaces[0].get("pr_burst_active").unwrap().as_bool().unwrap(),
-            true
-        );
+        assert!(ifaces[0].get("pr_burst_active").unwrap().as_bool().unwrap());
         assert_eq!(
             ifaces[0]
                 .get("pr_burst_activated")

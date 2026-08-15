@@ -688,6 +688,7 @@ fn compute_mdu(mtu: usize) -> usize {
     let numerator = mtu.saturating_sub(IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD);
     (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
 }
+use alloc::vec;
 
 #[cfg(test)]
 mod tests {
@@ -1353,4 +1354,3 @@ mod tests {
         assert_eq!(pt, b"AES128 test");
     }
 }
-use alloc::vec;

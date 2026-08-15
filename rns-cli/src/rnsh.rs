@@ -30,7 +30,7 @@ const VERSION: &str = env!("FULL_VERSION");
 const MSG_MAGIC: u16 = 0xac;
 const PROTOCOL_VERSION: u64 = 1;
 
-const MSG_NOOP: u16 = (MSG_MAGIC << 8) | 0;
+const MSG_NOOP: u16 = MSG_MAGIC << 8;
 const MSG_WINDOW_SIZE: u16 = (MSG_MAGIC << 8) | 2;
 const MSG_EXECUTE_COMMAND: u16 = (MSG_MAGIC << 8) | 3;
 const MSG_STREAM_DATA: u16 = (MSG_MAGIC << 8) | 4;

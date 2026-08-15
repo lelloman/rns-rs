@@ -400,7 +400,7 @@ fn wait_for_delivery(
             dest_hash,
             raw,
             packet_hash,
-        } => Some((dest_hash.clone(), raw.clone(), packet_hash.clone())),
+        } => Some((*dest_hash, raw.clone(), *packet_hash)),
         _ => None,
     })
 }
@@ -409,7 +409,7 @@ fn wait_for_proof(rx: &mpsc::Receiver<TestEvent>, timeout: Duration) -> Option<(
     wait_for_event(rx, timeout, |event| match event {
         TestEvent::Proof {
             packet_hash, rtt, ..
-        } => Some((packet_hash.clone(), *rtt)),
+        } => Some((*packet_hash, *rtt)),
         _ => None,
     })
 }
@@ -433,7 +433,7 @@ fn wait_for_link_closed(
     timeout: Duration,
 ) -> Option<([u8; 16], Option<rns_core::link::TeardownReason>)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::LinkClosed { link_id, reason } => Some((*link_id, reason.clone())),
+        TestEvent::LinkClosed { link_id, reason } => Some((*link_id, *reason)),
         _ => None,
     })
 }
@@ -489,7 +489,7 @@ fn wait_for_remote_identified(
             link_id,
             identity_hash,
             ..
-        } => Some((*link_id, identity_hash.clone())),
+        } => Some((*link_id, *identity_hash)),
         _ => None,
     })
 }
@@ -1624,12 +1624,7 @@ fn test_re_announce_updated_app_data() {
 
     // Drain any queued v1 retransmissions before sending v2.
     // Keep draining until no more events arrive within a short window.
-    loop {
-        match bob_rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(_) => continue,
-            Err(_) => break,
-        }
-    }
+    while bob_rx.recv_timeout(Duration::from_millis(500)).is_ok() {}
 
     // Re-announce with v2, retry up to 3 times to handle transport contention
     let mut got_v2 = false;
@@ -1638,7 +1633,7 @@ fn test_re_announce_updated_app_data() {
             .announce(&alice_dest, &alice_identity, Some(b"v2"))
             .unwrap();
 
-        if let Some(_) = wait_for_event(&bob_rx, Duration::from_secs(8), |event| match event {
+        if wait_for_event(&bob_rx, Duration::from_secs(8), |event| match event {
             TestEvent::Announce(a)
                 if a.dest_hash == alice_dest.hash
                     && a.app_data.as_deref() == Some(b"v2".as_slice()) =>
@@ -1646,7 +1641,9 @@ fn test_re_announce_updated_app_data() {
                 Some(())
             }
             _ => None,
-        }) {
+        })
+        .is_some()
+        {
             got_v2 = true;
             break;
         }

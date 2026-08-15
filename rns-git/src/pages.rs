@@ -2326,9 +2326,7 @@ fn unordered_list_item(line: &str) -> Option<(&str, &str)> {
 fn ordered_list_item(line: &str) -> Option<(&str, &str, &str)> {
     let trimmed = line.trim_start();
     let indent = &line[..line.len() - trimmed.len()];
-    let Some((number, text)) = trimmed.split_once(". ") else {
-        return None;
-    };
+    let (number, text) = trimmed.split_once(". ")?;
     if !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit()) {
         Some((indent, number, text))
     } else {
@@ -2638,9 +2636,9 @@ fn extract_markdown_inline_tokens(input: &str) -> (String, Vec<InlineToken>) {
 
     while index < input.len() {
         let rest = &input[index..];
-        if rest.starts_with('`') {
-            if let Some(end) = rest[1..].find('`') {
-                let content = &rest[1..1 + end];
+        if let Some(stripped) = rest.strip_prefix('`') {
+            if let Some(end) = stripped.find('`') {
+                let content = &stripped[..end];
                 if is_markdown_inline_code(content) {
                     tokens.push(InlineToken::Code(content.to_string()));
                     out.push_str(&markdown_token_placeholder(tokens.len() - 1));

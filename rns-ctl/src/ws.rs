@@ -237,6 +237,12 @@ pub struct WsBuf {
     buf: Vec<u8>,
 }
 
+impl Default for WsBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WsBuf {
     pub fn new() -> Self {
         WsBuf {

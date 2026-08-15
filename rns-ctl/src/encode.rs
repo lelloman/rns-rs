@@ -53,7 +53,7 @@ const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 
 /// Encode bytes as standard base64 with padding.
 pub fn to_base64(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     let chunks = data.chunks(3);
     for chunk in chunks {
         let b0 = chunk[0] as u32;

@@ -170,12 +170,12 @@ pub fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
         return Some(format!("Invalid TX power {} for {}", sub.txpower, sub.name));
     }
     if let Some(st) = sub.st_alock {
-        if st < 0.0 || st > 100.0 {
+        if !(0.0..=100.0).contains(&st) {
             return Some(format!("Invalid ST airtime limit {} for {}", st, sub.name));
         }
     }
     if let Some(lt) = sub.lt_alock {
-        if lt < 0.0 || lt > 100.0 {
+        if !(0.0..=100.0).contains(&lt) {
             return Some(format!("Invalid LT airtime limit {} for {}", lt, sub.name));
         }
     }

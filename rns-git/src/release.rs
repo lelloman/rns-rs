@@ -155,8 +155,7 @@ pub fn latest_published_tag(releases_path: &Path) -> Result<Option<String>> {
     }
     Ok(list_releases(releases_path)?
         .into_iter()
-        .filter(|release| release.status == "published")
-        .next()
+        .find(|release| release.status == "published")
         .map(|release| release.tag))
 }
 
@@ -717,7 +716,7 @@ fn clean_tag(value: &str) -> Option<String> {
     clean_component(value)
 }
 
-fn map_get_repository<'a>(map: &'a [(Value, Value)]) -> Option<&'a str> {
+fn map_get_repository(map: &[(Value, Value)]) -> Option<&str> {
     map.iter().find_map(|(key, value)| match key {
         Value::UInt(v) if *v == protocol::IDX_REPOSITORY => value.as_str(),
         Value::Str(v) if v == "repository" => value.as_str(),

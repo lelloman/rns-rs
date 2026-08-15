@@ -284,7 +284,7 @@ pub(crate) fn should_transmit_announce(
             if local_destination {
                 return true;
             }
-            !from_interface.is_some_and(|from_iface| from_iface.mode == constants::MODE_ROAMING)
+            from_interface.is_none_or(|from_iface| from_iface.mode != constants::MODE_ROAMING)
         }
         constants::MODE_INTERNAL => {
             if local_destination {

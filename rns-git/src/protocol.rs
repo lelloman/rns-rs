@@ -330,7 +330,7 @@ fn value_to_update(value: &Value) -> Result<RefUpdate> {
     })
 }
 
-fn map_get<'a>(map: &'a [(Value, Value)], key: u64) -> Option<&'a Value> {
+fn map_get(map: &[(Value, Value)], key: u64) -> Option<&Value> {
     map.iter().find_map(|(k, v)| {
         if matches!(k, Value::UInt(v) if *v == key) {
             Some(v)
