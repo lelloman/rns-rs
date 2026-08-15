@@ -146,6 +146,10 @@ impl Driver {
             id,
             name: String::from("LoRa"),
             mode: constants::MODE_FULL,
+            gravity: 0,
+            recursive_prs: false,
+            announces_from_internal: false,
+            announces_to_internal: None,
             out_capable: true,
             in_capable: true,
             bitrate: None,
@@ -158,8 +162,11 @@ impl Driver {
             wants_tunnel: false,
             tunnel_id: None,
             mtu: crate::config::LORA_MTU,
-            ingress_control: false,
+            ingress_control: Default::default(),
             ia_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
             started: now(),
         };
 
@@ -262,9 +269,10 @@ impl Driver {
             data
         };
 
-        let actions = self
-            .engine
-            .handle_inbound(&raw, interface_id, now(), &mut self.rng);
+        let actions = self.engine.handle_inbound(
+            rns_core::transport::InboundFrame::new(&raw, interface_id, now()),
+            &mut self.rng,
+        );
         self.dispatch_all(actions);
     }
 
@@ -515,9 +523,9 @@ impl Driver {
         let Some(partition) = self.settings_partition.clone() else {
             return Err("missing NVS partition".into());
         };
-        let mut nvs = EspNvs::<NvsDefault>::new(partition, NVS_NAMESPACE, true)
+        let nvs = EspNvs::<NvsDefault>::new(partition, NVS_NAMESPACE, true)
             .map_err(|err| format!("NVS open: {err}"))?;
-        nvs.set_raw(NVS_KEY_SETTINGS, &self.device_settings.encode())
+        nvs.set_blob(NVS_KEY_SETTINGS, &self.device_settings.encode())
             .map_err(|err| format!("NVS write: {err}"))
     }
 

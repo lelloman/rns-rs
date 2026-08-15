@@ -9,7 +9,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use esp_idf_hal::gpio::{AnyIOPin, Input, PinDriver};
+use esp_idf_hal::gpio::{Input, PinDriver};
 
 use crate::display::SharedStats;
 use crate::driver::Event;
@@ -22,11 +22,7 @@ const MULTI_PRESS_WINDOW_MS: u64 = 400;
 ///
 /// Short press cycles the display page directly via shared stats.
 /// Long press, double press, and triple press send events to the driver channel.
-pub fn button_loop(
-    pin: PinDriver<'static, AnyIOPin, Input>,
-    tx: mpsc::Sender<Event>,
-    stats: SharedStats,
-) {
+pub fn button_loop(pin: PinDriver<'static, Input>, tx: mpsc::Sender<Event>, stats: SharedStats) {
     let mut press_start: Option<Instant> = None;
     let mut was_low = false;
     // Track consecutive short presses for multi-press gestures

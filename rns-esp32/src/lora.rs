@@ -59,9 +59,9 @@ const PACKET_TYPE_LORA: u8 = 0x01;
 /// Opaque handle to the SX1262 radio behind a mutex.
 pub struct Radio {
     spi: SpiDeviceDriver<'static, SpiDriver<'static>>,
-    cs: PinDriver<'static, AnyIOPin, Output>,
-    rst: PinDriver<'static, AnyIOPin, Output>,
-    busy: PinDriver<'static, AnyIOPin, Input>,
+    cs: PinDriver<'static, Output>,
+    rst: PinDriver<'static, Output>,
+    busy: PinDriver<'static, Input>,
 }
 
 impl Radio {
@@ -444,9 +444,9 @@ impl LoRaWriter {
 /// The caller should spawn a reader thread using `reader_loop()`.
 pub fn init(
     spi_driver: SpiDriver<'static>,
-    cs: PinDriver<'static, AnyIOPin, Output>,
-    rst: PinDriver<'static, AnyIOPin, Output>,
-    busy: PinDriver<'static, AnyIOPin, Input>,
+    cs: PinDriver<'static, Output>,
+    rst: PinDriver<'static, Output>,
+    busy: PinDriver<'static, Input>,
 ) -> std::io::Result<(SharedRadio, LoRaWriter)> {
     let spi_config = spi::config::Config::new()
         .baudrate(Hertz(2_000_000))
@@ -490,8 +490,8 @@ pub fn reader_loop(
     tx: std::sync::mpsc::Sender<crate::driver::Event>,
     interface_id: rns_core::transport::types::InterfaceId,
     shutdown: Arc<AtomicBool>,
-    mut dio1: PinDriver<'static, AnyIOPin, Input>,
-) -> PinDriver<'static, AnyIOPin, Input> {
+    mut dio1: PinDriver<'static, Input>,
+) -> PinDriver<'static, Input> {
     log::info!("LoRa reader loop started");
 
     let notification = Notification::new();

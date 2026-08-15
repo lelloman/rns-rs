@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use core::num::NonZeroU32;
 
 use esp_idf_hal::delay::TickType;
-use esp_idf_hal::gpio::{AnyIOPin, Input, InterruptType, PinDriver};
+use esp_idf_hal::gpio::{Input, InterruptType, PinDriver};
 use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::uart::UartDriver;
 
@@ -113,7 +113,7 @@ pub enum BridgeExit {
 pub struct RNodeBridge<T: BridgeTransport> {
     radio: SharedRadio,
     transport: T,
-    dio1: PinDriver<'static, AnyIOPin, Input>,
+    dio1: PinDriver<'static, Input>,
     stats: Option<SharedStats>,
     pending_frames: Vec<KissFrame>,
     pending_freq: Option<u32>,
@@ -127,7 +127,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     pub fn new(
         radio: SharedRadio,
         transport: T,
-        dio1: PinDriver<'static, AnyIOPin, Input>,
+        dio1: PinDriver<'static, Input>,
         stats: Option<SharedStats>,
         pending_frames: Vec<KissFrame>,
     ) -> Self {
@@ -146,7 +146,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     }
 
     /// Run the RNode bridge loop. Blocks until serial goes idle or host sends LEAVE.
-    pub fn run(mut self) -> (BridgeExit, PinDriver<'static, AnyIOPin, Input>) {
+    pub fn run(mut self) -> (BridgeExit, PinDriver<'static, Input>) {
         log::info!("RNode bridge mode active");
 
         let mut decoder = KissDecoder::new();
