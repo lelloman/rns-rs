@@ -2091,7 +2091,7 @@ impl Driver {
         Some((vm_rss, vm_hwm, vm_data, vm_swap))
     }
 
-    pub(crate) fn smaps_rollup_mb() -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
+    pub(crate) fn smaps_rollup_mb() -> Option<MemoryRollup> {
         let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
         let rss_kib = Self::parse_proc_kib(&smaps, "Rss:")?;
         let anon_kib = Self::parse_proc_kib(&smaps, "Anonymous:")?;

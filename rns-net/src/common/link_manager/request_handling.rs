@@ -221,13 +221,15 @@ impl LinkManager {
 
         let senders = match Self::build_resource_senders(
             link,
-            &resource_payload,
-            metadata,
-            auto_compress,
-            true, // is_response
-            Some(request_id.to_vec()),
-            rng,
-            now,
+            ResourceSendParams {
+                data: &resource_payload,
+                metadata,
+                auto_compress,
+                is_response: true,
+                request_id: Some(request_id.to_vec()),
+                rng,
+                now,
+            },
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -336,13 +338,15 @@ impl LinkManager {
             let now = time::now();
             let senders = match Self::build_resource_senders(
                 link,
-                &plaintext,
-                None,
-                true,
-                false,
-                Some(request_id.to_vec()),
-                rng,
-                now,
+                ResourceSendParams {
+                    data: &plaintext,
+                    metadata: None,
+                    auto_compress: true,
+                    is_response: false,
+                    request_id: Some(request_id.to_vec()),
+                    rng,
+                    now,
+                },
             ) {
                 Ok(senders) => senders,
                 Err(e) => {

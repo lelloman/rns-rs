@@ -466,7 +466,7 @@ fn start_with_template(
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = poll_loop(
+            if let Err(e) = poll_loop(PollLoopContext {
                 listener,
                 name,
                 server_interface_id,
@@ -484,7 +484,7 @@ fn start_with_template(
                 accepted_peer_announces_to_internal,
                 dynamic_template,
                 ifac_size,
-            ) {
+            }) {
                 log::error!("backbone poll loop error: {}", e);
             }
         })?;
@@ -627,7 +627,7 @@ enum DisconnectReason {
 }
 
 /// Main poll event loop.
-fn poll_loop(
+struct PollLoopContext {
     listener: TcpListener,
     name: String,
     server_interface_id: InterfaceId,
@@ -645,7 +645,28 @@ fn poll_loop(
     accepted_peer_announces_to_internal: Option<bool>,
     dynamic_template: Option<DynamicInterfaceTemplate>,
     ifac_size: usize,
-) -> io::Result<()> {
+}
+
+fn poll_loop(context: PollLoopContext) -> io::Result<()> {
+    let PollLoopContext {
+        listener,
+        name,
+        server_interface_id,
+        tx,
+        next_id,
+        runtime,
+        peer_state,
+        fast_flap,
+        fast_flap_state,
+        ingress_control,
+        accepted_peer_mode,
+        accepted_peer_gravity,
+        accepted_peer_recursive_prs,
+        accepted_peer_announces_from_internal,
+        accepted_peer_announces_to_internal,
+        dynamic_template,
+        ifac_size,
+    } = context;
     let poller = Poller::new()?;
 
     const LISTENER_KEY: usize = 0;
@@ -905,20 +926,20 @@ fn poll_loop(
                     } else {
                         DisconnectReason::RemoteClosed
                     };
-                    disconnect_client(
-                        &poller,
-                        &mut clients,
-                        &mut peers,
-                        &name,
+                    disconnect_client(DisconnectContext {
+                        poller: &poller,
+                        clients: &mut clients,
+                        peers: &mut peers,
+                        name: &name,
                         server_interface_id,
-                        &tx,
-                        &peer_state,
-                        &fast_flap,
-                        &fast_flap_state,
+                        tx: &tx,
+                        peer_state: &peer_state,
+                        fast_flap: &fast_flap,
+                        fast_flap_state: &fast_flap_state,
                         key,
                         client_id,
                         reason,
-                    );
+                    });
                 } else if let Some(client) = clients.get(&key) {
                     // Re-arm client (oneshot semantics)
                     poller.modify(&client.stream, PollEvent::readable(key))?;
@@ -941,20 +962,20 @@ fn poll_loop(
                 .collect();
 
             for (key, client_id) in timed_out {
-                disconnect_client(
-                    &poller,
-                    &mut clients,
-                    &mut peers,
-                    &name,
+                disconnect_client(DisconnectContext {
+                    poller: &poller,
+                    clients: &mut clients,
+                    peers: &mut peers,
+                    name: &name,
                     server_interface_id,
-                    &tx,
-                    &peer_state,
-                    &fast_flap,
-                    &fast_flap_state,
+                    tx: &tx,
+                    peer_state: &peer_state,
+                    fast_flap: &fast_flap,
+                    fast_flap_state: &fast_flap_state,
                     key,
                     client_id,
-                    DisconnectReason::IdleTimeout,
-                );
+                    reason: DisconnectReason::IdleTimeout,
+                });
             }
         }
     }
@@ -984,20 +1005,36 @@ fn is_ip_blacklisted(peers: &mut HashMap<IpAddr, PeerBehaviorState>, peer_ip: Ip
     false
 }
 
-fn disconnect_client(
-    poller: &Poller,
-    clients: &mut HashMap<usize, ClientState>,
-    peers: &mut HashMap<IpAddr, PeerBehaviorState>,
-    name: &str,
+struct DisconnectContext<'a> {
+    poller: &'a Poller,
+    clients: &'a mut HashMap<usize, ClientState>,
+    peers: &'a mut HashMap<IpAddr, PeerBehaviorState>,
+    name: &'a str,
     server_interface_id: InterfaceId,
-    tx: &EventSender,
-    peer_state: &Arc<Mutex<BackbonePeerMonitor>>,
-    fast_flap: &BackboneFastFlapConfig,
-    fast_flap_state: &Arc<Mutex<BackboneFastFlapMonitor>>,
+    tx: &'a EventSender,
+    peer_state: &'a Arc<Mutex<BackbonePeerMonitor>>,
+    fast_flap: &'a BackboneFastFlapConfig,
+    fast_flap_state: &'a Arc<Mutex<BackboneFastFlapMonitor>>,
     key: usize,
     client_id: InterfaceId,
     reason: DisconnectReason,
-) {
+}
+
+fn disconnect_client(context: DisconnectContext<'_>) {
+    let DisconnectContext {
+        poller,
+        clients,
+        peers,
+        name,
+        server_interface_id,
+        tx,
+        peer_state,
+        fast_flap,
+        fast_flap_state,
+        key,
+        client_id,
+        reason,
+    } = context;
     let Some(client) = clients.remove(&key) else {
         return;
     };

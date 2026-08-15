@@ -26,7 +26,7 @@ pub fn route_outbound(
     packet: &RawPacket,
     dest_type: u8,
     attached_interface: Option<InterfaceId>,
-    now: f64,
+    _now: f64,
 ) -> Vec<TransportAction> {
     route_outbound_with_options(
         path_table,
@@ -35,7 +35,6 @@ pub fn route_outbound(
         packet,
         dest_type,
         attached_interface,
-        now,
         OutboundRouteOptions::default(),
     )
 }
@@ -47,7 +46,6 @@ pub(crate) fn route_outbound_with_options(
     packet: &RawPacket,
     dest_type: u8,
     attached_interface: Option<InterfaceId>,
-    _now: f64,
     options: OutboundRouteOptions,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
@@ -425,7 +423,6 @@ mod tests {
             &packet,
             constants::DESTINATION_SINGLE,
             None,
-            1000.0,
             OutboundRouteOptions {
                 identity_hash: Some([0x42; 16]),
                 local_hops_delta: 5,
@@ -461,7 +458,6 @@ mod tests {
             &packet,
             constants::DESTINATION_SINGLE,
             None,
-            1000.0,
             OutboundRouteOptions {
                 identity_hash: Some(identity_hash),
                 local_hops_delta: 4,
@@ -499,7 +495,6 @@ mod tests {
                 &packet,
                 dest_type,
                 Some(InterfaceId(9)),
-                1000.0,
                 OutboundRouteOptions {
                     identity_hash: Some([0x42; 16]),
                     local_hops_delta: 6,
@@ -533,7 +528,6 @@ mod tests {
             &packet,
             constants::DESTINATION_SINGLE,
             None,
-            1000.0,
             OutboundRouteOptions {
                 identity_hash: Some([0x42; 16]),
                 local_hops_delta: 5,

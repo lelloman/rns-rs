@@ -423,17 +423,30 @@ fn derive_ifac_state(
         })
 }
 
-fn register_started_interface(
-    driver: &mut Driver,
-    tx: &EventSender,
+struct StartedInterface<'a> {
+    driver: &'a mut Driver,
+    tx: &'a EventSender,
     queue_capacity: usize,
     id: rns_core::transport::types::InterfaceId,
-    mut info: rns_core::transport::types::InterfaceInfo,
+    info: rns_core::transport::types::InterfaceInfo,
     writer: Box<dyn crate::interface::Writer>,
     interface_type_name: String,
     ifac_state: Option<crate::ifac::IfacState>,
-    ifac_runtime: &crate::driver::IfacRuntimeConfig,
-) {
+    ifac_runtime: &'a crate::driver::IfacRuntimeConfig,
+}
+
+fn register_started_interface(params: StartedInterface<'_>) {
+    let StartedInterface {
+        driver,
+        tx,
+        queue_capacity,
+        id,
+        mut info,
+        writer,
+        interface_type_name,
+        ifac_state,
+        ifac_runtime,
+    } = params;
     driver.apply_announce_rate_defaults(&mut info);
     driver.apply_ingress_control_defaults(&mut info);
     let (writer, async_writer_metrics) =
@@ -1550,17 +1563,17 @@ impl RnsNode {
                     writer,
                     interface_type_name,
                 } => {
-                    register_started_interface(
-                        &mut driver,
-                        &tx,
-                        config.interface_writer_queue_capacity,
+                    register_started_interface(StartedInterface {
+                        driver: &mut driver,
+                        tx: &tx,
+                        queue_capacity: config.interface_writer_queue_capacity,
                         id,
                         info,
                         writer,
                         interface_type_name,
                         ifac_state,
-                        &ifac_runtime,
-                    );
+                        ifac_runtime: &ifac_runtime,
+                    });
                 }
                 crate::interface::StartResult::Listener { control } => {
                     // Listener-type interface (TcpServer, Auto, I2P, etc.)
@@ -1579,17 +1592,17 @@ impl RnsNode {
                         } else {
                             derive_ifac_state(ifac_cfg.as_ref(), &sub.info.name)?
                         };
-                        register_started_interface(
-                            &mut driver,
-                            &tx,
-                            config.interface_writer_queue_capacity,
-                            sub.id,
-                            sub.info,
-                            sub.writer,
-                            sub.interface_type_name,
-                            sub_ifac,
-                            &ifac_runtime,
-                        );
+                        register_started_interface(StartedInterface {
+                            driver: &mut driver,
+                            tx: &tx,
+                            queue_capacity: config.interface_writer_queue_capacity,
+                            id: sub.id,
+                            info: sub.info,
+                            writer: sub.writer,
+                            interface_type_name: sub.interface_type_name,
+                            ifac_state: sub_ifac,
+                            ifac_runtime: &ifac_runtime,
+                        });
                     }
                 }
             }
@@ -3122,21 +3135,21 @@ mod tests {
         });
 
         let id = rns_core::transport::types::InterfaceId(7);
-        register_started_interface(
-            &mut driver,
-            &tx,
-            crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+        register_started_interface(StartedInterface {
+            driver: &mut driver,
+            tx: &tx,
+            queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             id,
-            test_interface_info(id.0),
-            Box::new(TestWriter),
-            "TestInterface".to_string(),
-            None,
-            &IfacRuntimeConfig {
+            info: test_interface_info(id.0),
+            writer: Box::new(TestWriter),
+            interface_type_name: "TestInterface".to_string(),
+            ifac_state: None,
+            ifac_runtime: &IfacRuntimeConfig {
                 netname: None,
                 netkey: None,
                 size: 16,
             },
-        );
+        });
 
         let info = &driver.interfaces[&id].info;
         assert_eq!(info.announce_rate_target, Some(7200.0));
@@ -3161,21 +3174,21 @@ mod tests {
         driver.set_ingress_control_defaults(defaults);
 
         let id = rns_core::transport::types::InterfaceId(8);
-        register_started_interface(
-            &mut driver,
-            &tx,
-            crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+        register_started_interface(StartedInterface {
+            driver: &mut driver,
+            tx: &tx,
+            queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             id,
-            test_interface_info(id.0),
-            Box::new(TestWriter),
-            "TestInterface".to_string(),
-            None,
-            &IfacRuntimeConfig {
+            info: test_interface_info(id.0),
+            writer: Box::new(TestWriter),
+            interface_type_name: "TestInterface".to_string(),
+            ifac_state: None,
+            ifac_runtime: &IfacRuntimeConfig {
                 netname: None,
                 netkey: None,
                 size: 16,
             },
-        );
+        });
 
         let ic = driver.interfaces[&id].info.ingress_control;
         assert_eq!(ic.burst_hold, 1.5);

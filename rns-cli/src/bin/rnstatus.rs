@@ -256,15 +256,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         } else {
             print_status(
                 &response,
-                show_all,
-                sort_by.as_deref(),
-                reverse,
-                filter.as_deref(),
-                show_totals,
-                show_announces,
-                show_pr_stats,
-                show_bursts,
-                show_blocked_ips,
+                StatusDisplayOptions {
+                    show_all,
+                    sort_by: sort_by.as_deref(),
+                    reverse,
+                    filter: filter.as_deref(),
+                    show_totals,
+                    show_announces,
+                    show_pr_stats,
+                    show_bursts,
+                    show_blocked_ips,
+                },
             );
         }
 
@@ -292,18 +294,30 @@ fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
         .max(MONITOR_MIN_SLEEP)
 }
 
-fn print_status(
-    response: &PickleValue,
-    _show_all: bool,
-    sort_by: Option<&str>,
+struct StatusDisplayOptions<'a> {
+    show_all: bool,
+    sort_by: Option<&'a str>,
     reverse: bool,
-    filter: Option<&str>,
+    filter: Option<&'a str>,
     show_totals: bool,
     show_announces: bool,
     show_pr_stats: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
-) {
+}
+
+fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
+    let StatusDisplayOptions {
+        show_all: _show_all,
+        sort_by,
+        reverse,
+        filter,
+        show_totals,
+        show_announces,
+        show_pr_stats,
+        show_bursts,
+        show_blocked_ips,
+    } = options;
     // Print transport info
     if let Some(PickleValue::Bool(true)) = response.get("transport_enabled") {
         print!(" Transport Instance ");
@@ -785,15 +799,17 @@ fn remote_status(
                 } else {
                     print_status(
                         &remote.stats,
-                        show_all,
-                        sort_by,
-                        reverse,
-                        filter,
-                        show_totals,
-                        show_announces,
-                        show_pr_stats,
-                        show_bursts,
-                        show_blocked_ips,
+                        StatusDisplayOptions {
+                            show_all,
+                            sort_by,
+                            reverse,
+                            filter,
+                            show_totals,
+                            show_announces,
+                            show_pr_stats,
+                            show_bursts,
+                            show_blocked_ips,
+                        },
                     );
                 }
                 if let Some(count) = remote.link_count {

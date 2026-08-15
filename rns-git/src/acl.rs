@@ -41,6 +41,8 @@ enum Rule {
 }
 
 impl Access {
+    // Kept as a source-compatible public constructor; internal call sites use named config types.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         read: &[String],
         write: &[String],
@@ -64,6 +66,8 @@ impl Access {
         )
     }
 
+    // Kept as a source-compatible public constructor; changing its shape would be breaking.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_aliases(
         read: &[String],
         write: &[String],

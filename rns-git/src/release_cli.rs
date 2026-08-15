@@ -395,14 +395,16 @@ fn run_release_command_with_defaults(
             local,
         } => create_release(
             transport,
-            tag,
-            artifacts_dir,
-            notes_path.as_deref(),
-            signer_path.as_deref().or(default_signer_path),
-            package_name.as_deref().or(default_package_name),
-            origin_hash,
-            origin_path,
-            *local,
+            CreateReleaseOptions {
+                tag,
+                artifacts_dir,
+                notes_path: notes_path.as_deref(),
+                signer_path: signer_path.as_deref().or(default_signer_path),
+                package_name: package_name.as_deref().or(default_package_name),
+                origin_hash,
+                origin_path,
+                local: *local,
+            },
             &mut output,
         ),
         ReleaseCommand::Delete { tag, yes } => {
@@ -430,18 +432,32 @@ fn run_release_command_with_defaults(
     }
 }
 
+struct CreateReleaseOptions<'a> {
+    tag: &'a str,
+    artifacts_dir: &'a Path,
+    notes_path: Option<&'a Path>,
+    signer_path: Option<&'a Path>,
+    package_name: Option<&'a str>,
+    origin_hash: Option<&'a [u8; 16]>,
+    origin_path: Option<&'a str>,
+    local: bool,
+}
+
 fn create_release(
     transport: &mut impl ReleaseTransport,
-    tag: &str,
-    artifacts_dir: &Path,
-    notes_path: Option<&Path>,
-    signer_path: Option<&Path>,
-    package_name: Option<&str>,
-    origin_hash: Option<&[u8; 16]>,
-    origin_path: Option<&str>,
-    local: bool,
+    options: CreateReleaseOptions<'_>,
     mut output: impl Write,
 ) -> Result<()> {
+    let CreateReleaseOptions {
+        tag,
+        artifacts_dir,
+        notes_path,
+        signer_path,
+        package_name,
+        origin_hash,
+        origin_path,
+        local,
+    } = options;
     if !artifacts_dir.is_dir() {
         return Err(Error::msg(format!(
             "artifact directory does not exist: {}",
@@ -456,16 +472,16 @@ fn create_release(
         ));
     }
     if let Some(signer_path) = signer_path {
-        sign_release_artifacts(
+        sign_release_artifacts(SignReleaseOptions {
             artifacts_dir,
-            &artifacts,
+            artifacts: &artifacts,
             tag,
-            &notes.content,
+            notes: &notes.content,
             signer_path,
             package_name,
             origin_hash,
             origin_path,
-        )?;
+        })?;
         artifacts = artifact_files(artifacts_dir)?;
     }
     if local {
@@ -544,16 +560,28 @@ fn release_package_name(artifacts_dir: &Path, package_name: Option<&str>) -> Str
         .unwrap_or_else(|| "release".into())
 }
 
-fn sign_release_artifacts(
-    artifacts_dir: &Path,
-    artifacts: &[ArtifactFile],
-    tag: &str,
-    notes: &str,
-    signer_path: &Path,
-    package_name: Option<&str>,
-    origin_hash: Option<&[u8; 16]>,
-    origin_path: Option<&str>,
-) -> Result<()> {
+struct SignReleaseOptions<'a> {
+    artifacts_dir: &'a Path,
+    artifacts: &'a [ArtifactFile],
+    tag: &'a str,
+    notes: &'a str,
+    signer_path: &'a Path,
+    package_name: Option<&'a str>,
+    origin_hash: Option<&'a [u8; 16]>,
+    origin_path: Option<&'a str>,
+}
+
+fn sign_release_artifacts(options: SignReleaseOptions<'_>) -> Result<()> {
+    let SignReleaseOptions {
+        artifacts_dir,
+        artifacts,
+        tag,
+        notes,
+        signer_path,
+        package_name,
+        origin_hash,
+        origin_path,
+    } = options;
     sign_release_artifacts_in_repo(
         artifacts_dir,
         artifacts,
@@ -1548,14 +1576,16 @@ mod tests {
 
         create_release(
             &mut fake,
-            "v1",
-            tmp.path(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
+            CreateReleaseOptions {
+                tag: "v1",
+                artifacts_dir: tmp.path(),
+                notes_path: None,
+                signer_path: None,
+                package_name: None,
+                origin_hash: None,
+                origin_path: None,
+                local: false,
+            },
             &mut out,
         )
         .unwrap();
@@ -1628,14 +1658,16 @@ mod tests {
 
         create_release(
             &mut fake,
-            "v1",
-            tmp.path(),
-            None,
-            Some(&signer_path),
-            Some("pkg"),
-            Some(&[0x11; 16]),
-            Some("group/repo"),
-            false,
+            CreateReleaseOptions {
+                tag: "v1",
+                artifacts_dir: tmp.path(),
+                notes_path: None,
+                signer_path: Some(&signer_path),
+                package_name: Some("pkg"),
+                origin_hash: Some(&[0x11; 16]),
+                origin_path: Some("group/repo"),
+                local: false,
+            },
             &mut out,
         )
         .unwrap();
@@ -1746,14 +1778,16 @@ mod tests {
 
         create_release(
             &mut fake,
-            "v1",
-            tmp.path(),
-            None,
-            Some(&signer_path),
-            Some("pkg"),
-            Some(&[0x22; 16]),
-            Some("group/repo"),
-            true,
+            CreateReleaseOptions {
+                tag: "v1",
+                artifacts_dir: tmp.path(),
+                notes_path: None,
+                signer_path: Some(&signer_path),
+                package_name: Some("pkg"),
+                origin_hash: Some(&[0x22; 16]),
+                origin_path: Some("group/repo"),
+                local: true,
+            },
             &mut out,
         )
         .unwrap();

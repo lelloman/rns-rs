@@ -121,7 +121,7 @@ fn start_with_template(
     thread::Builder::new()
         .name(format!("tcp-server-{}", config.interface_id.0))
         .spawn(move || {
-            listener_loop(
+            listener_loop(ListenerLoopContext {
                 listener,
                 name,
                 tx,
@@ -129,17 +129,17 @@ fn start_with_template(
                 runtime,
                 ingress_control,
                 active_connections,
-                listener_control,
+                control: listener_control,
                 dynamic_template,
                 ifac_size,
-            );
+            });
         })?;
 
     Ok(control)
 }
 
 /// Listener thread: accepts connections and spawns reader threads.
-fn listener_loop(
+struct ListenerLoopContext {
     listener: TcpListener,
     name: String,
     tx: EventSender,
@@ -150,7 +150,21 @@ fn listener_loop(
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     ifac_size: usize,
-) {
+}
+
+fn listener_loop(context: ListenerLoopContext) {
+    let ListenerLoopContext {
+        listener,
+        name,
+        tx,
+        next_id,
+        runtime,
+        ingress_control,
+        active_connections,
+        control,
+        dynamic_template,
+        ifac_size,
+    } = context;
     loop {
         if control.should_stop() {
             log::info!("[{}] listener stopping", name);

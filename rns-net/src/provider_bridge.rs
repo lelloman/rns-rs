@@ -622,10 +622,12 @@ fn prune_disconnected_consumers(shared: &Arc<BridgeShared>) {
 fn enqueue_backlog(config: &ProviderBridgeConfig, state: &mut BridgeState, encoded: Vec<u8>) {
     enqueue_into_queue(
         config.overflow_policy,
-        &mut state.backlog,
-        &mut state.backlog_bytes,
-        &mut state.backlog_dropped_count,
-        &mut state.backlog_dropped_total,
+        QueueParts {
+            queue: &mut state.backlog,
+            queued_bytes: &mut state.backlog_bytes,
+            dropped_count: &mut state.backlog_dropped_count,
+            dropped_total: &mut state.backlog_dropped_total,
+        },
         state.queue_max_events,
         state.queue_max_bytes,
         encoded,
@@ -685,16 +687,26 @@ fn enqueue_consumer_state(
     state.queue.push_back(QueuedEnvelope { encoded });
 }
 
+struct QueueParts<'a> {
+    queue: &'a mut VecDeque<QueuedEnvelope>,
+    queued_bytes: &'a mut usize,
+    dropped_count: &'a mut u64,
+    dropped_total: &'a mut u64,
+}
+
 fn enqueue_into_queue(
     overflow_policy: OverflowPolicy,
-    queue: &mut VecDeque<QueuedEnvelope>,
-    queued_bytes: &mut usize,
-    dropped_count: &mut u64,
-    dropped_total: &mut u64,
+    parts: QueueParts<'_>,
     queue_max_events: usize,
     queue_max_bytes: usize,
     encoded: Vec<u8>,
 ) {
+    let QueueParts {
+        queue,
+        queued_bytes,
+        dropped_count,
+        dropped_total,
+    } = parts;
     if encoded.len() > queue_max_bytes {
         *dropped_count = dropped_count.saturating_add(1);
         *dropped_total = dropped_total.saturating_add(1);

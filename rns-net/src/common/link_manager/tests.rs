@@ -1580,6 +1580,14 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+type DrivenPackets = (
+    Option<Vec<u8>>,
+    bool,
+    Vec<(char, usize, usize)>,
+    Vec<(char, String)>,
+    usize,
+);
+
 fn drive_link_manager_packets(
     init_mgr: &mut LinkManager,
     resp_mgr: &mut LinkManager,
@@ -1587,13 +1595,7 @@ fn drive_link_manager_packets(
     initial_source: char,
     rng: &mut dyn Rng,
     max_rounds: usize,
-) -> (
-    Option<Vec<u8>>,
-    bool,
-    Vec<(char, usize, usize)>,
-    Vec<(char, String)>,
-    usize,
-) {
+) -> DrivenPackets {
     let mut pending: Vec<(char, LinkManagerAction)> = initial_actions
         .into_iter()
         .map(|a| (initial_source, a))

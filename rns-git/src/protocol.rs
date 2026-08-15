@@ -23,6 +23,9 @@ pub const RES_INVALID_REQ: u8 = 0x02;
 pub const RES_NOT_FOUND: u8 = 0x03;
 pub const RES_REMOTE_FAIL: u8 = 0xff;
 
+/// Repository, local object tips, and requested remote refs from a fetch request.
+pub type FetchRequest = (String, Vec<String>, Vec<(String, String)>);
+
 pub const IDX_REPOSITORY: u64 = 0x00;
 pub const IDX_RESULT_CODE: u64 = 0x01;
 pub const IDX_GROUP: u64 = 0x02;
@@ -137,7 +140,7 @@ pub fn fetch_request_for_refs(
     ]))
 }
 
-pub fn parse_fetch_request(data: &[u8]) -> Result<(String, Vec<String>, Vec<(String, String)>)> {
+pub fn parse_fetch_request(data: &[u8]) -> Result<FetchRequest> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value

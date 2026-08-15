@@ -31,6 +31,7 @@ mod state;
 use crate::resource::{
     ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError, ResourceTransferId,
 };
+use resource_handling::ResourceSendParams;
 use state::*;
 
 /// Resource acceptance strategy.

@@ -441,7 +441,7 @@ fn wait_for_link_closed(
 fn wait_for_resource_received(
     rx: &mpsc::Receiver<TestEvent>,
     timeout: Duration,
-) -> Option<([u8; 16], Vec<u8>, Option<Vec<u8>>)> {
+) -> Option<ReceivedResource> {
     wait_for_event(rx, timeout, |event| match event {
         TestEvent::ResourceReceived {
             link_id,
@@ -451,6 +451,8 @@ fn wait_for_resource_received(
         _ => None,
     })
 }
+
+type ReceivedResource = ([u8; 16], Vec<u8>, Option<Vec<u8>>);
 
 fn wait_for_channel_message(
     rx: &mpsc::Receiver<TestEvent>,

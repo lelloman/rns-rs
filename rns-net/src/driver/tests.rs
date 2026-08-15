@@ -14,6 +14,25 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+type Shared<T> = Arc<Mutex<T>>;
+type DestinationHops = Shared<Vec<(DestHash, u8)>>;
+type LinkEstablishedEvents = Shared<Vec<(TypedLinkId, f64, bool)>>;
+type RemoteIdentifiedEvents = Shared<Vec<(TypedLinkId, IdentityHash)>>;
+type ResourceEvents = Shared<Vec<(TypedLinkId, Vec<u8>)>>;
+type ChannelEvents = Shared<Vec<(TypedLinkId, u16, Vec<u8>)>>;
+type LinkDataEvents = Shared<Vec<(TypedLinkId, u8, Vec<u8>)>>;
+type ResponseEvents = Shared<Vec<(TypedLinkId, [u8; 16], Vec<u8>)>>;
+type ProofEvents = Shared<Vec<(DestHash, PacketHash, f64)>>;
+type DirectConnectEvents = Shared<Vec<(TypedLinkId, Option<IdentityHash>)>>;
+type MockCallbacksFixture = (
+    MockCallbacks,
+    DestinationHops,
+    DestinationHops,
+    Shared<Vec<DestHash>>,
+    Shared<Vec<InterfaceId>>,
+    Shared<Vec<InterfaceId>>,
+);
+
 struct MockWriter {
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
 }
@@ -86,33 +105,26 @@ use crate::event::HolePunchPolicy;
 use rns_core::types::{DestHash, IdentityHash, LinkId as TypedLinkId, PacketHash};
 
 struct MockCallbacks {
-    announces: Arc<Mutex<Vec<(DestHash, u8)>>>,
-    paths: Arc<Mutex<Vec<(DestHash, u8)>>>,
+    announces: DestinationHops,
+    paths: DestinationHops,
     deliveries: Arc<Mutex<Vec<DestHash>>>,
     iface_ups: Arc<Mutex<Vec<InterfaceId>>>,
     iface_downs: Arc<Mutex<Vec<InterfaceId>>>,
-    link_established: Arc<Mutex<Vec<(TypedLinkId, f64, bool)>>>,
+    link_established: LinkEstablishedEvents,
     link_closed: Arc<Mutex<Vec<TypedLinkId>>>,
-    remote_identified: Arc<Mutex<Vec<(TypedLinkId, IdentityHash)>>>,
-    resources_received: Arc<Mutex<Vec<(TypedLinkId, Vec<u8>)>>>,
+    remote_identified: RemoteIdentifiedEvents,
+    resources_received: ResourceEvents,
     resource_completed: Arc<Mutex<Vec<TypedLinkId>>>,
     resource_failed: Arc<Mutex<Vec<(TypedLinkId, String)>>>,
-    channel_messages: Arc<Mutex<Vec<(TypedLinkId, u16, Vec<u8>)>>>,
-    link_data: Arc<Mutex<Vec<(TypedLinkId, u8, Vec<u8>)>>>,
-    responses: Arc<Mutex<Vec<(TypedLinkId, [u8; 16], Vec<u8>)>>>,
-    proofs: Arc<Mutex<Vec<(DestHash, PacketHash, f64)>>>,
+    channel_messages: ChannelEvents,
+    link_data: LinkDataEvents,
+    responses: ResponseEvents,
+    proofs: ProofEvents,
     proof_requested: Arc<Mutex<Vec<(DestHash, PacketHash)>>>,
 }
 
 impl MockCallbacks {
-    fn new() -> (
-        Self,
-        Arc<Mutex<Vec<(DestHash, u8)>>>,
-        Arc<Mutex<Vec<(DestHash, u8)>>>,
-        Arc<Mutex<Vec<DestHash>>>,
-        Arc<Mutex<Vec<InterfaceId>>>,
-        Arc<Mutex<Vec<InterfaceId>>>,
-    ) {
+    fn new() -> MockCallbacksFixture {
         let announces = Arc::new(Mutex::new(Vec::new()));
         let paths = Arc::new(Mutex::new(Vec::new()));
         let deliveries = Arc::new(Mutex::new(Vec::new()));
@@ -147,9 +159,9 @@ impl MockCallbacks {
 
     fn with_link_tracking() -> (
         Self,
-        Arc<Mutex<Vec<(TypedLinkId, f64, bool)>>>,
+        LinkEstablishedEvents,
         Arc<Mutex<Vec<TypedLinkId>>>,
-        Arc<Mutex<Vec<(TypedLinkId, IdentityHash)>>>,
+        RemoteIdentifiedEvents,
     ) {
         let link_established = Arc::new(Mutex::new(Vec::new()));
         let link_closed = Arc::new(Mutex::new(Vec::new()));
@@ -1498,7 +1510,7 @@ impl Callbacks for MockCallbacks {
 }
 
 struct DirectConnectCallbacks {
-    proposals: Arc<Mutex<Vec<(TypedLinkId, Option<IdentityHash>)>>>,
+    proposals: DirectConnectEvents,
     accept: bool,
 }
 

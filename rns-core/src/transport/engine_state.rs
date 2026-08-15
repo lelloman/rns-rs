@@ -196,7 +196,7 @@ impl TransportEngine {
         &self,
         raw: &[u8],
         receiving_interface: InterfaceId,
-    ) -> Option<([u8; 16], [u8; 16], u8, Vec<u8>)> {
+    ) -> Option<super::LrproofRebalanceCandidate> {
         let ctx = self.prepare_inbound_packet(InboundFrame {
             raw,
             iface: receiving_interface,

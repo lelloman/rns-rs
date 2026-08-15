@@ -254,17 +254,17 @@ fn coordinator(
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer_addr))
             .spawn(move || {
-                outbound_peer_loop(
-                    sam_addr2,
-                    &session_id2,
-                    &peer_addr,
-                    &iface_name,
+                outbound_peer_loop(OutboundPeerContext {
+                    sam_addr: sam_addr2,
+                    session_id: session_id2,
+                    peer_addr,
+                    iface_name,
                     tx2,
                     next_id2,
                     runtime,
                     ingress_control,
                     dynamic_template,
-                );
+                });
             })
             .ok();
     }
@@ -304,23 +304,36 @@ fn coordinator(
 
 /// Outbound peer thread: connects to a remote I2P destination, runs HDLC reader loop.
 /// Reconnects on failure.
-fn outbound_peer_loop(
+struct OutboundPeerContext {
     sam_addr: SocketAddr,
-    session_id: &str,
-    peer_addr: &str,
-    iface_name: &str,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
+    session_id: String,
+    peer_addr: String,
+    iface_name: String,
+    tx2: EventSender,
+    next_id2: Arc<AtomicU64>,
     runtime: Arc<Mutex<I2pRuntime>>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
-) {
+}
+
+fn outbound_peer_loop(context: OutboundPeerContext) {
+    let OutboundPeerContext {
+        sam_addr,
+        session_id,
+        peer_addr,
+        iface_name,
+        tx2: tx,
+        next_id2: next_id,
+        runtime,
+        ingress_control,
+        dynamic_template,
+    } = context;
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
 
         // Resolve .b32.i2p address if needed
         let destination = if peer_addr.ends_with(".i2p") {
-            match sam::naming_lookup(&sam_addr, peer_addr) {
+            match sam::naming_lookup(&sam_addr, &peer_addr) {
                 Ok(dest) => dest.to_i2p_base64(),
                 Err(e) => {
                     log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
@@ -334,7 +347,7 @@ fn outbound_peer_loop(
         };
 
         // Connect via SAM
-        match sam::stream_connect(&sam_addr, session_id, &destination) {
+        match sam::stream_connect(&sam_addr, &session_id, &destination) {
             Ok(stream) => {
                 let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
 
@@ -402,7 +415,7 @@ fn outbound_peer_loop(
                 }
 
                 // Run HDLC reader loop (blocks until disconnect)
-                peer_reader_loop(stream, client_id, iface_name, &tx);
+                peer_reader_loop(stream, client_id, &iface_name, &tx);
 
                 // Disconnected
                 let _ = tx.send(Event::InterfaceDown(client_id));

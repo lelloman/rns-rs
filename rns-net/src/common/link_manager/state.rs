@@ -1,5 +1,10 @@
 use super::*;
 
+type RemoteIdentity = ([u8; 16], [u8; 64]);
+type ImmediateRequestHandler =
+    dyn Fn(LinkId, &str, &[u8], Option<&RemoteIdentity>) -> Option<RequestResponse> + Send;
+type DeferredHandler = dyn Fn(LinkId, &str, [u8; 16], &[u8], Option<&RemoteIdentity>) + Send;
+
 /// A managed link wrapping LinkEngine + optional Channel + resources.
 pub(super) struct ManagedLink {
     pub(super) engine: LinkEngine,
@@ -66,16 +71,12 @@ pub(super) struct RequestHandlerEntry {
     /// Access control: None means allow all, Some(list) means allow only listed identities.
     pub(super) allowed_list: Option<Vec<[u8; 16]>>,
     /// Handler function: (link_id, path, request_id, data, remote_identity) -> Option<response>.
-    pub(super) handler: Box<
-        dyn Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<RequestResponse>
-            + Send,
-    >,
+    pub(super) handler: Box<ImmediateRequestHandler>,
 }
 
 pub(super) struct DeferredRequestHandlerEntry {
     pub(super) path: String,
     pub(super) path_hash: [u8; 16],
     pub(super) allowed_list: Option<Vec<[u8; 16]>>,
-    pub(super) handler:
-        Box<dyn Fn(LinkId, &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send>,
+    pub(super) handler: Box<DeferredHandler>,
 }

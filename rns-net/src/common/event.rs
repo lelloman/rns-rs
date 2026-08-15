@@ -12,6 +12,18 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::common::link_manager::RequestResponse;
 
+/// Identity hash and public key supplied to request callbacks.
+pub type RequestRemoteIdentity = ([u8; 16], [u8; 64]);
+/// Callback for an immediate byte response.
+pub type ByteRequestHandler =
+    dyn Fn([u8; 16], &str, &[u8], Option<&RequestRemoteIdentity>) -> Option<Vec<u8>> + Send;
+/// Callback for an immediate packet or resource response.
+pub type ResponseRequestHandler =
+    dyn Fn([u8; 16], &str, &[u8], Option<&RequestRemoteIdentity>) -> Option<RequestResponse> + Send;
+/// Callback for an application-managed deferred response.
+pub type DeferredRequestHandler =
+    dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&RequestRemoteIdentity>) + Send;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InterfaceTelemetry {
     pub cpu_load: Option<f64>,
@@ -124,6 +136,8 @@ pub struct DrainStatus {
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
 /// or a channel sender for async).
+// Boxing the large registration variant would change this published event API.
+#[allow(clippy::large_enum_variant)]
 pub enum Event<W: Send> {
     /// A decoded frame arrived from an interface.
     Frame {
@@ -199,24 +213,19 @@ pub enum Event<W: Send> {
     RegisterRequestHandler {
         path: String,
         allowed_list: Option<Vec<[u8; 16]>>,
-        handler: Box<
-            dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send,
-        >,
+        handler: Box<ByteRequestHandler>,
     },
     /// Register a request handler that may return resource responses with metadata.
     RegisterRequestHandlerResponse {
         path: String,
         allowed_list: Option<Vec<[u8; 16]>>,
-        handler: Box<
-            dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<RequestResponse>
-                + Send,
-        >,
+        handler: Box<ResponseRequestHandler>,
     },
     /// Register a request handler that sends its response later.
     RegisterDeferredRequestHandler {
         path: String,
         allowed_list: Option<Vec<[u8; 16]>>,
-        handler: Box<dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&([u8; 16], [u8; 64])>) + Send>,
+        handler: Box<DeferredRequestHandler>,
     },
     /// Create an outbound link. Response sends (link_id) back.
     CreateLink {

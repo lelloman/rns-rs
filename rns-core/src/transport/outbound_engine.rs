@@ -16,7 +16,6 @@ impl TransportEngine {
             packet,
             dest_type,
             attached_interface,
-            now,
             OutboundRouteOptions {
                 identity_hash: self.config.identity_hash,
                 local_hops_delta: self.config.local_hops_delta,
