@@ -11,7 +11,7 @@ use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 
-use esp_idf_hal::gpio::{AnyIOPin, Output, PinDriver};
+use esp_idf_hal::gpio::{Output, PinDriver};
 use esp_idf_hal::i2c::I2cDriver;
 
 use ssd1306::mode::BufferedGraphicsMode;
@@ -138,10 +138,7 @@ impl DisplayStats {
 pub type SharedStats = Arc<Mutex<DisplayStats>>;
 
 /// Initialize the OLED display.
-pub fn init(
-    mut i2c: I2cDriver<'static>,
-    mut rst: PinDriver<'static, AnyIOPin, Output>,
-) -> Option<Display> {
+pub fn init(mut i2c: I2cDriver<'static>, mut rst: PinDriver<'static, Output>) -> Option<Display> {
     // Reset the display — hold low, then release
     if let Err(e) = rst.set_high() {
         log::warn!("OLED RST set_high failed: {:?}", e);

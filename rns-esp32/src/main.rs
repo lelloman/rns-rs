@@ -19,7 +19,7 @@ mod version;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
-use esp_idf_hal::gpio::{AnyIOPin, PinDriver};
+use esp_idf_hal::gpio::{AnyIOPin, PinDriver, Pull};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::spi::{SpiDriver, SpiDriverConfig};
@@ -104,8 +104,10 @@ fn main() {
 
     let cs = PinDriver::output(AnyIOPin::from(peripherals.pins.gpio8)).expect("CS pin");
     let rst = PinDriver::output(AnyIOPin::from(peripherals.pins.gpio12)).expect("RST pin");
-    let busy = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio13)).expect("BUSY pin");
-    let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14)).expect("DIO1 pin");
+    let busy = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio13), Pull::Floating)
+        .expect("BUSY pin");
+    let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14), Pull::Floating)
+        .expect("DIO1 pin");
 
     // Initialize LoRa radio
     let (radio, writer) = lora::init(spi_driver, cs, rst, busy).expect("LoRa radio init");
@@ -130,7 +132,7 @@ fn main() {
 
     // Spawn button handler thread (always-on, GPIO0 = PRG button)
     let button_pin =
-        PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0)).expect("PRG button pin");
+        PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0), Pull::Up).expect("PRG button pin");
     let button_tx = tx.clone();
     let button_stats = display_stats.clone();
     std::thread::Builder::new()
@@ -145,6 +147,7 @@ fn main() {
     let transport_config = TransportConfig {
         transport_enabled: true,
         identity_hash: Some(identity_hash),
+        local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
         packet_hashlist_max_entries: 1024,
@@ -159,6 +162,7 @@ fn main() {
         announce_sig_cache_max_entries: 256,
         announce_sig_cache_ttl_secs: rns_core::constants::ANNOUNCE_SIG_CACHE_TTL,
         announce_queue_max_entries: 64,
+        announce_queue_max_interfaces: 64,
     };
 
     // Build driver and register interface (once, reused across mode switches)
@@ -333,7 +337,7 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
 
     // Try to load existing private key
     let mut key_buf = [0u8; IDENTITY_KEY_LEN];
-    match nvs.get_raw(NVS_KEY_IDENTITY, &mut key_buf) {
+    match nvs.get_blob(NVS_KEY_IDENTITY, &mut key_buf) {
         Ok(raw) => match decode_identity_key(raw) {
             Ok(Some(key)) => {
                 log::info!("Loaded identity from NVS");
@@ -358,9 +362,9 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
 
     // Persist private key
     if let Some(prv) = identity.get_private_key() {
-        let mut nvs_mut = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
+        let nvs_mut = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
             .expect("NVS open for write");
-        match nvs_mut.set_raw(NVS_KEY_IDENTITY, &prv) {
+        match nvs_mut.set_blob(NVS_KEY_IDENTITY, &prv) {
             Ok(_) => log::info!("Identity saved to NVS"),
             Err(err) => log::warn!("Failed to persist regenerated identity: {}", err),
         }
@@ -373,7 +377,7 @@ fn load_or_create_settings(nvs_partition: &EspDefaultNvsPartition) -> DeviceSett
     let nvs =
         EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
     let mut raw = [0u8; 16];
-    match nvs.get_raw(NVS_KEY_SETTINGS, &mut raw) {
+    match nvs.get_blob(NVS_KEY_SETTINGS, &mut raw) {
         Ok(encoded) => match decode_settings(encoded) {
             Ok(Some(settings)) => {
                 log::info!("Loaded device settings from NVS");
@@ -401,9 +405,9 @@ fn load_or_create_settings(nvs_partition: &EspDefaultNvsPartition) -> DeviceSett
 }
 
 fn persist_settings(nvs_partition: &EspDefaultNvsPartition, settings: DeviceSettings) {
-    let mut nvs = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
+    let nvs = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
         .expect("NVS open for write");
-    if let Err(err) = nvs.set_raw(NVS_KEY_SETTINGS, &settings.encode()) {
+    if let Err(err) = nvs.set_blob(NVS_KEY_SETTINGS, &settings.encode()) {
         log::warn!("Failed to persist default device settings: {}", err);
     }
 }
