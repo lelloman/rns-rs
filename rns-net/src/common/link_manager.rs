@@ -34,20 +34,15 @@ use crate::resource::{
 use state::*;
 
 /// Resource acceptance strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResourceStrategy {
     /// Reject all incoming resources.
+    #[default]
     AcceptNone,
     /// Accept all incoming resources automatically.
     AcceptAll,
     /// Query the application callback for each resource.
     AcceptApp,
-}
-
-impl Default for ResourceStrategy {
-    fn default() -> Self {
-        ResourceStrategy::AcceptNone
-    }
 }
 
 struct IncomingSplitTransfer {
@@ -1942,15 +1937,14 @@ impl LinkManager {
             match action {
                 LinkAction::StateChanged {
                     new_state, reason, ..
-                } => match new_state {
-                    LinkState::Closed => {
+                } => {
+                    if new_state == &LinkState::Closed {
                         result.push(LinkManagerAction::LinkClosed {
                             link_id: *link_id,
                             reason: *reason,
                         });
                     }
-                    _ => {}
-                },
+                }
                 LinkAction::LinkEstablished {
                     rtt, is_initiator, ..
                 } => {

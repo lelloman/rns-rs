@@ -1111,7 +1111,7 @@ fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
 }
 
 fn cleanup(poller: &Poller, clients: &HashMap<usize, ClientState>, listener: &TcpListener) {
-    for (_, client) in clients {
+    for client in clients.values() {
         let _ = poller.delete(&client.stream);
     }
     let _ = poller.delete(listener);
@@ -1791,7 +1791,7 @@ mod tests {
                     start + Duration::from_secs(flap),
                 )
                 .unwrap();
-            assert_eq!(record.flap_count, flap as u64);
+            assert_eq!(record.flap_count, flap);
             assert!(!record.blocked);
             assert!(!monitor.is_blocked(peer, &config, start + Duration::from_secs(flap)));
         }
@@ -2087,10 +2087,7 @@ mod tests {
         // The exact Reticulum header minimum must be dropped without
         // preventing recovery of the next valid frame.
         client
-            .write_all(&hdlc::frame(&vec![
-                0x11;
-                rns_core::constants::HEADER_MINSIZE
-            ]))
+            .write_all(&hdlc::frame(&[0x11; rns_core::constants::HEADER_MINSIZE]))
             .unwrap();
         let payload: Vec<u8> = (0..32).collect();
         client.write_all(&hdlc::frame(&payload)).unwrap();
@@ -2337,10 +2334,7 @@ mod tests {
 
         // Client mode applies the same strict lower bound and recovers.
         server_stream
-            .write_all(&hdlc::frame(&vec![
-                0x11;
-                rns_core::constants::HEADER_MINSIZE
-            ]))
+            .write_all(&hdlc::frame(&[0x11; rns_core::constants::HEADER_MINSIZE]))
             .unwrap();
         let payload: Vec<u8> = (0..32).collect();
         server_stream.write_all(&hdlc::frame(&payload)).unwrap();
@@ -2801,11 +2795,8 @@ mod tests {
 
         // Should NOT get an InterfaceUp — connection should have been rejected
         let event = rx.try_recv();
-        match event {
-            Ok(Event::InterfaceUp(_, _, _)) => {
-                panic!("blacklisted peer should not get InterfaceUp")
-            }
-            _ => {} // Expected: no InterfaceUp
+        if let Ok(Event::InterfaceUp(_, _, _)) = event {
+            panic!("blacklisted peer should not get InterfaceUp")
         }
     }
 

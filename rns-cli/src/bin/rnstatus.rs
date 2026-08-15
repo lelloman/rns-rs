@@ -305,7 +305,7 @@ fn print_status(
     show_blocked_ips: bool,
 ) {
     // Print transport info
-    if let Some(PickleValue::Bool(true)) = response.get("transport_enabled").map(|v| v) {
+    if let Some(PickleValue::Bool(true)) = response.get("transport_enabled") {
         print!(" Transport Instance ");
         if let Some(tid) = response.get("transport_id").and_then(|v| v.as_bytes()) {
             print!("{} ", prettyhexrep(&tid[..tid.len().min(8)]));

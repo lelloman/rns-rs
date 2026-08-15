@@ -121,7 +121,7 @@ pub fn build_probe_announce(
 }
 
 /// Management configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ManagementConfig {
     /// Enable remote management destination.
     pub enable_remote_management: bool,
@@ -129,16 +129,6 @@ pub struct ManagementConfig {
     pub remote_management_allowed: Vec<[u8; 16]>,
     /// Enable blackhole list publication.
     pub publish_blackhole: bool,
-}
-
-impl Default for ManagementConfig {
-    fn default() -> Self {
-        ManagementConfig {
-            enable_remote_management: false,
-            remote_management_allowed: Vec::new(),
-            publish_blackhole: false,
-        }
-    }
 }
 
 /// Handle a `/status` request.

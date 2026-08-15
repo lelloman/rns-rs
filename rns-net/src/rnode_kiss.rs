@@ -173,12 +173,10 @@ impl RNodeDecoder {
                             data: core::mem::take(&mut self.data_buffer),
                         });
                     }
-                } else if self.command == CMD_FW_DETAIL {
-                    if !self.data_buffer.is_empty() {
-                        let s = String::from_utf8_lossy(&self.data_buffer).into_owned();
-                        events.push(RNodeEvent::FirmwareDetail(s));
-                        self.data_buffer.clear();
-                    }
+                } else if self.command == CMD_FW_DETAIL && !self.data_buffer.is_empty() {
+                    let s = String::from_utf8_lossy(&self.data_buffer).into_owned();
+                    events.push(RNodeEvent::FirmwareDetail(s));
+                    self.data_buffer.clear();
                 }
                 // Start new frame (closing FLAG = opening FLAG of next)
                 self.in_frame = true;
@@ -380,12 +378,10 @@ impl RNodeDecoder {
                     self.in_frame = false;
                 }
             }
-            CMD_ERROR => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::Error(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
+            CMD_ERROR if !buf.is_empty() => {
+                events.push(RNodeEvent::Error(buf[0]));
+                self.command = kiss::CMD_UNKNOWN;
+                self.in_frame = false;
             }
             _ => {
                 // Unknown command, ignore

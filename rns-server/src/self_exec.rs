@@ -21,7 +21,7 @@ mod tests {
     fn self_exec_prefers_proc_self_exe_or_falls_back_to_existing_path() {
         let resolved = resolve_self_exec().unwrap();
         assert!(
-            resolved == PathBuf::from("/proc/self/exe") || resolved.exists(),
+            resolved == *"/proc/self/exe" || resolved.exists(),
             "unexpected self exec path: {}",
             resolved.display()
         );

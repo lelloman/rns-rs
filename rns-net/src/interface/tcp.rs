@@ -676,10 +676,7 @@ mod tests {
         // The exact Reticulum header minimum is invalid; the next valid frame
         // must still be recovered from the same stream.
         server_stream
-            .write_all(&hdlc::frame(&vec![
-                0x11;
-                rns_core::constants::HEADER_MINSIZE
-            ]))
+            .write_all(&hdlc::frame(&[0x11; rns_core::constants::HEADER_MINSIZE]))
             .unwrap();
         let minimum_valid = vec![0x22; rns_core::constants::HEADER_MINSIZE + 1];
         server_stream
@@ -874,7 +871,6 @@ mod tests {
                 max_reconnect_tries: Some(0),
                 connect_timeout: Duration::from_millis(500),
             })),
-            ..TcpClientConfig::default()
         };
 
         let start_time = std::time::Instant::now();

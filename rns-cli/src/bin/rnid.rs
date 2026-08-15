@@ -34,7 +34,7 @@ const RSG_ASCII_FOOTER: &str = " End of rsg data ####";
 const RSG_ASCII_ROW_WIDTH: usize = 64;
 
 enum IdentityRef {
-    Identity(Identity),
+    Identity(Box<Identity>),
     Hash([u8; 16]),
 }
 
@@ -239,13 +239,14 @@ fn operation_paths<'a>(args: &'a Args, short: &str, long: &str) -> Result<Vec<&'
 fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef>, String> {
     if let Some(path) = args.get("g").or_else(|| args.get("generate")) {
         let identity = generate_identity(path, args)?;
-        return Ok(Some(IdentityRef::Identity(identity)));
+        return Ok(Some(IdentityRef::Identity(Box::new(identity))));
     }
 
     if let Some(spec) = args.get("i").or_else(|| args.get("identity")) {
         let expanded = Path::new(spec);
         if expanded.exists() {
-            return load_private_identity_file(expanded).map(|id| Some(IdentityRef::Identity(id)));
+            return load_private_identity_file(expanded)
+                .map(|id| Some(IdentityRef::Identity(Box::new(id))));
         }
 
         let hash = parse_identity_hash(spec)?;
@@ -255,7 +256,7 @@ fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef
 
         if args.has("R") || args.has("request") {
             if let Some(identity) = request_identity(args, hash)? {
-                return Ok(Some(IdentityRef::Identity(identity)));
+                return Ok(Some(IdentityRef::Identity(Box::new(identity))));
             }
         }
 
@@ -275,7 +276,9 @@ fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef
             .as_slice()
             .try_into()
             .map_err(|_| "Invalid public identity length".to_string())?;
-        return Ok(Some(IdentityRef::Identity(Identity::from_public_key(&key))));
+        return Ok(Some(IdentityRef::Identity(Box::new(
+            Identity::from_public_key(&key),
+        ))));
     }
 
     if let Some(spec) = args.get("M").or_else(|| args.get("import-prv")) {
@@ -284,8 +287,8 @@ fn load_identity_ref(args: &Args, allow_none: bool) -> Result<Option<IdentityRef
             .as_slice()
             .try_into()
             .map_err(|_| "Invalid private identity length".to_string())?;
-        return Ok(Some(IdentityRef::Identity(Identity::from_private_key(
-            &key,
+        return Ok(Some(IdentityRef::Identity(Box::new(
+            Identity::from_private_key(&key),
         ))));
     }
 
@@ -1318,7 +1321,7 @@ fn decode_rsg_data(input: &[u8]) -> Option<Vec<u8>> {
     if encoded.is_empty() {
         return None;
     }
-    if encoded.chars().any(|ch| !ch.is_ascii()) {
+    if !encoded.is_ascii() {
         return b256_to_bytes(&encoded)
             .or_else(|| if wrapped { None } else { Some(input.to_vec()) });
     }
@@ -1894,8 +1897,8 @@ mod tests {
             last_used_at: None,
             retained: false,
         };
-        assert!(find_identity_entry(&[entry.clone()], [0x22; 16]).is_some());
-        assert!(find_identity_entry(&[entry.clone()], [0x11; 16]).is_some());
+        assert!(find_identity_entry(std::slice::from_ref(&entry), [0x22; 16]).is_some());
+        assert!(find_identity_entry(std::slice::from_ref(&entry), [0x11; 16]).is_some());
         assert!(find_identity_entry(&[entry], [0x44; 16]).is_none());
     }
 

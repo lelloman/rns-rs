@@ -231,8 +231,7 @@ fn should_adopt_interface_name(
     platform_ignored: &[&str],
 ) -> bool {
     let is_allowed = allowed.iter().any(|a| a == name);
-    let is_system_ignored = ALL_IGNORE_IFS.iter().any(|&ig| ig == name)
-        || platform_ignored.iter().any(|&ig| ig == name);
+    let is_system_ignored = ALL_IGNORE_IFS.contains(&name) || platform_ignored.contains(&name);
 
     if is_system_ignored && !is_allowed {
         return false;

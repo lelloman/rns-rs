@@ -887,15 +887,13 @@ mod tests {
             ))
             .unwrap();
         let peer_id = loop {
-            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Event::DynamicInterfaceUp {
-                    id, registration, ..
-                } => {
-                    assert_eq!(registration.interface_type, "WeaveInterfacePeer");
-                    assert_eq!(registration.parent_id, InterfaceId(55));
-                    break id;
-                }
-                _ => {}
+            if let Event::DynamicInterfaceUp {
+                id, registration, ..
+            } = rx.recv_timeout(Duration::from_secs(1)).unwrap()
+            {
+                assert_eq!(registration.interface_type, "WeaveInterfacePeer");
+                assert_eq!(registration.parent_id, InterfaceId(55));
+                break id;
             }
         };
 
@@ -909,11 +907,11 @@ mod tests {
         .encode();
         session.process_frame(&endpoint_frame).unwrap();
         assert!(loop {
-            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Event::Frame {
-                    interface_id, data, ..
-                } => break interface_id == peer_id && data == b"rns-packet",
-                _ => {}
+            if let Event::Frame {
+                interface_id, data, ..
+            } = rx.recv_timeout(Duration::from_secs(1)).unwrap()
+            {
+                break interface_id == peer_id && data == b"rns-packet";
             }
         });
         session.process_frame(&endpoint_frame).unwrap();
@@ -921,9 +919,8 @@ mod tests {
 
         session.expire_peers(crate::time::now() + WEAVE_PEERING_TIMEOUT + 1.0);
         assert!(loop {
-            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
-                Event::InterfaceDown(id) => break id == peer_id,
-                _ => {}
+            if let Event::InterfaceDown(id) = rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                break id == peer_id;
             }
         });
     }

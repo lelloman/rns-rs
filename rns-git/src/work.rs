@@ -842,7 +842,7 @@ fn map_get<'a>(map: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
     })
 }
 
-fn map_get_repository<'a>(map: &'a [(Value, Value)]) -> Option<&'a str> {
+fn map_get_repository(map: &[(Value, Value)]) -> Option<&str> {
     map.iter().find_map(|(key, value)| match key {
         Value::UInt(v) if *v == protocol::IDX_REPOSITORY => value.as_str(),
         Value::Str(v) if v == "repository" => value.as_str(),

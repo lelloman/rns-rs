@@ -36,7 +36,7 @@ fn i2p_base64_decode_table() -> [u8; 256] {
 
 /// Encode binary data to I2P base64.
 pub fn i2p_base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -184,7 +184,7 @@ const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
 /// Encode bytes to base32 (lowercase, no padding).
 fn base32_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut out = String::with_capacity((data.len() * 8).div_ceil(5));
     let mut buffer: u64 = 0;
     let mut bits: u32 = 0;
 

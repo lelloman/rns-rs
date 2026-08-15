@@ -51,6 +51,7 @@ pub fn b256_to_bytes(input: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+use alloc::vec::Vec;
 
 #[cfg(test)]
 mod tests {
@@ -77,4 +78,3 @@ mod tests {
         assert_eq!(b256_to_bytes("not/base256"), None);
     }
 }
-use alloc::vec::Vec;

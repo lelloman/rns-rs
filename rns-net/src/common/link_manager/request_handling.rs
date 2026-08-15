@@ -29,11 +29,7 @@ impl LinkManager {
 
         // Check if this is a management path (handled by the driver)
         if self.management_paths.contains(&path_hash) {
-            let remote_identity = self
-                .links
-                .get(link_id)
-                .and_then(|l| l.remote_identity)
-                .map(|(h, k)| (h, k));
+            let remote_identity = self.links.get(link_id).and_then(|l| l.remote_identity);
             return vec![LinkManagerAction::ManagementRequest {
                 link_id: *link_id,
                 path_hash,

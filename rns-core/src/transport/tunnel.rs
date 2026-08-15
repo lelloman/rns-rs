@@ -628,7 +628,7 @@ mod tests {
             constants::DESTINATION_TIMEOUT,
         );
 
-        assert!(constants::TUNNEL_TIMEOUT < constants::DESTINATION_TIMEOUT);
+        const { assert!(constants::TUNNEL_TIMEOUT < constants::DESTINATION_TIMEOUT) };
         assert!(table.cull(now + constants::TUNNEL_TIMEOUT - 1.0).is_empty());
 
         let removed = table.cull(now + constants::TUNNEL_TIMEOUT + 1.0);

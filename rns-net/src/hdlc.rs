@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn oversized_complete_frame_is_dropped_and_next_frame_is_recovered() {
         let mut decoder = Decoder::reticulum(64, 0);
-        let oversized = frame(&vec![0x55; 65]);
-        let valid = frame(&vec![0x33; HEADER_MINSIZE + 1]);
+        let oversized = frame(&[0x55; 65]);
+        let valid = frame(&[0x33; HEADER_MINSIZE + 1]);
         let mut encoded = oversized;
         encoded.extend_from_slice(&valid[1..]);
 

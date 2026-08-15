@@ -134,8 +134,8 @@ impl Driver {
         } else if proof_data.len() == 64 {
             let mut candidates = self
                 .sent_packets
-                .iter()
-                .filter_map(|(packet_hash, _)| {
+                .keys()
+                .filter_map(|packet_hash| {
                     if packet_hash[..16] == dest_hash {
                         Some(*packet_hash)
                     } else {
@@ -665,47 +665,45 @@ impl Driver {
                     // Check if this is a discovery announce (matched by name_hash
                     // since discovery is a SINGLE destination — its dest hash varies
                     // with the sender's identity).
-                    if name_hash == self.discovery_name_hash {
-                        if self.discover_interfaces {
-                            if let Some(ref app_data) = app_data {
-                                if let Some(mut discovered) =
-                                    crate::discovery::parse_interface_announce_with_cache(
-                                        app_data,
-                                        &identity_hash,
-                                        hops,
-                                        self.discovery_required_value,
-                                        &mut self.discovery_stamp_cache,
-                                    )
+                    if name_hash == self.discovery_name_hash && self.discover_interfaces {
+                        if let Some(ref app_data) = app_data {
+                            if let Some(mut discovered) =
+                                crate::discovery::parse_interface_announce_with_cache(
+                                    app_data,
+                                    &identity_hash,
+                                    hops,
+                                    self.discovery_required_value,
+                                    &mut self.discovery_stamp_cache,
+                                )
+                            {
+                                crate::discovery::apply_transport_autoconnect_mode(
+                                    &mut discovered,
+                                    self.engine.transport_enabled(),
+                                    self.autoconnect_interface_mode,
+                                );
+                                if let Err(e) =
+                                    self.discovered_interfaces.store_received(&mut discovered)
                                 {
-                                    crate::discovery::apply_transport_autoconnect_mode(
-                                        &mut discovered,
-                                        self.engine.transport_enabled(),
-                                        self.autoconnect_interface_mode,
+                                    log::warn!("Failed to store discovered interface: {}", e);
+                                } else {
+                                    log::debug!(
+                                        "Discovered interface '{}' ({}) at {}:{} [stamp={}]",
+                                        discovered.name,
+                                        discovered.interface_type,
+                                        discovered.reachable_on.as_deref().unwrap_or("?"),
+                                        discovered
+                                            .port
+                                            .map(|p| p.to_string())
+                                            .unwrap_or_else(|| "?".into()),
+                                        discovered.stamp_value,
                                     );
-                                    if let Err(e) =
-                                        self.discovered_interfaces.store_received(&mut discovered)
-                                    {
-                                        log::warn!("Failed to store discovered interface: {}", e);
-                                    } else {
-                                        log::debug!(
-                                            "Discovered interface '{}' ({}) at {}:{} [stamp={}]",
-                                            discovered.name,
-                                            discovered.interface_type,
-                                            discovered.reachable_on.as_deref().unwrap_or("?"),
-                                            discovered
-                                                .port
-                                                .map(|p| p.to_string())
-                                                .unwrap_or_else(|| "?".into()),
-                                            discovered.stamp_value,
-                                        );
-                                    }
-                                    #[cfg(feature = "iface-backbone")]
-                                    self.upsert_discovered_backbone_peer_pool_candidate(discovered);
                                 }
+                                #[cfg(feature = "iface-backbone")]
+                                self.upsert_discovered_backbone_peer_pool_candidate(discovered);
                             }
                         }
-                        // Still cache the identity and notify callbacks
                     }
+                    // Still cache the identity and notify callbacks
 
                     if let (Some(store), Some(ratchet)) = (&self.ratchet_store, ratchet) {
                         let entry = crate::storage::RatchetEntry {

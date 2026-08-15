@@ -616,7 +616,7 @@ impl PeerTracker {
 
         let record = self
             .peers
-            .entry(peer_key.clone())
+            .entry(peer_key)
             .or_insert_with(|| PeerRecord::new(server_interface_id, interface_name.clone()));
         record.server_interface_id = server_interface_id;
         if !interface_name.is_empty() {

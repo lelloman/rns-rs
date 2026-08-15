@@ -492,10 +492,7 @@ mod tests {
             Event::InterfaceUp(InterfaceId(1100), _, _)
         ));
         client
-            .write_all(&hdlc::frame(&vec![
-                0x11;
-                rns_core::constants::HEADER_MINSIZE
-            ]))
+            .write_all(&hdlc::frame(&[0x11; rns_core::constants::HEADER_MINSIZE]))
             .unwrap();
         let valid = vec![0x22; rns_core::constants::HEADER_MINSIZE + 1];
         client.write_all(&hdlc::frame(&valid)).unwrap();

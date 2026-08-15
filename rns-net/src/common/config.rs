@@ -606,7 +606,7 @@ fn build_parsed_hook(name: String, mut kvs: HashMap<String, String>) -> ParsedHo
 fn default_hook_type() -> &'static str {
     #[cfg(feature = "rns-hooks-native")]
     {
-        return "native";
+        "native"
     }
     #[cfg(all(not(feature = "rns-hooks-native"), feature = "rns-hooks-wasm"))]
     {

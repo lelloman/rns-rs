@@ -296,7 +296,7 @@ pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key"))?;
-    fs::write(path, &private_key)
+    fs::write(path, private_key)
 }
 
 /// Load an identity from a private key file (64 bytes).

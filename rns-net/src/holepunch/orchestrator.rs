@@ -406,10 +406,8 @@ impl HolePunchManager {
 
                     // Notify engine of success
                     if let Some(session) = self.sessions.get_mut(&completion.session_id) {
-                        let engine_actions = match session.engine.punch_succeeded(now) {
-                            Ok(a) => a,
-                            Err(_) => Vec::new(),
-                        };
+                        let engine_actions =
+                            session.engine.punch_succeeded(now).unwrap_or_default();
                         for action in engine_actions {
                             match action {
                                 HolePunchAction::Succeeded { session_id } if iface_ok => {
@@ -441,10 +439,7 @@ impl HolePunchManager {
             } else {
                 // Punch failed
                 if let Some(session) = self.sessions.get_mut(&completion.session_id) {
-                    let engine_actions = match session.engine.punch_failed(now) {
-                        Ok(a) => a,
-                        Err(_) => Vec::new(),
-                    };
+                    let engine_actions = session.engine.punch_failed(now).unwrap_or_default();
                     let mgr = convert_engine_actions(completion.link_id, engine_actions.as_slice());
                     all_actions.extend(mgr);
                 }
