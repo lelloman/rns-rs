@@ -124,3 +124,6 @@ pub use rns_core::transport::types::InterfaceId;
 pub use rns_core::types::{
     DestHash, DestinationType, Direction, IdentityHash, LinkId, PacketHash, ProofStrategy,
 };
+
+#[cfg(test)]
+mod test_support;

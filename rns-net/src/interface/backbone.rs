@@ -1758,11 +1758,7 @@ mod tests {
     use std::time::Duration;
 
     fn find_free_port() -> u16 {
-        TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        crate::test_support::port()
     }
 
     fn test_fast_flap_config() -> BackboneFastFlapConfig {

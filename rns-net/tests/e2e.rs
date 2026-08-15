@@ -302,12 +302,7 @@ fn find_free_port() -> u16 {
     let base = 20_000 + (pid % 250) * 160;
     let _ = NEXT_PORT.compare_exchange(0, base, Ordering::SeqCst, Ordering::SeqCst);
 
-    loop {
-        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
+    NEXT_PORT.fetch_add(1, Ordering::SeqCst)
 }
 
 fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Option<Vec<u8>> {

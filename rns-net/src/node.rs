@@ -3952,12 +3952,7 @@ share_instance = False
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        // Find a free port
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = crate::test_support::port();
 
         let config = format!(
             r#"
@@ -3993,11 +3988,7 @@ enable_transport = False
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let rpc_port = crate::test_support::port();
 
         let config = format!(
             r#"
@@ -4030,11 +4021,7 @@ instance_control_port = {}
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let rpc_port = crate::test_support::port();
 
         let config = format!(
             r#"
@@ -4067,16 +4054,8 @@ instance_control_port = {}
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let unreachable_port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let rpc_port = crate::test_support::port();
+        let unreachable_port = crate::test_support::port();
 
         let config = format!(
             r#"
@@ -4555,11 +4534,7 @@ enable_transport = False
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = crate::test_support::port();
 
         let config = format!(
             r#"
