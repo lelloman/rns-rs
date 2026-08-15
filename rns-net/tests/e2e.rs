@@ -299,7 +299,8 @@ fn find_free_port() -> u16 {
     static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
 
     let pid = std::process::id() as u16;
-    let base = 20_000 + (pid % 250) * 160;
+    // Keep listener allocations out of the default ephemeral client-port range.
+    let base = 10_000 + (pid % 200) * 100;
     let _ = NEXT_PORT.compare_exchange(0, base, Ordering::SeqCst, Ordering::SeqCst);
 
     NEXT_PORT.fetch_add(1, Ordering::SeqCst)
