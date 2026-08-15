@@ -317,13 +317,10 @@ pub fn bench_shared_client_replay_once(
         Ok(frames)
     }
 
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        listener.local_addr()?.port()
-    };
+    let listener1 = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener1.local_addr()?.port();
     let instance_name = format!("bench-shared-replay-{port}");
 
-    let listener1 = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))?;
     let (accepted1_tx, accepted1_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let (stream, _) = listener1.accept().unwrap();
@@ -536,11 +533,7 @@ mod tests {
     }
 
     fn find_free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        crate::test_support::port()
     }
 
     #[test]
