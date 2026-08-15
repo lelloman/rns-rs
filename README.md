@@ -90,11 +90,12 @@ Standard host-side validation commands:
 # Full workspace tests
 cargo test --workspace
 
-# Host-safe workspace lint
+# Warning-free host-safe workspace lint
 bash scripts/lint-host.sh
 ```
 
-The lint script enables native `rns-hooks` coverage, but intentionally does not use
+The lint script treats every host warning as an error and enables native
+`rns-hooks` coverage, but intentionally does not use
 workspace-wide `--all-features`. That would enable `rns-crypto/espidf`, which
 pulls in `esp-idf-sys` and fails on normal `x86_64-unknown-linux-gnu` host
 machines. ESP32 validation remains separate under `rns-esp32/`.
