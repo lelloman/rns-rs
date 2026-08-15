@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+
+  - package-ecosystem: cargo
+    directory: "/rns-esp32"
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
