@@ -691,17 +691,7 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    fn candidate_pool_order(
-        candidate: &BackbonePeerPoolCandidate,
-    ) -> (
-        std::cmp::Reverse<u8>,
-        u8,
-        u8,
-        u8,
-        std::cmp::Reverse<u32>,
-        std::cmp::Reverse<u64>,
-        [u8; 32],
-    ) {
+    fn candidate_pool_order(candidate: &BackbonePeerPoolCandidate) -> BackboneCandidateOrder {
         let source_order = match candidate.config.source {
             BackbonePeerPoolCandidateSource::Configured => 0,
             BackbonePeerPoolCandidateSource::Discovered => 1,

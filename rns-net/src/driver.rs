@@ -6,6 +6,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+type MemoryRollup = (f64, f64, f64, f64, f64, f64, f64, f64);
+#[cfg(feature = "iface-backbone")]
+type BackboneCandidateOrder = (
+    std::cmp::Reverse<u8>,
+    u8,
+    u8,
+    u8,
+    std::cmp::Reverse<u32>,
+    std::cmp::Reverse<u64>,
+    [u8; 32],
+);
+
 use rns_core::packet::RawPacket;
 use rns_core::transport::announce_verify_queue::{AnnounceVerifyQueue, OverflowPolicy};
 use rns_core::transport::tables::PathEntry;

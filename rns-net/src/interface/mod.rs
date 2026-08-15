@@ -263,6 +263,8 @@ pub struct InterfaceEntry {
 }
 
 /// Result of starting an interface via a factory.
+// Boxing `Simple` would change the published factory result representation.
+#[allow(clippy::large_enum_variant)]
 pub enum StartResult {
     /// One writer, registered immediately (TcpClient, Udp, Serial, etc.)
     Simple {

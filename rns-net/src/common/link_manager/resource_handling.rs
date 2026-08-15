@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) struct ResourceSendParams<'a> {
+    pub(super) data: &'a [u8],
+    pub(super) metadata: Option<&'a [u8]>,
+    pub(super) auto_compress: bool,
+    pub(super) is_response: bool,
+    pub(super) request_id: Option<Vec<u8>>,
+    pub(super) rng: &'a mut dyn Rng,
+    pub(super) now: f64,
+}
+
 impl LinkManager {
     pub(super) fn request_response_deadline(link: &ManagedLink, now: f64) -> f64 {
         now + link.engine.rtt().unwrap_or(1.0) * constants::LINK_TRAFFIC_TIMEOUT_FACTOR
@@ -8,14 +18,17 @@ impl LinkManager {
 
     pub(super) fn build_resource_senders(
         link: &ManagedLink,
-        data: &[u8],
-        metadata: Option<&[u8]>,
-        auto_compress: bool,
-        is_response: bool,
-        request_id: Option<Vec<u8>>,
-        rng: &mut dyn Rng,
-        now: f64,
+        params: ResourceSendParams<'_>,
     ) -> Result<Vec<ResourceSender>, rns_core::resource::ResourceError> {
+        let ResourceSendParams {
+            data,
+            metadata,
+            auto_compress,
+            is_response,
+            request_id,
+            rng,
+            now,
+        } = params;
         let link_rtt = link.engine.rtt().unwrap_or(1.0);
         let resource_sdu = Self::resource_sdu_for_link(link);
         let metadata_overhead = metadata.map(|m| 3 + m.len()).unwrap_or(0);
@@ -1435,13 +1448,15 @@ impl LinkManager {
 
         let senders = match Self::build_resource_senders(
             link,
-            data,
-            metadata,
-            auto_compress,
-            false, // is_response
-            None,  // request_id
-            rng,
-            now,
+            ResourceSendParams {
+                data,
+                metadata,
+                auto_compress,
+                is_response: false,
+                request_id: None,
+                rng,
+                now,
+            },
         ) {
             Ok(s) => s,
             Err(e) => {

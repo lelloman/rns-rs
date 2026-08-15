@@ -771,16 +771,16 @@ fn start_auto_worker(
         thread::Builder::new()
             .name(format!("auto-disc-tx-{}", key.ifname))
             .spawn(move || {
-                discovery_sender_loop(
-                    &group_id,
-                    &link_local,
-                    &mcast_ip,
+                discovery_sender_loop(DiscoverySenderContext {
+                    group_id,
+                    link_local_addr: link_local,
+                    mcast_ip,
                     discovery_port,
                     if_index,
                     runtime,
-                    &running,
-                    &name,
-                );
+                    running,
+                    name,
+                });
             })?;
     }
 
@@ -800,21 +800,21 @@ fn start_auto_worker(
         thread::Builder::new()
             .name(format!("auto-disc-rx-{}", key.ifname))
             .spawn(move || {
-                discovery_receiver_loop(
-                    mcast_socket,
-                    &group_id,
+                discovery_receiver_loop(DiscoveryReceiverContext {
+                    socket: mcast_socket,
+                    group_id,
                     shared,
                     tx,
-                    &running,
-                    &name,
-                    &ifname,
+                    running,
+                    name,
+                    ifname,
                     if_index,
                     data_port,
                     configured_bitrate,
                     ingress_control,
                     runtime,
                     dynamic_template,
-                );
+                });
             })?;
     }
 
@@ -834,21 +834,21 @@ fn start_auto_worker(
         thread::Builder::new()
             .name(format!("auto-udisc-rx-{}", key.ifname))
             .spawn(move || {
-                discovery_receiver_loop(
-                    unicast_socket,
-                    &group_id,
+                discovery_receiver_loop(DiscoveryReceiverContext {
+                    socket: unicast_socket,
+                    group_id,
                     shared,
                     tx,
-                    &running,
-                    &name,
-                    &ifname,
+                    running,
+                    name,
+                    ifname,
                     if_index,
                     data_port,
                     configured_bitrate,
                     ingress_control,
                     runtime,
                     dynamic_template,
-                );
+                });
             })?;
     }
 
@@ -959,17 +959,29 @@ fn create_data_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Re
 // ── Thread loops ───────────────────────────────────────────────────────────
 
 /// Discovery sender: periodically sends discovery token via multicast.
-fn discovery_sender_loop(
-    group_id: &[u8],
-    link_local_addr: &str,
-    mcast_ip: &Ipv6Addr,
+struct DiscoverySenderContext {
+    group_id: Vec<u8>,
+    link_local_addr: String,
+    mcast_ip: Ipv6Addr,
     discovery_port: u16,
     if_index: u32,
     runtime: Arc<Mutex<AutoRuntime>>,
-    running: &AtomicBool,
-    name: &str,
-) {
-    let token = compute_discovery_token(group_id, link_local_addr);
+    running: Arc<AtomicBool>,
+    name: String,
+}
+
+fn discovery_sender_loop(context: DiscoverySenderContext) {
+    let DiscoverySenderContext {
+        group_id,
+        link_local_addr,
+        mcast_ip,
+        discovery_port,
+        if_index,
+        runtime,
+        running,
+        name,
+    } = context;
+    let token = compute_discovery_token(&group_id, &link_local_addr);
 
     while running.load(Ordering::Relaxed) {
         // Create a fresh socket for each send (matches Python)
@@ -986,7 +998,7 @@ fn discovery_sender_loop(
                 );
             }
 
-            let target = SocketAddrV6::new(*mcast_ip, discovery_port, 0, 0);
+            let target = SocketAddrV6::new(mcast_ip, discovery_port, 0, 0);
             if let Err(e) = socket.send_to(&token, target) {
                 log::debug!("[{}] multicast send error: {}", name, e);
             }
@@ -1002,21 +1014,38 @@ fn discovery_sender_loop(
 }
 
 /// Discovery receiver: listens for discovery tokens and adds peers.
-fn discovery_receiver_loop(
+struct DiscoveryReceiverContext {
     socket: UdpSocket,
-    group_id: &[u8],
+    group_id: Vec<u8>,
     shared: Arc<Mutex<SharedState>>,
     tx: EventSender,
-    running: &AtomicBool,
-    name: &str,
-    ifname: &str,
+    running: Arc<AtomicBool>,
+    name: String,
+    ifname: String,
     if_index: u32,
     data_port: u16,
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     runtime: Arc<Mutex<AutoRuntime>>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
-) {
+}
+
+fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
+    let DiscoveryReceiverContext {
+        socket,
+        group_id,
+        shared,
+        tx,
+        running,
+        name,
+        ifname,
+        if_index,
+        data_port,
+        configured_bitrate,
+        ingress_control,
+        runtime,
+        dynamic_template,
+    } = context;
     let mut buf = [0u8; 1024];
 
     while running.load(Ordering::Relaxed) {
@@ -1035,7 +1064,7 @@ fn discovery_receiver_loop(
                 let src_ip = peer_key.link_local_addr.clone();
 
                 let peering_hash = &buf[..32];
-                let expected = compute_discovery_token(group_id, &src_ip);
+                let expected = compute_discovery_token(&group_id, &src_ip);
 
                 if peering_hash != expected {
                     log::debug!("[{}] invalid peering hash from {}", name, src_ip);
@@ -1067,18 +1096,18 @@ fn discovery_receiver_loop(
                 drop(state);
 
                 // New peer! Create a data writer to send to them.
-                add_peer(
-                    &shared,
-                    &tx,
-                    &peer_key,
+                add_peer(AddPeerContext {
+                    shared: &shared,
+                    tx: &tx,
+                    peer_key: &peer_key,
                     data_port,
-                    name,
-                    ifname,
+                    name: &name,
+                    ifname: &ifname,
                     configured_bitrate,
                     ingress_control,
-                    &runtime,
-                    dynamic_template.as_ref(),
-                );
+                    runtime: &runtime,
+                    dynamic_template: dynamic_template.as_ref(),
+                });
             }
             Err(ref e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
@@ -1098,18 +1127,32 @@ fn discovery_receiver_loop(
 }
 
 /// Add a new peer, creating a writer and emitting InterfaceUp.
-fn add_peer(
-    shared: &Arc<Mutex<SharedState>>,
-    tx: &EventSender,
-    peer_key: &PeerKey,
+struct AddPeerContext<'a> {
+    shared: &'a Arc<Mutex<SharedState>>,
+    tx: &'a EventSender,
+    peer_key: &'a PeerKey,
     data_port: u16,
-    name: &str,
-    ifname: &str,
+    name: &'a str,
+    ifname: &'a str,
     configured_bitrate: u64,
     ingress_control: rns_core::transport::types::IngressControlConfig,
-    _runtime: &Arc<Mutex<AutoRuntime>>,
-    dynamic_template: Option<&super::DynamicInterfaceTemplate>,
-) {
+    runtime: &'a Arc<Mutex<AutoRuntime>>,
+    dynamic_template: Option<&'a super::DynamicInterfaceTemplate>,
+}
+
+fn add_peer(context: AddPeerContext<'_>) {
+    let AddPeerContext {
+        shared,
+        tx,
+        peer_key,
+        data_port,
+        name,
+        ifname,
+        configured_bitrate,
+        ingress_control,
+        runtime: _runtime,
+        dynamic_template,
+    } = context;
     // Create UDP writer to send data to this peer
     let send_socket = match UdpSocket::bind("[::]:0") {
         Ok(s) => s,

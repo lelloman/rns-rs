@@ -483,20 +483,20 @@ pub fn parse_interface_announce_with_cache(
     let discovery_hash = compute_discovery_hash(&transport_id, &name);
 
     // Generate config entry
-    let config_entry = generate_config_entry(
-        &interface_type,
-        &name,
-        &transport_id,
-        reachable_on.as_deref(),
+    let config_entry = generate_config_entry(ConfigEntryParams {
+        interface_type: &interface_type,
+        name: &name,
+        transport_id: &transport_id,
+        reachable_on: reachable_on.as_deref(),
         port,
         frequency,
         bandwidth,
         spreading_factor,
         coding_rate,
-        modulation.as_deref(),
-        ifac_netname.as_deref(),
-        ifac_netkey.as_deref(),
-    );
+        modulation: modulation.as_deref(),
+        ifac_netname: ifac_netname.as_deref(),
+        ifac_netkey: ifac_netkey.as_deref(),
+    });
 
     let now = time::now();
 
@@ -587,20 +587,36 @@ fn interface_mode_name(mode: u8) -> &'static str {
 }
 
 /// Generate a config entry for auto-connecting to a discovered interface
-fn generate_config_entry(
-    interface_type: &str,
-    name: &str,
-    transport_id: &[u8; 16],
-    reachable_on: Option<&str>,
+struct ConfigEntryParams<'a> {
+    interface_type: &'a str,
+    name: &'a str,
+    transport_id: &'a [u8; 16],
+    reachable_on: Option<&'a str>,
     port: Option<u16>,
     frequency: Option<u32>,
     bandwidth: Option<u32>,
     spreading_factor: Option<u8>,
     coding_rate: Option<u8>,
-    modulation: Option<&str>,
-    ifac_netname: Option<&str>,
-    ifac_netkey: Option<&str>,
-) -> Option<String> {
+    modulation: Option<&'a str>,
+    ifac_netname: Option<&'a str>,
+    ifac_netkey: Option<&'a str>,
+}
+
+fn generate_config_entry(params: ConfigEntryParams<'_>) -> Option<String> {
+    let ConfigEntryParams {
+        interface_type,
+        name,
+        transport_id,
+        reachable_on,
+        port,
+        frequency,
+        bandwidth,
+        spreading_factor,
+        coding_rate,
+        modulation,
+        ifac_netname,
+        ifac_netkey,
+    } = params;
     if reachable_on.is_some_and(is_ygg_ipv6) {
         return None;
     }

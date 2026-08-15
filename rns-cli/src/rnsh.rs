@@ -2089,9 +2089,11 @@ mod tests {
 
     #[derive(Default)]
     struct FakeTransport {
-        sent: Mutex<Vec<([u8; 16], u16, Vec<u8>)>>,
+        sent: Mutex<Vec<SentFrame>>,
         teardowns: Mutex<Vec<[u8; 16]>>,
     }
+
+    type SentFrame = ([u8; 16], u16, Vec<u8>);
 
     impl FakeTransport {
         fn sent_messages(&self) -> Vec<([u8; 16], RnshMessage)> {
