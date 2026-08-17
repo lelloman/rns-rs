@@ -12,7 +12,7 @@ API generation and cannot compile independently.
 | `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Upgraded; libbz2 backend and RNCP regression suite pass |
 | `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Upgraded; native ABI/error/lifetime suite passes |
 | `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Upgraded; allocator, CLI, and ARMv7 suites pass |
-| `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Pending review |
+| `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Upgraded; certificate and live TLS suites pass |
 | `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Independent API generation | Pending review |
 | `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Independent API generation | Pending review |
 | `aes` | 0.8.4 | 0.9.2 | Direct crypto dependency in `rns-crypto` | Coupled with `cbc` through the `cipher` trait generation | Pending review |
@@ -99,3 +99,20 @@ series.
 - A dedicated integration-test executable installs Jemalloc globally and
   verifies 4096-byte alignment, zeroed allocation, content-preserving growth
   and shrink reallocations, and concurrent mixed-size allocation workloads.
+
+## rcgen 0.14 assessment
+
+- The 0.14.0 through 0.14.9 release notes and complete 0.13.2-to-0.14.9 tag
+  diff were reviewed. Version 0.14 declares Rust 1.71 as its MSRV, retains the
+  selected `aws_lc_rs` and `pem` features, restructures signing APIs around
+  `SigningKey` and `Issuer`, and renames `CertifiedKey::key_pair` to
+  `signing_key`. Version 0.14.9 corrects the DER encoding of a default false
+  BasicConstraints CA flag.
+- This workspace only generates simple self-signed TLS test certificates. Its
+  sole source migration is the documented `signing_key` field rename; it does
+  not use the changed issuer, CSR, CRL, or parameter-retention APIs.
+- Focused tests parse the generated certificate and PKCS#8 PEM, load it into
+  the production rustls configuration, complete a trusted DNS-name handshake,
+  reject a wrong hostname and unrelated trust root, and reject a certificate
+  paired with another generated private key. The existing live HTTPS endpoint
+  and plaintext-rejection tests provide end-to-end coverage.

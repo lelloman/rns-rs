@@ -1880,7 +1880,7 @@ mod tls_tests {
 
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
         let cert_pem = cert.cert.pem();
-        let key_pem = cert.key_pair.serialize_pem();
+        let key_pem = cert.signing_key.serialize_pem();
 
         // Write cert and key to temp files (unique per call to avoid parallel test conflicts)
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
