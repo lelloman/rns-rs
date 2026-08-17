@@ -17,8 +17,8 @@ API generation and cannot compile independently.
 | `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Coupled with `sha2` through `digest` 0.11 | Upgraded; RFC 4231 suite passes |
 | `aes` | 0.8.4 | 0.9.2 | Direct crypto dependency in `rns-crypto` | Coupled with `cbc` through the `cipher` trait generation | Upgraded; NIST, interop, token, and platform suites pass |
 | `cbc` | 0.1.2 | 0.2.1 | Direct crypto dependency in `rns-crypto` | Coupled with `aes` through the `cipher` trait generation | Upgraded; no-padding CBC and edge-case suites pass |
-| `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Pending review |
-| `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Pending review |
+| `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 8032, interop, and link suites pass |
+| `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 7748, identity, and platform suites pass |
 | `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Pending review |
 | `ssd1306` | 0.9.0 | 0.10.0 | Direct optional ESP32 display dependency | Independent embedded lane | Pending review |
 | `generic-array` | 0.14.7 | 0.14.9 | Transitive in both lockfiles | Do not force with a direct dependency | Awaiting direct upgrades |
@@ -162,3 +162,29 @@ series.
   fixtures, empty input, rejection of unaligned input, token authentication and
   round trips, and the complete crypto crate. Host, ARMv7, and ESP32 lanes
   exercise the applicable architecture-specific implementations.
+
+## ed25519-dalek 3 and x25519-dalek 3 assessment
+
+- The complete `ed25519-2.2.0...ed25519-3.0.0` and
+  `x25519-2.0.1...x25519-3.0.0` tag diffs and both upstream changelogs were
+  reviewed. The crates move to edition 2024 and Rust 1.85, share
+  curve25519-dalek 5, and adopt the current RustCrypto signature, digest, and
+  RNG trait generations. Ed25519 removes its `std` feature and adds multipart
+  signing traits. X25519 removes its no-op `alloc` feature and deprecated
+  constructors; secret types can no longer be explicitly zeroized but remain
+  zeroized on drop.
+- The workspace disables default features and uses only byte-based signing and
+  verification, static Diffie-Hellman, and public/private byte conversion. It
+  uses no removed features, random constructors, multipart APIs, PKCS#8,
+  serde, or explicit zeroization. Both direct dependencies move together so
+  they retain one curve25519-dalek generation. Their public wrapper APIs and
+  wire representations require no source migration, and the upgrade removes
+  the remaining transitive sha2 0.10 copy.
+- Ed25519 coverage includes the first three RFC 8032 known answers, exact seed,
+  public-key, and signature bytes, reconstruction from a public key, message
+  and signature mutation rejection, and noncanonical scalar rejection. X25519
+  coverage includes exact RFC 7748 public keys and shared secret, clamping and
+  private-key serialization stability, ignored public-coordinate high bits,
+  low-order-peer behavior, and symmetric exchange. Existing Python identity
+  fixtures plus signing, encryption, ratchet, and full link-handshake tests
+  cover the protocol consumers; ARMv7 and ESP32 builds cover non-host codegen.
