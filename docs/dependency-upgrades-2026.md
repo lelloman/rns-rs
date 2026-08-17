@@ -9,7 +9,7 @@ API generation and cannot compile independently.
 | Dependency | Current | Target | Kind and scope | Upgrade unit | Status |
 | --- | ---: | ---: | --- | --- | --- |
 | `criterion` | 0.5.1 | 0.8.2 | Direct dev dependency in `rns-core`, `rns-net`, and `rns-hooks` | Independent | Upgraded; four harness smoke tests pass |
-| `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Upgraded; C/Rust backend parity verified |
+| `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Upgraded; libbz2 backend and RNCP regression suite pass |
 | `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Upgraded; native ABI/error/lifetime suite passes |
 | `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Pending review |
 | `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Pending review |
@@ -61,11 +61,16 @@ series.
   uninitialized-output-buffer APIs used internally by vector operations.
 - The workspace uses Rust 1.96, does not consume exported C symbols, and uses
   only the unchanged `read::BzEncoder`, `read::BzDecoder`, and `Compression`
-  APIs. The backend change therefore has no source-level incompatibility.
+  APIs. The wrapper therefore has no source-level incompatibility. The new
+  pure-Rust default backend corrupted a real compressed, split RNCP transfer,
+  while the same test passed before the backend change. The manifest now
+  selects bzip2 0.6's static `bzip2-sys` backend explicitly.
 - Focused tests pin the level-6 libbz2 wire representation, decode that fixed
   reference stream, cover empty and exact/zero bounded output, reject invalid,
   truncated, and checksum-corrupt streams, and cross the 900 KB bzip2 block
-  boundary with a 1.1 MB round trip.
+  boundary with a 1.1 MB round trip. Additional coverage exercises a maximum
+  Resource segment, a compressed multi-segment disk-backed transfer with
+  metadata, and the complete multi-process RNCP send/fetch path.
 
 ## libloading 0.9 assessment
 

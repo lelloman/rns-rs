@@ -166,4 +166,18 @@ mod tests {
             Ok(input)
         );
     }
+
+    #[test]
+    fn bzip2_roundtrips_maximum_resource_segment_with_periodic_data() {
+        let compressor = Bzip2Compressor;
+        let input: Vec<u8> = (0..rns_core::constants::RESOURCE_MAX_EFFICIENT_SIZE)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let compressed = compressor.compress(&input).unwrap();
+
+        assert_eq!(
+            compressor.decompress_bounded(&compressed, input.len()),
+            Ok(input)
+        );
+    }
 }
