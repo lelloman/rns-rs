@@ -3,41 +3,12 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rns_hooks::{HookBackend, HookContext, HookManager, NullEngine, Verdict};
+use rns_hooks::native::NativeProgram;
+use rns_hooks::{HookBackend, HookContext, HookError, HookManager, NullEngine, Verdict};
 
-#[test]
-fn native_hook_loads_and_executes() {
-    let lib_path = build_native_fixture();
-    let manager = HookManager::new().expect("manager");
-    let mut program = manager
-        .load_file_backend("native-test".into(), &lib_path, 0, HookBackend::Native)
-        .expect("load native hook");
-
-    assert_eq!(program.backend_name(), "native");
-
-    let exec = manager
-        .execute_program(&mut program, &HookContext::Tick, &NullEngine, 0.0, None)
-        .expect("native hook result");
-    let result = exec.hook_result.expect("hook result");
-    assert_eq!(Verdict::from_u32(result.verdict), Some(Verdict::Continue));
-    assert!(exec.injected_actions.is_empty());
-    assert!(exec.provider_events.is_empty());
-    assert!(exec.modified_data.is_none());
-}
-
-fn build_native_fixture() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rns-hooks-native-test-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("create fixture dir");
-
-    let source = dir.join("native_hook.c");
-    let lib_path = dir.join(format!(
-        "libnative_hook.{}",
-        std::env::consts::DLL_EXTENSION
-    ));
-    fs::write(
-        &source,
-        r#"
+const FIXTURE_PREAMBLE: &str = r#"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -52,10 +23,10 @@ typedef struct HookResult {
 } HookResult;
 
 typedef struct RnsNativeHostApi RnsNativeHostApi;
+"#;
 
-int rns_hook_abi_version(void) {
-    return 1;
-}
+const VALID_HOOK: &str = r#"
+int rns_hook_abi_version(void) { return 1; }
 
 int rns_hook_on_call(
     const uint8_t *ctx,
@@ -76,17 +47,150 @@ int rns_hook_on_call(
         return -2;
     }
     result->verdict = 0;
-    result->modified_data_offset = 0;
-    result->modified_data_len = 0;
-    result->inject_actions_offset = 0;
-    result->inject_actions_count = 0;
-    result->log_offset = 0;
-    result->log_len = 0;
     return 0;
+}
+"#;
+
+#[test]
+fn native_hook_loads_and_executes() {
+    let lib_path = build_native_fixture("valid", VALID_HOOK);
+    let manager = HookManager::new().expect("manager");
+    let mut program = manager
+        .load_file_backend("native-test".into(), &lib_path, 0, HookBackend::Native)
+        .expect("load native hook");
+
+    assert_eq!(program.backend_name(), "native");
+    fs::remove_file(&lib_path).expect("unlink loaded fixture");
+
+    let exec = manager
+        .execute_program(&mut program, &HookContext::Tick, &NullEngine, 0.0, None)
+        .expect("native hook result");
+    let result = exec.hook_result.expect("hook result");
+    assert_eq!(Verdict::from_u32(result.verdict), Some(Verdict::Continue));
+    assert!(exec.injected_actions.is_empty());
+    assert!(exec.provider_events.is_empty());
+    assert!(exec.modified_data.is_none());
+}
+
+#[test]
+fn native_hook_reports_missing_library() {
+    let path = std::env::temp_dir().join(format!(
+        "rns-hooks-missing-{}-{}.so",
+        std::process::id(),
+        next_fixture_id()
+    ));
+    let error = NativeProgram::load(&path).err().expect("load must fail");
+    assert!(matches!(error, HookError::CompileError(_)));
+    assert!(error.to_string().contains("failed to load native hook"));
+}
+
+#[test]
+fn native_hook_requires_abi_version_symbol() {
+    let path = build_native_fixture(
+        "missing-abi",
+        r#"
+int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
+    (void)ctx; (void)len; (void)api; (void)result; return 0;
+}
+"#,
+    );
+    let error = NativeProgram::load(&path).err().expect("load must fail");
+    assert!(matches!(error, HookError::CompileError(_)));
+    assert!(error.to_string().contains("missing rns_hook_abi_version"));
+}
+
+#[test]
+fn native_hook_rejects_wrong_abi_version() {
+    let path = build_native_fixture(
+        "wrong-abi",
+        r#"
+int rns_hook_abi_version(void) { return 2; }
+int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
+    (void)ctx; (void)len; (void)api; (void)result; return 0;
+}
+"#,
+    );
+    let error = NativeProgram::load(&path).err().expect("load must fail");
+    assert!(matches!(
+        error,
+        HookError::AbiVersionMismatch {
+            expected: 1,
+            found: Some(2),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn native_hook_requires_call_symbol() {
+    let path = build_native_fixture(
+        "missing-call",
+        "int rns_hook_abi_version(void) { return 1; }",
+    );
+    let error = NativeProgram::load(&path).err().expect("load must fail");
+    assert!(matches!(error, HookError::CompileError(_)));
+    assert!(error.to_string().contains("missing rns_hook_on_call"));
+}
+
+#[test]
+fn native_hook_propagates_nonzero_return_code() {
+    let error = execute_fixture(
+        "return-error",
+        r#"
+int rns_hook_abi_version(void) { return 1; }
+int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
+    (void)ctx; (void)len; (void)api; (void)result; return 37;
 }
 "#,
     )
-    .expect("write fixture source");
+    .expect_err("execution must fail");
+    assert!(matches!(error, HookError::Trap(_)));
+    assert!(error.to_string().contains("error code 37"));
+}
+
+#[test]
+fn native_hook_rejects_invalid_verdict() {
+    let error = execute_fixture(
+        "invalid-verdict",
+        r#"
+int rns_hook_abi_version(void) { return 1; }
+int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
+    (void)ctx; (void)len; (void)api; result->verdict = 99; return 0;
+}
+"#,
+    )
+    .expect_err("execution must fail");
+    assert!(matches!(error, HookError::InvalidResult(_)));
+    assert!(error.to_string().contains("invalid verdict value: 99"));
+}
+
+fn execute_fixture(name: &str, source: &str) -> Result<rns_hooks::ExecuteResult, HookError> {
+    let path = build_native_fixture(name, source);
+    let program = NativeProgram::load(&path)?;
+    program.execute(&[2, 0, 0, 0], &NullEngine, false)
+}
+
+fn next_fixture_id() -> u64 {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn build_native_fixture(name: &str, implementation: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rns-hooks-native-test-{}-{}-{}",
+        std::process::id(),
+        next_fixture_id(),
+        name
+    ));
+    fs::create_dir_all(&dir).expect("create fixture dir");
+
+    let source = dir.join("native_hook.c");
+    let lib_path = dir.join(format!(
+        "libnative_hook.{}",
+        std::env::consts::DLL_EXTENSION
+    ));
+    fs::write(&source, format!("{FIXTURE_PREAMBLE}\n{implementation}"))
+        .expect("write fixture source");
 
     let output = Command::new("cc")
         .arg("-shared")
