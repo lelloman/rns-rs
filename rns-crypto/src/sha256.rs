@@ -74,4 +74,55 @@ mod tests {
         hasher.update(b"c");
         assert_eq!(hasher.digest(), sha256(b"abc"));
     }
+
+    #[test]
+    fn test_sha256_million_a_known_answer() {
+        let mut hasher = Sha256::new();
+        for _ in 0..1000 {
+            hasher.update(&[b'a'; 1000]);
+        }
+        assert_eq!(
+            hasher.digest().to_vec(),
+            hex_to_bytes("cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+        );
+    }
+
+    #[test]
+    fn test_sha256_incremental_matches_one_shot_across_padding_boundaries() {
+        for length in [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 255] {
+            let input: alloc::vec::Vec<u8> = (0..length)
+                .map(|index| ((index * 37 + 11) & 0xff) as u8)
+                .collect();
+            let expected = sha256(&input);
+            for chunk_size in [1, 3, 7, 64] {
+                let mut hasher = Sha256::new();
+                for chunk in input.chunks(chunk_size) {
+                    hasher.update(chunk);
+                }
+                assert_eq!(
+                    hasher.digest(),
+                    expected,
+                    "length={length}, chunk={chunk_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sha256_digest_snapshot_does_not_consume_state() {
+        let mut hasher = Sha256::new();
+        hasher.update(b"abc");
+        let snapshot = hasher.digest();
+        hasher.update(b"def");
+
+        assert_eq!(snapshot, sha256(b"abc"));
+        assert_eq!(hasher.digest(), sha256(b"abcdef"));
+    }
+
+    fn hex_to_bytes(hex: &str) -> alloc::vec::Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect()
+    }
 }

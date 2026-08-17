@@ -11,4 +11,4 @@ crate-type = ["cdylib"]
 [dependencies]
 rns-hooks-sdk = { path = "../../sdk/rns-hooks-sdk" }
 rns-hooks-abi = { path = "../../sdk/rns-hooks-abi" }
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.11", default-features = false }

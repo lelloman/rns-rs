@@ -58,6 +58,53 @@ mod tests {
         assert_eq!(hasher.digest(), sha512(b"abc"));
     }
 
+    #[test]
+    fn test_sha512_million_a_known_answer() {
+        let mut hasher = Sha512::new();
+        for _ in 0..1000 {
+            hasher.update(&[b'a'; 1000]);
+        }
+        assert_eq!(
+            hasher.digest().to_vec(),
+            hex_to_bytes(concat!(
+                "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973eb",
+                "de0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b"
+            ))
+        );
+    }
+
+    #[test]
+    fn test_sha512_incremental_matches_one_shot_across_padding_boundaries() {
+        for length in [0, 1, 111, 112, 127, 128, 129, 255, 256, 257] {
+            let input: Vec<u8> = (0..length)
+                .map(|index| ((index * 53 + 19) & 0xff) as u8)
+                .collect();
+            let expected = sha512(&input);
+            for chunk_size in [1, 5, 17, 128] {
+                let mut hasher = Sha512::new();
+                for chunk in input.chunks(chunk_size) {
+                    hasher.update(chunk);
+                }
+                assert_eq!(
+                    hasher.digest(),
+                    expected,
+                    "length={length}, chunk={chunk_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sha512_digest_snapshot_does_not_consume_state() {
+        let mut hasher = Sha512::new();
+        hasher.update(b"abc");
+        let snapshot = hasher.digest();
+        hasher.update(b"def");
+
+        assert_eq!(snapshot, sha512(b"abc"));
+        assert_eq!(hasher.digest(), sha512(b"abcdef"));
+    }
+
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
         (0..hex.len())
             .step_by(2)
