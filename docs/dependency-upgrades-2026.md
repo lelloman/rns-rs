@@ -11,7 +11,7 @@ API generation and cannot compile independently.
 | `criterion` | 0.5.1 | 0.8.2 | Direct dev dependency in `rns-core`, `rns-net`, and `rns-hooks` | Independent | Upgraded; four harness smoke tests pass |
 | `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Upgraded; libbz2 backend and RNCP regression suite pass |
 | `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Upgraded; native ABI/error/lifetime suite passes |
-| `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Pending review |
+| `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Upgraded; allocator, CLI, and ARMv7 suites pass |
 | `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Pending review |
 | `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Independent API generation | Pending review |
 | `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Independent API generation | Pending review |
@@ -86,3 +86,16 @@ series.
   execution after unlinking the shared-object file, missing libraries, each
   missing required symbol, ABI mismatch, nonzero hook returns, and invalid
   verdict values.
+
+## tikv-jemallocator 0.7 assessment
+
+- The 0.7 release notes and complete 0.6.1-to-0.7.0 tag diff were reviewed.
+  The bundled allocator moves from jemalloc 5.3.0 to 5.3.1, build scripts gain
+  improved cross-compiler and linker flag propagation, and new sized-free and
+  optional libunwind-profiling APIs are added.
+- `rnsd` uses only the unchanged unit `Jemalloc` type as `#[global_allocator]`
+  and enables no optional allocator features, so the new FFI and profiling
+  surfaces do not affect it.
+- A dedicated integration-test executable installs Jemalloc globally and
+  verifies 4096-byte alignment, zeroed allocation, content-preserving growth
+  and shrink reallocations, and concurrent mixed-size allocation workloads.

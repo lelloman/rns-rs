@@ -38,7 +38,7 @@ libc = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
+tikv-jemallocator = "0.7"
 
 [build-dependencies]
 anyhow = "1"
