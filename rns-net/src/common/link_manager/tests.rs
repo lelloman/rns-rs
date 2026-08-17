@@ -1580,6 +1580,50 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
+#[test]
+fn streaming_compressed_periodic_resource_preserves_segment_boundaries() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let directory = tempfile::tempdir().unwrap();
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    resp_mgr.set_resource_receive_mode(
+        &link_id,
+        ResourceReceiveMode::TemporaryFile {
+            directory: directory.path().to_path_buf(),
+            max_bytes: None,
+        },
+    );
+
+    let length = constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 73_003;
+    let data: Vec<u8> = (0..length).map(|index| (index % 251) as u8).collect();
+    let metadata = rns_core::msgpack::pack(&rns_core::msgpack::Value::Array(vec![
+        rns_core::msgpack::Value::Str("streaming.bin".into()),
+    ]));
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(43),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        Some(metadata),
+        true,
+        &mut rng,
+    );
+
+    let (received, completed, _progress, failures, rounds) =
+        drive_link_manager_packets(&mut init_mgr, &mut resp_mgr, initial, 'i', &mut rng, 30_000);
+    assert_eq!(
+        received.as_deref(),
+        Some(data.as_slice()),
+        "compressed streaming transfer differed after {rounds} rounds"
+    );
+    assert!(completed);
+    assert!(
+        failures.is_empty(),
+        "compressed streaming transfer failed: {failures:?}"
+    );
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
 type DrivenPackets = (
     Option<Vec<u8>>,
     bool,

@@ -388,6 +388,21 @@ fn patterned_file(path: &Path, size: usize) -> Vec<u8> {
     data
 }
 
+fn assert_file_contents(path: &Path, expected: &[u8]) {
+    let actual = fs::read(path).unwrap();
+    let first_difference = actual
+        .iter()
+        .zip(expected)
+        .position(|(actual, expected)| actual != expected);
+    assert!(
+        actual == expected,
+        "file contents differ: actual length {}, expected length {}, first differing byte {:?}",
+        actual.len(),
+        expected.len(),
+        first_difference
+    );
+}
+
 fn rncp_send(
     harness: &Harness,
     implementation: Implementation,
@@ -509,10 +524,7 @@ fn rust_rncp_send_and_fetch_end_to_end() {
         &destination,
     );
     assert_success(&sent, "Rust rncp send");
-    assert_eq!(
-        fs::read(receive.join("streaming.bin")).unwrap(),
-        source_data
-    );
+    assert_file_contents(&receive.join("streaming.bin"), &source_data);
 
     let mut fetch = harness.rust_command("rncp", Side::Client);
     fetch.args(harness.common_args(&client_identity, Side::Client));
@@ -522,7 +534,7 @@ fn rust_rncp_send_and_fetch_end_to_end() {
     fetch.arg(&destination);
     let fetched_output = run(fetch);
     assert_success(&fetched_output, "Rust rncp fetch");
-    assert_eq!(fs::read(fetched.join("fetch.bin")).unwrap(), fetch_data);
+    assert_file_contents(&fetched.join("fetch.bin"), &fetch_data);
 }
 
 #[test]
