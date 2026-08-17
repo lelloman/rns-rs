@@ -76,6 +76,11 @@ impl WasmRuntime {
     pub fn new() -> Result<Self, wasmtime::Error> {
         let mut config = wasmtime::Config::new();
         config.consume_fuel(true);
+        // Hooks use the stable core-module ABI only. Keep proposals which add
+        // reference types and exception control flow outside the sandbox even
+        // if a Wasmtime release enables them by default.
+        config.wasm_gc(false);
+        config.wasm_exceptions(false);
         let engine = wasmtime::Engine::new(&config)?;
         Ok(WasmRuntime {
             engine,
@@ -93,5 +98,59 @@ impl WasmRuntime {
 
     pub fn fuel(&self) -> u64 {
         self.fuel
+    }
+}
+
+#[cfg(all(test, feature = "wasm"))]
+mod tests {
+    use super::WasmRuntime;
+
+    #[test]
+    fn compiles_core_hook_instruction_set() {
+        let runtime = WasmRuntime::new().unwrap();
+        runtime
+            .compile(
+                br#"(module
+                    (memory 2)
+                    (func (export "bulk")
+                        i32.const 0
+                        i32.const 90
+                        i32.const 4096
+                        memory.fill
+                        i32.const 8192
+                        i32.const 0
+                        i32.const 4096
+                        memory.copy))"#,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_webassembly_gc_modules() {
+        let runtime = WasmRuntime::new().unwrap();
+        let result = runtime.compile(
+            br#"(module
+                (type $record (struct (field i32)))
+                (func (export "make") (result (ref null $record))
+                    ref.null $record))"#,
+        );
+
+        assert!(result.is_err(), "the hook sandbox must not enable Wasm GC");
+    }
+
+    #[test]
+    fn rejects_webassembly_exception_modules() {
+        let runtime = WasmRuntime::new().unwrap();
+        let result = runtime.compile(
+            br#"(module
+                (tag $failure)
+                (func (export "raise")
+                    throw $failure))"#,
+        );
+
+        assert!(
+            result.is_err(),
+            "the hook sandbox must not enable Wasm exception handling"
+        );
     }
 }
