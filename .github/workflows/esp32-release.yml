@@ -52,7 +52,7 @@ jobs:
         run: cargo install ldproxy espflash --locked
 
       - name: Cache ESP-IDF and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             rns-esp32/.embuild
