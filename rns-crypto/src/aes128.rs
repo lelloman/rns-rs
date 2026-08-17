@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{block_padding::NoPadding, BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 
 const BLOCK_SIZE: usize = 16;
 
@@ -19,24 +19,21 @@ impl Aes128 {
     pub fn encrypt_cbc(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         assert_eq!(plaintext.len() % BLOCK_SIZE, 0);
         let mut buf = plaintext.to_vec();
-        let mut enc = Aes128CbcEnc::new(&self.key.into(), iv.into());
-        enc.encrypt_blocks_mut(bytemuck_cast_blocks_mut(&mut buf));
+        let message_len = buf.len();
+        Aes128CbcEnc::new(&self.key.into(), iv.into())
+            .encrypt_padded::<NoPadding>(&mut buf, message_len)
+            .expect("aligned CBC plaintext has sufficient capacity");
         buf
     }
 
     pub fn decrypt_cbc(&self, ciphertext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         assert_eq!(ciphertext.len() % BLOCK_SIZE, 0);
         let mut buf = ciphertext.to_vec();
-        let mut dec = Aes128CbcDec::new(&self.key.into(), iv.into());
-        dec.decrypt_blocks_mut(bytemuck_cast_blocks_mut(&mut buf));
+        Aes128CbcDec::new(&self.key.into(), iv.into())
+            .decrypt_padded::<NoPadding>(&mut buf)
+            .expect("aligned CBC ciphertext has no padding to validate");
         buf
     }
-}
-
-fn bytemuck_cast_blocks_mut(buf: &mut [u8]) -> &mut [aes::Block] {
-    assert_eq!(buf.len() % 16, 0);
-    // SAFETY: aes::Block is [u8; 16] with repr transparent via GenericArray
-    unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut aes::Block, buf.len() / 16) }
 }
 
 #[cfg(test)]
@@ -84,5 +81,51 @@ mod tests {
         let iv = [0u8; 16];
         let result = cipher.encrypt_cbc(&plaintext, &iv);
         assert_eq!(&result[..16], &expected);
+    }
+
+    #[test]
+    fn test_aes128_nist_sp800_38a_cbc_four_block_vector() {
+        let key: [u8; 16] = decode_hex("2b7e151628aed2a6abf7158809cf4f3c")
+            .try_into()
+            .unwrap();
+        let iv: [u8; 16] = decode_hex("000102030405060708090a0b0c0d0e0f")
+            .try_into()
+            .unwrap();
+        let plaintext = decode_hex(concat!(
+            "6bc1bee22e409f96e93d7e117393172a",
+            "ae2d8a571e03ac9c9eb76fac45af8e51",
+            "30c81c46a35ce411e5fbc1191a0a52ef",
+            "f69f2445df4f9b17ad2b417be66c3710"
+        ));
+        let expected = decode_hex(concat!(
+            "7649abac8119b246cee98e9b12e9197d",
+            "5086cb9b507219ee95db113a917678b2",
+            "73bed6b8e3c1743b7116e69e22229516",
+            "3ff1caa1681fac09120eca307586e1a7"
+        ));
+        let cipher = Aes128::new(&key);
+
+        assert_eq!(cipher.encrypt_cbc(&plaintext, &iv), expected);
+        assert_eq!(cipher.decrypt_cbc(&expected, &iv), plaintext);
+    }
+
+    #[test]
+    fn test_aes128_empty_cbc_payload_is_stable() {
+        let cipher = Aes128::new(&[0x11; 16]);
+        assert!(cipher.encrypt_cbc(&[], &[0x22; 16]).is_empty());
+        assert!(cipher.decrypt_cbc(&[], &[0x22; 16]).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn test_aes128_rejects_unaligned_plaintext() {
+        Aes128::new(&[0; 16]).encrypt_cbc(&[0; 15], &[0; 16]);
+    }
+
+    fn decode_hex(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect()
     }
 }

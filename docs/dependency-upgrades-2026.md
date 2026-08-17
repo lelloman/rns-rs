@@ -15,8 +15,8 @@ API generation and cannot compile independently.
 | `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Upgraded; certificate and live TLS suites pass |
 | `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Coupled with `hmac` through `digest` 0.11 | Upgraded; vectors and host/WASM/ESP32 lanes pass |
 | `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Coupled with `sha2` through `digest` 0.11 | Upgraded; RFC 4231 suite passes |
-| `aes` | 0.8.4 | 0.9.2 | Direct crypto dependency in `rns-crypto` | Coupled with `cbc` through the `cipher` trait generation | Pending review |
-| `cbc` | 0.1.2 | 0.2.1 | Direct crypto dependency in `rns-crypto` | Coupled with `aes` through the `cipher` trait generation | Pending review |
+| `aes` | 0.8.4 | 0.9.2 | Direct crypto dependency in `rns-crypto` | Coupled with `cbc` through the `cipher` trait generation | Upgraded; NIST, interop, token, and platform suites pass |
+| `cbc` | 0.1.2 | 0.2.1 | Direct crypto dependency in `rns-crypto` | Coupled with `aes` through the `cipher` trait generation | Upgraded; no-padding CBC and edge-case suites pass |
 | `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Pending review |
 | `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Pending review |
 | `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Pending review |
@@ -139,3 +139,26 @@ series.
   snapshots. A fixed identity-hash truncation vector covers the stats hook;
   the stats-scraper WASM build and ESP32 release build exercise non-host
   backends and `no_std` consumers.
+
+## aes 0.9 and cbc 0.2 assessment
+
+- The complete `aes-v0.8.4...aes-v0.9.2` and `cbc-v0.1.2...cbc-v0.2.1`
+  tag diffs and upstream changelogs were reviewed. Both crates move to edition
+  2024, raise MSRV to Rust 1.85, and adopt `cipher` 0.5. AES 0.9 refactors its
+  software and hardware backends and enables runtime-selected ARMv8 support by
+  default; 0.9.2 fixes an x86 performance regression. CBC 0.2 removes its
+  unused `std` feature and `Clone` implementation and 0.2.1 adds IV-state
+  accessors.
+- The workspace uses Rust 1.96, disables AES default features, and uses no
+  removed features, cloning, IV-state accessors, or concrete upstream block
+  types. AES and CBC must move together because their traits come from one
+  `cipher` generation. The implementation now uses the supported
+  `BlockModeEncrypt` and `BlockModeDecrypt` APIs with explicit `NoPadding`;
+  this also removes an unsafe assumption about the representation of
+  `aes::Block`. The public `Aes128` and `Aes256` APIs and their aligned-input
+  behavior are unchanged.
+- Focused coverage includes the four-block NIST SP 800-38A AES-128-CBC and
+  AES-256-CBC encryption/decryption vectors, existing Reticulum interoperability
+  fixtures, empty input, rejection of unaligned input, token authentication and
+  round trips, and the complete crypto crate. Host, ARMv7, and ESP32 lanes
+  exercise the applicable architecture-specific implementations.
