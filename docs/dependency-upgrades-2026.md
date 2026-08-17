@@ -19,7 +19,7 @@ API generation and cannot compile independently.
 | `cbc` | 0.1.2 | 0.2.1 | Direct crypto dependency in `rns-crypto` | Coupled with `aes` through the `cipher` trait generation | Upgraded; no-padding CBC and edge-case suites pass |
 | `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 8032, interop, and link suites pass |
 | `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 7748, identity, and platform suites pass |
-| `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Pending review |
+| `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Upgraded; sandbox, examples, and hook E2E suites pass |
 | `ssd1306` | 0.9.0 | 0.10.0 | Direct optional ESP32 display dependency | Independent embedded lane | Pending review |
 | `generic-array` | 0.14.7 | 0.14.9 | Transitive in both lockfiles | Do not force with a direct dependency | Awaiting direct upgrades |
 | `az` | 1.2.1 | 1.3.0 | Transitive in the ESP32 lockfile | Do not force with a direct dependency | Awaiting `ssd1306` review |
@@ -188,3 +188,30 @@ series.
   low-order-peer behavior, and symmetric exchange. Existing Python identity
   fixtures plus signing, encryption, ratchet, and full link-handshake tests
   cover the protocol consumers; ARMv7 and ESP32 builds cover non-host codegen.
+
+## Wasmtime 47 assessment
+
+- The official 47.0.0 through 47.0.3 release notes, complete 169-commit
+  `v46.0.2...v47.0.3` comparison, crate manifests, and public embedding-source
+  diff were reviewed. Wasmtime remains edition 2024 with Rust 1.94 as its MSRV.
+  The `Engine`, `Config`, `Module`, `Linker`, `Store`, `Instance`, `Memory`,
+  `Caller`, fuel, and typed-function APIs used here are unchanged. The release
+  removes `wasi-common` and wasi-threads, neither of which the hook runtime
+  uses, and updates Cranelift and wasmparser together.
+- Wasmtime 47 enables the WebAssembly GC and exception-handling proposals by
+  default. Hook modules use only the core-module ABI, so the runtime now
+  explicitly disables both proposals to preserve the accepted-module surface
+  and avoid unnecessary sandbox complexity. Existing fuel metering, one-engine
+  ownership, synchronous calls, store caching, host imports, and fail-open trap
+  behavior are unchanged. Version 47.0.3 includes fixes for cross-engine type
+  confusion and preemption during bulk operations; this embedding uses one
+  engine and no epoch callbacks, and its prior 46.0.2 version already contained
+  the corresponding backports.
+- New tests prove that GC and exception modules remain rejected while bulk
+  memory instructions compile, exercise a 16 KiB fuel-accounted memory fill
+  and copy byte-for-byte, and verify that a cached store can recover after fuel
+  exhaustion with a reset budget. The complete runtime and native-hook suites,
+  all nine built WASM examples, 27 example integration cases, 23 network hook
+  E2E cases, the control API hook lifecycle, and the hook benchmark harness
+  cover compilation, ABI validation, host calls, traps, persistence, and live
+  attachment behavior.

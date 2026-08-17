@@ -14,7 +14,7 @@ wasm = ["dep:wasmtime"]
 native = ["dep:libloading"]
 
 [dependencies]
-wasmtime = { version = "46", optional = true }
+wasmtime = { version = "47", optional = true }
 libloading = { version = "0.9", optional = true }
 log = "0.4"
 rns-hooks-abi = { version = "0.1.5", path = "sdk/rns-hooks-abi" }

@@ -725,6 +725,48 @@ mod tests {
         )
     "#;
 
+    /// Exhausts fuel on the first call, then succeeds from the same cached
+    /// instance. This verifies both store recovery and per-call fuel reset.
+    const WAT_FUEL_RECOVERY: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (global $calls (mut i32) (i32.const 0))
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "on_hook") (param i32) (result i32)
+                (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+                (if (i32.eq (global.get $calls) (i32.const 1))
+                    (then (loop $inf (br $inf))))
+                (i32.store (i32.const 0x2000) (i32.const 0))
+                (i32.store (i32.const 0x2004) (i32.const 0))
+                (i32.store (i32.const 0x2008) (i32.const 0))
+                (i32.store (i32.const 0x200c) (i32.const 0))
+                (i32.store (i32.const 0x2010) (i32.const 0))
+                (i32.store (i32.const 0x2014) (i32.const 0))
+                (i32.store (i32.const 0x2018) (i32.const 0))
+                (i32.const 0x2000))
+        )
+    "#;
+
+    /// Exercises Wasmtime's fuel-accounted bulk-memory implementation and
+    /// returns the copied bytes through the hook ABI.
+    const WAT_BULK_MEMORY: &str = r#"
+        (module
+            (memory (export "memory") 2)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "on_hook") (param i32) (result i32)
+                (memory.fill (i32.const 0x10000) (i32.const 0x5a) (i32.const 0x4000))
+                (memory.copy (i32.const 0x14000) (i32.const 0x10000) (i32.const 0x4000))
+                (i32.store (i32.const 0x2000) (i32.const 2))
+                (i32.store (i32.const 0x2004) (i32.const 0x14000))
+                (i32.store (i32.const 0x2008) (i32.const 0x4000))
+                (i32.store (i32.const 0x200c) (i32.const 0))
+                (i32.store (i32.const 0x2010) (i32.const 0))
+                (i32.store (i32.const 0x2014) (i32.const 0))
+                (i32.store (i32.const 0x2018) (i32.const 0))
+                (i32.const 0x2000))
+        )
+    "#;
+
     /// WAT module that calls host_has_path and drops if path exists.
     const WAT_HOST_HAS_PATH: &str = r#"
         (module
@@ -816,6 +858,44 @@ mod tests {
         // Should fail-open (fuel exhausted = trap)
         assert!(result.is_none());
         assert_eq!(prog.consecutive_traps, 1);
+    }
+
+    #[test]
+    fn fuel_exhaustion_recovers_cached_store_on_next_call() {
+        let mgr = make_manager();
+        let mut prog = mgr
+            .compile("fuel-recovery".into(), WAT_FUEL_RECOVERY.as_bytes(), 0)
+            .unwrap();
+        let ctx = HookContext::Tick;
+
+        assert!(mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .is_none());
+        assert_eq!(prog.consecutive_traps, 1);
+
+        let recovered = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .expect("fuel must be reset before reusing the cached store");
+        assert_eq!(
+            recovered.hook_result.unwrap().verdict,
+            Verdict::Continue as u32
+        );
+        assert_eq!(prog.consecutive_traps, 0);
+    }
+
+    #[test]
+    fn bulk_memory_fill_and_copy_preserve_all_bytes() {
+        let mgr = make_manager();
+        let mut prog = mgr
+            .compile("bulk-memory".into(), WAT_BULK_MEMORY.as_bytes(), 0)
+            .unwrap();
+
+        let result = mgr
+            .execute_program(&mut prog, &HookContext::Tick, &NullEngine, 0.0, None)
+            .unwrap();
+        let copied = result.modified_data.unwrap();
+        assert_eq!(copied.len(), 0x4000);
+        assert!(copied.iter().all(|byte| *byte == 0x5a));
     }
 
     #[test]
