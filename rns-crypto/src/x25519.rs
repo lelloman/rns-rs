@@ -97,6 +97,63 @@ mod tests {
         let shared_ab = alice.exchange(&bob_pub);
         let shared_ba = bob.exchange(&alice_pub);
 
+        assert_eq!(
+            alice_pub.public_bytes(),
+            decode_hex_array("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        );
+        assert_eq!(
+            bob_pub.public_bytes(),
+            decode_hex_array("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+        );
         assert_eq!(shared_ab, shared_ba);
+        assert_eq!(
+            shared_ab,
+            decode_hex_array("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742")
+        );
+    }
+
+    #[test]
+    fn test_x25519_private_serialization_is_clamped_and_idempotent() {
+        for input in [[0; 32], [0xff; 32], [0x55; 32], [0xaa; 32]] {
+            let first = X25519PrivateKey::from_bytes(&input);
+            let serialized = first.private_bytes();
+            let second = X25519PrivateKey::from_bytes(&serialized);
+
+            assert_eq!(second.private_bytes(), serialized);
+            assert_eq!(
+                second.public_key().public_bytes(),
+                first.public_key().public_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn test_x25519_peer_u_coordinate_high_bit_is_ignored() {
+        let private = X25519PrivateKey::from_bytes(&[0x42; 32]);
+        let peer = X25519PrivateKey::from_bytes(&[0x24; 32]).public_key();
+        let mut high_bit_peer = peer.public_bytes();
+        high_bit_peer[31] ^= 0x80;
+
+        assert_eq!(
+            private.exchange(&peer),
+            private.exchange(&X25519PublicKey::from_bytes(&high_bit_peer))
+        );
+    }
+
+    #[test]
+    fn test_x25519_low_order_peer_produces_zero_shared_secret() {
+        let private = X25519PrivateKey::from_bytes(&[0x42; 32]);
+        let zero_peer = X25519PublicKey::from_bytes(&[0; 32]);
+
+        assert_eq!(private.exchange(&zero_peer), [0; 32]);
+    }
+
+    fn decode_hex_array(hex: &str) -> [u8; 32] {
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect::<alloc::vec::Vec<_>>()
+            .try_into()
+            .unwrap()
     }
 }
