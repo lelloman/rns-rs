@@ -13,8 +13,8 @@ API generation and cannot compile independently.
 | `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Upgraded; native ABI/error/lifetime suite passes |
 | `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Upgraded; allocator, CLI, and ARMv7 suites pass |
 | `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Upgraded; certificate and live TLS suites pass |
-| `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Independent API generation | Pending review |
-| `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Independent API generation | Pending review |
+| `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Coupled with `hmac` through `digest` 0.11 | Upgraded; vectors and host/WASM/ESP32 lanes pass |
+| `hmac` | 0.12.1 | 0.13.0 | Direct crypto dependency in `rns-crypto` | Coupled with `sha2` through `digest` 0.11 | Upgraded; RFC 4231 suite passes |
 | `aes` | 0.8.4 | 0.9.2 | Direct crypto dependency in `rns-crypto` | Coupled with `cbc` through the `cipher` trait generation | Pending review |
 | `cbc` | 0.1.2 | 0.2.1 | Direct crypto dependency in `rns-crypto` | Coupled with `aes` through the `cipher` trait generation | Pending review |
 | `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Pending review |
@@ -116,3 +116,26 @@ series.
   reject a wrong hostname and unrelated trust root, and reject a certificate
   paired with another generated private key. The existing live HTTPS endpoint
   and plaintext-rejection tests provide end-to-end coverage.
+
+## sha2 0.11 and hmac 0.13 assessment
+
+- The complete `sha2-v0.10.9...sha2-v0.11.0` and
+  `hmac-v0.12.1...hmac-v0.13.0` tag diffs and upstream changelogs were
+  reviewed. Both crates move to edition 2024, raise MSRV to Rust 1.85, replace
+  public aliases with newtypes, and adopt `digest` 0.11. sha2 replaces its
+  backend-selection features with checked configuration flags and adds new
+  CPU backends; hmac removes its `std` and `reset` features and adds explicit
+  reset-capable types.
+- The workspace used no removed features, compression APIs, reset APIs, or
+  concrete upstream output types. Direct `sha2` and `hmac` dependencies must
+  move together because `Hmac<Sha256>` requires one `digest` trait generation.
+  Construction now imports the documented `hmac::KeyInit` trait. sha2 0.10 is
+  temporarily retained transitively by Dalek 2 and Wasmtime 46; those copies
+  are owned by their separately reviewed upgrade units.
+- SHA-256 and SHA-512 coverage now includes fixed empty/short/million-byte
+  known answers, incremental updates across every padding boundary, and
+  non-consuming state snapshots. HMAC-SHA-256 covers RFC 4231 short,
+  block-crossing, nonuniform, and long-key vectors plus empty input and state
+  snapshots. A fixed identity-hash truncation vector covers the stats hook;
+  the stats-scraper WASM build and ESP32 release build exercise non-host
+  backends and `no_std` consumers.

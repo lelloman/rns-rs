@@ -20,4 +20,4 @@ crate-type = ["cdylib", "rlib"]
 rns-hooks = { version = "0.1.9", path = "../rns-hooks", default-features = false, optional = true }
 rns-hooks-sdk = { version = "0.1.5", path = "../rns-hooks/sdk/rns-hooks-sdk" }
 rns-hooks-abi = { version = "0.1.5", path = "../rns-hooks/sdk/rns-hooks-abi" }
-sha2 = { version = "0.10", default-features = false }
+sha2 = { version = "0.11", default-features = false }

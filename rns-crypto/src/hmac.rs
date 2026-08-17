@@ -1,4 +1,4 @@
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 
 #[derive(Clone)]
 pub struct HmacSha256 {
@@ -61,7 +61,10 @@ mod tests {
     fn test_hmac_empty_msg() {
         let key = b"secret";
         let result = hmac_sha256(key, b"");
-        assert_eq!(result.len(), 32);
+        assert_eq!(
+            result.to_vec(),
+            hex_to_bytes("f9e66e179b6747ae54108f82f8ade8b3c25d76fd30afde6c395822c530196169")
+        );
     }
 
     #[test]
@@ -83,5 +86,36 @@ mod tests {
         h.update(b"hello ");
         h.update(b"world");
         assert_eq!(h.finalize(), expected);
+    }
+
+    #[test]
+    fn test_hmac_rfc4231_test3_crosses_block_boundary() {
+        let key = [0xaa; 20];
+        let data = [0xdd; 50];
+        assert_eq!(
+            hmac_sha256(&key, &data).to_vec(),
+            hex_to_bytes("773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe")
+        );
+    }
+
+    #[test]
+    fn test_hmac_rfc4231_test4_nonuniform_key() {
+        let key: alloc::vec::Vec<u8> = (1..=25).collect();
+        let data = [0xcd; 50];
+        assert_eq!(
+            hmac_sha256(&key, &data).to_vec(),
+            hex_to_bytes("82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b")
+        );
+    }
+
+    #[test]
+    fn test_hmac_finalize_snapshot_does_not_consume_state() {
+        let mut hmac = HmacSha256::new(b"key");
+        hmac.update(b"first");
+        let snapshot = hmac.finalize();
+        hmac.update(b"-second");
+
+        assert_eq!(snapshot, hmac_sha256(b"key", b"first"));
+        assert_eq!(hmac.finalize(), hmac_sha256(b"key", b"first-second"));
     }
 }

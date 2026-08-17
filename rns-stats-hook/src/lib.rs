@@ -42,6 +42,14 @@ const HEADER_2_DATA_OFFSET: usize = 35;
 #[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 const PACKET_TYPE_ANNOUNCE: u8 = 0x01;
 
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
+fn identity_hash(public_key: &[u8]) -> [u8; 16] {
+    let full_hash = Sha256::digest(public_key);
+    let mut identity_hash = [0u8; 16];
+    identity_hash.copy_from_slice(&full_hash[..16]);
+    identity_hash
+}
+
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
@@ -101,9 +109,7 @@ fn emit_announce_stats(ctx: &PacketContext) {
     let name_hash = &announce_data[64..74];
     let random_hash = &announce_data[74..84];
 
-    let full_hash = Sha256::digest(public_key);
-    let mut identity_hash = [0u8; 16];
-    identity_hash.copy_from_slice(&full_hash[..16]);
+    let identity_hash = identity_hash(public_key);
 
     let mut nh = [0u8; 10];
     nh.copy_from_slice(name_hash);
@@ -186,9 +192,7 @@ fn emit_builtin_announce_stats(
     let name_hash = &announce_data[64..74];
     let random_hash = &announce_data[74..84];
 
-    let full_hash = Sha256::digest(public_key);
-    let mut identity_hash = [0u8; 16];
-    identity_hash.copy_from_slice(&full_hash[..16]);
+    let identity_hash = identity_hash(public_key);
 
     let mut nh = [0u8; 10];
     nh.copy_from_slice(name_hash);
@@ -205,6 +209,23 @@ fn emit_builtin_announce_stats(
     }
     .encode();
     host.emit_event(call, ANNOUNCE_STATS_PAYLOAD_TYPE, payload)
+}
+
+#[cfg(all(test, feature = "builtin"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_hash_matches_fixed_sha256_truncation_vector() {
+        let public_key: Vec<u8> = (0..64).collect();
+        assert_eq!(
+            identity_hash(&public_key),
+            [
+                0xfd, 0xea, 0xb9, 0xac, 0xf3, 0x71, 0x03, 0x62, 0xbd, 0x26, 0x58, 0xcd, 0xc9, 0xa2,
+                0x9e, 0x8f,
+            ]
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
