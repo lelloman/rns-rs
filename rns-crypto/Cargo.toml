@@ -19,8 +19,8 @@ ed25519-dalek = { version = "2", default-features = false }
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
 sha2 = { version = "0.11", default-features = false }
 hmac = { version = "0.13", default-features = false }
-aes = { version = "0.8", default-features = false }
-cbc = { version = "0.1", default-features = false, features = ["alloc"] }
+aes = { version = "0.9", default-features = false }
+cbc = { version = "0.2", default-features = false, features = ["alloc", "block-padding"] }
 
 [dev-dependencies]
 serde_json = "1"
