@@ -453,6 +453,11 @@ pub fn bench_shared_client_replay_once(
 
     for (dest_hash, name_hash, prv_key, app_data) in &records {
         let raw = build_shared_announce_raw(dest_hash, name_hash, prv_key, Some(app_data), false);
+        tx.send(Event::RegisterDestination {
+            dest_hash: *dest_hash,
+            dest_type: rns_core::constants::DESTINATION_SINGLE,
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("{e}")))?;
         tx.send(Event::StoreSharedAnnounce {
             dest_hash: *dest_hash,
             name_hash: *name_hash,
@@ -472,7 +477,8 @@ pub fn bench_shared_client_replay_once(
         &mut stream1,
         announce_count,
         rns_core::constants::CONTEXT_NONE,
-    )?;
+    )
+    .map_err(|e| io::Error::new(e.kind(), format!("initial announce delivery failed: {e}")))?;
     drop(stream1);
 
     let listener2 = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))?;
@@ -495,7 +501,8 @@ pub fn bench_shared_client_replay_once(
         &mut stream2,
         announce_count,
         rns_core::constants::CONTEXT_PATH_RESPONSE,
-    )?;
+    )
+    .map_err(|e| io::Error::new(e.kind(), format!("replayed announce delivery failed: {e}")))?;
 
     tx.send(Event::Shutdown)
         .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("{e}")))?;
