@@ -20,7 +20,7 @@ log = "0.4"
 rns-hooks-abi = { version = "0.1.5", path = "sdk/rns-hooks-abi" }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 wat = "1"
 
 [[bench]]

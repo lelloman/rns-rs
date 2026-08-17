@@ -1,10 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use rns_core::constants;
 use rns_core::packet::RawPacket;
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::{FixedRng, Rng};
 use rns_net::link_manager::{LinkManager, ResourceStrategy};
 use rns_net::{InterfaceId, LinkManagerAction};
+use std::hint::black_box;
 
 fn make_rng(seed: u8) -> FixedRng {
     FixedRng::new(&[seed; 128])

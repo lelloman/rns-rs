@@ -8,7 +8,7 @@ API generation and cannot compile independently.
 
 | Dependency | Current | Target | Kind and scope | Upgrade unit | Status |
 | --- | ---: | ---: | --- | --- | --- |
-| `criterion` | 0.5.1 | 0.8.2 | Direct dev dependency in `rns-core`, `rns-net`, and `rns-hooks` | Independent | Pending review |
+| `criterion` | 0.5.1 | 0.8.2 | Direct dev dependency in `rns-core`, `rns-net`, and `rns-hooks` | Independent | Upgraded; four harness smoke tests pass |
 | `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Pending review |
 | `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Pending review |
 | `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Pending review |
@@ -40,3 +40,15 @@ For each direct upgrade or inseparable upgrade unit:
 Final validation repeats the full workspace, hooks, TLS, WASM, ARMv7, ESP32,
 Docker, web, Python, and Backbone gates used by the preceding maintenance
 series.
+
+## Criterion 0.8 assessment
+
+- Upstream changes reviewed: 0.6.0 through 0.8.2. The relevant breaking
+  changes are an MSRV increase to Rust 1.86 and removal of async-std support.
+- This workspace pins Rust 1.96 and all four benchmark harnesses are
+  synchronous. The retained `html_reports` feature remains supported.
+- The deprecated `criterion::black_box` re-export was replaced with
+  `std::hint::black_box`, as recommended upstream.
+- `scripts/test-benchmarks.sh` compiles and executes every Criterion harness
+  once, exercising benchmark macros, batching, throughput configuration, and
+  the optional hook-runtime benchmark paths.

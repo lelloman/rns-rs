@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use rns_core::announce::AnnounceData;
 use rns_core::constants;
 use rns_core::destination;
@@ -9,6 +9,7 @@ use rns_core::transport::types::{
 use rns_core::transport::{InboundFrame, RxMetadata, TransportEngine};
 use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
+use std::hint::black_box;
 
 fn make_config(transport_enabled: bool) -> TransportConfig {
     TransportConfig {

@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Duration;
 
 fn bench_shared_replay(c: &mut Criterion) {
@@ -14,6 +15,7 @@ fn bench_shared_replay(c: &mut Criterion) {
                     Duration::from_millis(10),
                 )
                 .unwrap();
+                assert_eq!(replayed, 8);
                 black_box(replayed);
             },
             BatchSize::SmallInput,
