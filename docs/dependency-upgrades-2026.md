@@ -10,7 +10,7 @@ API generation and cannot compile independently.
 | --- | ---: | ---: | --- | --- | --- |
 | `criterion` | 0.5.1 | 0.8.2 | Direct dev dependency in `rns-core`, `rns-net`, and `rns-hooks` | Independent | Upgraded; four harness smoke tests pass |
 | `bzip2` | 0.5.2 | 0.6.1 | Direct runtime dependency in `rns-net` | Independent | Upgraded; C/Rust backend parity verified |
-| `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Pending review |
+| `libloading` | 0.8.9 | 0.9.0 | Direct optional native-hook dependency in `rns-hooks` | Independent | Upgraded; native ABI/error/lifetime suite passes |
 | `tikv-jemallocator` | 0.6.1 | 0.7.0 | Direct allocator dependency in `rns-cli` | Independent | Pending review |
 | `rcgen` | 0.13.2 | 0.14.9 | Direct TLS test/support dependency in `rns-ctl` | Independent | Pending review |
 | `sha2` | 0.10.9 | 0.11.0 | Direct crypto dependency in `rns-crypto`, `rns-stats-hook`, and the stats-scraper example | Independent API generation | Pending review |
@@ -66,3 +66,18 @@ series.
   reference stream, cover empty and exact/zero bounded output, reject invalid,
   truncated, and checksum-corrupt streams, and cross the 900 KB bzip2 block
   boundary with a 1.1 MB round trip.
+
+## libloading 0.9 assessment
+
+- The complete 0.8.9-to-0.9.0 tag diff was reviewed. Version 0.9 raises MSRV
+  from Rust 1.71 to 1.88, adds optional `no_std` support, replaces the library
+  filename bound with sealed `AsFilename`, broadens symbol-name inputs, and
+  restructures its public error variants.
+- The workspace uses Rust 1.96 and libloading's default `std` feature. Native
+  hooks pass `&Path` (supported by `AsFilename` under `std`), look up symbols
+  with retained `&[u8]` support, and only format errors rather than matching
+  libloading's changed error variants.
+- The Linux native-hook integration suite now covers successful loading and
+  execution after unlinking the shared-object file, missing libraries, each
+  missing required symbol, ABI mismatch, nonzero hook returns, and invalid
+  verdict values.
