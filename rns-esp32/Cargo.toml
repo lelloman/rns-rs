@@ -24,7 +24,7 @@ esp-idf-svc = { version = "0.52", optional = true }
 esp-idf-hal = { version = "0.46", optional = true }
 
 log = "0.4"
-ssd1306 = { version = "0.9", optional = true }
+ssd1306 = { version = "0.10", optional = true }
 embedded-graphics = { version = "0.8", optional = true }
 
 [[bin]]
@@ -35,6 +35,11 @@ test = false
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
+
+[dev-dependencies]
+embedded-graphics = "0.8"
+embedded-hal = "1"
+ssd1306 = "0.10"
 
 # Crypto is unusably slow without optimization
 [profile.dev.package.rns-crypto]
