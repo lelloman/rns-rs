@@ -20,7 +20,7 @@ API generation and cannot compile independently.
 | `ed25519-dalek` | 2.2.0 | 3.0.0 | Direct signing dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 8032, interop, and link suites pass |
 | `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 7748, identity, and platform suites pass |
 | `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Upgraded; sandbox, examples, and hook E2E suites pass |
-| `ssd1306` | 0.9.0 | 0.10.0 | Direct optional ESP32 display dependency | Independent embedded lane | Pending review |
+| `ssd1306` | 0.9.0 | 0.10.0 | Direct optional ESP32 display dependency | Independent embedded lane | Upgraded; wire-contract and ESP32 lanes pass |
 | `generic-array` | 0.14.7 | 0.14.9 | Transitive in both lockfiles | Do not force with a direct dependency | Awaiting direct upgrades |
 | `az` | 1.2.1 | 1.3.0 | Transitive in the ESP32 lockfile | Do not force with a direct dependency | Awaiting `ssd1306` review |
 
@@ -215,3 +215,26 @@ series.
   E2E cases, the control API hook lifecycle, and the hook benchmark harness
   cover compilation, ABI validation, host calls, traps, persistence, and live
   attachment behavior.
+
+## SSD1306 0.10 assessment
+
+- The official 0.10.0 changelog and complete nine-commit `v0.9.0...v0.10.0`
+  tag diff were reviewed. The crate remains edition 2021 with Rust 1.75 as its
+  MSRV. Production changes correct the asynchronous I2C trait bounds, fix two
+  terminal-mode expressions, and re-export the new 64x32 display size. The
+  release also pins `maybe-async-cfg` 0.2.4; the associated lockfile changes
+  are build-time macro dependencies only. RustSec finds no vulnerability, but
+  reports its `proc-macro-error` 1.0.4 dependency as unmaintained
+  (RUSTSEC-2024-0370); SSD1306's exact pin prevents selecting the maintained
+  0.2.5 macro stack, and no advisory ignore has been added.
+- The firmware uses synchronous embedded-hal 1.0 I2C, a 128x64 buffered
+  graphics display, rotation zero, and the unchanged initialization,
+  brightness, power, clear, flush, and embedded-graphics drawing APIs. It uses
+  neither the corrected async path nor terminal mode, so no source or runtime
+  migration is required.
+- A host-side recording I2C implementation now pins the default 0x3c address,
+  initialization sequence, firmware power and maximum-brightness commands,
+  page/bit framebuffer layout, 16-byte transfer chunking, text drawing, full
+  clear, and command/data bus-error propagation. The same five tests pass on
+  both 0.9 and 0.10; the firmware release build validates the concrete ESP-IDF
+  I2C driver and Xtensa target.
