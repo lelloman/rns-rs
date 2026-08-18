@@ -21,8 +21,8 @@ API generation and cannot compile independently.
 | `x25519-dalek` | 2.0.1 | 3.0.0 | Direct key-agreement dependency in `rns-crypto` | Dalek compatibility group | Upgraded; RFC 7748, identity, and platform suites pass |
 | `wasmtime` | 46.0.2 | 47.0.3 | Direct optional WASM-hook runtime in `rns-hooks` | Independent, high-impact | Upgraded; sandbox, examples, and hook E2E suites pass |
 | `ssd1306` | 0.9.0 | 0.10.0 | Direct optional ESP32 display dependency | Independent embedded lane | Upgraded; wire-contract and ESP32 lanes pass |
-| `generic-array` | 0.14.7 | 0.14.9 | Transitive in both lockfiles | Do not force with a direct dependency | Awaiting direct upgrades |
-| `az` | 1.2.1 | 1.3.0 | Transitive in the ESP32 lockfile | Do not force with a direct dependency | Awaiting `ssd1306` review |
+| `generic-array` | 0.14.7 | 0.14.9 | Transitive in the host lockfile | Do not force with a direct dependency | Constrained by `crypto-common =0.14.7` |
+| `az` | 1.2.1 | 1.3.0 | Transitive in the ESP32 lockfile | Do not force with a direct dependency | Constrained by embedded-graphics `~1.2.0` |
 
 ## Required completion evidence
 
@@ -238,3 +238,28 @@ series.
   clear, and command/data bus-error propagation. The same five tests pass on
   both 0.9 and 0.10; the firmware release build validates the concrete ESP-IDF
   I2C driver and Xtensa target.
+
+## Constrained transitive dependency assessments
+
+- The published `generic-array` 0.14.7 and 0.14.9 source artifacts were
+  compared in full. Version 0.14.9 leaves its runtime implementation unchanged
+  and adds crate-level deprecation diagnostics directing consumers to 1.x.
+  Wasmtime 47's Cranelift stack retains sha2 0.10, whose `crypto-common` 0.1.7
+  dependency requires `generic-array =0.14.7` exactly. Cargo therefore rejects
+  a precise 0.14.9 lock update. Moving it would require an upstream
+  Wasmtime/Cranelift crypto-stack change or a local third-party patch, neither
+  of which is a safe transitive lockfile update.
+- The published `az` 1.2.1 and 1.3.0 source artifacts and 1.3.0 release notes
+  were compared in full. Version 1.3 moves to edition 2024 and Rust 1.85, adds
+  strict-cast replacements for APIs scheduled for future deprecation, and adds
+  an optional nightly floating-point feature. The existing `SaturatingAs`
+  operations used by embedded-graphics remain available, and the repository's
+  Rust 1.96 toolchain satisfies the new MSRV. However, embedded-graphics 0.8.2
+  and embedded-graphics-core 0.4.1 both require `az ~1.2.0`, so Cargo correctly
+  excludes 1.3. Updating it must wait for a reviewed embedded-graphics release;
+  adding an unused direct dependency or patching upstream manifests would not
+  upgrade the code actually used by the display driver.
+- A verbose dry-run resolution leaves only these two packages and SSD1306's
+  exact `maybe-async-cfg` 0.2.4 pin behind newer registry releases.
+  No manifest range, patch section, advisory ignore, or lockfile was changed to
+  force them.
