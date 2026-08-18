@@ -42,6 +42,8 @@ jobs:
 
       - name: Check upstream badge matches UPSTREAM.md
         run: |
+          # The sed pattern matches literal Markdown backticks.
+          # shellcheck disable=SC2016
           upstream="$(sed -nE 's/^- Version: `([^`]+)`.*/\1/p' UPSTREAM.md | head -n1)"
           badge="$(sed -nE 's#.*img\.shields\.io/badge/upstream%20Reticulum-([^-)]*)-blue.*#\1#p' README.md | head -n1)"
 
