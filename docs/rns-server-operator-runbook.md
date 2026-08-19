@@ -291,18 +291,25 @@ The accepted Reticulum baseline is the `Normative commit` recorded in
 and inspect upstream. Before reporting a delta, require the checkout's `HEAD`
 to equal that recorded commit. This catches a stale or accidentally advanced
 checkout instead of misreporting its distance from the remotes as unintegrated
-work. Run `scripts/check_upstream_drift.py`; it fetches both remotes (with one
-retry), classifies each tip as `at_baseline`, `behind`, `ahead`, or `diverged`,
-and deduplicates commits reachable from either tip but not the baseline. A
+work. Run `scripts/check_upstream_drift.py`; it fetches both remotes
+independently (with one retry each), classifies each tip as `at_baseline`,
+`behind`, `ahead`, or `diverged`, and deduplicates commits reachable from either
+tip but not the baseline. A
 remote is allowed to be behind: the currently accepted rgit commit can precede
 its GitHub mirror, so requiring the baseline to be an ancestor of both tips
 would incorrectly fail a current checkout.
 
-The command exits 0 after a successful inspection, including when drift is
-reported, and exits 1 for configuration, checkout, fetch, or Git errors. Use
+The command reports a per-remote fetch timestamp and error. If either refresh
+fails, it labels the overall result `incomplete`, clearly marks the affected tip
+as cached, continues inspecting the other remote, and exits 1. Never report a
+cached tip as current after a failed refresh. The command otherwise exits 0
+after a successful inspection, including when drift is reported, and exits 1
+for configuration, checkout, fetch, or Git errors. Use
 `--fail-on-drift` in automation to return 2 when unintegrated commits exist.
 Use `--json` for stable machine-readable output and `--no-fetch` only when the
 existing remote-tracking refs are intentionally being inspected offline.
+`--no-fetch` labels the complete comparison as cached; it is diagnostic output,
+not evidence that either upstream is current.
 
 #### Drift-to-Parity Workflow
 
@@ -311,6 +318,8 @@ The daily operational flow is:
 1. Complete and review both VPS snapshots and the live Backbone smoke test.
 2. Compare the accepted `UPSTREAM.md` normative commit with both upstream
    remote tips.
+   If either fetch fails, mark upstream freshness unknown and stop the parity
+   decision; cached refs may be included only as explicitly stale context.
 3. If both logs are empty, report that upstream parity is current and stop.
 4. If either log contains commits, report the baseline, both remote tips, the
    union of commits ahead, and whether the two remotes agree.

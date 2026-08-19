@@ -87,6 +87,15 @@ measured from `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`.
 
 ## Acceptance Record
 
+- `2026-08-19`: The GitHub mirror refreshed successfully, but the canonical
+  rgit endpoint could not establish an application Link after resolving
+  `7649a50d84610232d1416b41d2896aff`. The failure reproduced with both the
+  current Rust `git-remote-rns` helper and the original Python client from the
+  accepted Reticulum checkout. Independent path lookups from the workstation,
+  `vps-eu`, and `vps-us` succeeded through different next hops. Canonical rgit
+  freshness is therefore unknown; the cached `rgit/master` ref at `4fc8e03d`
+  is not accepted as evidence that upstream has not moved. The last successful
+  local rgit fetch recorded in the reflog was `2026-07-29 17:43:02 +0200`.
 - `2026-08-11`: Both upstream remotes were refreshed. Normative `rgit/master`
   remained at `4fc8e03d`; GitHub `master` remained at the signed-release
   baseline. Root-tree, `RNS`-tree and version assertions passed against the

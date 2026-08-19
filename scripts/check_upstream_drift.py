@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -65,18 +66,45 @@ def accepted_baseline(override: str | None) -> str:
     return baseline.lower()
 
 
-def fetch_with_retry(repo: pathlib.Path, remote: str) -> None:
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
+
+
+def fetch_with_retry(repo: pathlib.Path, remote: str) -> dict[str, object]:
+    attempted_at = utc_now()
     failures: list[str] = []
-    for _ in range(2):
+    for attempt in range(1, 3):
         proc = subprocess.run(
             ["git", "-C", str(repo), "fetch", remote],
             text=True,
             capture_output=True,
         )
         if proc.returncode == 0:
-            return
+            return {
+                "status": "succeeded",
+                "attempts": attempt,
+                "attempted_at_utc": attempted_at,
+                "completed_at_utc": utc_now(),
+                "error": None,
+            }
         failures.append(proc.stderr.strip() or proc.stdout.strip())
-    raise DriftError(f"fetch {remote} failed twice: {failures[-1]}")
+    return {
+        "status": "failed",
+        "attempts": 2,
+        "attempted_at_utc": attempted_at,
+        "completed_at_utc": utc_now(),
+        "error": failures[-1],
+    }
+
+
+def skipped_fetch() -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "attempts": 0,
+        "attempted_at_utc": None,
+        "completed_at_utc": None,
+        "error": None,
+    }
 
 
 def is_ancestor(repo: pathlib.Path, older: str, newer: str) -> bool:
@@ -114,7 +142,32 @@ def inspect_remote(repo: pathlib.Path, remote: str, baseline: str) -> dict[str, 
         "tip": tip,
         "relation": relation,
         "commits_ahead": commits,
+        "inspection_error": None,
     }
+
+
+def inspect_remote_safely(
+    repo: pathlib.Path,
+    remote: str,
+    baseline: str,
+    fetch: dict[str, object],
+) -> dict[str, object]:
+    try:
+        result = inspect_remote(repo, remote, baseline)
+    except DriftError as exc:
+        result = {
+            "remote": remote,
+            "ref": f"{remote}/master",
+            "tip": None,
+            "relation": "unknown",
+            "commits_ahead": [],
+            "inspection_error": str(exc),
+        }
+    result["fetch"] = fetch
+    result["fresh"] = (
+        fetch["status"] == "succeeded" and result["inspection_error"] is None
+    )
+    return result
 
 
 def check(args: argparse.Namespace) -> dict[str, object]:
@@ -130,31 +183,57 @@ def check(args: argparse.Namespace) -> dict[str, object]:
 
     github_remote = os.environ.get("RETICULUM_GITHUB_REMOTE", "origin")
     rgit_remote = os.environ.get("RETICULUM_RGIT_REMOTE", "rgit")
-    if not args.no_fetch:
-        fetch_with_retry(repo, github_remote)
-        fetch_with_retry(repo, rgit_remote)
+    if args.no_fetch:
+        github_fetch = skipped_fetch()
+        rgit_fetch = skipped_fetch()
+    else:
+        # Refresh independently so an unavailable transport does not conceal the
+        # other remote's current state.
+        github_fetch = fetch_with_retry(repo, github_remote)
+        rgit_fetch = fetch_with_retry(repo, rgit_remote)
 
-    github = inspect_remote(repo, github_remote, baseline)
-    rgit = inspect_remote(repo, rgit_remote, baseline)
+    github = inspect_remote_safely(repo, github_remote, baseline, github_fetch)
+    rgit = inspect_remote_safely(repo, rgit_remote, baseline, rgit_fetch)
     union: dict[str, dict[str, str]] = {}
     for item in [*github["commits_ahead"], *rgit["commits_ahead"]]:
         union[item["commit"]] = item
     commits = [union[key] for key in sorted(union)]
     relations = {github["relation"], rgit["relation"]}
-    status = "drift" if commits or "diverged" in relations else (
+    comparison_status = "drift" if commits or "diverged" in relations else (
         "behind" if "behind" in relations else "current"
     )
+    incomplete_reasons = []
+    for label, remote in (("GitHub", github), ("rgit", rgit)):
+        fetch = remote["fetch"]
+        if fetch["status"] == "failed":
+            incomplete_reasons.append(f"{label} fetch failed: {fetch['error']}")
+        if remote["inspection_error"] is not None:
+            incomplete_reasons.append(
+                f"{label} inspection failed: {remote['inspection_error']}"
+            )
+    status = "incomplete" if incomplete_reasons else comparison_status
+    if args.no_fetch:
+        freshness = "cached"
+    elif incomplete_reasons:
+        freshness = "incomplete"
+    else:
+        freshness = "fresh"
     audit = ROOT / ACTIVE_AUDIT
     return {
         "status": status,
+        "comparison_status": comparison_status,
+        "freshness": freshness,
+        "incomplete_reasons": incomplete_reasons,
         "baseline": baseline,
         "upstream_dir": str(repo),
         "github": github,
         "rgit": rgit,
         "commits": commits,
         "commits_ahead": len(commits),
-        "remotes_agree": github["tip"] == rgit["tip"],
-        "fetched": not args.no_fetch,
+        "remotes_agree": (
+            github["tip"] is not None and github["tip"] == rgit["tip"]
+        ),
+        "fetched": freshness == "fresh",
         "active_audit": ACTIVE_AUDIT,
         "active_audit_exists": audit.is_file(),
     }
@@ -172,14 +251,34 @@ def parse_args() -> argparse.Namespace:
 
 def render_human(result: dict[str, object]) -> None:
     print(f"Upstream parity: {result['status']}")
+    print(f"Comparison from available refs: {result['comparison_status']}")
+    print(f"Data freshness: {result['freshness']}")
     print(f"Accepted baseline: {result['baseline']}")
-    print(f"GitHub tip: {result['github']['tip']} ({result['github']['relation']})")
-    print(f"rgit tip: {result['rgit']['tip']} ({result['rgit']['relation']})")
+    for label, remote in (("GitHub", result["github"]), ("rgit", result["rgit"])):
+        tip = remote["tip"] or "unavailable"
+        fetch = remote["fetch"]
+        tip_freshness = "fresh" if remote["fresh"] else "cached"
+        print(f"{label} tip: {tip} ({remote['relation']}; {tip_freshness})")
+        if fetch["status"] == "succeeded":
+            print(
+                f"{label} fetch: succeeded at {fetch['completed_at_utc']} "
+                f"({fetch['attempts']} attempt(s))"
+            )
+        elif fetch["status"] == "failed":
+            print(
+                f"{label} fetch: FAILED at {fetch['completed_at_utc']} "
+                f"after {fetch['attempts']} attempts: {fetch['error']}"
+            )
+        else:
+            print(f"{label} fetch: skipped (--no-fetch; tip is cached)")
+        if remote["inspection_error"] is not None:
+            print(f"{label} inspection: FAILED: {remote['inspection_error']}")
     print(f"Commits ahead: {result['commits_ahead']}")
     for item in result["commits"]:
         print(f"  {item['commit']} {item['subject']}")
-    suffix = "exists" if result["active_audit_exists"] else "required when drift exists"
-    print(f"Active audit: {result['active_audit']} ({suffix})")
+    if result["comparison_status"] == "drift" or result["active_audit_exists"]:
+        suffix = "exists" if result["active_audit_exists"] else "required"
+        print(f"Active audit: {result['active_audit']} ({suffix})")
 
 
 def main() -> int:
@@ -196,7 +295,9 @@ def main() -> int:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         render_human(result)
-    return 2 if args.fail_on_drift and result["status"] == "drift" else 0
+    if result["status"] == "incomplete":
+        return 1
+    return 2 if args.fail_on_drift and result["comparison_status"] == "drift" else 0
 
 
 if __name__ == "__main__":
