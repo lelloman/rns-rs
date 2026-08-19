@@ -36,6 +36,7 @@ const CHALLENGE_PREFIX: &[u8] = b"#CHALLENGE#";
 const WELCOME: &[u8] = b"#WELCOME#";
 const FAILURE: &[u8] = b"#FAILURE#";
 const CHALLENGE_LEN: usize = 40;
+const MAX_CONCURRENT_RPC_CONNECTIONS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RpcCodec {
@@ -104,20 +105,39 @@ fn rpc_server_loop(
     event_tx: EventSender,
     shutdown: Arc<AtomicBool>,
 ) {
+    let mut workers = Vec::new();
+
     loop {
+        reap_finished_rpc_workers(&mut workers);
+
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
 
         match listener.accept() {
-            Ok((stream, _addr)) => {
+            Ok((stream, addr)) => {
+                if workers.len() >= MAX_CONCURRENT_RPC_CONNECTIONS {
+                    log::warn!(
+                        "rejecting RPC connection from {addr}: {MAX_CONCURRENT_RPC_CONNECTIONS} handlers already active"
+                    );
+                    continue;
+                }
+
                 // Set blocking for this connection
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
                 let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
 
-                if let Err(e) = handle_connection(stream, &auth_key, &event_tx) {
-                    log::debug!("RPC connection error: {}", e);
+                let worker_event_tx = event_tx.clone();
+                match thread::Builder::new()
+                    .name("rpc-client".into())
+                    .spawn(move || {
+                        if let Err(e) = handle_connection(stream, &auth_key, &worker_event_tx) {
+                            log::debug!("RPC connection error: {e}");
+                        }
+                    }) {
+                    Ok(worker) => workers.push(worker),
+                    Err(e) => log::error!("failed to start RPC connection handler: {e}"),
                 }
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -128,6 +148,22 @@ fn rpc_server_loop(
                 log::error!("RPC accept error: {}", e);
                 thread::sleep(std::time::Duration::from_millis(100));
             }
+        }
+    }
+
+    for worker in workers {
+        let _ = worker.join();
+    }
+}
+
+fn reap_finished_rpc_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].is_finished() {
+            let worker = workers.swap_remove(index);
+            let _ = worker.join();
+        } else {
+            index += 1;
         }
     }
 }
@@ -426,11 +462,7 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 }
                 "hooks" => {
                     let (response_tx, response_rx) = mpsc::channel();
-                    event_tx
-                        .send(Event::ListHooks { response_tx })
-                        .map_err(|_| {
-                            io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down")
-                        })?;
+                    try_send_event(event_tx, Event::ListHooks { response_tx })?;
                     let hooks = response_rx
                         .recv_timeout(std::time::Duration::from_secs(5))
                         .map_err(|_| {
@@ -522,7 +554,7 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
             .unwrap_or(0.0)
             .max(0.0);
         let timeout = Duration::from_secs_f64(timeout_secs);
-        let _ = event_tx.send(Event::BeginDrain { timeout });
+        try_send_event(event_tx, Event::BeginDrain { timeout })?;
         return Ok(PickleValue::Bool(true));
     }
 
@@ -678,7 +710,7 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
             if hash_bytes.len() >= 16 {
                 let mut dest_hash = [0u8; 16];
                 dest_hash.copy_from_slice(&hash_bytes[..16]);
-                let _ = event_tx.send(crate::event::Event::RequestPath { dest_hash });
+                try_send_event(event_tx, crate::event::Event::RequestPath { dest_hash })?;
                 return Ok(PickleValue::Bool(true));
             }
         }
@@ -853,15 +885,16 @@ fn handle_hook_rpc_request(
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing wasm"))?
                 .to_vec();
             let (response_tx, response_rx) = mpsc::channel();
-            event_tx
-                .send(Event::LoadHook {
+            try_send_event(
+                event_tx,
+                Event::LoadHook {
                     name,
                     wasm_bytes: wasm,
                     attach_point,
                     priority,
                     response_tx,
-                })
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+                },
+            )?;
             let response = response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook load timed out"))?;
@@ -876,15 +909,16 @@ fn handle_hook_rpc_request(
                 .and_then(|v| v.as_int())
                 .unwrap_or(0) as i32;
             let (response_tx, response_rx) = mpsc::channel();
-            event_tx
-                .send(Event::LoadBuiltinHook {
+            try_send_event(
+                event_tx,
+                Event::LoadBuiltinHook {
                     name,
                     builtin_id,
                     attach_point,
                     priority,
                     response_tx,
-                })
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+                },
+            )?;
             let response = response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| {
@@ -896,13 +930,14 @@ fn handle_hook_rpc_request(
             let name = required_string(request, "name")?;
             let attach_point = required_string(request, "attach_point")?;
             let (response_tx, response_rx) = mpsc::channel();
-            event_tx
-                .send(Event::UnloadHook {
+            try_send_event(
+                event_tx,
+                Event::UnloadHook {
                     name,
                     attach_point,
                     response_tx,
-                })
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+                },
+            )?;
             let response = response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook unload timed out"))?;
@@ -913,14 +948,15 @@ fn handle_hook_rpc_request(
             let attach_point = required_string(request, "attach_point")?;
             let enabled = op == "enable";
             let (response_tx, response_rx) = mpsc::channel();
-            event_tx
-                .send(Event::SetHookEnabled {
+            try_send_event(
+                event_tx,
+                Event::SetHookEnabled {
                     name,
                     attach_point,
                     enabled,
                     response_tx,
-                })
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+                },
+            )?;
             let response = response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| {
@@ -937,14 +973,15 @@ fn handle_hook_rpc_request(
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing priority"))?
                 as i32;
             let (response_tx, response_rx) = mpsc::channel();
-            event_tx
-                .send(Event::SetHookPriority {
+            try_send_event(
+                event_tx,
+                Event::SetHookPriority {
                     name,
                     attach_point,
                     priority,
                     response_tx,
-                })
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+                },
+            )?;
             let response = response_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook priority timed out"))?;
@@ -957,12 +994,21 @@ fn handle_hook_rpc_request(
 /// Send a query to the driver and wait for the response.
 fn send_query(event_tx: &EventSender, request: QueryRequest) -> io::Result<QueryResponse> {
     let (resp_tx, resp_rx) = mpsc::channel();
-    event_tx
-        .send(Event::Query(request, resp_tx))
-        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+    try_send_event(event_tx, Event::Query(request, resp_tx))?;
     resp_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "query timed out"))
+}
+
+fn try_send_event(event_tx: &EventSender, event: Event) -> io::Result<()> {
+    event_tx.try_send(event).map_err(|error| match error {
+        mpsc::TrySendError::Full(_) => {
+            io::Error::new(io::ErrorKind::WouldBlock, "driver event queue is full")
+        }
+        mpsc::TrySendError::Disconnected(_) => {
+            io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down")
+        }
+    })
 }
 
 /// Extract a 16-byte destination hash from an RPC dict field.
@@ -2794,6 +2840,142 @@ mod tests {
         shutdown2.store(true, Ordering::Relaxed);
         server_thread.join().unwrap();
         driver_thread.join().unwrap();
+    }
+
+    #[test]
+    fn full_event_queue_fails_rpc_query_without_blocking() {
+        let (event_tx, event_rx) = crate::event::channel_with_capacity(1);
+        event_tx.send(Event::Tick).unwrap();
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let query_thread = thread::spawn(move || {
+            let _ = result_tx.send(send_query(&event_tx, QueryRequest::LinkCount));
+        });
+
+        let completed_promptly = match result_rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(result) => {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+                true
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("RPC query thread disconnected without a result")
+            }
+        };
+
+        // Let the old blocking implementation finish so a regression failure does
+        // not leak a thread into the rest of the test process.
+        assert!(matches!(event_rx.recv().unwrap(), Event::Tick));
+        if !completed_promptly {
+            match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::Query(QueryRequest::LinkCount, response_tx) => {
+                    response_tx.send(QueryResponse::LinkCount(1)).unwrap();
+                }
+                other => panic!("unexpected event after releasing queue: {other:?}"),
+            }
+            let _ = result_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        query_thread.join().unwrap();
+
+        assert!(
+            completed_promptly,
+            "RPC query blocked while the driver event queue was full"
+        );
+    }
+
+    #[test]
+    fn stalled_rpc_request_does_not_block_later_clients() {
+        let key = derive_auth_key(b"concurrent-rpc-test");
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let server_shutdown = shutdown.clone();
+        let server_thread = thread::spawn(move || {
+            rpc_server_loop(listener, key, event_tx, server_shutdown);
+        });
+
+        let (first_seen_tx, first_seen_rx) = mpsc::channel();
+        let (concurrent_tx, concurrent_rx) = mpsc::channel();
+        let driver_thread = thread::spawn(move || {
+            let first_response = match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Event::Query(QueryRequest::LinkCount, response_tx) => response_tx,
+                other => panic!("unexpected first RPC event: {other:?}"),
+            };
+            first_seen_tx.send(()).unwrap();
+
+            let second = event_rx.recv_timeout(Duration::from_millis(500));
+            let handled_concurrently = match second {
+                Ok(Event::Query(QueryRequest::TransportIdentity, response_tx)) => {
+                    response_tx
+                        .send(QueryResponse::TransportIdentity(Some([7; 16])))
+                        .unwrap();
+                    true
+                }
+                Ok(other) => panic!("unexpected second RPC event: {other:?}"),
+                Err(mpsc::RecvTimeoutError::Timeout) => false,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("RPC event channel disconnected")
+                }
+            };
+
+            first_response.send(QueryResponse::LinkCount(1)).unwrap();
+
+            if !handled_concurrently {
+                match event_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                    Event::Query(QueryRequest::TransportIdentity, response_tx) => {
+                        response_tx
+                            .send(QueryResponse::TransportIdentity(Some([7; 16])))
+                            .unwrap();
+                    }
+                    other => panic!("unexpected delayed RPC event: {other:?}"),
+                }
+            }
+            concurrent_tx.send(handled_concurrently).unwrap();
+        });
+
+        let first_addr = RpcAddr::Tcp("127.0.0.1".into(), port);
+        let first_client = thread::spawn(move || {
+            let mut client = RpcClient::connect(&first_addr, &key).unwrap();
+            client
+                .call(&PickleValue::Dict(vec![(
+                    PickleValue::String("get".into()),
+                    PickleValue::String("link_count".into()),
+                )]))
+                .unwrap()
+        });
+
+        first_seen_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let second_addr = RpcAddr::Tcp("127.0.0.1".into(), port);
+        let second_client = thread::spawn(move || {
+            let mut client = RpcClient::connect(&second_addr, &key).unwrap();
+            client
+                .call(&PickleValue::Dict(vec![(
+                    PickleValue::String("get".into()),
+                    PickleValue::String("transport_identity".into()),
+                )]))
+                .unwrap()
+        });
+
+        let handled_concurrently = concurrent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(first_client.join().unwrap().as_int(), Some(1));
+        assert_eq!(
+            second_client.join().unwrap().as_bytes(),
+            Some([7; 16].as_slice())
+        );
+
+        shutdown.store(true, Ordering::Relaxed);
+        server_thread.join().unwrap();
+        driver_thread.join().unwrap();
+
+        assert!(
+            handled_concurrently,
+            "a stalled RPC request prevented the server from handling a later client"
+        );
     }
 
     #[test]
