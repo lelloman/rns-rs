@@ -48,7 +48,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Non-runtime | No `rnodeconf` utility or configuration-summary renderer exists in this repository; no Rust behavior is affected |
 | 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Integrated | Operator address wire/config/persistence/RPC/CLI tests; unsafe endpoint and missing-address regressions; complete `rns-net --all-features` suite |
 | 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Integrated | Token HMAC verification uses the MAC crate's constant-time verifier; all tag positions and invalid lengths are covered |
-| 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Needs decision | Pending per-commit analysis |
+| 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Integrated | Local `085b396` uses constant-time MAC verification and covers every tag position plus invalid lengths |
 | 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Needs decision | Pending per-commit analysis |
 | 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Needs decision | Pending per-commit analysis |
 | 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Needs decision | Pending per-commit analysis |
@@ -179,6 +179,23 @@ Python-compatible interoperability tests, and doc tests on 2026-08-20.
 
 **Final disposition:** Integrated.
 
+### 4. `ce81b339` — Constant-time HMAC comparison
+
+**Upstream change:** Exposes Python's `hmac.compare_digest` through the bundled
+HMAC module, with an equality fallback for old interpreters, and replaces the
+ordinary tag equality in `Token.verify_hmac` with that helper.
+
+**Rust applicability:** Directly applicable to the compatible Token HMAC
+verification path.
+
+**Local handling and evidence:** Already integrated in local commit `085b396`
+while processing the immediately preceding upstream timing test. Rust uses the
+HMAC crate's constant-time `verify_slice` primitive and deterministically tests
+all 32 possible single-byte tag mismatch positions and invalid tag length. No
+additional production or test change is necessary for this commit.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -204,6 +221,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `ce81b339` required no additional code beyond local
+  `085b396`; the all-tag-position HMAC regression passed with the exact
+  reference checkout at `ce81b339`, and the drift checker reported 59 commits
+  remaining.
 - `2026-08-20`: Commit `3db15dae` integration passed all 71 `rns-crypto` unit
   tests, 11 crypto exercise tests, 11 interoperability tests, doc tests,
   formatting, and warning-free host lint. The accepted reference checkout and

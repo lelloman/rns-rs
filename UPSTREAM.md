@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `3db15dae44a03079da570c9d05efdafb0d09bd44`
-- Commit date: `2026-08-16 21:28:03 +0200`
-- Subject: `Updated identity test`
+- Normative commit: `ce81b339dcbf36137b12a87b5b149bcff7e7f36a`
+- Commit date: `2026-08-16 21:34:34 +0200`
+- Subject: constant-time HMAC comparison; verbatim upstream subject retained in the active audit
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`3db15dae44a03079da570c9d05efdafb0d09bd44`. The first commit fixes
+`ce81b339dcbf36137b12a87b5b149bcff7e7f36a`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -49,7 +49,9 @@ wire-packing, persistence, RPC, CLI, and endpoint-safety regressions. The third
 commit adds an upstream HMAC verification timing probe. Rust now routes token
 tag verification through the HMAC implementation's constant-time verification
 primitive, with every tag position and invalid length covered deterministically
-instead of relying on noisy wall-clock thresholds. The full
+instead of relying on noisy wall-clock thresholds. The following upstream
+runtime commit makes that same `compare_digest` change and is directly covered
+by the preceding Rust integration. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
