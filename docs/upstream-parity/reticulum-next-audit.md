@@ -1,0 +1,143 @@
+# Reticulum 1.5.0 Upstream Audit
+
+## Scope and Baseline
+
+- audit date: `2026-08-20`
+- previous accepted version: `1.4.2`
+- previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
+- target version: `1.5.0`
+- target tag or ref: `rgit/master`
+- target normative commit: `4ab0755d0acc19eb45f729257b8976fde61146bf`
+- target root tree: `120e47a62072c34108b582c8569b807bd2143636`
+- target `RNS` tree: `fd4c58a1048681afab8d159b7ea64ec180d3aa85`
+- version assertion: `RNS.__version__ == "1.5.0"`
+- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..4ab0755d0acc19eb45f729257b8976fde61146bf`
+- commits in range: `63`
+- repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
+- local branch and revision inspected: `dev@53b458ec00c175257b866fae1df261b9ace37d59`
+
+The canonical rGit tip is 63 commits ahead of the accepted baseline. The GitHub
+mirror tip `b48b96e61676504e0a4e527b33b9a0b4495c6872` is behind the accepted
+baseline, so the remotes do not agree. This initial daily inventory records all
+canonical commits conservatively as **Needs decision**; it does not claim that
+any behavior has already been integrated.
+
+## Audit Vocabulary
+
+- **Needs port**: compatible behavior is absent or observably different.
+- **Needs coordinated port**: related changes must be implemented together.
+- **Needs decision**: architecture differs and the compatibility surface must
+  be chosen explicitly.
+- **Integrated**: applicable behavior is implemented with recorded evidence.
+- **Structurally covered**: the Rust design already provides the behavior or
+  avoids the upstream failure through a different invariant.
+- **Documentation follow-up**: native documentation is required after the
+  related behavior exists.
+- **Deferred**: applicable work is deliberately postponed with rationale and
+  impact recorded.
+- **Non-runtime**: metadata, changelog, generated artifacts, or upstream-only
+  tests require no independent Rust runtime change.
+
+## Commit Inventory
+
+Every commit in the audited range appears once. Dispositions are intentionally
+conservative until the corresponding diffs and Rust code paths are reviewed.
+
+| # | Upstream commit | Subject | Final disposition | Local evidence |
+|---:|---|---|---|---|
+| 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Needs decision | Pending per-commit analysis |
+| 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Needs decision | Pending per-commit analysis |
+| 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Needs decision | Pending per-commit analysis |
+| 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Needs decision | Pending per-commit analysis |
+| 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Needs decision | Pending per-commit analysis |
+| 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Needs decision | Pending per-commit analysis |
+| 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Needs decision | Pending per-commit analysis |
+| 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Needs decision | Pending per-commit analysis |
+| 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Needs decision | Pending per-commit analysis |
+| 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Needs decision | Pending per-commit analysis |
+| 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Needs decision | Pending per-commit analysis |
+| 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Needs decision | Pending per-commit analysis |
+| 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Needs decision | Pending per-commit analysis |
+| 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Needs decision | Pending per-commit analysis |
+| 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Needs decision | Pending per-commit analysis |
+| 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Needs decision | Pending per-commit analysis |
+| 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Needs decision | Pending per-commit analysis |
+| 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Needs decision | Pending per-commit analysis |
+| 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Needs decision | Pending per-commit analysis |
+| 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Needs decision | Pending per-commit analysis |
+| 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Needs decision | Pending per-commit analysis |
+| 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Needs decision | Pending per-commit analysis |
+| 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Needs decision | Pending per-commit analysis |
+| 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Needs decision | Pending per-commit analysis |
+| 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Needs decision | Pending per-commit analysis |
+| 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Needs decision | Pending per-commit analysis |
+| 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Needs decision | Pending per-commit analysis |
+| 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Needs decision | Pending per-commit analysis |
+| 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Needs decision | Pending per-commit analysis |
+| 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Needs decision | Pending per-commit analysis |
+| 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Needs decision | Pending per-commit analysis |
+| 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Needs decision | Pending per-commit analysis |
+| 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Needs decision | Pending per-commit analysis |
+| 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Needs decision | Pending per-commit analysis |
+| 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Needs decision | Pending per-commit analysis |
+| 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Needs decision | Pending per-commit analysis |
+| 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Needs decision | Pending per-commit analysis |
+| 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Needs decision | Pending per-commit analysis |
+| 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Needs decision | Pending per-commit analysis |
+| 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Needs decision | Pending per-commit analysis |
+| 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Needs decision | Pending per-commit analysis |
+| 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Needs decision | Pending per-commit analysis |
+| 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Needs decision | Pending per-commit analysis |
+| 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Needs decision | Pending per-commit analysis |
+| 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Needs decision | Pending per-commit analysis |
+| 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Needs decision | Pending per-commit analysis |
+| 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Needs decision | Pending per-commit analysis |
+| 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Needs decision | Pending per-commit analysis |
+| 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Needs decision | Pending per-commit analysis |
+| 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Needs decision | Pending per-commit analysis |
+| 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Needs decision | Pending per-commit analysis |
+| 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Needs decision | Pending per-commit analysis |
+| 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Needs decision | Pending per-commit analysis |
+| 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Needs decision | Pending per-commit analysis |
+| 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Needs decision | Pending per-commit analysis |
+| 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Needs decision | Pending per-commit analysis |
+
+## Per-Commit Analysis
+
+Detailed diff analysis and focused evidence are pending. As each commit is
+reviewed, replace its provisional **Needs decision** inventory entry and add a
+numbered analysis section here.
+
+## Integration Plan
+
+1. Group the 63 commits into protocol/runtime, interfaces, utilities,
+   documentation, tests, and non-runtime changes.
+2. Review each upstream diff against the corresponding Rust implementation.
+3. Add focused regression tests before porting applicable behavior.
+4. Record local implementation commits and evidence, then run promotion gates.
+
+## Promotion Gates
+
+- [ ] Every upstream commit has a final disposition.
+- [ ] Focused regressions pass for every applicable behavior change.
+- [ ] Fixture provenance and byte stability are checked where applicable.
+- [ ] Exact-target live Python/Rust interop passes.
+- [ ] Workspace tests, feature suites, formatting, and lint pass.
+- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [ ] Native documentation is updated for user-visible behavior.
+- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+
+## Acceptance Record
+
+- `2026-08-20`: Daily drift check refreshed both remotes successfully through
+  R-Net Istanbul. Canonical rGit was 63 commits ahead; the GitHub mirror was
+  behind the accepted baseline. Audit inventory opened; no parity acceptance
+  or implementation claim was made.
+
