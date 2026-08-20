@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `72ba27d63c634e1f37ec74488e9bde02da436cd2`
-- Commit date: `2026-08-17 00:26:19 +0200`
-- Subject: `Link: fix resource cancellation`
+- Normative commit: `55755c6b3c243a6d3e607f0f9d36cd5e538c9033`
+- Commit date: `2026-08-17 00:30:38 +0200`
+- Subject: `Transport: fix check for r_stat_snr`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`f97b0c3b9161e26125fc108ece74d1998fe458d5`. The CI interop lane remains pinned
+`df5ffe9c714c3b87d560fe817ac045c615d33ffe`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`72ba27d63c634e1f37ec74488e9bde02da436cd2`. The first commit fixes
+`55755c6b3c243a6d3e607f0f9d36cd5e538c9033`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -58,7 +58,10 @@ a focused regression now pins both values. The sixth commit prevents Python
 link shutdown from skipping alternating resources when cancellation mutates
 the iterated lists. Rust already cancels resources in place and cleans both
 vectors afterward; a new bidirectional regression proves that every
-simultaneous incoming and outgoing transfer is cancelled. The full
+simultaneous incoming and outgoing transfer is cancelled. The seventh commit
+fixes Python's accidental RSSI guard around SNR propagation. Rust's RNode path
+already records both metrics independently; that behavior is now isolated in a
+testable helper with an explicit SNR-without-RSSI regression. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

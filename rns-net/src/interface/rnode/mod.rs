@@ -397,6 +397,9 @@ fn reader_loop(
                 }
                 Ok(n) => {
                     for event in decoder.feed(&buf[..n]) {
+                        if update_pending_rx_metadata(&event, &mut last_rssi, &mut last_snr) {
+                            continue;
+                        }
                         match event {
                             rnode_kiss::RNodeEvent::DataFrame { index, data } => {
                                 let Some(position) = config
@@ -434,12 +437,6 @@ fn reader_loop(
                                         );
                                     }
                                 }
-                            }
-                            rnode_kiss::RNodeEvent::StatRssi(rssi) => {
-                                last_rssi = Some(rssi as i16 - 157);
-                            }
-                            rnode_kiss::RNodeEvent::StatSnr(snr) => {
-                                last_snr = Some(snr as f32 * 0.25);
                             }
                             rnode_kiss::RNodeEvent::Error(code) => {
                                 log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
@@ -582,6 +579,24 @@ fn signal_interface_down(tx: &EventSender, config: &RNodeConfig) {
     for i in 0..config.subinterfaces.len() {
         let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
         let _ = tx.send(Event::InterfaceDown(sub_id));
+    }
+}
+
+fn update_pending_rx_metadata(
+    event: &rnode_kiss::RNodeEvent,
+    last_rssi: &mut Option<i16>,
+    last_snr: &mut Option<f32>,
+) -> bool {
+    match event {
+        rnode_kiss::RNodeEvent::StatRssi(rssi) => {
+            *last_rssi = Some(*rssi as i16 - 157);
+            true
+        }
+        rnode_kiss::RNodeEvent::StatSnr(snr) => {
+            *last_snr = Some(*snr as f32 * 0.25);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1399,6 +1414,21 @@ mod tests {
 
         assert_eq!(last_rssi, None);
         assert_eq!(last_snr, None);
+    }
+
+    #[test]
+    fn rnode_snr_metadata_does_not_depend_on_rssi() {
+        let mut last_rssi = None;
+        let mut last_snr = None;
+
+        assert!(update_pending_rx_metadata(
+            &rnode_kiss::RNodeEvent::StatSnr(-12),
+            &mut last_rssi,
+            &mut last_snr,
+        ));
+
+        assert_eq!(last_rssi, None);
+        assert_eq!(last_snr, Some(-3.0));
     }
 
     #[test]
