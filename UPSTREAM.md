@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `0c41027765a6c2e47660caca1b75bcf8c01d96d5`
-- Commit date: `2026-08-17 00:36:43 +0200`
-- Subject: `Resource: avoid rebind of data variable`
+- Normative commit: `90ac62620dd35b84249c2bc0006477cc727363aa`
+- Commit date: `2026-08-17 00:38:28 +0200`
+- Subject: `Transport: fix pending_links items removal while being iterated`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`11bf2d9948c1d3a622c0af549ccf8abae867a700`. The CI interop lane remains pinned
+`d77b1ed2616f47ba6e43d06936b68fc03dcdb608`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`0c41027765a6c2e47660caca1b75bcf8c01d96d5`. The first commit fixes
+`90ac62620dd35b84249c2bc0006477cc727363aa`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -70,7 +70,10 @@ and processes its returned events, covered by the simultaneous two-client
 Backbone multiplexing regression. The tenth commit prevents Python part slicing
 from rebinding the full resource payload used on collision retries. Rust keeps
 the original and generated parts in distinct bindings; a multipart regression
-pins full-payload resource hashes and proofs. The full
+pins full-payload resource hashes and proofs. The eleventh commit prevents
+Python pending-link cleanup from skipping entries while removing from the
+iterated list. Rust already collects closed IDs before removal; a four-link
+regression verifies every deregistration. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
