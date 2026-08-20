@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `efb8c8500d87df13d42011cc5c1595beebe44837`
-- Commit date: `2026-08-18 11:45:20 +0200`
-- Subject: `Made queue lengths configurable`
+- Normative commit: `8c08b9ce09ee79117020cf58686bcce953d0d5e9`
+- Commit date: `2026-08-18 11:45:34 +0200`
+- Subject: `Added queue config to documentation`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`efb8c8500d87df13d42011cc5c1595beebe44837`. The first commit fixes
+`8c08b9ce09ee79117020cf58686bcce953d0d5e9`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -129,7 +129,10 @@ path-request, and ingress-limited lengths independently configurable. Rust
 accepts the four upstream keys, preserves its legacy scalar capacity setting
 and public `NodeConfig`, and validates/enforces every class independently. Held
 announces are released inside the single-owner engine and do not re-enter the
-external announce queue. The full
+external announce queue. The twenty-ninth commit documents queue order,
+defaults, configuration keys, and full-queue dropping. The native README now
+records the same information while also noting Rust's control-event barriers.
+The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

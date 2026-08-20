@@ -169,6 +169,23 @@ and I2P interfaces. It defaults to disabled on local/serial/KISS/RNode/Pipe-styl
 interfaces. Spawned dynamic interfaces inherit the full ingress-control config
 from their parent interface.
 
+### Inbound Queue Tuning
+
+Inbound packets use four independent queues, drained in priority order: data,
+announces, path requests, then ingress-limited traffic. Their positive maximum
+lengths can be set in `[reticulum]`:
+
+```ini
+qlen_in_data = 4096
+qlen_in_announce = 256
+qlen_in_pr = 256
+qlen_in_il = 128
+```
+
+The values above are the defaults. A packet is dropped when its class queue is
+full. A lower-priority queue begins draining only after all higher-priority
+queues before the same control-event barrier are empty.
+
 ## Low-Level Tools
 
 These are lower-level building blocks for development, debugging, custom setups,
