@@ -596,27 +596,26 @@ impl Driver {
         writer: Box<dyn crate::interface::Writer>,
         mut registration: crate::event::DynamicInterfaceRegistration,
     ) {
-        let parent_ifac = self
-            .interfaces
-            .get(&registration.parent_id)
-            .and_then(|parent| {
-                registration.info.mode = parent.info.mode;
-                registration.info.gravity = parent.info.gravity;
-                registration.info.recursive_prs = parent.info.recursive_prs;
-                registration.info.announces_from_internal = parent.info.announces_from_internal;
-                registration.info.announces_to_internal = parent.info.announces_to_internal;
-                registration.info.announce_rate_target = parent.info.announce_rate_target;
-                registration.info.announce_rate_grace = parent.info.announce_rate_grace;
-                registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
-                registration.info.ingress_control = parent.info.ingress_control;
-                parent.ifac.clone()
-            });
+        let parent_id = registration.parent_id;
+        let parent_ifac = self.interfaces.get(&parent_id).and_then(|parent| {
+            registration.info.mode = parent.info.mode;
+            registration.info.gravity = parent.info.gravity;
+            registration.info.recursive_prs = parent.info.recursive_prs;
+            registration.info.announces_from_internal = parent.info.announces_from_internal;
+            registration.info.announces_to_internal = parent.info.announces_to_internal;
+            registration.info.announce_rate_target = parent.info.announce_rate_target;
+            registration.info.announce_rate_grace = parent.info.announce_rate_grace;
+            registration.info.announce_rate_penalty = parent.info.announce_rate_penalty;
+            registration.info.ingress_control = parent.info.ingress_control;
+            parent.ifac.clone()
+        });
         let inherited_ifac = registration.ifac.take().or(parent_ifac);
 
         let interface_type = registration.interface_type;
         let telemetry = registration.telemetry;
         self.handle_interface_up_event(id, Some(writer), Some(registration.info));
         if let Some(entry) = self.interfaces.get_mut(&id) {
+            self.dynamic_interface_parents.insert(id, parent_id);
             entry.interface_type = interface_type;
             entry.ifac = inherited_ifac;
             Self::apply_interface_telemetry(entry, telemetry);
@@ -661,6 +660,7 @@ impl Driver {
                 self.interface_runtime_defaults.remove(&interface_name);
                 self.engine.deregister_interface(id);
                 self.interfaces.remove(&id);
+                self.dynamic_interface_parents.remove(&id);
             } else {
                 log::info!("[{}] interface offline", id.0);
                 if let Some(entry) = self.interfaces.get_mut(&id) {

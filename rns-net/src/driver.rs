@@ -608,6 +608,8 @@ struct KnownDestinationCleanup {
 pub struct Driver {
     pub(crate) engine: TransportEngine,
     pub(crate) interfaces: HashMap<InterfaceId, InterfaceEntry>,
+    /// Parent listener for dynamically spawned interfaces.
+    pub(crate) dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
     pub(crate) rng: OsRng,
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
@@ -836,6 +838,7 @@ impl Driver {
         Driver {
             engine,
             interfaces: HashMap::new(),
+            dynamic_interface_parents: HashMap::new(),
             rng: OsRng,
             rx,
             callbacks,
