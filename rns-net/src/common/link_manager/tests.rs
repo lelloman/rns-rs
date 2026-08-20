@@ -2275,6 +2275,86 @@ fn test_cancel_all_resources_clears_active_transfers() {
 }
 
 #[test]
+fn cancel_all_resources_cancels_every_simultaneous_transfer() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    init_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
+
+    for index in 0..4 {
+        let advertisement = init_mgr.send_resource(
+            &link_id,
+            format!("initiator resource {index}").as_bytes(),
+            None,
+            &mut rng,
+        );
+        let raw = extract_any_send_packet(&advertisement);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        resp_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+
+        let advertisement = resp_mgr.send_resource(
+            &link_id,
+            format!("responder resource {index}").as_bytes(),
+            None,
+            &mut rng,
+        );
+        let raw = extract_any_send_packet(&advertisement);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        init_mgr.handle_local_delivery(
+            packet.destination_hash,
+            &raw,
+            packet.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
+    }
+
+    assert_eq!(init_mgr.resource_transfer_count(), 8);
+    assert_eq!(resp_mgr.resource_transfer_count(), 8);
+
+    for manager in [&mut init_mgr, &mut resp_mgr] {
+        let actions = manager.cancel_all_resources(&mut rng);
+        let cancellation_contexts: Vec<u8> = actions
+            .iter()
+            .filter_map(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    RawPacket::unpack(raw).ok().map(|packet| packet.context)
+                }
+                _ => None,
+            })
+            .filter(|context| {
+                matches!(
+                    *context,
+                    constants::CONTEXT_RESOURCE_ICL | constants::CONTEXT_RESOURCE_RCL
+                )
+            })
+            .collect();
+
+        assert_eq!(manager.resource_transfer_count(), 0);
+        assert_eq!(
+            cancellation_contexts
+                .iter()
+                .filter(|context| **context == constants::CONTEXT_RESOURCE_ICL)
+                .count(),
+            4
+        );
+        assert_eq!(
+            cancellation_contexts
+                .iter()
+                .filter(|context| **context == constants::CONTEXT_RESOURCE_RCL)
+                .count(),
+            4
+        );
+    }
+}
+
+#[test]
 fn cancelling_stream_reports_one_terminal_failure() {
     let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
