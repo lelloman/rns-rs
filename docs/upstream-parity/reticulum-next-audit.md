@@ -56,7 +56,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Structurally covered | Rust performs one poll wait and consumes that batch; existing simultaneous two-client multiplexing regression passes |
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Structurally covered | Immutable original payload and separate parts storage; multipart regression verifies full-payload resource hash and proof |
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Structurally covered | Closed link IDs are collected before removal; four-pending-link regression verifies complete cleanup and deregistration |
-| 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Needs decision | Pending per-commit analysis |
+| 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Non-runtime | No Android/Bluetooth RNode client or BLE discovery state exists locally; ESP32 BLE support is a peripheral bridge |
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Needs decision | Pending per-commit analysis |
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Needs decision | Pending per-commit analysis |
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Needs decision | Pending per-commit analysis |
@@ -340,6 +340,25 @@ upstream reference checkout on 2026-08-20. No production change is required.
 
 **Final disposition:** Structurally covered.
 
+### 12. `c6f9ef10` — Clear stale Android BLE device
+
+**Upstream change:** Corrects an equality expression to an assignment when an
+Android RNode BLE scan finds no target devices. The typo left a previously
+selected `ble_device` in place and allowed reconnect logic to reuse stale state.
+
+**Rust applicability:** This repository supports serial RNode interfaces and an
+ESP32 BLE peripheral bridge, but it does not implement Reticulum's Android
+Bluetooth RNode client, BLE scanning, or a selected-device reconnect field. The
+ESP32 peripheral waits for central connections and is not the affected client
+discovery path.
+
+**Local handling and evidence:** A repository-wide search confirmed there is no
+equivalent Android/Bluetooth dispatcher or BLE device-selection state. No
+production change or regression test is appropriate for an absent platform
+implementation.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -365,6 +384,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `c6f9ef10` has no local Android BLE client equivalent.
+  The reference checkout and drift checker resolved exactly to `c6f9ef10`,
+  leaving 51 commits; formatting and warning-free host lint passed.
 - `2026-08-20`: Commit `90ac6262` is structurally covered by Rust's collect-then-
   remove link cleanup. The four-pending-link regression passed with every
   deregistration observed; the accepted reference checkout and drift checker
