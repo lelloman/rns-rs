@@ -8,20 +8,21 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.4.2`
-- Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `d41afd2d8151206994cd6e06b363a00072722f7d`
-- Commit date: `2026-08-17 21:40:14 +0200`
-- Subject: `Updated rnstatus docs`
+- Version: `1.5.0`
+- Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
+- Normative commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
+- Commit date: `2026-08-17 21:40:57 +0200`
+- Subject: `Updated version`
 
-The normative baseline is a 1.4.2 rgit `master` development commit observed
+The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
-1.4.2. GitHub `master` remains at the signed-release target and a clean GitHub
-clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
+1.5.0 but has not tagged this development line. GitHub `master` remains at the
+signed-release target and a clean GitHub clone cannot fetch the accepted rgit
+commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`e2967f4ed14019404183a35e671331a316624f33`. The CI interop lane remains pinned
+`a96891b2319e89c856816c60b71b2007bcafe066`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`d41afd2d8151206994cd6e06b363a00072722f7d`. The first commit fixes
+`e81532f541ef5747b5309459edaaec89c03aeffa`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -114,7 +115,9 @@ duration. Focused tests deliberately use different class pressures to avoid
 the upstream commit's announce/path copy-and-paste error. The twenty-fourth
 commit documents the expanded `rnstatus` options; the native utility guide now
 records the compatible flags, queue classes, filtering, and remote-management
-requirements. The full
+requirements. The twenty-fifth commit changes upstream's Python package
+assertion from 1.4.2 to 1.5.0. The baseline records that development version
+without changing the independently versioned Rust crates. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
