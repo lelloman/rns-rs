@@ -2179,6 +2179,51 @@ mod tests {
     }
 
     #[test]
+    fn backbone_write_backpressure_does_not_starve_reads() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(8250));
+        let config = make_server_config(port, 82, None, None, None, BackboneAbuseConfig::default());
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        SockRef::from(&client).set_recv_buffer_size(4096).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+        let mut writer = match event {
+            Event::InterfaceUp(_, Some(writer), _) => writer,
+            other => panic!("expected InterfaceUp with writer, got {other:?}"),
+        };
+
+        let outbound = vec![0x55; 60 * 1024];
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut backpressured = false;
+        while Instant::now() < deadline {
+            match writer.send_frame(&outbound) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    backpressured = true;
+                    break;
+                }
+                Err(error) => panic!("unexpected backbone write error: {error}"),
+            }
+        }
+        assert!(
+            backpressured,
+            "failed to create outbound write backpressure"
+        );
+
+        let inbound: Vec<u8> = (0..32).collect();
+        client.write_all(&hdlc::frame(&inbound)).unwrap();
+        let event = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        match event {
+            Event::Frame { data, .. } => assert_eq!(data, inbound),
+            other => panic!("inbound frame was starved by outbound backpressure: {other:?}"),
+        }
+    }
+
+    #[test]
     fn backbone_multiple_clients() {
         let port = find_free_port();
         let (tx, rx) = crate::event::channel();
