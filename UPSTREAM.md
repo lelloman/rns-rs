@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `90ac62620dd35b84249c2bc0006477cc727363aa`
-- Commit date: `2026-08-17 00:38:28 +0200`
-- Subject: `Transport: fix pending_links items removal while being iterated`
+- Normative commit: `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94`
+- Commit date: `2026-08-17 00:39:25 +0200`
+- Subject: `RNodeInterface: fix stale ble_device`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`d77b1ed2616f47ba6e43d06936b68fc03dcdb608`. The CI interop lane remains pinned
+`dff2d8a261bba8dbf4271c7c3926f56693755789`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`90ac62620dd35b84249c2bc0006477cc727363aa`. The first commit fixes
+`c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -73,7 +73,9 @@ the original and generated parts in distinct bindings; a multipart regression
 pins full-payload resource hashes and proofs. The eleventh commit prevents
 Python pending-link cleanup from skipping entries while removing from the
 iterated list. Rust already collects closed IDs before removal; a four-link
-regression verifies every deregistration. The full
+regression verifies every deregistration. The twelfth commit clears stale
+Android BLE discovery state and is non-runtime here because this port has no
+Android/Bluetooth RNode client. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
