@@ -73,7 +73,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Non-runtime | Python-only quote compatibility; Rust's compiled invalid-endpoint diagnostic and endpoint rejection are already covered |
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Integrated | Tagless path-request rejection now logs on the dedicated pathing target; removed Python queue block has no Rust equivalent |
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Integrated | Four positive `qlen_in_*` settings, upstream defaults, legacy scalar compatibility, private startup wiring, and independent saturation regressions |
-| 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Needs decision | Pending per-commit analysis |
+| 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Documentation follow-up | README documents queue priority, all four keys/defaults, full-queue drops, and Rust control barriers |
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Needs decision | Pending per-commit analysis |
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Needs decision | Pending per-commit analysis |
@@ -688,6 +688,25 @@ at four deliberately different bounds.
 
 **Final disposition:** Integrated.
 
+### 29. `8c08b9ce` — Document inbound queue tuning
+
+**Upstream change:** Adds an ingress-queue tuning section describing priority
+order, the four `qlen_in_*` settings and defaults, full-queue packet drops, and
+strict draining of higher-priority queues. It also regenerates upstream's
+manual artifacts for version 1.5.0.
+
+**Rust applicability:** The configuration and runtime behavior from the prior
+commit are user-facing and need native documentation. Generated Sphinx and
+Markdown copies are upstream publication artifacts and are not vendored.
+
+**Local handling and evidence:** Added the four settings and exact defaults to
+the README beside ingress control, together with priority, saturation, and
+control-barrier semantics. The labels correctly identify path-request and
+ingress-limited queues instead of repeating upstream's “data queue” wording.
+No test is appropriate for this documentation-only change.
+
+**Final disposition:** Documentation follow-up.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -713,6 +732,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `8c08b9ce` is covered by native inbound-queue tuning
+  documentation with correct class labels and Rust barrier semantics. No test
+  was added for documentation-only content; formatting, host lint, and the
+  exact drift check passed, leaving 34 commits.
 - `2026-08-20`: Commit `efb8c850` adds independently configurable inbound
   queue lengths with upstream defaults while preserving legacy scalar/API
   behavior. Config parsing/validation and four-class saturation regressions,
