@@ -3,7 +3,7 @@ use core::fmt;
 
 use crate::aes128::Aes128;
 use crate::aes256::Aes256;
-use crate::hmac::hmac_sha256;
+use crate::hmac::{hmac_sha256, hmac_sha256_verify};
 use crate::pkcs7;
 use crate::Rng;
 
@@ -91,8 +91,11 @@ impl Token {
             return Err(TokenError::InvalidToken);
         }
         let received_hmac = &token[token.len() - 32..];
-        let expected_hmac = hmac_sha256(&self.signing_key, &token[..token.len() - 32]);
-        Ok(received_hmac == expected_hmac)
+        Ok(hmac_sha256_verify(
+            &self.signing_key,
+            &token[..token.len() - 32],
+            received_hmac,
+        ))
     }
 
     pub fn decrypt(&self, token: &[u8]) -> Result<Vec<u8>, TokenError> {
@@ -178,6 +181,26 @@ mod tests {
         let mut tampered = encrypted.clone();
         tampered[20] ^= 0xFF; // flip a bit in ciphertext
         assert!(token.decrypt(&tampered).is_err());
+    }
+
+    #[test]
+    fn token_hmac_rejects_mismatches_across_the_entire_tag() {
+        let key = [0x42u8; 64];
+        let token = Token::new(&key).unwrap();
+        let mut rng = FixedRng::new(&[0xCC; 16]);
+        let encrypted = token.encrypt(b"timing regression", &mut rng);
+
+        assert_eq!(token.verify_hmac(&encrypted), Ok(true));
+        for tag_index in 0..32 {
+            let mut corrupted = encrypted.clone();
+            let index = corrupted.len() - 32 + tag_index;
+            corrupted[index] ^= 0x01;
+            assert_eq!(
+                token.verify_hmac(&corrupted),
+                Ok(false),
+                "tag mismatch at byte {tag_index} must fail"
+            );
+        }
     }
 
     #[test]

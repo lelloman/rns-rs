@@ -47,7 +47,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 |---:|---|---|---|---|
 | 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Non-runtime | No `rnodeconf` utility or configuration-summary renderer exists in this repository; no Rust behavior is affected |
 | 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Integrated | Operator address wire/config/persistence/RPC/CLI tests; unsafe endpoint and missing-address regressions; complete `rns-net --all-features` suite |
-| 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Needs decision | Pending per-commit analysis |
+| 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Integrated | Token HMAC verification uses the MAC crate's constant-time verifier; all tag positions and invalid lengths are covered |
 | 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Needs decision | Pending per-commit analysis |
 | 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Needs decision | Pending per-commit analysis |
 | 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Needs decision | Pending per-commit analysis |
@@ -157,6 +157,28 @@ rns-net --all-features` and `cargo test -p rns-cli --bin rnstatus` passed on
 
 **Final disposition:** Integrated.
 
+### 3. `3db15dae` — Updated identity test
+
+**Upstream change:** Adds a diagnostic timing loop that invokes
+`Token.verify_hmac()` one million times over random 64-byte inputs and reports
+the observed min/mean/median/max timings. It adds no assertion and changes no
+runtime code.
+
+**Rust applicability:** Token HMAC verification is part of the compatible
+identity encryption path. Rust previously calculated the expected tag and used
+ordinary slice equality, which does not express the constant-time verification
+invariant being probed upstream.
+
+**Local handling and evidence:** Added an HMAC-SHA256 verification helper backed
+by the HMAC crate's constant-time `verify_slice` primitive and routed
+`Token::verify_hmac` through it. Deterministic regressions reject wrong-length
+tags and mutations at every one of the 32 tag positions; this avoids a flaky
+wall-clock timing threshold while pinning the intended implementation shape.
+`cargo test -p rns-crypto` passed 71 unit tests, 11 crypto exercise tests, 11
+Python-compatible interoperability tests, and doc tests on 2026-08-20.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -182,6 +204,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `3db15dae` integration passed all 71 `rns-crypto` unit
+  tests, 11 crypto exercise tests, 11 interoperability tests, doc tests,
+  formatting, and warning-free host lint. The accepted reference checkout and
+  drift checker both resolved exactly to `3db15dae`, leaving 60 commits.
 - `2026-08-20`: Commit `38a73f95` integration passed `cargo test -p rns-net
   --all-features` (864 unit tests, 54 network E2E tests, 23 hook E2E tests,
   IFAC/Python interop, fixture suites and doc tests), `cargo test -p rns-cli
