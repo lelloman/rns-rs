@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `0ec51cce67e890abd0301f2134c82dd05c2fa127`
-- Commit date: `2026-08-17 00:31:59 +0200`
-- Subject: `Link: fix constant name`
+- Normative commit: `691211bf0dbcfb6f964f9037fb82bcae26fbb453`
+- Commit date: `2026-08-17 00:34:16 +0200`
+- Subject: `BackboneInterface: remove unused poll`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`eecda215537a273f9b6e76ac14b56abacbb7836c`. The CI interop lane remains pinned
+`49aef9ad115797e284c8c110775dee9c930993ad`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`0ec51cce67e890abd0301f2134c82dd05c2fa127`. The first commit fixes
+`691211bf0dbcfb6f964f9037fb82bcae26fbb453`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -64,7 +64,10 @@ already records both metrics independently; that behavior is now isolated in a
 testable helper with an explicit SNR-without-RSSI regression. The eighth commit
 repairs Python's default-MTU lookup for a zero MTU signal. Rust now normalizes
 zero signalling to the protocol MTU across link initiation, acceptance, and
-proof confirmation; a full handshake regression covers both peers. The full
+proof confirmation; a full handshake regression covers both peers. The ninth
+commit removes a discarded Python epoll batch. Rust already performs one wait
+and processes its returned events, covered by the simultaneous two-client
+Backbone multiplexing regression. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

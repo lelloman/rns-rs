@@ -53,7 +53,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Structurally covered | Rust cancels resources in place before retaining completed entries; bidirectional multi-transfer regression verifies none are skipped |
 | 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Structurally covered | RNode receive handling records SNR independently of RSSI; focused absent-RSSI regression pins the behavior |
 | 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Integrated | Zero MTU signalling falls back to the protocol MTU for initiator, responder, and proof confirmation; full handshake regression |
-| 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Needs decision | Pending per-commit analysis |
+| 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Structurally covered | Rust performs one poll wait and consumes that batch; existing simultaneous two-client multiplexing regression passes |
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Needs decision | Pending per-commit analysis |
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Needs decision | Pending per-commit analysis |
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Needs decision | Pending per-commit analysis |
@@ -281,6 +281,25 @@ The focused test passed against the exact upstream reference checkout on
 
 **Final disposition:** Integrated.
 
+### 9. `691211bf` — Remove discarded Backbone poll
+
+**Upstream change:** Removes an extra `epoll.poll(1)` call whose returned event
+batch was assigned but never processed immediately before the real polling
+loop. This avoids discarding readiness notifications and an unnecessary system
+call or timeout.
+
+**Rust applicability:** Backbone server event polling is compatible runtime
+behavior, but Rust's loop already clears its event buffer, performs exactly one
+`Poller::wait()`, and iterates over that same returned buffer. It has no
+discarded preliminary poll.
+
+**Local handling and evidence:** No production change is required. The existing
+`backbone_epoll_multiplexing` regression connects two clients, makes both
+sockets ready together, and requires both payloads to be delivered. It passed
+against the exact upstream reference checkout on 2026-08-20.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -306,6 +325,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `691211bf` is structurally covered by Rust's single-wait
+  Backbone poll loop. The simultaneous two-client multiplexing regression
+  passed; the accepted reference checkout and drift checker resolved exactly to
+  `691211bf`, leaving 54 commits.
 - `2026-08-20`: Commit `0ec51cce` integration reproduced Rust's zero-MTU MDU
   underflow before the fix. The full zero-signalling handshake then passed with
   default MTU/MDU on both peers; the accepted reference checkout and drift
