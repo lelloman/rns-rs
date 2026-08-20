@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Commit date: `2026-08-17 21:40:57 +0200`
-- Subject: `Updated version`
+- Normative commit: `0d15cfc134129ab7b90fda42c88f3445a458ba39`
+- Commit date: `2026-08-17 21:52:53 +0200`
+- Subject: `Fixed f-string for old snakes`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`a96891b2319e89c856816c60b71b2007bcafe066`. The CI interop lane remains pinned
+`acf259f45e406e4cad80acc3ffc6a2b835fc0ecf`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`e81532f541ef5747b5309459edaaec89c03aeffa`. The first commit fixes
+`0d15cfc134129ab7b90fda42c88f3445a458ba39`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -117,7 +117,10 @@ commit documents the expanded `rnstatus` options; the native utility guide now
 records the compatible flags, queue classes, filtering, and remote-management
 requirements. The twenty-fifth commit changes upstream's Python package
 assertion from 1.4.2 to 1.5.0. The baseline records that development version
-without changing the independently versioned Rust crates. The full
+without changing the independently versioned Rust crates. The twenty-sixth
+commit changes only Python f-string quoting for older interpreter
+compatibility. Rust already compiles the equivalent invalid-endpoint diagnostic
+and retains its endpoint-safety regression. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
