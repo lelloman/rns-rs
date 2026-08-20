@@ -69,7 +69,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Integrated | Four independently bounded inbound classes with strict priority, control barriers, ingress-limited PR demotion, RPC queue pressure, and saturation/order regressions |
 | 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Integrated | `-q`/`--queues`, correct per-class pressure rendering, Backbone burst counts/durations, parser/format/RPC regressions |
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Documentation follow-up | Native `rnstatus` guide documents current flags, filtering, queue classes, Backbone counts, and remote management |
-| 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Needs decision | Pending per-commit analysis |
+| 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Non-runtime | Baseline now records upstream 1.5.0 development metadata; independently versioned Rust crates are unchanged |
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Needs decision | Pending per-commit analysis |
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Needs decision | Pending per-commit analysis |
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Needs decision | Pending per-commit analysis |
@@ -608,6 +608,23 @@ acceptance gates.
 
 **Final disposition:** Documentation follow-up.
 
+### 25. `e81532f5` — Assert upstream version 1.5.0
+
+**Upstream change:** Changes `RNS.__version__` from 1.4.2 to 1.5.0. No runtime,
+protocol, or packaging code changes, and no 1.5.0 tag accompanies this commit.
+
+**Rust applicability:** The asserted upstream version belongs in the normative
+baseline. Rust workspace crates have independent package versions and release
+histories, so changing them to 1.5.0 would be inaccurate and would create an
+unrelated publication change.
+
+**Local handling and evidence:** Updated `UPSTREAM.md` to record the 1.5.0
+development assertion and its exact metadata commit while retaining the signed
+1.4.2 tag as the GitHub/CI reference. No production code or test changes are
+appropriate for upstream-only Python version metadata.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -633,6 +650,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `e81532f5` advances upstream's development version
+  assertion to 1.5.0 without changing independently versioned Rust crates. The
+  exact checkout and drift checker resolved to `e81532f5`, leaving 38 commits;
+  formatting and warning-free host lint passed.
 - `2026-08-20`: Commit `d41afd2d` is covered by the new native `rnstatus`
   utility guide and README link. No test was added for documentation-only
   content; formatting, warning-free host lint, and the drift checker passed,
