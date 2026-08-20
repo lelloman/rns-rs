@@ -63,7 +63,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Non-runtime | Upstream-only Speedtest example; no equivalent Rust example or speed-test utility exists |
 | 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Structurally covered | Separate read poll loop and writer socket preserve readable interest; forced outbound-backpressure regression receives inbound traffic |
 | 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Non-runtime | Parentheses-only Python cleanup around the existing EPOLLHUP bit test; no semantic change |
-| 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Needs decision | Pending per-commit analysis |
+| 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Structurally covered | Driver-owned receipt state is removed before `on_proof`; callback-driven outbound send regression completes and dispatches its packet |
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Needs decision | Pending per-commit analysis |
 | 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Needs decision | Pending per-commit analysis |
 | 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Needs decision | Pending per-commit analysis |
@@ -472,6 +472,27 @@ passed for the immediately preceding runtime commit.
 
 **Final disposition:** Non-runtime.
 
+### 19. `2d7f858a` — Release receipt state before proof callbacks
+
+**Upstream change:** Copies candidate packet receipts while holding
+`receipts_lock`, then validates them and invokes their callbacks after releasing
+the lock. Previously, a delivery callback that sent another packet could try to
+acquire the same non-reentrant receipt lock and deadlock.
+
+**Rust applicability:** Callback-driven sends are directly applicable, but the
+Python lock failure is structurally absent. The Rust driver exclusively owns
+`sent_packets` and `completed_proofs`; `handle_inbound_proof` removes the tracked
+send and records completion before invoking `on_proof`, without a receipt mutex
+held across the callback.
+
+**Local handling and evidence:** Added a proof callback that synchronously
+enqueues a valid outbound packet through the bounded driver event channel. The
+driver returns from the callback, consumes the queued send, and writes the exact
+packet. The focused regression passed against the exact upstream reference on
+2026-08-20.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -497,6 +518,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `2d7f858a` is structurally covered by driver-owned
+  receipt state that is released before `on_proof`. The callback-driven
+  outbound-send regression passed; the accepted reference checkout and drift
+  checker resolved exactly to `2d7f858a`, leaving 44 commits.
 - `2026-08-20`: Commit `9ebcb55c` is a semantics-neutral parentheses cleanup.
   The reference checkout and drift checker resolved exactly to `9ebcb55c`,
   leaving 45 commits; formatting and warning-free host lint passed.
