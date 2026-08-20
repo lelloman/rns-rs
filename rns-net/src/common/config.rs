@@ -140,6 +140,8 @@ pub struct ReticulumSection {
     pub announce_queue_overflow_policy: String,
     /// Maximum queued events awaiting driver processing.
     pub driver_event_queue_capacity: usize,
+    /// Independently bounded inbound traffic-class queues.
+    pub inbound_queue_capacities: crate::event::InboundQueueCapacities,
     /// Maximum queued outbound frames per interface writer worker.
     pub interface_writer_queue_capacity: usize,
     /// Maximum active outbound Backbone peer-pool connections. Zero disables pooling.
@@ -225,6 +227,7 @@ impl Default for ReticulumSection {
             announce_queue_ttl: 30,
             announce_queue_overflow_policy: "drop_worst".into(),
             driver_event_queue_capacity: crate::event::DEFAULT_EVENT_QUEUE_CAPACITY,
+            inbound_queue_capacities: crate::event::InboundQueueCapacities::default(),
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
             backbone_peer_pool_max_connected: 0,
             backbone_peer_pool_failure_threshold: 3,
@@ -1099,6 +1102,34 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
             });
         }
         section.driver_event_queue_capacity = n;
+        section.inbound_queue_capacities =
+            crate::event::InboundQueueCapacities::from_shared_capacity(n);
+    }
+    for (key, queue) in [
+        ("qlen_in_data", 0),
+        ("qlen_in_announce", 1),
+        ("qlen_in_pr", 2),
+        ("qlen_in_il", 3),
+    ] {
+        let Some(v) = kvs.get(key) else {
+            continue;
+        };
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: key.into(),
+            value: v.clone(),
+        })?;
+        if n == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: key.into(),
+                value: v.clone(),
+            });
+        }
+        match queue {
+            0 => section.inbound_queue_capacities.data = n,
+            1 => section.inbound_queue_capacities.announce = n,
+            2 => section.inbound_queue_capacities.path_request = n,
+            _ => section.inbound_queue_capacities.ingress_limited = n,
+        }
     }
     if let Some(v) = kvs.get("interface_writer_queue_capacity") {
         let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
@@ -1248,6 +1279,67 @@ mod tests {
         assert_eq!(
             config.reticulum.ratchet_expiry,
             rns_core::constants::RATCHET_EXPIRY
+        );
+        assert_eq!(
+            config.reticulum.inbound_queue_capacities,
+            crate::event::InboundQueueCapacities::default()
+        );
+    }
+
+    #[test]
+    fn parse_reticulum_inbound_queue_lengths() {
+        let config = parse(
+            r#"
+[reticulum]
+qlen_in_data = 101
+qlen_in_announce = 102
+qlen_in_pr = 103
+qlen_in_il = 104
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.reticulum.inbound_queue_capacities,
+            crate::event::InboundQueueCapacities {
+                data: 101,
+                announce: 102,
+                path_request: 103,
+                ingress_limited: 104,
+            }
+        );
+    }
+
+    #[test]
+    fn inbound_queue_lengths_must_be_positive_integers() {
+        for key in [
+            "qlen_in_data",
+            "qlen_in_announce",
+            "qlen_in_pr",
+            "qlen_in_il",
+        ] {
+            for value in ["0", "-1", "many"] {
+                let input = format!("[reticulum]\n{key} = {value}\n");
+                assert!(matches!(
+                    parse(&input),
+                    Err(ConfigError::InvalidValue { key: invalid_key, .. })
+                        if invalid_key == key
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_event_capacity_still_scales_class_defaults() {
+        let config = parse("[reticulum]\ndriver_event_queue_capacity = 64\n").unwrap();
+        assert_eq!(
+            config.reticulum.inbound_queue_capacities,
+            crate::event::InboundQueueCapacities {
+                data: 64,
+                announce: 64,
+                path_request: 64,
+                ingress_limited: 64,
+            }
         );
     }
 
