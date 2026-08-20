@@ -193,6 +193,11 @@ impl Driver {
         }
 
         self.dispatch_all(actions);
+        self.event_tx.set_ingress_bursts(
+            interface_id,
+            self.engine.burst_active(&interface_id),
+            self.engine.pr_burst_active(&interface_id),
+        );
     }
 
     pub(crate) fn handle_announce_verified_event(
@@ -616,6 +621,7 @@ impl Driver {
         self.handle_interface_up_event(id, Some(writer), Some(registration.info));
         if let Some(entry) = self.interfaces.get_mut(&id) {
             self.dynamic_interface_parents.insert(id, parent_id);
+            self.event_tx.register_dynamic_parent(id, parent_id);
             entry.interface_type = interface_type;
             entry.ifac = inherited_ifac;
             Self::apply_interface_telemetry(entry, telemetry);
@@ -645,6 +651,7 @@ impl Driver {
     }
 
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
+        self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {
             if let Some(tunnel_id) = entry.info.tunnel_id {
                 self.engine.void_tunnel_interface(&tunnel_id);

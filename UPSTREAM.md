@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `c2eac12ff55e78b4180777e13527d4e0c1a9642c`
-- Commit date: `2026-08-17 20:47:30 +0200`
-- Subject: `Added burst count stat to interfaces`
+- Normative commit: `fc0f84f23e803ba40ae678ce179c3767ebe8c89e`
+- Commit date: `2026-08-17 20:51:46 +0200`
+- Subject: `Added prioritized inbound traffic processing`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`34dbb7c02d6cd4a9d68385d62bb9e5ecbf78e741`. The CI interop lane remains pinned
+`2972f1c665c3f623bbb316177537439ab68215d1`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`c2eac12ff55e78b4180777e13527d4e0c1a9642c`. The first commit fixes
+`fc0f84f23e803ba40ae678ce179c3767ebe8c89e`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -98,9 +98,14 @@ outbound message. The twentieth commit adds only upstream TODO comments about
 possible future receipt lock/list contention improvements and changes no
 behavior. The twenty-first commit adds aggregate announce and path-request
 burst counts to Backbone listeners. Rust now retains each dynamic interface's
-parent listener
-and exposes the two counts from existing per-child ingress-control state;
-mixed-parent and disconnect cleanup behavior is covered. The full
+parent listener and exposes the two counts from existing per-child
+ingress-control state; mixed-parent and disconnect cleanup behavior is covered.
+The twenty-second commit replaces FIFO inbound contention with bounded DATA,
+ANNOUNCE, PATH REQUEST, and INGRESS-LIMITED queues. Rust now classifies frames
+at the event boundary, drains them in upstream priority order without allowing
+one class to consume another's capacity, retains control events as ordering
+barriers, and reports queue height/pressure plus listener burst counts over the
+existing RPC dictionary without changing public Rust status structs. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

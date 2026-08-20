@@ -66,7 +66,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Structurally covered | Driver-owned receipt state is removed before `on_proof`; callback-driven outbound send regression completes and dispatches its packet |
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Non-runtime | Adds only Python TODO comments about possible receipt list and lock contention improvements |
 | 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Integrated | Dynamic child→listener ownership is retained; Backbone aggregate accessor counts independent announce/PR burst states and cleans up disconnected children |
-| 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Needs decision | Pending per-commit analysis |
+| 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Integrated | Four independently bounded inbound classes with strict priority, control barriers, ingress-limited PR demotion, RPC queue pressure, and saturation/order regressions |
 | 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Needs decision | Pending per-commit analysis |
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Needs decision | Pending per-commit analysis |
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Needs decision | Pending per-commit analysis |
@@ -530,6 +530,40 @@ and verifies both its ownership and count disappear.
 
 **Final disposition:** Integrated.
 
+### 22. `fc0f84f2` — Prioritize bounded inbound traffic classes
+
+**Upstream change:** Replaces direct inbound processing with four independently
+bounded queues, drained in DATA, ANNOUNCE, PATH REQUEST, then INGRESS-LIMITED
+order. Packet parsing, announce validation/limiting, and path-request duplicate
+and ingress checks move before queue insertion. Interface stats gain listener
+burst counts and inbound queue height/pressure keys. Outbound queue support is
+left disabled and unimplemented upstream.
+
+**Rust applicability:** Directly applicable. Rust previously used one bounded
+`SyncSender<Event>` for frames and driver control, so one traffic category could
+consume all queue capacity and all inbound frames were processed FIFO. Rust's
+engine already performs packet filtering, announce validation, duplicate path
+request suppression, and ingress control at its single-owner boundary; moving
+those mutable tables into reader threads would violate that ownership model.
+
+**Local handling and evidence:** Replaced the concrete event channel with a
+method-compatible sender/receiver pair that classifies valid frame headers into
+the four upstream classes, gives each an independent bound, and drains strict
+class priority. Control events retain FIFO barriers, preserving established
+frame-before-query/shutdown behavior. Once the engine activates path-request
+ingress limiting, subsequent frames on that interface enter the lowest class.
+Full queues drop inbound frames without blocking interface readers, while
+control sends retain bounded backpressure. RPC dictionaries now include
+`rxqt`, per-class heights, pressure ratios, `txq`, and Backbone burst counts;
+published Rust status struct layouts remain unchanged.
+
+Focused regressions cover all four-class ordering, isolation of path-request
+capacity under data saturation, consistent queue snapshots, independent burst
+states and cleanup, and RPC pressure/count encoding. The complete 868-test
+`rns-net` unit suite passed with loopback access.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -555,6 +589,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `fc0f84f2` is integrated with independently bounded,
+  prioritized inbound queues and RPC pressure/count reporting. Focused queue
+  and RPC tests plus all 868 `rns-net` unit tests passed; the accepted checkout
+  and drift checker resolved exactly to `fc0f84f2`, leaving 41 commits.
 - `2026-08-20`: Commit `c2eac12f` is integrated with retained dynamic-parent
   ownership and Backbone burst-count aggregation. The mixed-parent and cleanup
   regression passed; the accepted checkout and drift checker resolved exactly
