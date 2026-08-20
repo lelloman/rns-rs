@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `38a73f9508bb9d3aa43da00306868fce6cd9e382`
-- Commit date: `2026-08-16 00:29:14 +0200`
-- Subject: `Added ability to include operator LXMF address in interface discovery info`
+- Normative commit: `3db15dae44a03079da570c9d05efdafb0d09bd44`
+- Commit date: `2026-08-16 21:28:03 +0200`
+- Subject: `Updated identity test`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`38a73f9508bb9d3aa43da00306868fce6cd9e382`. The first commit fixes
+`3db15dae44a03079da570c9d05efdafb0d09bd44`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -45,7 +45,11 @@ suppresses unusable network-interface announcements without `reachable_on`,
 and prevents autoconnection to onion, loopback, and unspecified endpoints.
 Rust now validates and carries the 16-byte field through discovery wire data,
 persistence, RPC, and `rnstatus`, with focused configuration, malformed-input,
-wire-packing, persistence, RPC, CLI, and endpoint-safety regressions. The full
+wire-packing, persistence, RPC, CLI, and endpoint-safety regressions. The third
+commit adds an upstream HMAC verification timing probe. Rust now routes token
+tag verification through the HMAC implementation's constant-time verification
+primitive, with every tag position and invalid length covered deterministically
+instead of relying on noisy wall-clock thresholds. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

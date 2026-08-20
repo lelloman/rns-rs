@@ -28,6 +28,15 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     h.finalize()
 }
 
+/// Verify an HMAC-SHA256 tag with the MAC implementation's constant-time
+/// comparison primitive.
+pub fn hmac_sha256_verify(key: &[u8], data: &[u8], tag: &[u8]) -> bool {
+    let mut hmac =
+        hmac::Hmac::<sha2::Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    hmac.update(data);
+    hmac.verify_slice(tag).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +126,23 @@ mod tests {
 
         assert_eq!(snapshot, hmac_sha256(b"key", b"first"));
         assert_eq!(hmac.finalize(), hmac_sha256(b"key", b"first-second"));
+    }
+
+    #[test]
+    fn hmac_verify_checks_every_tag_position_and_length() {
+        let key = b"timing-test-key";
+        let data = b"authenticated payload";
+        let expected = hmac_sha256(key, data);
+
+        assert!(hmac_sha256_verify(key, data, &expected));
+        assert!(!hmac_sha256_verify(key, data, &expected[..31]));
+        for index in 0..expected.len() {
+            let mut corrupted = expected;
+            corrupted[index] ^= 0x80;
+            assert!(
+                !hmac_sha256_verify(key, data, &corrupted),
+                "tag mismatch at byte {index} must fail"
+            );
+        }
     }
 }
