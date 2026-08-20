@@ -61,7 +61,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Deferred | Depends on locally generated destination ratchet history, which is not yet implemented; received-remote-ratchet storage is a different path |
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Structurally covered | Typed tunnel/path expiry fields remain distinct; persistence round-trip asserts differing values survive snapshot and restore |
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Non-runtime | Upstream-only Speedtest example; no equivalent Rust example or speed-test utility exists |
-| 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Needs decision | Pending per-commit analysis |
+| 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Structurally covered | Separate read poll loop and writer socket preserve readable interest; forced outbound-backpressure regression receives inbound traffic |
 | 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Needs decision | Pending per-commit analysis |
 | 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Needs decision | Pending per-commit analysis |
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Needs decision | Pending per-commit analysis |
@@ -437,6 +437,26 @@ appropriate for an absent example.
 
 **Final disposition:** Non-runtime.
 
+### 17. `bbc1a0d0` — Backbone RX under write backpressure
+
+**Upstream change:** Keeps `EPOLLIN` registered when a Backbone peer also needs
+`EPOLLOUT`, and processes read and write readiness independently when both flags
+are returned. Previously, changing interest to write-only could starve RX during
+large full-duplex transfers.
+
+**Rust applicability:** Full-duplex Backbone behavior under socket backpressure
+is directly applicable. Rust uses a dedicated writer-side socket clone while
+the server poll loop keeps the original stream registered as readable; writer
+backpressure never modifies the poller's read interest.
+
+**Local handling and evidence:** Added a loopback regression that shrinks the
+client receive buffer, writes from the server until `WouldBlock`, then sends a
+client frame without draining outbound data. The server still emits the exact
+inbound frame within the timeout. The focused test passed against the exact
+upstream reference checkout on 2026-08-20. No production change is required.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -462,6 +482,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `bbc1a0d0` is structurally covered by Rust's separate
+  Backbone read poll and writer socket. The forced-`WouldBlock` inbound-delivery
+  regression passed; the accepted reference checkout and drift checker resolved
+  exactly to `bbc1a0d0`, leaving 46 commits.
 - `2026-08-20`: Commit `31298e5e` affects only an upstream Speedtest example
   with no Rust equivalent. The reference checkout and drift checker resolved
   exactly to `31298e5e`, leaving 47 commits; the unchanged `RNS` tree remained

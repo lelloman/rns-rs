@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `31298e5edad07d8a7029c5fe126d092200d6a3e0`
-- Commit date: `2026-08-17 01:00:29 +0200`
-- Subject: `Fixed speedtest TX abort on link stale status`
+- Normative commit: `bbc1a0d06b1bce3750935d1fd5787cca063be62c`
+- Commit date: `2026-08-17 01:06:13 +0200`
+- Subject: `BackboneInterface: fix epoll RX starvation`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`c0308afed73dfe6aa997117428c614b5f7ab47ff`. The CI interop lane remains pinned
+`60beda95e4683972ead373d5af1ad0be7d062683`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`31298e5edad07d8a7029c5fe126d092200d6a3e0`. The first commit fixes
+`bbc1a0d06b1bce3750935d1fd5787cca063be62c`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -86,7 +86,9 @@ expiration during persistence. Rust uses distinct typed fields; the tunnel
 round-trip regression now pins different expiry values through snapshot and
 restore. The sixteenth commit changes only upstream's Speedtest example, for
 which this repository has no equivalent utility, and is non-runtime here. The
-full
+seventeenth commit preserves Backbone read interest during outbound
+backpressure. Rust already separates the read poll loop from its writer socket;
+a new forced-`WouldBlock` full-duplex regression proves reads continue. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
