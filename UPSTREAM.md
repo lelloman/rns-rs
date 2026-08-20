@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031`
-- Commit date: `2026-08-17 00:51:33 +0200`
-- Subject: `Transport: fix rebind of expires variable`
+- Normative commit: `31298e5edad07d8a7029c5fe126d092200d6a3e0`
+- Commit date: `2026-08-17 01:00:29 +0200`
+- Subject: `Fixed speedtest TX abort on link stale status`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`e31c570d2be8a3e07c5c10b8f1ea4252abfd5031`. The first commit fixes
+`31298e5edad07d8a7029c5fe126d092200d6a3e0`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -84,7 +84,9 @@ implements received remote ratchets, not local ratchet generation or rotation.
 The fifteenth commit prevents tunnel expiration from being rebound to a path
 expiration during persistence. Rust uses distinct typed fields; the tunnel
 round-trip regression now pins different expiry values through snapshot and
-restore. The full
+restore. The sixteenth commit changes only upstream's Speedtest example, for
+which this repository has no equivalent utility, and is non-runtime here. The
+full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
