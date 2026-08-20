@@ -70,7 +70,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Integrated | `-q`/`--queues`, correct per-class pressure rendering, Backbone burst counts/durations, parser/format/RPC regressions |
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Documentation follow-up | Native `rnstatus` guide documents current flags, filtering, queue classes, Backbone counts, and remote management |
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Non-runtime | Baseline now records upstream 1.5.0 development metadata; independently versioned Rust crates are unchanged |
-| 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Needs decision | Pending per-commit analysis |
+| 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Non-runtime | Python-only quote compatibility; Rust's compiled invalid-endpoint diagnostic and endpoint rejection are already covered |
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Needs decision | Pending per-commit analysis |
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Needs decision | Pending per-commit analysis |
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Needs decision | Pending per-commit analysis |
@@ -625,6 +625,24 @@ appropriate for upstream-only Python version metadata.
 
 **Final disposition:** Non-runtime.
 
+### 26. `0d15cfc1` — Keep discovery diagnostic compatible with older Python
+
+**Upstream change:** Changes nested double quotes to single quotes inside one
+f-string expression so the invalid-discovery-endpoint diagnostic parses on
+older Python interpreters. The message and endpoint rejection are unchanged.
+
+**Rust applicability:** The interpreter grammar issue is Python-only. Rust's
+format string and indexed endpoint value are statically compiled, and the
+corresponding unsafe IP, loopback, onion, and unspecified endpoint behavior was
+already covered while integrating discovery metadata.
+
+**Local handling and evidence:** No production or synthetic test change is
+appropriate. The exact diff is recorded as non-runtime, while the existing
+discovery endpoint-safety regression and warning-free compilation cover the
+equivalent Rust path.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -650,6 +668,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `0d15cfc1` is Python-parser compatibility only. The
+  existing compiled Rust diagnostic and endpoint-safety coverage remain
+  applicable; the exact checkout and drift checker resolved to `0d15cfc1`,
+  leaving 37 commits, and warning-free host lint passed.
 - `2026-08-20`: Commit `e81532f5` advances upstream's development version
   assertion to 1.5.0 without changing independently versioned Rust crates. The
   exact checkout and drift checker resolved to `e81532f5`, leaving 38 commits;
