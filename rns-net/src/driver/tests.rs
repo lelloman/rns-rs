@@ -1517,6 +1517,30 @@ struct DirectConnectCallbacks {
     accept: bool,
 }
 
+struct ProofReplyCallbacks {
+    tx: event::EventSender,
+    reply: Vec<u8>,
+}
+
+impl Callbacks for ProofReplyCallbacks {
+    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
+
+    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
+
+    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
+    }
+
+    fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {
+        self.tx
+            .send(Event::SendOutbound {
+                raw: self.reply.clone(),
+                dest_type: constants::DESTINATION_PLAIN,
+                attached_interface: None,
+            })
+            .expect("proof callback should enqueue its reply");
+    }
+}
+
 impl Callbacks for DirectConnectCallbacks {
     fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
 
@@ -9051,6 +9075,59 @@ fn check_proof_found_returns_rtt() {
     }
     // Should be consumed (removed) after checking
     assert!(!driver.completed_proofs.contains_key(&packet_hash));
+}
+
+#[test]
+fn proof_callback_can_enqueue_outbound_message() {
+    let (tx, rx) = event::channel_with_capacity(2);
+    let reply_dest = [0x44; 16];
+    let reply = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &reply_dest,
+        None,
+        constants::CONTEXT_NONE,
+        b"reply from proof callback",
+    )
+    .unwrap();
+    let mut driver = Driver::new(
+        make_transport_config(false),
+        rx,
+        tx.clone(),
+        Box::new(ProofReplyCallbacks {
+            tx: tx.clone(),
+            reply: reply.raw.clone(),
+        }),
+    );
+    driver.engine.register_interface(make_interface_info(1));
+    let (writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+    let tracked_hash = [0xA5; 32];
+    let tracked_dest = [0x5A; 16];
+    driver
+        .sent_packets
+        .insert(tracked_hash, (tracked_dest, time::now()));
+    let mut proof = Vec::with_capacity(96);
+    proof.extend_from_slice(&tracked_hash);
+    proof.extend_from_slice(&[0; 64]);
+
+    // The callback synchronously enqueues another message. This must happen only
+    // after receipt state is released, or callback-driven sends can deadlock.
+    driver.handle_inbound_proof(tracked_dest, &proof, &[0; 32]);
+    tx.send(Event::Shutdown).unwrap();
+    driver.run();
+
+    assert_eq!(sent.lock().unwrap().as_slice(), &[reply.raw]);
+    assert!(!driver.sent_packets.contains_key(&tracked_hash));
 }
 
 #[test]
