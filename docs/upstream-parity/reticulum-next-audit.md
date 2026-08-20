@@ -51,7 +51,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Integrated | Local `085b396` uses constant-time MAC verification and covers every tag position plus invalid lengths |
 | 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Structurally covered | Inbound events explicitly propagate RSSI/SNR into announced identities; focused regression asserts both values |
 | 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Structurally covered | Rust cancels resources in place before retaining completed entries; bidirectional multi-transfer regression verifies none are skipped |
-| 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Needs decision | Pending per-commit analysis |
+| 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Structurally covered | RNode receive handling records SNR independently of RSSI; focused absent-RSSI regression pins the behavior |
 | 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Needs decision | Pending per-commit analysis |
 | 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Needs decision | Pending per-commit analysis |
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Needs decision | Pending per-commit analysis |
@@ -241,6 +241,25 @@ reference checkout on 2026-08-20. No production change is required.
 
 **Final disposition:** Structurally covered.
 
+### 7. `55755c6b` — Independent SNR propagation
+
+**Upstream change:** Corrects the condition guarding Python's assignment of
+received SNR metadata. The code mistakenly checked that RSSI was non-null, so a
+valid `r_stat_snr` was not copied to the packet when RSSI was unavailable.
+
+**Rust applicability:** RNode receive metadata feeds compatible packet and
+announce telemetry. Rust already matches `StatRssi` and `StatSnr` as independent
+events and stores either value without consulting the other, so it does not
+have the cross-field guard defect.
+
+**Local handling and evidence:** Extracted the existing independent metadata
+updates into a small helper used by the reader loop. A focused regression feeds
+an SNR value while RSSI remains absent and verifies that SNR is converted and
+retained. The test passed against the exact upstream reference checkout on
+2026-08-20.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -266,6 +285,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `55755c6b` is structurally covered by independent RNode
+  RSSI/SNR event handling. The SNR-without-RSSI regression passed; the accepted
+  reference checkout and drift checker resolved exactly to `55755c6b`, leaving
+  56 commits.
 - `2026-08-20`: Commit `72ba27d6` is structurally covered by Rust's two-phase
   cancel-then-retain implementation. The bidirectional multi-resource
   regression passed; the accepted reference checkout and drift checker resolved
