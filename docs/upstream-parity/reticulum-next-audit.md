@@ -52,7 +52,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Structurally covered | Inbound events explicitly propagate RSSI/SNR into announced identities; focused regression asserts both values |
 | 6 | `72ba27d63c634e1f37ec74488e9bde02da436cd2` | Link: fix resource cancellation | Structurally covered | Rust cancels resources in place before retaining completed entries; bidirectional multi-transfer regression verifies none are skipped |
 | 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Structurally covered | RNode receive handling records SNR independently of RSSI; focused absent-RSSI regression pins the behavior |
-| 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Needs decision | Pending per-commit analysis |
+| 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Integrated | Zero MTU signalling falls back to the protocol MTU for initiator, responder, and proof confirmation; full handshake regression |
 | 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Needs decision | Pending per-commit analysis |
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Needs decision | Pending per-commit analysis |
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Needs decision | Pending per-commit analysis |
@@ -260,6 +260,27 @@ retained. The test passed against the exact upstream reference checkout on
 
 **Final disposition:** Structurally covered.
 
+### 8. `0ec51cce` — Default MTU fallback
+
+**Upstream change:** Qualifies the default-MTU constant used when an incoming
+link request signals a zero MTU. The prior `Reticulum.MTU` name was undefined in
+that scope; the exception handler happened to recover using the correctly
+qualified constant. The same fallback is used when processing link proofs.
+
+**Rust applicability:** Rust parses the same link-request and link-proof MTU
+signalling. It treated a present zero as a real MTU, which caused debug builds
+to panic while calculating the link MDU instead of falling back to the protocol
+default as Python does.
+
+**Local handling and evidence:** Added one MTU normalization function and use it
+for link initiation, incoming link requests, and confirmed link proofs. A full
+initiator/responder handshake regression with zero signalling first reproduced
+the MDU underflow, then passed with both peers using the default MTU and MDU.
+The focused test passed against the exact upstream reference checkout on
+2026-08-20.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -285,6 +306,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `0ec51cce` integration reproduced Rust's zero-MTU MDU
+  underflow before the fix. The full zero-signalling handshake then passed with
+  default MTU/MDU on both peers; the accepted reference checkout and drift
+  checker resolved exactly to `0ec51cce`, leaving 55 commits.
 - `2026-08-20`: Commit `55755c6b` is structurally covered by independent RNode
   RSSI/SNR event handling. The SNR-without-RSSI regression passed; the accepted
   reference checkout and drift checker resolved exactly to `55755c6b`, leaving

@@ -98,7 +98,7 @@ impl LinkEngine {
 
         let request_data = build_linkrequest_data(&pub_bytes, &sig_pub_bytes, mtu, mode);
 
-        let link_mtu = mtu.unwrap_or(MTU as u32);
+        let link_mtu = effective_link_mtu(mtu);
 
         let engine = LinkEngine {
             link_id: [0u8; 16], // will be set after packet is built
@@ -180,7 +180,7 @@ impl LinkEngine {
         let derived_key = perform_key_exchange(&prv, &peer_pub, &link_id, mode)?;
         let token = create_session_token(&derived_key)?;
 
-        let link_mtu = peer_mtu.unwrap_or(MTU as u32);
+        let link_mtu = effective_link_mtu(peer_mtu);
 
         // Build LRPROOF
         let lrproof_data = handshake::build_lrproof(
@@ -284,7 +284,8 @@ impl LinkEngine {
         self.token = Some(token);
 
         // Update MTU if confirmed
-        if let Some(mtu) = confirmed_mtu {
+        if confirmed_mtu.is_some() {
+            let mtu = effective_link_mtu(confirmed_mtu);
             self.mtu = mtu;
             self.mdu = compute_mdu(mtu as usize);
         }
@@ -688,6 +689,10 @@ fn compute_mdu(mtu: usize) -> usize {
     let numerator = mtu.saturating_sub(IFAC_MIN_SIZE + HEADER_MINSIZE + TOKEN_OVERHEAD);
     (numerator / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
 }
+
+fn effective_link_mtu(signalled_mtu: Option<u32>) -> u32 {
+    signalled_mtu.filter(|mtu| *mtu != 0).unwrap_or(MTU as u32)
+}
 use alloc::vec;
 
 #[cfg(test)]
@@ -745,6 +750,52 @@ mod tests {
     #[test]
     fn test_compute_mdu_default() {
         assert_eq!(compute_mdu(500), LINK_MDU);
+    }
+
+    #[test]
+    fn zero_mtu_signalling_falls_back_to_reticulum_mtu() {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+
+        let mut rng_init = make_rng(0x10);
+        let (mut initiator, request_data) = LinkEngine::new_initiator(
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(0),
+            100.0,
+            &mut rng_init,
+        );
+        let mut hashable = vec![0x00, 0x00];
+        hashable.extend_from_slice(&dest_hash);
+        hashable.push(0x00);
+        hashable.extend_from_slice(&request_data);
+        initiator.set_link_id_from_hashable(&hashable, request_data.len());
+
+        let mut rng_resp = make_rng(0x20);
+        let (responder, lrproof_data) = LinkEngine::new_responder(
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
+
+        let mut rng_lrrtt = make_rng(0x30);
+        initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
+
+        assert_eq!(initiator.mtu(), MTU as u32);
+        assert_eq!(responder.mtu(), MTU as u32);
+        assert_eq!(initiator.mdu(), LINK_MDU);
+        assert_eq!(responder.mdu(), LINK_MDU);
     }
 
     #[test]
