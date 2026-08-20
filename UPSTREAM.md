@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `bbc1a0d06b1bce3750935d1fd5787cca063be62c`
-- Commit date: `2026-08-17 01:06:13 +0200`
-- Subject: `BackboneInterface: fix epoll RX starvation`
+- Normative commit: `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039`
+- Commit date: `2026-08-17 01:07:59 +0200`
+- Subject: `Cleanup`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`60beda95e4683972ead373d5af1ad0be7d062683`. The CI interop lane remains pinned
+`93e6ebae27012a3a4054e528321f665db71dcba7`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`bbc1a0d06b1bce3750935d1fd5787cca063be62c`. The first commit fixes
+`9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -88,7 +88,9 @@ restore. The sixteenth commit changes only upstream's Speedtest example, for
 which this repository has no equivalent utility, and is non-runtime here. The
 seventeenth commit preserves Backbone read interest during outbound
 backpressure. Rust already separates the read poll loop from its writer socket;
-a new forced-`WouldBlock` full-duplex regression proves reads continue. The full
+a new forced-`WouldBlock` full-duplex regression proves reads continue. The
+eighteenth commit only parenthesizes the existing Python hangup bit test and is
+non-runtime. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
