@@ -58,7 +58,14 @@ impl TransportEngine {
             Some(&data[16..])
         } else {
             None
-        }?;
+        };
+        let Some(tag_bytes) = tag_bytes else {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Ignoring tagless path request for {:02x?}",
+                &destination_hash[..4],
+            );
+            return None;
+        };
 
         let tag_len = tag_bytes.len().min(16);
         let mut unique_tag = [0u8; 32];

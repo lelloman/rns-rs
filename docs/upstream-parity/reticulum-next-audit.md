@@ -71,7 +71,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Documentation follow-up | Native `rnstatus` guide documents current flags, filtering, queue classes, Backbone counts, and remote management |
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Non-runtime | Baseline now records upstream 1.5.0 development metadata; independently versioned Rust crates are unchanged |
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Non-runtime | Python-only quote compatibility; Rust's compiled invalid-endpoint diagnostic and endpoint rejection are already covered |
-| 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Needs decision | Pending per-commit analysis |
+| 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Integrated | Tagless path-request rejection now logs on the dedicated pathing target; removed Python queue block has no Rust equivalent |
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Needs decision | Pending per-commit analysis |
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Needs decision | Pending per-commit analysis |
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Needs decision | Pending per-commit analysis |
@@ -643,6 +643,26 @@ equivalent Rust path.
 
 **Final disposition:** Non-runtime.
 
+### 27. `f366dd9c` — Clean inbound queue path and pathing diagnostic
+
+**Upstream change:** Removes an obsolete commented copy of inbound queue
+insertion, marks early path-request limiting as implemented, and changes the
+tagless path-request rejection diagnostic from debug to the dedicated pathing
+log level. Packet acceptance and wire behavior are unchanged.
+
+**Rust applicability:** Rust has only one active prioritized queue insertion
+implementation and no deprecated commented block. It already rejects tagless
+path requests, but previously did so silently rather than at the pathing log
+level.
+
+**Local handling and evidence:** Added a trace on `PATHING_LOG_TARGET` at the
+existing tagless rejection branch. The established logging regressions prove
+that this target is hidden at debug, enabled at pathing, and enabled by extreme
+verbosity. No synthetic packet-behavior test was added because rejection itself
+did not change.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -668,6 +688,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `f366dd9c` aligns the tagless path-request diagnostic
+  with the dedicated pathing target; obsolete Python queue code has no local
+  equivalent. Pathing-filter tests, formatting, host lint, and exact drift
+  checks passed, leaving 36 commits.
 - `2026-08-20`: Commit `0d15cfc1` is Python-parser compatibility only. The
   existing compiled Rust diagnostic and endpoint-safety coverage remain
   applicable; the exact checkout and drift checker resolved to `0d15cfc1`,
