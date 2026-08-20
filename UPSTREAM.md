@@ -10,17 +10,18 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
-- Commit date: `2026-07-28 15:36:12 +0200`
-- Subject: `Added blocked IP listing to rnstatus`
+- Normative commit: `ebd9b862e976bc06185499e3f644f25e92df374a`
+- Commit date: `2026-08-14 11:21:04 +0200`
+- Subject: `Fixed rnodeconf config summary print`
 
-The normative baseline is the 1.4.2 rgit `master` tip observed and accepted on
-2026-08-11. It is one commit after the signed `1.4.2` tag target
+The normative baseline is a 1.4.2 rgit `master` development commit observed
+and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
 1.4.2. GitHub `master` remains at the signed-release target and a clean GitHub
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
-used the normative rgit checkout and asserted `RNS` tree
-`8edc9d52943aa465c8f4e23debaaa9224c74eeb2`. The CI interop lane remains pinned
+for runtime behavior remains recorded at the previous accepted commit. The
+current normative checkout asserts `RNS` tree
+`6a999e6d254bca8da56ac61d40ab6be3afa067a5`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -32,6 +33,17 @@ The signed-release acceptance remains preserved in the original 1.4.2 records.
 Historical conformance fixtures retain their source provenance. Docker,
 cross-build and physical Weave HIL validation were not rerun for this CLI-only
 baseline advancement.
+
+## In-Progress 1.5.0 Development Porting Queue
+
+The normative baseline advanced from `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
+to `ebd9b862e976bc06185499e3f644f25e92df374a`. That commit fixes contradictory
+WiFi status lines in Python's `rnodeconf` configuration-summary output. This
+repository does not implement the `rnodeconf` device-management utility or an
+equivalent configuration-summary renderer, so the change is classified as
+non-runtime and requires no Rust implementation or regression test. The full
+moving-target inventory is maintained in
+[`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
 ## Completed 1.4.2..1.4.2-rgit Porting Queue
 
