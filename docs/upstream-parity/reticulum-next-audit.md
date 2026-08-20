@@ -60,7 +60,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Structurally covered | Rust's typed, lexically scoped transfer/link identifiers cannot produce the Python undefined-local failure; existing rncp unit tests pass |
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Deferred | Depends on locally generated destination ratchet history, which is not yet implemented; received-remote-ratchet storage is a different path |
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Structurally covered | Typed tunnel/path expiry fields remain distinct; persistence round-trip asserts differing values survive snapshot and restore |
-| 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Needs decision | Pending per-commit analysis |
+| 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Non-runtime | Upstream-only Speedtest example; no equivalent Rust example or speed-test utility exists |
 | 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Needs decision | Pending per-commit analysis |
 | 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Needs decision | Pending per-commit analysis |
 | 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Needs decision | Pending per-commit analysis |
@@ -421,6 +421,22 @@ reference checkout on 2026-08-20. No production change is required.
 
 **Final disposition:** Structurally covered.
 
+### 16. `31298e5e` — Speedtest stale-link transmit loop
+
+**Upstream change:** Changes the Python Speedtest example's transmit loop from
+running only while a link is `ACTIVE` to running until it is `CLOSED`. A
+temporary `STALE` state therefore no longer aborts an in-progress benchmark.
+
+**Rust applicability:** The change is confined to `Examples/Speedtest.py`.
+This repository has link lifecycle support but no Speedtest example, benchmark
+CLI, or equivalent transmit loop.
+
+**Local handling and evidence:** A repository-wide example and utility search
+confirmed there is no corresponding code path. No production change or test is
+appropriate for an absent example.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -446,6 +462,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `31298e5e` affects only an upstream Speedtest example
+  with no Rust equivalent. The reference checkout and drift checker resolved
+  exactly to `31298e5e`, leaving 47 commits; the unchanged `RNS` tree remained
+  `c0308afed73dfe6aa997117428c614b5f7ab47ff`.
 - `2026-08-20`: Commit `e31c570d` is structurally covered by distinct typed
   tunnel/path expiry fields. The differing-expiry persistence round-trip passed;
   the accepted reference checkout and drift checker resolved exactly to
