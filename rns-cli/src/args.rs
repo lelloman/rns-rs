@@ -58,8 +58,9 @@ impl Args {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
-                        | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "hex" | "meta"
-                        | "daemon" | "disable-auth" | "json" | "value-only" | "keys-only" => {
+                        | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "queues"
+                        | "hex" | "meta" | "daemon" | "disable-auth" | "json" | "value-only"
+                        | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -235,6 +236,7 @@ mod tests {
             "--pr-stats",
             "--burst",
             "--blocked-ips",
+            "--queues",
             "--meta",
         ]);
         assert!(a.has("stdin"));
@@ -254,6 +256,7 @@ mod tests {
         assert!(a.has("pr-stats"));
         assert!(a.has("burst"));
         assert!(a.has("blocked-ips"));
+        assert!(a.has("queues"));
         assert!(a.has("meta"));
     }
 
