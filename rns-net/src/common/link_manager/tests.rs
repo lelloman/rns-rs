@@ -673,6 +673,41 @@ fn test_teardown_link() {
 }
 
 #[test]
+fn tick_removes_every_closed_pending_link() {
+    let mut rng = OsRng;
+    let mut mgr = LinkManager::new();
+    let dummy_sig = [0xAA; 32];
+    let mut link_ids = Vec::new();
+
+    for suffix in 0..4 {
+        let mut dest_hash = [0xDD; 16];
+        dest_hash[15] = suffix;
+        let (link_id, _) =
+            mgr.create_link(&dest_hash, &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        link_ids.push(link_id);
+    }
+    assert_eq!(mgr.link_count(), link_ids.len());
+
+    for link_id in &link_ids {
+        mgr.teardown_link(link_id);
+    }
+    let actions = mgr.tick(&mut rng);
+    let deregistered: Vec<LinkId> = actions
+        .iter()
+        .filter_map(|action| match action {
+            LinkManagerAction::DeregisterLinkDest { link_id } => Some(*link_id),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(mgr.link_count(), 0);
+    assert_eq!(deregistered.len(), link_ids.len());
+    for link_id in link_ids {
+        assert!(deregistered.contains(&link_id));
+    }
+}
+
+#[test]
 fn active_teardown_sends_linkclose_and_remote_closed_teardown_is_noop() {
     let (mut initiator, mut responder, link_id) = setup_active_link();
     let actions = initiator.teardown_link(&link_id);

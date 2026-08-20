@@ -55,7 +55,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Integrated | Zero MTU signalling falls back to the protocol MTU for initiator, responder, and proof confirmation; full handshake regression |
 | 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Structurally covered | Rust performs one poll wait and consumes that batch; existing simultaneous two-client multiplexing regression passes |
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Structurally covered | Immutable original payload and separate parts storage; multipart regression verifies full-payload resource hash and proof |
-| 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Needs decision | Pending per-commit analysis |
+| 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Structurally covered | Closed link IDs are collected before removal; four-pending-link regression verifies complete cleanup and deregistration |
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Needs decision | Pending per-commit analysis |
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Needs decision | Pending per-commit analysis |
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Needs decision | Pending per-commit analysis |
@@ -321,6 +321,25 @@ focused test passed against the exact upstream reference checkout on
 
 **Final disposition:** Structurally covered.
 
+### 11. `90ac6262` — Pending-link cleanup iteration
+
+**Upstream change:** Collects closed pending links in a temporary list and
+removes them only after iterating. Removing directly from Python's
+`pending_links` list skipped alternating closed entries and their associated
+path rediscovery handling.
+
+**Rust applicability:** Pending link lifecycle and cleanup are compatible
+runtime behavior. Rust snapshots all link IDs before ticking and then collects
+all closed IDs into another vector before removing any map entry. Mutation never
+occurs through the active iterator.
+
+**Local handling and evidence:** Added a regression that creates and closes four
+pending links before one tick, then requires four distinct deregistration
+actions and an empty LinkManager. The focused test passed against the exact
+upstream reference checkout on 2026-08-20. No production change is required.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -346,6 +365,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `90ac6262` is structurally covered by Rust's collect-then-
+  remove link cleanup. The four-pending-link regression passed with every
+  deregistration observed; the accepted reference checkout and drift checker
+  resolved exactly to `90ac6262`, leaving 52 commits.
 - `2026-08-20`: Commit `0c410277` is structurally covered by Rust's separate
   immutable payload and generated-part bindings. The multipart identity/proof
   regression passed; the accepted reference checkout and drift checker resolved
