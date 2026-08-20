@@ -67,7 +67,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Non-runtime | Adds only Python TODO comments about possible receipt list and lock contention improvements |
 | 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Integrated | Dynamic child→listener ownership is retained; Backbone aggregate accessor counts independent announce/PR burst states and cleans up disconnected children |
 | 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Integrated | Four independently bounded inbound classes with strict priority, control barriers, ingress-limited PR demotion, RPC queue pressure, and saturation/order regressions |
-| 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Needs decision | Pending per-commit analysis |
+| 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Integrated | `-q`/`--queues`, correct per-class pressure rendering, Backbone burst counts/durations, parser/format/RPC regressions |
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Needs decision | Pending per-commit analysis |
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Needs decision | Pending per-commit analysis |
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Needs decision | Pending per-commit analysis |
@@ -564,6 +564,31 @@ states and cleanup, and RPC pressure/count encoding. The complete 868-test
 
 **Final disposition:** Integrated.
 
+### 23. `7a1291d5` — Display inbound queue pressure in rnstatus
+
+**Upstream change:** Adds `-q`/`--queues` and renders total, data, announce,
+path-request, and ingress-limited inbound queue pressure and packet counts.
+Active burst descriptions also include the number of limited Backbone child
+interfaces. The upstream diff accidentally reads `dqpressure` for its announce
+and path-request lines.
+
+**Rust applicability:** Directly applicable. The preceding integration exposes
+all queue height and pressure keys through the local and remote status RPC
+dictionaries. Dynamic Backbone children also have independent burst state, but
+the listener needs the earliest active timestamp to describe aggregate burst
+duration accurately.
+
+**Local handling and evidence:** `rnstatus` accepts both queue flags and prints
+all five classes. It deliberately reads `aqpressure` and `pqpressure` for the
+corresponding lines instead of reproducing the upstream copy-and-paste defect.
+Backbone RPC enrichment now reports aggregate active state, child counts, and
+the earliest activation time for each burst class without changing public Rust
+statistics structs. Focused parser, formatter, event aggregation, and RPC tests
+cover missing statistics, distinct pressure values, counts, timestamps, and
+cleanup.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -589,6 +614,11 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `7a1291d5` is integrated with `rnstatus -q/--queues`,
+  correct independent class pressure rendering, and aggregate Backbone burst
+  counts/durations. Focused CLI, parser, event, and RPC tests passed; the
+  accepted checkout and drift checker resolved exactly to `7a1291d5`, leaving
+  40 commits.
 - `2026-08-20`: Commit `fc0f84f2` is integrated with independently bounded,
   prioritized inbound queues and RPC pressure/count reporting. Focused queue
   and RPC tests plus all 868 `rns-net` unit tests passed; the accepted checkout

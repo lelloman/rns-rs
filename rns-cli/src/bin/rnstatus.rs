@@ -55,6 +55,9 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_pr_stats = args.has("P") || args.has("pr-stats");
     let show_bursts = args.has("B") || args.has("burst");
     let show_blocked_ips = args.has("b") || args.has("blocked-ips");
+    // `q` is the shared parser's quiet counter, but rnstatus follows upstream
+    // in assigning it to queue statistics.
+    let show_queues = args.has("queues") || args.quiet > 0;
     let monitor_mode = args.has("m");
     let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let remote_timeout = args
@@ -87,6 +90,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_pr_stats,
             show_bursts,
             show_blocked_ips,
+            show_queues,
         );
         return;
     }
@@ -266,6 +270,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     show_pr_stats,
                     show_bursts,
                     show_blocked_ips,
+                    show_queues,
                 },
             );
         }
@@ -304,6 +309,7 @@ struct StatusDisplayOptions<'a> {
     show_pr_stats: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
+    show_queues: bool,
 }
 
 fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
@@ -317,6 +323,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
         show_pr_stats,
         show_bursts,
         show_blocked_ips,
+        show_queues,
     } = options;
     // Print transport info
     if let Some(PickleValue::Bool(true)) = response.get("transport_enabled") {
@@ -490,6 +497,13 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
             size_str(total_txb),
             size_str(total_rxb),
         );
+        println!();
+    }
+
+    if show_queues {
+        for line in queue_status_lines(response) {
+            println!("{line}");
+        }
         println!();
     }
 }
@@ -713,8 +727,14 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
             .get("burst_activated")
             .and_then(|v| v.as_float())
             .unwrap_or(now);
+        let count = iface
+            .get("burst_count")
+            .and_then(|v| v.as_int())
+            .filter(|count| *count > 0)
+            .map(|count| format!(" on {count}"))
+            .unwrap_or_default();
         parts.push(format!(
-            "announces {}",
+            "announces{count} for {}",
             prettytime((now - activated).max(0.0))
         ));
     }
@@ -727,8 +747,14 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
             .get("pr_burst_activated")
             .and_then(|v| v.as_float())
             .unwrap_or(now);
+        let count = iface
+            .get("pr_burst_count")
+            .and_then(|v| v.as_int())
+            .filter(|count| *count > 0)
+            .map(|count| format!(" on {count}"))
+            .unwrap_or_default();
         parts.push(format!(
-            "path requests {}",
+            "path requests{count} for {}",
             prettytime((now - activated).max(0.0))
         ));
     }
@@ -738,6 +764,35 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
     } else {
         vec![format!("    Bursts    : {}", parts.join(", "))]
     }
+}
+
+fn queue_status_lines(stats: &PickleValue) -> Vec<String> {
+    let fields = [
+        ("tqpressure", "rxqt", "total"),
+        ("dqpressure", "rxqd", "data"),
+        ("aqpressure", "rxqa", "announce"),
+        ("pqpressure", "rxqp", "path request"),
+        ("ilqpressure", "rxqil", "ingress limiter"),
+    ];
+    let mut lines = Vec::new();
+    for (index, (pressure_key, count_key, label)) in fields.into_iter().enumerate() {
+        let Some(pressure) = stats.get(pressure_key).and_then(|value| value.as_float()) else {
+            continue;
+        };
+        let Some(count) = stats.get(count_key).and_then(|value| value.as_int()) else {
+            continue;
+        };
+        let prefix = if index == 0 {
+            " Qu. Pressure :"
+        } else {
+            "               "
+        };
+        lines.push(format!(
+            "{prefix} {:.1}% {label}, {count} pkts",
+            pressure * 100.0
+        ));
+    }
+    lines
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -759,6 +814,7 @@ fn remote_status(
     show_pr_stats: bool,
     show_bursts: bool,
     show_blocked_ips: bool,
+    show_queues: bool,
 ) {
     let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
         Ok(h) => h,
@@ -809,6 +865,7 @@ fn remote_status(
                             show_pr_stats,
                             show_bursts,
                             show_blocked_ips,
+                            show_queues,
                         },
                     );
                 }
@@ -1101,6 +1158,7 @@ fn print_usage(usage_name: &str) {
     println!("  -P, --pr-stats          Show path request statistics");
     println!("  -B, --burst             Only show interfaces with active burst limiting");
     println!("  -b, --blocked-ips       Show blocked IPs per interface");
+    println!("  -q, --queues            Show inbound queue pressure statistics");
     println!("  -d                      Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
@@ -1339,11 +1397,66 @@ mod tests {
                 PickleValue::String("pr_burst_activated".into()),
                 PickleValue::Float(95.0),
             ),
+            (
+                PickleValue::String("burst_count".into()),
+                PickleValue::Int(3),
+            ),
+            (
+                PickleValue::String("pr_burst_count".into()),
+                PickleValue::Int(2),
+            ),
         ]);
 
         assert_eq!(
             burst_status_lines(&iface, 100.0),
-            vec!["    Bursts    : announces 10s, path requests 5s"]
+            vec!["    Bursts    : announces on 3 for 10s, path requests on 2 for 5s"]
         );
+    }
+
+    #[test]
+    fn queue_status_uses_each_traffic_class_pressure() {
+        let stats = PickleValue::Dict(vec![
+            (
+                PickleValue::String("tqpressure".into()),
+                PickleValue::Float(0.11),
+            ),
+            (PickleValue::String("rxqt".into()), PickleValue::Int(15)),
+            (
+                PickleValue::String("dqpressure".into()),
+                PickleValue::Float(0.22),
+            ),
+            (PickleValue::String("rxqd".into()), PickleValue::Int(1)),
+            (
+                PickleValue::String("aqpressure".into()),
+                PickleValue::Float(0.33),
+            ),
+            (PickleValue::String("rxqa".into()), PickleValue::Int(2)),
+            (
+                PickleValue::String("pqpressure".into()),
+                PickleValue::Float(0.44),
+            ),
+            (PickleValue::String("rxqp".into()), PickleValue::Int(4)),
+            (
+                PickleValue::String("ilqpressure".into()),
+                PickleValue::Float(0.55),
+            ),
+            (PickleValue::String("rxqil".into()), PickleValue::Int(8)),
+        ]);
+
+        assert_eq!(
+            queue_status_lines(&stats),
+            vec![
+                " Qu. Pressure : 11.0% total, 15 pkts",
+                "                22.0% data, 1 pkts",
+                "                33.0% announce, 2 pkts",
+                "                44.0% path request, 4 pkts",
+                "                55.0% ingress limiter, 8 pkts",
+            ]
+        );
+    }
+
+    #[test]
+    fn queue_status_ignores_unavailable_statistics() {
+        assert!(queue_status_lines(&PickleValue::Dict(Vec::new())).is_empty());
     }
 }

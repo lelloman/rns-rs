@@ -1,6 +1,6 @@
 //! Event types for the driver loop — concrete sync instantiation.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -47,8 +47,8 @@ struct QueueState {
     inbound: [VecDeque<QueuedEvent>; INBOUND_QUEUE_COUNT],
     next_sequence: u64,
     receiver_alive: bool,
-    announce_burst_active: HashSet<InterfaceId>,
-    pr_ingress_limited: HashSet<InterfaceId>,
+    announce_bursts: HashMap<InterfaceId, f64>,
+    path_request_bursts: HashMap<InterfaceId, f64>,
     dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
 }
 
@@ -59,8 +59,8 @@ impl QueueState {
             inbound: std::array::from_fn(|_| VecDeque::new()),
             next_sequence: 0,
             receiver_alive: true,
-            announce_burst_active: HashSet::new(),
-            pr_ingress_limited: HashSet::new(),
+            announce_bursts: HashMap::new(),
+            path_request_bursts: HashMap::new(),
             dynamic_interface_parents: HashMap::new(),
         }
     }
@@ -112,6 +112,18 @@ impl InboundQueueSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BurstClassStats {
+    pub(crate) count: usize,
+    pub(crate) activated: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DynamicBurstStats {
+    pub(crate) announce: BurstClassStats,
+    pub(crate) path_request: BurstClassStats,
+}
+
 impl Clone for EventSender {
     fn clone(&self) -> Self {
         self.shared.sender_count.fetch_add(1, Ordering::Relaxed);
@@ -147,7 +159,7 @@ impl EventSender {
             .as_ref()
             .is_some_and(|packet| packet.destination_hash == self.shared.path_request_dest)
         {
-            return Some(if state.pr_ingress_limited.contains(interface_id) {
+            return Some(if state.path_request_bursts.contains_key(interface_id) {
                 QueueClass::IngressLimited
             } else {
                 QueueClass::PathRequest
@@ -226,19 +238,19 @@ impl EventSender {
     pub(crate) fn set_ingress_bursts(
         &self,
         interface_id: InterfaceId,
-        announce_limited: bool,
-        path_request_limited: bool,
+        announce_activated: Option<f64>,
+        path_request_activated: Option<f64>,
     ) {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
-        if announce_limited {
-            state.announce_burst_active.insert(interface_id);
+        if let Some(activated) = announce_activated {
+            state.announce_bursts.insert(interface_id, activated);
         } else {
-            state.announce_burst_active.remove(&interface_id);
+            state.announce_bursts.remove(&interface_id);
         }
-        if path_request_limited {
-            state.pr_ingress_limited.insert(interface_id);
+        if let Some(activated) = path_request_activated {
+            state.path_request_bursts.insert(interface_id, activated);
         } else {
-            state.pr_ingress_limited.remove(&interface_id);
+            state.path_request_bursts.remove(&interface_id);
         }
     }
 
@@ -257,8 +269,8 @@ impl EventSender {
 
     pub(crate) fn remove_interface(&self, interface_id: InterfaceId) {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.announce_burst_active.remove(&interface_id);
-        state.pr_ingress_limited.remove(&interface_id);
+        state.announce_bursts.remove(&interface_id);
+        state.path_request_bursts.remove(&interface_id);
         state.dynamic_interface_parents.remove(&interface_id);
     }
 
@@ -270,20 +282,44 @@ impl EventSender {
         }
     }
 
-    pub(crate) fn dynamic_burst_counts(&self, parent_id: InterfaceId) -> Option<(usize, usize)> {
+    pub(crate) fn dynamic_burst_stats(&self, parent_id: InterfaceId) -> Option<DynamicBurstStats> {
         let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         let children = state
             .dynamic_interface_parents
             .iter()
             .filter(|(_, candidate_parent)| **candidate_parent == parent_id);
         let mut found = false;
-        let mut counts = (0, 0);
+        let mut announce = (0, None::<f64>);
+        let mut path_request = (0, None::<f64>);
         for (child, _) in children {
             found = true;
-            counts.0 += usize::from(state.announce_burst_active.contains(child));
-            counts.1 += usize::from(state.pr_ingress_limited.contains(child));
+            if let Some(activated) = state.announce_bursts.get(child) {
+                announce.0 += 1;
+                announce.1 = Some(
+                    announce
+                        .1
+                        .map_or(*activated, |current| current.min(*activated)),
+                );
+            }
+            if let Some(activated) = state.path_request_bursts.get(child) {
+                path_request.0 += 1;
+                path_request.1 = Some(
+                    path_request
+                        .1
+                        .map_or(*activated, |current| current.min(*activated)),
+                );
+            }
         }
-        found.then_some(counts)
+        found.then_some(DynamicBurstStats {
+            announce: BurstClassStats {
+                count: announce.0,
+                activated: announce.1,
+            },
+            path_request: BurstClassStats {
+                count: path_request.0,
+                activated: path_request.1,
+            },
+        })
     }
 }
 
@@ -464,7 +500,7 @@ mod tests {
         let (tx, rx) = channel_with_capacity(8);
         let path_dest =
             rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
-        tx.set_ingress_bursts(InterfaceId(4), false, true);
+        tx.set_ingress_bursts(InterfaceId(4), None, Some(4.0));
 
         tx.send(frame(4, path_dest, rns_core::constants::PACKET_TYPE_DATA))
             .unwrap();
@@ -494,17 +530,55 @@ mod tests {
         let (tx, _rx) = channel();
         tx.register_dynamic_parent(InterfaceId(11), InterfaceId(10));
         tx.register_dynamic_parent(InterfaceId(12), InterfaceId(10));
+        tx.register_dynamic_parent(InterfaceId(13), InterfaceId(10));
         tx.register_dynamic_parent(InterfaceId(21), InterfaceId(20));
-        tx.set_ingress_bursts(InterfaceId(11), true, false);
-        tx.set_ingress_bursts(InterfaceId(12), false, true);
-        tx.set_ingress_bursts(InterfaceId(21), true, true);
+        tx.set_ingress_bursts(InterfaceId(11), Some(11.0), None);
+        tx.set_ingress_bursts(InterfaceId(12), None, Some(12.0));
+        tx.set_ingress_bursts(InterfaceId(13), Some(9.0), None);
+        tx.set_ingress_bursts(InterfaceId(21), Some(21.0), Some(22.0));
 
-        assert_eq!(tx.dynamic_burst_counts(InterfaceId(10)), Some((1, 1)));
-        assert_eq!(tx.dynamic_burst_counts(InterfaceId(20)), Some((1, 1)));
-        assert_eq!(tx.dynamic_burst_counts(InterfaceId(30)), None);
+        assert_eq!(
+            tx.dynamic_burst_stats(InterfaceId(10)),
+            Some(DynamicBurstStats {
+                announce: BurstClassStats {
+                    count: 2,
+                    activated: Some(9.0),
+                },
+                path_request: BurstClassStats {
+                    count: 1,
+                    activated: Some(12.0),
+                },
+            })
+        );
+        assert_eq!(
+            tx.dynamic_burst_stats(InterfaceId(20)),
+            Some(DynamicBurstStats {
+                announce: BurstClassStats {
+                    count: 1,
+                    activated: Some(21.0),
+                },
+                path_request: BurstClassStats {
+                    count: 1,
+                    activated: Some(22.0),
+                },
+            })
+        );
+        assert_eq!(tx.dynamic_burst_stats(InterfaceId(30)), None);
 
         tx.remove_interface(InterfaceId(12));
-        assert_eq!(tx.dynamic_burst_counts(InterfaceId(10)), Some((1, 0)));
+        assert_eq!(
+            tx.dynamic_burst_stats(InterfaceId(10)),
+            Some(DynamicBurstStats {
+                announce: BurstClassStats {
+                    count: 2,
+                    activated: Some(9.0),
+                },
+                path_request: BurstClassStats {
+                    count: 0,
+                    activated: None,
+                },
+            })
+        );
     }
 
     #[test]

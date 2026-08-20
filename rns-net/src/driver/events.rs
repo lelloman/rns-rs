@@ -195,8 +195,12 @@ impl Driver {
         self.dispatch_all(actions);
         self.event_tx.set_ingress_bursts(
             interface_id,
-            self.engine.burst_active(&interface_id),
-            self.engine.pr_burst_active(&interface_id),
+            self.engine
+                .burst_active(&interface_id)
+                .then(|| self.engine.burst_activated(&interface_id)),
+            self.engine
+                .pr_burst_active(&interface_id)
+                .then(|| self.engine.pr_burst_activated(&interface_id)),
         );
     }
 

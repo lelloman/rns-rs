@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `fc0f84f23e803ba40ae678ce179c3767ebe8c89e`
-- Commit date: `2026-08-17 20:51:46 +0200`
-- Subject: `Added prioritized inbound traffic processing`
+- Normative commit: `7a1291d53069d2b495d02ab7266443f4d5c87527`
+- Commit date: `2026-08-17 20:52:02 +0200`
+- Subject: `Added inbound queue pressure statistics to rnstatus`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`2972f1c665c3f623bbb316177537439ab68215d1`. The CI interop lane remains pinned
+`e2967f4ed14019404183a35e671331a316624f33`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -31,13 +31,13 @@ with the detailed audit in
 [`docs/upstream-parity/reticulum-1.4.2-rgit-audit.md`](docs/upstream-parity/reticulum-1.4.2-rgit-audit.md).
 The signed-release acceptance remains preserved in the original 1.4.2 records.
 Historical conformance fixtures retain their source provenance. Docker,
-cross-build and physical Weave HIL validation were not rerun for this CLI-only
-baseline advancement.
+cross-build and physical Weave HIL validation were not rerun for this
+status-display baseline advancement.
 
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`fc0f84f23e803ba40ae678ce179c3767ebe8c89e`. The first commit fixes
+`7a1291d53069d2b495d02ab7266443f4d5c87527`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -105,7 +105,13 @@ ANNOUNCE, PATH REQUEST, and INGRESS-LIMITED queues. Rust now classifies frames
 at the event boundary, drains them in upstream priority order without allowing
 one class to consume another's capacity, retains control events as ordering
 barriers, and reports queue height/pressure plus listener burst counts over the
-existing RPC dictionary without changing public Rust status structs. The full
+existing RPC dictionary without changing public Rust status structs. The
+twenty-third commit exposes those queue statistics in `rnstatus` and includes
+Backbone child counts in active-burst descriptions. Rust supports both short
+and long queue flags, displays the correct independent pressure for every
+class, and aggregates the earliest active child timestamp for listener burst
+duration. Focused tests deliberately use different class pressures to avoid
+the upstream commit's announce/path copy-and-paste error. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

@@ -24,11 +24,11 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventSender,
-    HookInfo, InterfaceStatsResponse, KnownDestinationEntry, LifecycleState, PathTableEntry,
-    ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
-    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
-    RuntimeConfigValue, SingleInterfaceStat,
+    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, BurstClassStats, DrainStatus,
+    DynamicBurstStats, Event, EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry,
+    LifecycleState, PathTableEntry, ProviderBridgeStats, QueryRequest, QueryResponse,
+    RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -1214,25 +1214,64 @@ fn add_inbound_runtime_stats(
             let PickleValue::Dict(iface_dict) = iface else {
                 continue;
             };
-            let counts = if stat.interface_type == "BackboneInterface" {
+            let burst_stats = if stat.interface_type == "BackboneInterface" {
                 event_tx
-                    .dynamic_burst_counts(InterfaceId(stat.id))
-                    .or(Some((0, 0)))
+                    .dynamic_burst_stats(InterfaceId(stat.id))
+                    .or(Some(DynamicBurstStats {
+                        announce: BurstClassStats {
+                            count: 0,
+                            activated: None,
+                        },
+                        path_request: BurstClassStats {
+                            count: 0,
+                            activated: None,
+                        },
+                    }))
             } else {
                 None
             };
             iface_dict.push((
                 PickleValue::String("burst_count".into()),
-                counts
-                    .map(|counts| PickleValue::Int(counts.0 as i64))
+                burst_stats
+                    .map(|stats| PickleValue::Int(stats.announce.count as i64))
                     .unwrap_or(PickleValue::None),
             ));
             iface_dict.push((
                 PickleValue::String("pr_burst_count".into()),
-                counts
-                    .map(|counts| PickleValue::Int(counts.1 as i64))
+                burst_stats
+                    .map(|stats| PickleValue::Int(stats.path_request.count as i64))
                     .unwrap_or(PickleValue::None),
             ));
+            if let Some(stats) = burst_stats {
+                set_pickle_dict_entry(
+                    iface_dict,
+                    "burst_active",
+                    PickleValue::Bool(stats.announce.count > 0),
+                );
+                set_pickle_dict_entry(
+                    iface_dict,
+                    "burst_activated",
+                    stats
+                        .announce
+                        .activated
+                        .map(PickleValue::Float)
+                        .unwrap_or(PickleValue::None),
+                );
+                set_pickle_dict_entry(
+                    iface_dict,
+                    "pr_burst_active",
+                    PickleValue::Bool(stats.path_request.count > 0),
+                );
+                set_pickle_dict_entry(
+                    iface_dict,
+                    "pr_burst_activated",
+                    stats
+                        .path_request
+                        .activated
+                        .map(PickleValue::Float)
+                        .unwrap_or(PickleValue::None),
+                );
+            }
         }
     }
 
@@ -1289,6 +1328,21 @@ fn add_inbound_runtime_stats(
         ),
         (PickleValue::String("txq".into()), PickleValue::None),
     ]);
+}
+
+fn set_pickle_dict_entry(
+    dict: &mut Vec<(PickleValue, PickleValue)>,
+    key: &str,
+    value: PickleValue,
+) {
+    if let Some((_, existing)) = dict
+        .iter_mut()
+        .find(|(candidate, _)| candidate.as_str() == Some(key))
+    {
+        *existing = value;
+    } else {
+        dict.push((PickleValue::String(key.into()), value));
+    }
 }
 
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
@@ -3363,7 +3417,7 @@ mod tests {
         stats.interfaces[0].interface_type = "BackboneInterface".into();
         let (event_tx, _event_rx) = crate::event::channel_with_capacity(4);
         event_tx.register_dynamic_parent(InterfaceId(2), InterfaceId(1));
-        event_tx.set_ingress_bursts(InterfaceId(2), true, true);
+        event_tx.set_ingress_bursts(InterfaceId(2), Some(10.0), Some(20.0));
         event_tx
             .try_send(Event::Frame {
                 interface_id: InterfaceId(2),
@@ -3390,6 +3444,32 @@ mod tests {
                 .as_int()
                 .unwrap(),
             1
+        );
+        assert!(runtime_ifaces[0]
+            .get("burst_active")
+            .unwrap()
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            runtime_ifaces[0]
+                .get("burst_activated")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            10.0
+        );
+        assert!(runtime_ifaces[0]
+            .get("pr_burst_active")
+            .unwrap()
+            .as_bool()
+            .unwrap());
+        assert_eq!(
+            runtime_ifaces[0]
+                .get("pr_burst_activated")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            20.0
         );
         assert_eq!(runtime_pickle.get("rxqt").unwrap().as_int().unwrap(), 1);
         assert_eq!(runtime_pickle.get("rxqd").unwrap().as_int().unwrap(), 1);
