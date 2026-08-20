@@ -1,6 +1,27 @@
 use super::*;
 
 impl Driver {
+    pub(super) fn dynamic_burst_counts(&self, parent_id: InterfaceId) -> (usize, usize) {
+        self.dynamic_interface_parents
+            .iter()
+            .filter(|(_, candidate_parent)| **candidate_parent == parent_id)
+            .fold((0, 0), |(announce_count, path_request_count), (id, _)| {
+                (
+                    announce_count + usize::from(self.engine.burst_active(id)),
+                    path_request_count + usize::from(self.engine.pr_burst_active(id)),
+                )
+            })
+    }
+
+    /// Return active announce and path-request burst counts for a Backbone listener.
+    #[cfg(feature = "iface-backbone")]
+    pub fn backbone_burst_counts(&self, parent_id: InterfaceId) -> Option<(usize, usize)> {
+        self.backbone_peer_state
+            .values()
+            .any(|handle| handle.interface_id == parent_id)
+            .then(|| self.dynamic_burst_counts(parent_id))
+    }
+
     pub(crate) fn handle_interface_stats_query(&self) -> QueryResponse {
         let mut interfaces = Vec::new();
         let mut total_rxb: u64 = 0;

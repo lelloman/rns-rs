@@ -2946,6 +2946,87 @@ fn dynamic_interface_register() {
 }
 
 #[test]
+fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
+    let (callbacks, ..) = MockCallbacks::new();
+    let (tx, rx) = event::channel();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    for parent_id in [10, 20] {
+        let (writer, _) = MockWriter::new();
+        let mut parent = make_entry(parent_id, Box::new(writer), true);
+        parent.info.mode = constants::MODE_ACCESS_POINT;
+        parent.info.ingress_control = rns_core::transport::types::IngressControlConfig::enabled();
+        driver.interfaces.insert(InterfaceId(parent_id), parent);
+    }
+
+    for (child_id, parent_id, announce_burst, path_request_burst) in [
+        (11, 10, true, false),
+        (12, 10, false, true),
+        (21, 20, false, true),
+    ] {
+        let mut info = make_interface_info(child_id);
+        if announce_burst {
+            info.ia_freq = constants::IC_BURST_FREQ + 1.0;
+        }
+        if path_request_burst {
+            info.ip_freq = constants::IC_PR_BURST_FREQ + 1.0;
+        }
+        let (writer, _) = MockWriter::new();
+        driver.handle_dynamic_interface_up_event(
+            InterfaceId(child_id),
+            Box::new(writer),
+            event::DynamicInterfaceRegistration {
+                info,
+                interface_type: "BackboneClientInterface".into(),
+                parent_id: InterfaceId(parent_id),
+                telemetry: event::InterfaceTelemetry::default(),
+                ifac: None,
+            },
+        );
+        let registered = driver
+            .engine
+            .interface_info(&InterfaceId(child_id))
+            .unwrap();
+        assert!(registered.ingress_control.enabled);
+
+        if announce_burst {
+            let identity = Identity::new(&mut OsRng);
+            let raw = build_announce_packet(&identity);
+            driver.engine.handle_inbound(
+                rns_core::transport::InboundFrame {
+                    raw: &raw,
+                    iface: InterfaceId(child_id),
+                    now: time::now(),
+                    rx: rns_core::transport::RxMetadata::default(),
+                },
+                &mut driver.rng,
+            );
+            assert!(driver.engine.burst_active(&InterfaceId(child_id)));
+        }
+        if path_request_burst {
+            let mut request = vec![0xC3; 16];
+            request.extend_from_slice(&[child_id as u8; 16]);
+            driver
+                .engine
+                .handle_path_request(&request, InterfaceId(child_id), time::now());
+            assert!(driver.engine.pr_burst_active(&InterfaceId(child_id)));
+        }
+        assert_eq!(
+            driver.dynamic_interface_parents[&InterfaceId(child_id)],
+            InterfaceId(parent_id)
+        );
+    }
+
+    assert_eq!(driver.dynamic_burst_counts(InterfaceId(10)), (1, 1));
+    assert_eq!(driver.dynamic_burst_counts(InterfaceId(20)), (0, 1));
+
+    driver.handle_interface_down_event(InterfaceId(12));
+    assert_eq!(driver.dynamic_burst_counts(InterfaceId(10)), (1, 0));
+    assert!(!driver
+        .dynamic_interface_parents
+        .contains_key(&InterfaceId(12)));
+}
+
+#[test]
 fn dynamic_interface_applies_transport_announce_rate_defaults() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

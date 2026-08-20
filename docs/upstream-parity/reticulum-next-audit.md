@@ -65,7 +65,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Non-runtime | Parentheses-only Python cleanup around the existing EPOLLHUP bit test; no semantic change |
 | 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Structurally covered | Driver-owned receipt state is removed before `on_proof`; callback-driven outbound send regression completes and dispatches its packet |
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Non-runtime | Adds only Python TODO comments about possible receipt list and lock contention improvements |
-| 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Needs decision | Pending per-commit analysis |
+| 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Integrated | Dynamic child→listener ownership is retained; Backbone aggregate accessor counts independent announce/PR burst states and cleans up disconnected children |
 | 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Needs decision | Pending per-commit analysis |
 | 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Needs decision | Pending per-commit analysis |
 | 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Needs decision | Pending per-commit analysis |
@@ -510,6 +510,26 @@ in the moving baseline.
 
 **Final disposition:** Non-runtime.
 
+### 21. `c2eac12f` — Count burst-limited Backbone clients
+
+**Upstream change:** Adds `ic_burst_count` and `ic_pr_burst_count` properties.
+Base interfaces return no aggregate, while a Backbone listener counts spawned
+client interfaces with active announce or path-request ingress limiting.
+
+**Rust applicability:** Directly applicable. Rust already tracks both burst
+states per concrete child interface, but previously discarded the dynamic
+child-to-listener relationship after registration, so listener-level counts
+could not be reconstructed reliably.
+
+**Local handling and evidence:** The driver now retains dynamic interface
+parent IDs, removes them with disconnected children, and exposes a non-breaking
+Backbone count accessor without changing the published `SingleInterfaceStat`
+layout. A focused regression activates different announce and path-request
+bursts across two listeners, verifies parent scoping, disconnects one child,
+and verifies both its ownership and count disappear.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -535,6 +555,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `c2eac12f` is integrated with retained dynamic-parent
+  ownership and Backbone burst-count aggregation. The mixed-parent and cleanup
+  regression passed; the accepted checkout and drift checker resolved exactly
+  to `c2eac12f`, leaving 42 commits.
 - `2026-08-20`: Commit `e4649603` adds only TODO comments about receipt
   contention. The reference checkout and drift checker resolved exactly to
   `e4649603`, leaving 43 commits; formatting and warning-free host lint passed.
