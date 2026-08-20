@@ -62,7 +62,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Structurally covered | Typed tunnel/path expiry fields remain distinct; persistence round-trip asserts differing values survive snapshot and restore |
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Non-runtime | Upstream-only Speedtest example; no equivalent Rust example or speed-test utility exists |
 | 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Structurally covered | Separate read poll loop and writer socket preserve readable interest; forced outbound-backpressure regression receives inbound traffic |
-| 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Needs decision | Pending per-commit analysis |
+| 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Non-runtime | Parentheses-only Python cleanup around the existing EPOLLHUP bit test; no semantic change |
 | 19 | `2d7f858a5498795b53218f422099bbd87c1ac078` | Transport: fix deadlock on receipts_lock  when callback sends message | Needs decision | Pending per-commit analysis |
 | 20 | `e46496032c8845fc8312060e682627d416ab77d9` | Contention comments | Needs decision | Pending per-commit analysis |
 | 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Needs decision | Pending per-commit analysis |
@@ -457,6 +457,21 @@ upstream reference checkout on 2026-08-20. No production change is required.
 
 **Final disposition:** Structurally covered.
 
+### 18. `9ebcb55c` — Parenthesize Backbone hangup test
+
+**Upstream change:** Adds parentheses around `event & select.EPOLLHUP` in the
+Backbone poll loop. Python's operator precedence and the evaluated condition are
+unchanged.
+
+**Rust applicability:** None. This is a source-style clarification with no wire,
+lifecycle, polling, or disconnect behavior change.
+
+**Local handling and evidence:** No code or test change is appropriate. The
+complete 40-test Backbone suite, including disconnect and backpressure cases,
+passed for the immediately preceding runtime commit.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -482,6 +497,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `9ebcb55c` is a semantics-neutral parentheses cleanup.
+  The reference checkout and drift checker resolved exactly to `9ebcb55c`,
+  leaving 45 commits; formatting and warning-free host lint passed.
 - `2026-08-20`: Commit `bbc1a0d0` is structurally covered by Rust's separate
   Backbone read poll and writer socket. The forced-`WouldBlock` inbound-delivery
   regression passed; the accepted reference checkout and drift checker resolved
