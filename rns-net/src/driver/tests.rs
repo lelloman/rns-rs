@@ -6406,6 +6406,8 @@ fn announce_received_populates_known_destinations() {
         &identity.get_public_key().unwrap()
     );
     assert_eq!(recalled.announced.hops, 1);
+    assert_eq!(recalled.announced.rssi, Some(-100));
+    assert_eq!(recalled.announced.snr, Some(10.5));
 }
 
 #[test]

@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `ce81b339dcbf36137b12a87b5b149bcff7e7f36a`
-- Commit date: `2026-08-16 21:34:34 +0200`
-- Subject: constant-time HMAC comparison; verbatim upstream subject retained in the active audit
+- Normative commit: `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556`
+- Commit date: `2026-08-17 00:24:16 +0200`
+- Subject: `Packet: reticulum variable is not defined`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`61589a141c37f3968464625996aa3abc9eab2a28`. The CI interop lane remains pinned
+`dcdbdf863f17fc1327daec3ef00f40f49f8cf2bb`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`ce81b339dcbf36137b12a87b5b149bcff7e7f36a`. The first commit fixes
+`6c1182c2c2043a0e9cb7b8fab3c3980e633f3556`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -51,7 +51,10 @@ tag verification through the HMAC implementation's constant-time verification
 primitive, with every tag position and invalid length covered deterministically
 instead of relying on noisy wall-clock thresholds. The following upstream
 runtime commit makes that same `compare_digest` change and is directly covered
-by the preceding Rust integration. The full
+by the preceding Rust integration. The fifth commit repairs Python's fallback
+lookup for packet RSSI, SNR, and quality metadata. Rust has no global fallback:
+the inbound event owns RSSI/SNR and propagates them into the announced identity;
+a focused regression now pins both values. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
