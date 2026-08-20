@@ -45,7 +45,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Needs decision | Pending per-commit analysis |
+| 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Non-runtime | No `rnodeconf` utility or configuration-summary renderer exists in this repository; no Rust behavior is affected |
 | 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Needs decision | Pending per-commit analysis |
 | 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Needs decision | Pending per-commit analysis |
 | 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Needs decision | Pending per-commit analysis |
@@ -111,7 +111,27 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 
 ## Per-Commit Analysis
 
-Detailed diff analysis and focused evidence are pending. As each commit is
+### 1. `ebd9b862` — Fixed rnodeconf config summary print
+
+**Upstream change:** Changes the WiFi station/AP summary branches in Python's
+`rnodeconf` utility from two independent conditions to one `if`/`elif`/`else`
+chain. Before the fix, station mode printed both "Enabled (Station)" and
+"Disabled".
+
+**Rust applicability:** This repository implements RNode framing, interfaces,
+and runtime configuration, but it does not implement the `rnodeconf`
+device-management utility or expose an equivalent device configuration-summary
+renderer. The changed presentation path therefore has no Rust compatibility
+surface.
+
+**Local handling and evidence:** No production change or regression test is
+appropriate because there is no corresponding output path to exercise. A
+repository-wide search confirmed that RNode code is limited to protocol,
+interface, runtime configuration, ESP32 bridge, and hardware examples.
+
+**Final disposition:** Non-runtime.
+
+Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
 
@@ -140,4 +160,3 @@ numbered analysis section here.
   R-Net Istanbul. Canonical rGit was 63 commits ahead; the GitHub mirror was
   behind the accepted baseline. Audit inventory opened; no parity acceptance
   or implementation claim was made.
-
