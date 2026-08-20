@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use rns_core::msgpack::{self, Value as MsgpackValue};
+use rns_core::transport::types::InterfaceId;
 use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
@@ -371,7 +372,9 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                 "interface_stats" => {
                     let resp = send_query(event_tx, QueryRequest::InterfaceStats)?;
                     if let QueryResponse::InterfaceStats(stats) = resp {
-                        Ok(interface_stats_to_pickle(&stats))
+                        let mut response = interface_stats_to_pickle(&stats);
+                        add_inbound_runtime_stats(&mut response, &stats, event_tx);
+                        Ok(response)
                     } else {
                         Ok(PickleValue::None)
                     }
@@ -1193,6 +1196,99 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
     }
 
     PickleValue::Dict(dict)
+}
+
+fn add_inbound_runtime_stats(
+    response: &mut PickleValue,
+    stats: &InterfaceStatsResponse,
+    event_tx: &EventSender,
+) {
+    let PickleValue::Dict(dict) = response else {
+        return;
+    };
+    if let Some((_, PickleValue::List(ifaces))) = dict
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some("interfaces"))
+    {
+        for (iface, stat) in ifaces.iter_mut().zip(&stats.interfaces) {
+            let PickleValue::Dict(iface_dict) = iface else {
+                continue;
+            };
+            let counts = if stat.interface_type == "BackboneInterface" {
+                event_tx
+                    .dynamic_burst_counts(InterfaceId(stat.id))
+                    .or(Some((0, 0)))
+            } else {
+                None
+            };
+            iface_dict.push((
+                PickleValue::String("burst_count".into()),
+                counts
+                    .map(|counts| PickleValue::Int(counts.0 as i64))
+                    .unwrap_or(PickleValue::None),
+            ));
+            iface_dict.push((
+                PickleValue::String("pr_burst_count".into()),
+                counts
+                    .map(|counts| PickleValue::Int(counts.1 as i64))
+                    .unwrap_or(PickleValue::None),
+            ));
+        }
+    }
+
+    let snapshot = event_tx.inbound_queue_snapshot();
+    let total_height = snapshot.total_height();
+    let total_capacity = snapshot.total_capacity();
+    let pressure = |height: usize, capacity: usize| {
+        if height == 0 {
+            0.0
+        } else {
+            height as f64 / capacity as f64
+        }
+    };
+    dict.extend([
+        (
+            PickleValue::String("rxqt".into()),
+            PickleValue::Int(total_height as i64),
+        ),
+        (
+            PickleValue::String("rxqd".into()),
+            PickleValue::Int(snapshot.heights[0] as i64),
+        ),
+        (
+            PickleValue::String("rxqa".into()),
+            PickleValue::Int(snapshot.heights[1] as i64),
+        ),
+        (
+            PickleValue::String("rxqp".into()),
+            PickleValue::Int(snapshot.heights[2] as i64),
+        ),
+        (
+            PickleValue::String("rxqil".into()),
+            PickleValue::Int(snapshot.heights[3] as i64),
+        ),
+        (
+            PickleValue::String("tqpressure".into()),
+            PickleValue::Float(pressure(total_height, total_capacity)),
+        ),
+        (
+            PickleValue::String("dqpressure".into()),
+            PickleValue::Float(pressure(snapshot.heights[0], snapshot.capacities[0])),
+        ),
+        (
+            PickleValue::String("aqpressure".into()),
+            PickleValue::Float(pressure(snapshot.heights[1], snapshot.capacities[1])),
+        ),
+        (
+            PickleValue::String("pqpressure".into()),
+            PickleValue::Float(pressure(snapshot.heights[2], snapshot.capacities[2])),
+        ),
+        (
+            PickleValue::String("ilqpressure".into()),
+            PickleValue::Float(pressure(snapshot.heights[3], snapshot.capacities[3])),
+        ),
+        (PickleValue::String("txq".into()), PickleValue::None),
+    ]);
 }
 
 fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
@@ -3142,7 +3238,7 @@ mod tests {
 
     #[test]
     fn interface_stats_pickle_format() {
-        let stats = InterfaceStatsResponse {
+        let mut stats = InterfaceStatsResponse {
             interfaces: vec![SingleInterfaceStat {
                 id: 1,
                 name: "TCP".into(),
@@ -3262,6 +3358,56 @@ mod tests {
                 .map(|value| value.as_str().unwrap())
                 .collect::<Vec<_>>(),
             vec!["192.0.2.1", "203.0.113.2"]
+        );
+
+        stats.interfaces[0].interface_type = "BackboneInterface".into();
+        let (event_tx, _event_rx) = crate::event::channel_with_capacity(4);
+        event_tx.register_dynamic_parent(InterfaceId(2), InterfaceId(1));
+        event_tx.set_ingress_bursts(InterfaceId(2), true, true);
+        event_tx
+            .try_send(Event::Frame {
+                interface_id: InterfaceId(2),
+                data: vec![0],
+                rssi: None,
+                snr: None,
+            })
+            .unwrap();
+        let mut runtime_pickle = interface_stats_to_pickle(&stats);
+        add_inbound_runtime_stats(&mut runtime_pickle, &stats, &event_tx);
+        let runtime_ifaces = runtime_pickle.get("interfaces").unwrap().as_list().unwrap();
+        assert_eq!(
+            runtime_ifaces[0]
+                .get("burst_count")
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            runtime_ifaces[0]
+                .get("pr_burst_count")
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            1
+        );
+        assert_eq!(runtime_pickle.get("rxqt").unwrap().as_int().unwrap(), 1);
+        assert_eq!(runtime_pickle.get("rxqd").unwrap().as_int().unwrap(), 1);
+        assert_eq!(
+            runtime_pickle
+                .get("dqpressure")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            0.25
+        );
+        assert_eq!(
+            runtime_pickle
+                .get("tqpressure")
+                .unwrap()
+                .as_float()
+                .unwrap(),
+            1.0 / 16.0
         );
     }
 

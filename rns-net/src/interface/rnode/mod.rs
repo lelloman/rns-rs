@@ -1185,7 +1185,7 @@ mod tests {
     }
 
     fn wait_for_interface_event<F>(
-        rx: &std::sync::mpsc::Receiver<Event>,
+        rx: &crate::event::EventReceiver,
         timeout: Duration,
         predicate: F,
     ) -> Event

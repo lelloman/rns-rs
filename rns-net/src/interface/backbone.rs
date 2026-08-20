@@ -1995,7 +1995,7 @@ mod tests {
     }
 
     fn recv_non_peer_event(
-        rx: &mpsc::Receiver<Event>,
+        rx: &crate::event::EventReceiver,
         timeout: Duration,
     ) -> Result<Event, mpsc::RecvTimeoutError> {
         let deadline = Instant::now() + timeout;
@@ -2763,7 +2763,11 @@ mod tests {
     }
 
     /// Drain events matching a predicate, return the first match.
-    fn wait_for<F>(rx: &mpsc::Receiver<Event>, timeout: Duration, mut pred: F) -> Option<Event>
+    fn wait_for<F>(
+        rx: &crate::event::EventReceiver,
+        timeout: Duration,
+        mut pred: F,
+    ) -> Option<Event>
     where
         F: FnMut(&Event) -> bool,
     {
