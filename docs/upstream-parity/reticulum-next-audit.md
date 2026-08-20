@@ -72,7 +72,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Non-runtime | Baseline now records upstream 1.5.0 development metadata; independently versioned Rust crates are unchanged |
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Non-runtime | Python-only quote compatibility; Rust's compiled invalid-endpoint diagnostic and endpoint rejection are already covered |
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Integrated | Tagless path-request rejection now logs on the dedicated pathing target; removed Python queue block has no Rust equivalent |
-| 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Needs decision | Pending per-commit analysis |
+| 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Integrated | Four positive `qlen_in_*` settings, upstream defaults, legacy scalar compatibility, private startup wiring, and independent saturation regressions |
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Needs decision | Pending per-commit analysis |
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Needs decision | Pending per-commit analysis |
@@ -663,6 +663,31 @@ did not change.
 
 **Final disposition:** Integrated.
 
+### 28. `efb8c850` — Configure inbound traffic-class queue lengths
+
+**Upstream change:** Lowers default DATA, ANNOUNCE, PATH REQUEST, and
+INGRESS-LIMITED capacities to 4096, 256, 256, and 128, respectively, and adds
+positive `qlen_in_data`, `qlen_in_announce`, `qlen_in_pr`, and `qlen_in_il`
+configuration settings. A released held announce is explicitly classified as
+ingress-limited when it re-enters Python's inbound queue.
+
+**Rust applicability:** Independent capacity configuration is directly
+applicable to the prioritized event queues. Rust's released held announces are
+processed as maintenance actions inside the single-owner engine rather than
+re-entering the external event queue, so they cannot consume announce queue
+capacity and need no synthetic traffic-class marker.
+
+**Local handling and evidence:** Added a named public capacity value, adopted
+the four upstream defaults, parsed and positively validated all upstream keys,
+and wired file-based startup through a private queue context. The legacy
+`driver_event_queue_capacity` setting and public `NodeConfig` layout remain
+compatible; direct API callers retain the prior shared-capacity behavior.
+Regressions cover exact defaults, four distinct configured values, zero,
+negative and non-integer rejection, legacy scaling, and independent saturation
+at four deliberately different bounds.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -688,6 +713,11 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `efb8c850` adds independently configurable inbound
+  queue lengths with upstream defaults while preserving legacy scalar/API
+  behavior. Config parsing/validation and four-class saturation regressions,
+  the full `rns-net` unit suite, formatting, host lint, and exact drift checks
+  passed, leaving 35 commits.
 - `2026-08-20`: Commit `f366dd9c` aligns the tagless path-request diagnostic
   with the dedicated pathing target; obsolete Python queue code has no local
   equivalent. Pathing-filter tests, formatting, host lint, and exact drift

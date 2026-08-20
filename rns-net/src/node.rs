@@ -600,6 +600,28 @@ pub struct NodeConfig {
     pub provider_bridge: Option<crate::provider_bridge::ProviderBridgeConfig>,
 }
 
+struct NodeQueueConfig {
+    announce_max_entries: usize,
+    announce_max_interfaces: usize,
+    announce_max_bytes: usize,
+    announce_ttl_secs: f64,
+    announce_overflow_policy: AnnounceQueueOverflowPolicy,
+    inbound_capacities: crate::event::InboundQueueCapacities,
+}
+
+impl Default for NodeQueueConfig {
+    fn default() -> Self {
+        Self {
+            announce_max_entries: 256,
+            announce_max_interfaces: 1024,
+            announce_max_bytes: 256 * 1024,
+            announce_ttl_secs: 30.0,
+            announce_overflow_policy: AnnounceQueueOverflowPolicy::DropWorst,
+            inbound_capacities: crate::event::InboundQueueCapacities::default(),
+        }
+    }
+}
+
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
@@ -1084,17 +1106,24 @@ impl RnsNode {
             },
         };
 
-        let mut node = Self::start_with_announce_queue_max_entries(
+        let mut node = Self::start_with_queue_config(
             node_config,
             callbacks,
-            rns_config.reticulum.announce_queue_max_entries,
-            rns_config.reticulum.announce_queue_max_interfaces,
-            rns_config.reticulum.announce_queue_max_bytes,
-            rns_config.reticulum.announce_queue_ttl as f64,
-            match rns_config.reticulum.announce_queue_overflow_policy.as_str() {
-                "drop_newest" => AnnounceQueueOverflowPolicy::DropNewest,
-                "drop_oldest" => AnnounceQueueOverflowPolicy::DropOldest,
-                _ => AnnounceQueueOverflowPolicy::DropWorst,
+            NodeQueueConfig {
+                announce_max_entries: rns_config.reticulum.announce_queue_max_entries,
+                announce_max_interfaces: rns_config.reticulum.announce_queue_max_interfaces,
+                announce_max_bytes: rns_config.reticulum.announce_queue_max_bytes,
+                announce_ttl_secs: rns_config.reticulum.announce_queue_ttl as f64,
+                announce_overflow_policy: match rns_config
+                    .reticulum
+                    .announce_queue_overflow_policy
+                    .as_str()
+                {
+                    "drop_newest" => AnnounceQueueOverflowPolicy::DropNewest,
+                    "drop_oldest" => AnnounceQueueOverflowPolicy::DropOldest,
+                    _ => AnnounceQueueOverflowPolicy::DropWorst,
+                },
+                inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
             },
         )?;
 
@@ -1123,25 +1152,23 @@ impl RnsNode {
 
     /// Start the node. Connects all interfaces, starts driver and timer threads.
     pub fn start(config: NodeConfig, callbacks: Box<dyn Callbacks>) -> io::Result<Self> {
-        Self::start_with_announce_queue_max_entries(
+        let inbound_queue_capacities = crate::event::InboundQueueCapacities::from_shared_capacity(
+            config.driver_event_queue_capacity,
+        );
+        Self::start_with_queue_config(
             config,
             callbacks,
-            256,
-            1024,
-            256 * 1024,
-            30.0,
-            AnnounceQueueOverflowPolicy::DropWorst,
+            NodeQueueConfig {
+                inbound_capacities: inbound_queue_capacities,
+                ..NodeQueueConfig::default()
+            },
         )
     }
 
-    fn start_with_announce_queue_max_entries(
+    fn start_with_queue_config(
         config: NodeConfig,
         callbacks: Box<dyn Callbacks>,
-        announce_queue_max_entries: usize,
-        announce_queue_max_interfaces: usize,
-        announce_queue_max_bytes: usize,
-        announce_queue_ttl_secs: f64,
-        announce_queue_overflow_policy: AnnounceQueueOverflowPolicy,
+        queue_config: NodeQueueConfig,
     ) -> io::Result<Self> {
         let transport_state_dir = if config.transport_enabled {
             config.cache_dir.as_ref().map(|cache_dir| {
@@ -1189,18 +1216,21 @@ impl RnsNode {
             announce_sig_cache_enabled: config.announce_sig_cache_enabled,
             announce_sig_cache_max_entries: config.announce_sig_cache_max_entries,
             announce_sig_cache_ttl_secs: config.announce_sig_cache_ttl.as_secs_f64(),
-            announce_queue_max_entries,
-            announce_queue_max_interfaces,
+            announce_queue_max_entries: queue_config.announce_max_entries,
+            announce_queue_max_interfaces: queue_config.announce_max_interfaces,
         };
 
-        let (tx, rx) = event::channel_with_capacity(config.driver_event_queue_capacity);
+        let (tx, rx) = event::channel_with_queue_capacities(
+            config.driver_event_queue_capacity,
+            queue_config.inbound_capacities,
+        );
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.set_announce_verify_queue_config(
-            announce_queue_max_entries,
-            announce_queue_max_bytes,
-            announce_queue_ttl_secs,
-            announce_queue_overflow_policy,
+            queue_config.announce_max_entries,
+            queue_config.announce_max_bytes,
+            queue_config.announce_ttl_secs,
+            queue_config.announce_overflow_policy,
         );
         driver.async_announce_verification = true;
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));

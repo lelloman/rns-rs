@@ -22,10 +22,50 @@ pub use crate::common::event::{
 /// Concrete Event type using boxed sync Writer.
 pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;
 
-pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 8192;
-const DEFAULT_ANNOUNCE_QUEUE_CAPACITY: usize = 1024;
-const DEFAULT_PATH_REQUEST_QUEUE_CAPACITY: usize = 1024;
-const DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY: usize = 256;
+pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 4096;
+pub const DEFAULT_ANNOUNCE_QUEUE_CAPACITY: usize = 256;
+pub const DEFAULT_PATH_REQUEST_QUEUE_CAPACITY: usize = 256;
+pub const DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InboundQueueCapacities {
+    pub data: usize,
+    pub announce: usize,
+    pub path_request: usize,
+    pub ingress_limited: usize,
+}
+
+impl Default for InboundQueueCapacities {
+    fn default() -> Self {
+        Self {
+            data: DEFAULT_EVENT_QUEUE_CAPACITY,
+            announce: DEFAULT_ANNOUNCE_QUEUE_CAPACITY,
+            path_request: DEFAULT_PATH_REQUEST_QUEUE_CAPACITY,
+            ingress_limited: DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY,
+        }
+    }
+}
+
+impl InboundQueueCapacities {
+    pub(crate) fn from_shared_capacity(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        Self {
+            data: capacity,
+            announce: capacity.min(DEFAULT_ANNOUNCE_QUEUE_CAPACITY),
+            path_request: capacity.min(DEFAULT_PATH_REQUEST_QUEUE_CAPACITY),
+            ingress_limited: capacity.min(DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY),
+        }
+    }
+
+    fn as_array(self) -> [usize; INBOUND_QUEUE_COUNT] {
+        [
+            self.data,
+            self.announce,
+            self.path_request,
+            self.ingress_limited,
+        ]
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueueClass {
@@ -405,22 +445,32 @@ impl EventReceiver {
 }
 
 pub fn channel() -> (EventSender, EventReceiver) {
-    channel_with_capacity(DEFAULT_EVENT_QUEUE_CAPACITY)
+    channel_with_queue_capacities(
+        DEFAULT_EVENT_QUEUE_CAPACITY,
+        InboundQueueCapacities::default(),
+    )
 }
 
 pub fn channel_with_capacity(capacity: usize) -> (EventSender, EventReceiver) {
     let capacity = capacity.max(1);
+    channel_with_queue_capacities(
+        capacity,
+        InboundQueueCapacities::from_shared_capacity(capacity),
+    )
+}
+
+pub(crate) fn channel_with_queue_capacities(
+    control_capacity: usize,
+    inbound_capacities: InboundQueueCapacities,
+) -> (EventSender, EventReceiver) {
     let shared = Arc::new(QueueShared {
         state: Mutex::new(QueueState::new()),
         changed: Condvar::new(),
         sender_count: AtomicUsize::new(1),
-        control_capacity: capacity,
-        inbound_capacities: [
-            capacity,
-            capacity.min(DEFAULT_ANNOUNCE_QUEUE_CAPACITY),
-            capacity.min(DEFAULT_PATH_REQUEST_QUEUE_CAPACITY),
-            capacity.min(DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY),
-        ],
+        control_capacity: control_capacity.max(1),
+        inbound_capacities: inbound_capacities
+            .as_array()
+            .map(|capacity| capacity.max(1)),
         path_request_dest: rns_core::destination::destination_hash(
             "rnstransport",
             &["path", "request"],
@@ -599,6 +649,43 @@ mod tests {
         assert_eq!(frame_interface(rx.recv().unwrap()), 1);
         assert_eq!(frame_interface(rx.recv().unwrap()), 3);
         assert!(matches!(rx.recv().unwrap(), Event::Shutdown));
+    }
+
+    #[test]
+    fn custom_traffic_class_capacities_are_enforced_independently() {
+        let capacities = InboundQueueCapacities {
+            data: 1,
+            announce: 2,
+            path_request: 3,
+            ingress_limited: 4,
+        };
+        let (tx, _rx) = channel_with_queue_capacities(9, capacities);
+        let path_dest =
+            rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
+        tx.set_ingress_bursts(InterfaceId(4), None, Some(1.0));
+
+        let classes = [
+            (1, [0xD1; 16], rns_core::constants::PACKET_TYPE_DATA, 1),
+            (2, [0xA2; 16], rns_core::constants::PACKET_TYPE_ANNOUNCE, 2),
+            (3, path_dest, rns_core::constants::PACKET_TYPE_DATA, 3),
+            (4, path_dest, rns_core::constants::PACKET_TYPE_DATA, 4),
+        ];
+        for (interface_id, destination, packet_type, capacity) in classes {
+            for _ in 0..capacity {
+                tx.try_send(frame(interface_id, destination, packet_type))
+                    .unwrap();
+            }
+            assert!(matches!(
+                tx.try_send(frame(interface_id, destination, packet_type)),
+                Err(TrySendError::Full(_))
+            ));
+        }
+
+        assert_eq!(
+            tx.inbound_queue_snapshot().capacities,
+            capacities.as_array()
+        );
+        assert_eq!(tx.inbound_queue_snapshot().heights, [1, 2, 3, 4]);
     }
 
     #[test]
