@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `55755c6b3c243a6d3e607f0f9d36cd5e538c9033`
-- Commit date: `2026-08-17 00:30:38 +0200`
-- Subject: `Transport: fix check for r_stat_snr`
+- Normative commit: `0ec51cce67e890abd0301f2134c82dd05c2fa127`
+- Commit date: `2026-08-17 00:31:59 +0200`
+- Subject: `Link: fix constant name`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`df5ffe9c714c3b87d560fe817ac045c615d33ffe`. The CI interop lane remains pinned
+`eecda215537a273f9b6e76ac14b56abacbb7836c`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`55755c6b3c243a6d3e607f0f9d36cd5e538c9033`. The first commit fixes
+`0ec51cce67e890abd0301f2134c82dd05c2fa127`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -61,7 +61,10 @@ vectors afterward; a new bidirectional regression proves that every
 simultaneous incoming and outgoing transfer is cancelled. The seventh commit
 fixes Python's accidental RSSI guard around SNR propagation. Rust's RNode path
 already records both metrics independently; that behavior is now isolated in a
-testable helper with an explicit SNR-without-RSSI regression. The full
+testable helper with an explicit SNR-without-RSSI regression. The eighth commit
+repairs Python's default-MTU lookup for a zero MTU signal. Rust now normalizes
+zero signalling to the protocol MTU across link initiation, acceptance, and
+proof confirmation; a full handshake regression covers both peers. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
