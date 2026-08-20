@@ -35,6 +35,7 @@ pub const SPREADINGFACTOR: u8 = 0x0B;
 pub const CODINGRATE: u8 = 0x0C;
 pub const MODULATION: u8 = 0x0D;
 pub const CHANNEL: u8 = 0x0E;
+pub const OP_ADDR: u8 = 0xF0;
 
 /// App name for discovery destination
 pub const APP_NAME: &str = "rnstransport";
@@ -101,6 +102,8 @@ pub struct DiscoveryConfig {
     pub longitude: Option<f64>,
     /// Height/altitude in meters.
     pub height: Option<f64>,
+    /// Optional 16-byte LXMF destination hash for the interface operator.
+    pub operator_lxmf_address: Option<[u8; 16]>,
 }
 
 // ============================================================================
@@ -167,6 +170,8 @@ pub struct DiscoveredInterface {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub height: Option<f64>,
+    /// Optional 16-byte LXMF destination hash advertised by the operator.
+    pub operator_lxmf_address: Option<[u8; 16]>,
 
     // Connection info
     pub reachable_on: Option<String>,
@@ -478,6 +483,16 @@ pub fn parse_interface_announce_with_cache(
     let channel = get_u8_val(CHANNEL).and_then(|v| v.as_uint().map(|n| n as u8));
     let ifac_netname = get_u8_val(IFAC_NETNAME).map(|v| discovery_value_to_string(&v));
     let ifac_netkey = get_u8_val(IFAC_NETKEY).map(|v| discovery_value_to_string(&v));
+    let operator_lxmf_address = match get_u8_val(OP_ADDR) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Bin(value)) if value.len() == 16 => {
+            let mut address = [0u8; 16];
+            address.copy_from_slice(&value);
+            Some(address)
+        }
+        Some(Value::Bin(_)) => None,
+        Some(_) => return None,
+    };
 
     // Compute discovery hash
     let discovery_hash = compute_discovery_hash(&transport_id, &name);
@@ -516,6 +531,7 @@ pub fn parse_interface_announce_with_cache(
         latitude,
         longitude,
         height,
+        operator_lxmf_address,
         reachable_on,
         port,
         frequency,
@@ -617,7 +633,9 @@ fn generate_config_entry(params: ConfigEntryParams<'_>) -> Option<String> {
         ifac_netname,
         ifac_netkey,
     } = params;
-    if reachable_on.is_some_and(is_ygg_ipv6) {
+    if reachable_on.is_some_and(|address| {
+        is_ygg_ipv6(address) || is_onion_address(address) || is_invalid_ip_address(address)
+    }) {
         return None;
     }
 
@@ -758,6 +776,16 @@ pub fn is_ygg_ipv6(s: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Check whether an address is a Tor onion service hostname.
+pub fn is_onion_address(s: &str) -> bool {
+    s.to_ascii_lowercase().ends_with(".onion")
+}
+
+/// Check addresses that must never be used for discovery autoconnection.
+pub fn is_invalid_ip_address(s: &str) -> bool {
+    matches!(s, "127.0.0.1" | "0.0.0.0")
 }
 
 /// Check if a string is a valid hostname
@@ -1170,6 +1198,48 @@ mod tests {
 
         assert_eq!(parsed.ifac_netname.as_deref(), Some("123"));
         assert_eq!(parsed.ifac_netkey.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn parse_accepts_exact_operator_lxmf_address() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(OP_ADDR as u64), Value::Bin(vec![0x5a; 16])));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.operator_lxmf_address, Some([0x5a; 16]));
+    }
+
+    #[test]
+    fn parse_rejects_non_binary_operator_lxmf_address() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(OP_ADDR as u64), Value::Str("5a".repeat(16))));
+        let app_data = pack_discovery_entries(entries);
+
+        assert!(parse_interface_announce(&app_data, &[0x11; 16], 1, 0).is_none());
+    }
+
+    #[test]
+    fn parse_ignores_operator_lxmf_address_with_wrong_length() {
+        let mut entries = discovery_entries("BackboneInterface", Some("example.com"));
+        entries.push((Value::UInt(OP_ADDR as u64), Value::Bin(vec![0x5a; 15])));
+        let app_data = pack_discovery_entries(entries);
+
+        let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+        assert_eq!(parsed.operator_lxmf_address, None);
+    }
+
+    #[test]
+    fn unsafe_discovery_endpoints_are_retained_without_autoconnect_config() {
+        for address in ["example.onion", "127.0.0.1", "0.0.0.0"] {
+            let app_data = build_discovery_app_data("BackboneInterface", Some(address));
+            let parsed = parse_interface_announce(&app_data, &[0x11; 16], 1, 0).unwrap();
+
+            assert_eq!(parsed.reachable_on.as_deref(), Some(address));
+            assert_eq!(parsed.config_entry, None, "{address} must not autoconnect");
+        }
     }
 
     #[test]

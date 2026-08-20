@@ -259,6 +259,12 @@ impl DiscoveredInterfaceStorage {
         if let Some(v) = iface.height {
             entries.push((Value::Str("height".into()), Value::Float(v)));
         }
+        if let Some(v) = iface.operator_lxmf_address {
+            entries.push((
+                Value::Str("operator_lxmf_address".into()),
+                Value::Bin(v.to_vec()),
+            ));
+        }
         if let Some(ref v) = iface.reachable_on {
             entries.push((Value::Str("reachable_on".into()), Value::Str(v.clone())));
         }
@@ -409,6 +415,15 @@ impl DiscoveredInterfaceStorage {
             latitude: get_opt_float(&value, "latitude"),
             longitude: get_opt_float(&value, "longitude"),
             height: get_opt_float(&value, "height"),
+            operator_lxmf_address: value
+                .map_get("operator_lxmf_address")
+                .and_then(Value::as_bin)
+                .filter(|bytes| bytes.len() == 16)
+                .map(|bytes| {
+                    let mut address = [0u8; 16];
+                    address.copy_from_slice(bytes);
+                    address
+                }),
             reachable_on: get_opt_str(&value, "reachable_on"),
             port: get_opt_uint(&value, "port").map(|v| v as u16),
             frequency: get_opt_uint(&value, "frequency").map(|v| v as u32),
@@ -704,10 +719,7 @@ fn prepare_interface_info(
         resolved.config.longitude = Some(longitude);
         resolved.config.height = Some(height);
     }
-    Ok(InterfaceAnnouncer::pack_interface_info(
-        transport_id,
-        &resolved,
-    ))
+    InterfaceAnnouncer::pack_interface_info(transport_id, &resolved)
 }
 
 impl InterfaceAnnouncer {
@@ -843,7 +855,20 @@ impl InterfaceAnnouncer {
     }
 
     /// Pack interface metadata as msgpack map with integer keys.
-    fn pack_interface_info(transport_id: &[u8; 16], iface: &DiscoverableInterface) -> Vec<u8> {
+    fn pack_interface_info(
+        transport_id: &[u8; 16],
+        iface: &DiscoverableInterface,
+    ) -> Result<Vec<u8>, String> {
+        if matches!(
+            iface.config.interface_type.as_str(),
+            "BackboneInterface" | "TCPServerInterface"
+        ) && iface.config.reachable_on.is_none()
+        {
+            return Err(format!(
+                "{} discovery requires a reachable_on address",
+                iface.config.interface_type
+            ));
+        }
         let mut entries: Vec<(msgpack::Value, msgpack::Value)> = vec![
             (
                 msgpack::Value::UInt(INTERFACE_TYPE as u64),
@@ -892,6 +917,12 @@ impl InterfaceAnnouncer {
                 msgpack::Value::Float(h),
             ));
         }
+        if let Some(address) = iface.config.operator_lxmf_address {
+            entries.push((
+                msgpack::Value::UInt(OP_ADDR as u64),
+                msgpack::Value::Bin(address.to_vec()),
+            ));
+        }
         if let Some(ref netname) = iface.ifac_netname {
             entries.push((
                 msgpack::Value::UInt(IFAC_NETNAME as u64),
@@ -905,7 +936,7 @@ impl InterfaceAnnouncer {
             ));
         }
 
-        msgpack::pack(&msgpack::Value::Map(entries))
+        Ok(msgpack::pack(&msgpack::Value::Map(entries)))
     }
 }
 
@@ -941,6 +972,7 @@ mod tests {
                 latitude: Some(45.0),
                 longitude: Some(9.0),
                 height: Some(100.0),
+                operator_lxmf_address: None,
             },
             transport_enabled: true,
             ifac_netname: Some("testnet".into()),
@@ -1190,12 +1222,42 @@ mod tests {
     #[test]
     fn background_packing_preserves_static_metadata_bytes() {
         let iface = test_announce_interface("static", 1);
-        let expected = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface);
+        let expected = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
         let mut announcer = InterfaceAnnouncer::new([0x24; 16], vec![iface]);
 
         announcer.maybe_start(1.0);
         let result = wait_for_announce(&mut announcer).app_data.unwrap();
         assert_eq!(&result[1..result.len() - STAMP_SIZE], expected.as_slice());
+    }
+
+    #[test]
+    fn announcer_packs_operator_lxmf_address() {
+        let mut iface = test_announce_interface("operator", 1);
+        iface.config.operator_lxmf_address = Some([0xa5; 16]);
+
+        let packed = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
+        let (Value::Map(entries), consumed) = msgpack::unpack(&packed).unwrap() else {
+            panic!("discovery metadata was not a map")
+        };
+
+        assert_eq!(consumed, packed.len());
+        assert!(entries.contains(&(Value::UInt(OP_ADDR as u64), Value::Bin(vec![0xa5; 16]),)));
+    }
+
+    #[test]
+    fn announcer_suppresses_network_discovery_without_reachable_address() {
+        for interface_type in ["BackboneInterface", "TCPServerInterface"] {
+            let mut iface = test_announce_interface("missing-address", 1);
+            iface.config.interface_type = interface_type.into();
+            iface.config.reachable_on = None;
+
+            assert_eq!(
+                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface),
+                Err(format!(
+                    "{interface_type} discovery requires a reachable_on address"
+                ))
+            );
+        }
     }
 
     #[test]
@@ -1260,6 +1322,7 @@ mod tests {
             latitude: None,
             longitude: None,
             height: None,
+            operator_lxmf_address: None,
             reachable_on: None,
             port: None,
             frequency: None,
@@ -1303,6 +1366,7 @@ mod tests {
             latitude: Some(45.0),
             longitude: Some(9.0),
             height: Some(100.0),
+            operator_lxmf_address: Some([0xa5; 16]),
             reachable_on: Some("example.com".into()),
             port: Some(4242),
             frequency: None,
@@ -1345,6 +1409,7 @@ mod tests {
         assert_eq!(loaded.transport_id, iface.transport_id);
         assert_eq!(loaded.hops, iface.hops);
         assert_eq!(loaded.latitude, iface.latitude);
+        assert_eq!(loaded.operator_lxmf_address, iface.operator_lxmf_address);
         assert_eq!(loaded.reachable_on, iface.reachable_on);
         assert_eq!(loaded.port, iface.port);
 
@@ -1602,6 +1667,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 height: None,
+                operator_lxmf_address: None,
                 reachable_on: None,
                 port: None,
                 frequency: None,
@@ -1631,6 +1697,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 height: None,
+                operator_lxmf_address: None,
                 reachable_on: None,
                 port: None,
                 frequency: None,
@@ -1660,6 +1727,7 @@ mod tests {
                 latitude: None,
                 longitude: None,
                 height: None,
+                operator_lxmf_address: None,
                 reachable_on: None,
                 port: None,
                 frequency: None,

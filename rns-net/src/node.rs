@@ -276,6 +276,17 @@ fn extract_discovery_config(
         .or_else(|| params.get("lon"))
         .and_then(|v| v.parse().ok());
     let height = params.get("height").and_then(|v| v.parse().ok());
+    let operator_lxmf_address = params.get("discovery_lxmf_address").and_then(|value| {
+        let parsed = parse_discovery_lxmf_address(value);
+        if parsed.is_none() {
+            log::error!(
+                "Invalid interface discovery LXMF address for '{}': {}",
+                iface_name,
+                value
+            );
+        }
+        parsed
+    });
 
     Some(crate::discovery::DiscoveryConfig {
         discovery_name,
@@ -288,6 +299,7 @@ fn extract_discovery_config(
         latitude,
         longitude,
         height,
+        operator_lxmf_address,
     })
 }
 
@@ -307,7 +319,19 @@ fn default_discovery_runtime_config(
         latitude: None,
         longitude: None,
         height: None,
+        operator_lxmf_address: None,
     }
+}
+
+fn parse_discovery_lxmf_address(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut address = [0u8; 16];
+    for (index, byte) in address.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(address)
 }
 
 fn discovery_runtime_ifac_fields(ifac: Option<&IfacConfig>) -> (Option<String>, Option<String>) {
@@ -3372,6 +3396,32 @@ mod tests {
             discovery.location_cmd.as_deref(),
             Some("~/bin/reticulum-location")
         );
+    }
+
+    #[test]
+    fn discovery_config_parses_valid_operator_lxmf_address() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("discoverable".into(), "yes".into());
+        params.insert("discovery_lxmf_address".into(), "ab".repeat(16));
+
+        let discovery =
+            super::extract_discovery_config("public", "BackboneInterface", &params).unwrap();
+
+        assert_eq!(discovery.operator_lxmf_address, Some([0xab; 16]));
+    }
+
+    #[test]
+    fn discovery_config_ignores_invalid_operator_lxmf_addresses() {
+        for address in ["ab".repeat(15), "zz".repeat(16)] {
+            let mut params = std::collections::HashMap::new();
+            params.insert("discoverable".into(), "yes".into());
+            params.insert("discovery_lxmf_address".into(), address);
+
+            let discovery =
+                super::extract_discovery_config("public", "BackboneInterface", &params).unwrap();
+
+            assert_eq!(discovery.operator_lxmf_address, None);
+        }
     }
 
     #[test]

@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `ebd9b862e976bc06185499e3f644f25e92df374a`
-- Commit date: `2026-08-14 11:21:04 +0200`
-- Subject: `Fixed rnodeconf config summary print`
+- Normative commit: `38a73f9508bb9d3aa43da00306868fce6cd9e382`
+- Commit date: `2026-08-16 00:29:14 +0200`
+- Subject: `Added ability to include operator LXMF address in interface discovery info`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`6a999e6d254bca8da56ac61d40ab6be3afa067a5`. The CI interop lane remains pinned
+`61589a141c37f3968464625996aa3abc9eab2a28`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -36,13 +36,17 @@ baseline advancement.
 
 ## In-Progress 1.5.0 Development Porting Queue
 
-The normative baseline advanced from `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
-to `ebd9b862e976bc06185499e3f644f25e92df374a`. That commit fixes contradictory
-WiFi status lines in Python's `rnodeconf` configuration-summary output. This
-repository does not implement the `rnodeconf` device-management utility or an
-equivalent configuration-summary renderer, so the change is classified as
-non-runtime and requires no Rust implementation or regression test. The full
-moving-target inventory is maintained in
+The normative baseline has advanced through
+`38a73f9508bb9d3aa43da00306868fce6cd9e382`. The first commit fixes
+contradictory WiFi status lines in Python's `rnodeconf` utility and is
+non-runtime here because this repository has no equivalent utility. The second
+commit adds an optional operator LXMF destination hash to interface discovery,
+suppresses unusable network-interface announcements without `reachable_on`,
+and prevents autoconnection to onion, loopback, and unspecified endpoints.
+Rust now validates and carries the 16-byte field through discovery wire data,
+persistence, RPC, and `rnstatus`, with focused configuration, malformed-input,
+wire-packing, persistence, RPC, CLI, and endpoint-safety regressions. The full
+moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
 ## Completed 1.4.2..1.4.2-rgit Porting Queue
