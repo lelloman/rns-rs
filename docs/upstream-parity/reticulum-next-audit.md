@@ -68,7 +68,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 21 | `c2eac12ff55e78b4180777e13527d4e0c1a9642c` | Added burst count stat to interfaces | Integrated | Dynamic child→listener ownership is retained; Backbone aggregate accessor counts independent announce/PR burst states and cleans up disconnected children |
 | 22 | `fc0f84f23e803ba40ae678ce179c3767ebe8c89e` | Added prioritized inbound traffic processing | Integrated | Four independently bounded inbound classes with strict priority, control barriers, ingress-limited PR demotion, RPC queue pressure, and saturation/order regressions |
 | 23 | `7a1291d53069d2b495d02ab7266443f4d5c87527` | Added inbound queue pressure statistics to rnstatus | Integrated | `-q`/`--queues`, correct per-class pressure rendering, Backbone burst counts/durations, parser/format/RPC regressions |
-| 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Needs decision | Pending per-commit analysis |
+| 24 | `d41afd2d8151206994cd6e06b363a00072722f7d` | Updated rnstatus docs | Documentation follow-up | Native `rnstatus` guide documents current flags, filtering, queue classes, Backbone counts, and remote management |
 | 25 | `e81532f541ef5747b5309459edaaec89c03aeffa` | Updated version | Needs decision | Pending per-commit analysis |
 | 26 | `0d15cfc134129ab7b90fda42c88f3445a458ba39` | Fixed f-string for old snakes | Needs decision | Pending per-commit analysis |
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Needs decision | Pending per-commit analysis |
@@ -589,6 +589,25 @@ cleanup.
 
 **Final disposition:** Integrated.
 
+### 24. `d41afd2d` — Document expanded rnstatus options
+
+**Upstream change:** Updates the `rnstatus` usage block with path-request,
+burst-only, blocked-IP, and queue-statistics flags and expands the documented
+sort keys.
+
+**Rust applicability:** The option surface is user-visible and directly
+applicable, although this repository maintains Markdown documentation rather
+than upstream's Sphinx source.
+
+**Local handling and evidence:** Added a native `rnstatus` guide containing the
+actual Rust utility's current help surface, queue-class output, filter behavior,
+Backbone burst counts, and remote-management identity requirement, and linked
+it from the README. This is documentation-only, so no synthetic test was added;
+formatting, warning-free host lint, and exact baseline checks remain the
+acceptance gates.
+
+**Final disposition:** Documentation follow-up.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -614,6 +633,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `d41afd2d` is covered by the new native `rnstatus`
+  utility guide and README link. No test was added for documentation-only
+  content; formatting, warning-free host lint, and the drift checker passed,
+  with the exact accepted checkout leaving 39 commits.
 - `2026-08-20`: Commit `7a1291d5` is integrated with `rnstatus -q/--queues`,
   correct independent class pressure rendering, and aggregate Backbone burst
   counts/durations. Focused CLI, parser, event, and RPC tests passed; the

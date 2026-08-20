@@ -199,6 +199,7 @@ cargo run --bin rnsh -- <destination_hash>
 
 Utility docs:
 
+- [docs/rnstatus.md](docs/rnstatus.md)
 - [docs/rnsh.md](docs/rnsh.md)
 - [docs/rns-git.md](docs/rns-git.md)
 

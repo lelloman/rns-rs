@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `7a1291d53069d2b495d02ab7266443f4d5c87527`
-- Commit date: `2026-08-17 20:52:02 +0200`
-- Subject: `Added inbound queue pressure statistics to rnstatus`
+- Normative commit: `d41afd2d8151206994cd6e06b363a00072722f7d`
+- Commit date: `2026-08-17 21:40:14 +0200`
+- Subject: `Updated rnstatus docs`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -37,7 +37,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`7a1291d53069d2b495d02ab7266443f4d5c87527`. The first commit fixes
+`d41afd2d8151206994cd6e06b363a00072722f7d`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -111,7 +111,10 @@ Backbone child counts in active-burst descriptions. Rust supports both short
 and long queue flags, displays the correct independent pressure for every
 class, and aggregates the earliest active child timestamp for listener burst
 duration. Focused tests deliberately use different class pressures to avoid
-the upstream commit's announce/path copy-and-paste error. The full
+the upstream commit's announce/path copy-and-paste error. The twenty-fourth
+commit documents the expanded `rnstatus` options; the native utility guide now
+records the compatible flags, queue classes, filtering, and remote-management
+requirements. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
