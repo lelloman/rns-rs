@@ -57,7 +57,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Structurally covered | Immutable original payload and separate parts storage; multipart regression verifies full-payload resource hash and proof |
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Structurally covered | Closed link IDs are collected before removal; four-pending-link regression verifies complete cleanup and deregistration |
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Non-runtime | No Android/Bluetooth RNode client or BLE discovery state exists locally; ESP32 BLE support is a peripheral bridge |
-| 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Needs decision | Pending per-commit analysis |
+| 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Structurally covered | Rust's typed, lexically scoped transfer/link identifiers cannot produce the Python undefined-local failure; existing rncp unit tests pass |
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Needs decision | Pending per-commit analysis |
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Needs decision | Pending per-commit analysis |
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Needs decision | Pending per-commit analysis |
@@ -359,6 +359,25 @@ implementation.
 
 **Final disposition:** Non-runtime.
 
+### 13. `0d9bf5b8` — rncp interrupt cleanup variable
+
+**Upstream change:** Changes `resource` to `current_resource` in Python
+`rncp`'s `KeyboardInterrupt` handler so an active transfer can be cancelled
+before its link is torn down. The old undefined name raised `NameError` during
+cleanup.
+
+**Rust applicability:** This repository implements `rncp`, but its active
+transfer and link IDs are statically typed lexical bindings in the send and
+fetch loops. Rust cannot compile a reference to an undefined local variable, so
+the Python name-resolution failure mode is structurally absent.
+
+**Local handling and evidence:** No production change or synthetic runtime test
+is appropriate for compile-time name resolution. The existing `rncp` unit tests
+passed against the exact upstream reference checkout on 2026-08-20, and host
+Clippy validates all identifiers and branches with warnings denied.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -384,6 +403,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `0d9bf5b8` is structurally covered by Rust's compile-time
+  local-name checking and typed rncp transfer state. Existing rncp tests passed;
+  the accepted reference checkout and drift checker resolved exactly to
+  `0d9bf5b8`, leaving 50 commits.
 - `2026-08-20`: Commit `c6f9ef10` has no local Android BLE client equivalent.
   The reference checkout and drift checker resolved exactly to `c6f9ef10`,
   leaving 51 commits; formatting and warning-free host lint passed.

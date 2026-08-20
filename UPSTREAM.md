@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94`
-- Commit date: `2026-08-17 00:39:25 +0200`
-- Subject: `RNodeInterface: fix stale ble_device`
+- Normative commit: `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03`
+- Commit date: `2026-08-17 00:41:14 +0200`
+- Subject: `rncp: fix variable name`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`dff2d8a261bba8dbf4271c7c3926f56693755789`. The CI interop lane remains pinned
+`fc6a9a499eeca0fa4260a9f80aceec460c450db9`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94`. The first commit fixes
+`0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -75,7 +75,10 @@ Python pending-link cleanup from skipping entries while removing from the
 iterated list. Rust already collects closed IDs before removal; a four-link
 regression verifies every deregistration. The twelfth commit clears stale
 Android BLE discovery state and is non-runtime here because this port has no
-Android/Bluetooth RNode client. The full
+Android/Bluetooth RNode client. The thirteenth commit corrects a Python `rncp`
+local-variable name in interrupt cleanup; Rust's statically checked, typed
+transfer and link identifiers make that failure mode structurally absent. The
+full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
