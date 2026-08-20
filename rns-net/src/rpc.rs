@@ -1554,6 +1554,12 @@ fn discovered_interfaces_to_pickle(
             } else {
                 dict.push((PickleValue::String("height".into()), PickleValue::None));
             }
+            if let Some(v) = iface.operator_lxmf_address {
+                dict.push((
+                    PickleValue::String("operator_lxmf_address".into()),
+                    PickleValue::String(crate::discovery::hex_encode(&v)),
+                ));
+            }
 
             // Connection info
             if let Some(ref v) = iface.reachable_on {
@@ -2630,6 +2636,50 @@ pub fn derive_auth_key(private_key: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovered_interface_rpc_includes_operator_lxmf_address() {
+        let interface = crate::discovery::DiscoveredInterface {
+            interface_type: "BackboneInterface".into(),
+            transport: true,
+            name: "Operator Test".into(),
+            discovered: 1.0,
+            last_heard: 2.0,
+            heard_count: 1,
+            status: crate::discovery::DiscoveredStatus::Available,
+            stamp: vec![0; crate::discovery::STAMP_SIZE],
+            stamp_value: 16,
+            transport_id: [0x11; 16],
+            network_id: [0x22; 16],
+            hops: 1,
+            latitude: None,
+            longitude: None,
+            height: None,
+            operator_lxmf_address: Some([0xa5; 16]),
+            reachable_on: Some("example.com".into()),
+            port: Some(4242),
+            frequency: None,
+            bandwidth: None,
+            spreading_factor: None,
+            coding_rate: None,
+            modulation: None,
+            channel: None,
+            ifac_netname: None,
+            ifac_netkey: None,
+            config_entry: None,
+            discovery_hash: [0x33; 32],
+        };
+
+        let encoded = discovered_interfaces_to_pickle(&[interface]);
+        let first = &encoded.as_list().unwrap()[0];
+
+        assert_eq!(
+            first
+                .get("operator_lxmf_address")
+                .and_then(PickleValue::as_str),
+            Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+        );
+    }
 
     #[test]
     fn send_recv_bytes_roundtrip() {

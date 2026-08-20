@@ -870,7 +870,7 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
         // Detailed view with config entries
         for (idx, iface) in interfaces.iter().enumerate() {
             if idx > 0 {
-                println!("{}", "=".repeat(32));
+                println!("{}", "=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH));
             }
 
             let name = iface
@@ -921,6 +921,9 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
             }
             if !transport_id.is_empty() {
                 println!("Transport ID : {}", transport_id);
+            }
+            if let Some(address) = discovered_operator_lxmf_address(iface) {
+                println!("LXMF address : {}", address);
             }
 
             println!("Name         : {}", name);
@@ -1075,6 +1078,14 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
     }
 }
 
+const DISCOVERY_DETAIL_SEPARATOR_WIDTH: usize = 47;
+
+fn discovered_operator_lxmf_address(iface: &PickleValue) -> Option<&str> {
+    iface
+        .get("operator_lxmf_address")
+        .and_then(|value| value.as_str())
+}
+
 fn print_usage(usage_name: &str) {
     println!("Usage: {usage_name} [OPTIONS] [FILTER]");
     println!();
@@ -1195,6 +1206,24 @@ mod tests {
         assert_eq!(interface_status_label(true, 4), "Up, gravity 4");
         assert_eq!(interface_status_label(false, -2), "Down, gravity -2");
         assert_eq!(interface_status_label(true, 0), "Up");
+    }
+
+    #[test]
+    fn discovered_interface_extracts_operator_lxmf_address() {
+        let iface = PickleValue::Dict(vec![(
+            PickleValue::String("operator_lxmf_address".into()),
+            PickleValue::String("a5".repeat(16)),
+        )]);
+
+        assert_eq!(
+            discovered_operator_lxmf_address(&iface),
+            Some("a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5")
+        );
+        assert_eq!(
+            discovered_operator_lxmf_address(&PickleValue::Dict(Vec::new())),
+            None
+        );
+        assert_eq!("=".repeat(DISCOVERY_DETAIL_SEPARATOR_WIDTH).len(), 47);
     }
 
     #[test]

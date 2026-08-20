@@ -46,7 +46,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `ebd9b862e976bc06185499e3f644f25e92df374a` | Fixed rnodeconf config summary print | Non-runtime | No `rnodeconf` utility or configuration-summary renderer exists in this repository; no Rust behavior is affected |
-| 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Needs decision | Pending per-commit analysis |
+| 2 | `38a73f9508bb9d3aa43da00306868fce6cd9e382` | Added ability to include operator LXMF address in interface discovery info | Integrated | Operator address wire/config/persistence/RPC/CLI tests; unsafe endpoint and missing-address regressions; complete `rns-net --all-features` suite |
 | 3 | `3db15dae44a03079da570c9d05efdafb0d09bd44` | Updated identity test | Needs decision | Pending per-commit analysis |
 | 4 | `ce81b339dcbf36137b12a87b5b149bcff7e7f36a` | This will have *zero* effect on any actual, real-world or otherwise just tangentially relevant physically viable situation, but at this point I am fed up with receiving a daily dose of overly verbose machine soup from yet another random LLM-bro who's playing security researcher, so there you have it, now ffs leave me in peace to do some *actual* work, and keep your tech-fantasy wanking to yourself, thank you very much. | Needs decision | Pending per-commit analysis |
 | 5 | `6c1182c2c2043a0e9cb7b8fab3c3980e633f3556` | Packet: reticulum variable is not defined | Needs decision | Pending per-commit analysis |
@@ -131,6 +131,32 @@ interface, runtime configuration, ESP32 bridge, and hardware examples.
 
 **Final disposition:** Non-runtime.
 
+### 2. `38a73f95` — Added ability to include operator LXMF address in interface discovery info
+
+**Upstream change:** Adds discovery field `0xF0` for an optional 16-byte
+operator LXMF destination hash, parses `discovery_lxmf_address` from interface
+configuration, persists and exposes the received address, and prints it in
+`rnstatus -D`. The same commit suppresses Backbone/TCP-server discovery without
+a reachable address and prevents autoconnection to onion, loopback, and
+unspecified-IP endpoints while retaining those announcements for inspection.
+
+**Rust applicability:** Interface discovery wire metadata, configuration,
+persistence, compatible RPC output, `rnstatus`, and discovered Backbone peer
+autoconnection are all implemented locally and require matching behavior.
+
+**Local handling and evidence:** Added the `0xF0` wire field and exact 16-byte
+validation, optional configuration parsing, discovery persistence, compatible
+lowercase-hex RPC representation, and `rnstatus -D` display. Network discovery
+packing now rejects missing `reachable_on`; unsafe endpoints remain visible but
+do not produce autoconnect configuration. The detailed-display separator also
+matches upstream's widened 47-column layout. Tests cover valid, malformed-type,
+wrong-length, packing, missing-address, onion/loopback/unspecified endpoints,
+configuration parsing, persistence, RPC, and CLI extraction. `cargo test -p
+rns-net --all-features` and `cargo test -p rns-cli --bin rnstatus` passed on
+2026-08-20.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -156,6 +182,11 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `38a73f95` integration passed `cargo test -p rns-net
+  --all-features` (864 unit tests, 54 network E2E tests, 23 hook E2E tests,
+  IFAC/Python interop, fixture suites and doc tests), `cargo test -p rns-cli
+  --bin rnstatus`, exact-target Python/Rust TCP interop with the reference
+  checkout at `38a73f95`, and warning-free `scripts/lint-host.sh`.
 - `2026-08-20`: Daily drift check refreshed both remotes successfully through
   R-Net Istanbul. Canonical rGit was 63 commits ahead; the GitHub mirror was
   behind the accepted baseline. Audit inventory opened; no parity acceptance
