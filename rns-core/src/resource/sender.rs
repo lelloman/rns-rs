@@ -812,6 +812,26 @@ mod tests {
     }
 
     #[test]
+    fn multipart_resource_identity_uses_complete_original_data() {
+        let data = varying_data(RESOURCE_SDU * 3 + 17);
+        let sender = make_sender(&data);
+
+        assert!(sender.total_parts() > 1);
+        assert_eq!(
+            sender.resource_hash,
+            compute_resource_hash(&data, &sender.random_hash)
+        );
+        assert_eq!(
+            sender.expected_proof,
+            compute_expected_proof(&data, &sender.resource_hash)
+        );
+        assert_ne!(
+            sender.resource_hash,
+            compute_resource_hash(&sender.parts[0], &sender.random_hash)
+        );
+    }
+
+    #[test]
     fn test_sender_with_metadata() {
         let mut rng = rns_crypto::FixedRng::new(&[0x55; 64]);
         let sender = ResourceSender::new(

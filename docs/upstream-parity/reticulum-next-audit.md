@@ -54,7 +54,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 7 | `55755c6b3c243a6d3e607f0f9d36cd5e538c9033` | Transport: fix check for r_stat_snr | Structurally covered | RNode receive handling records SNR independently of RSSI; focused absent-RSSI regression pins the behavior |
 | 8 | `0ec51cce67e890abd0301f2134c82dd05c2fa127` | Link: fix constant name | Integrated | Zero MTU signalling falls back to the protocol MTU for initiator, responder, and proof confirmation; full handshake regression |
 | 9 | `691211bf0dbcfb6f964f9037fb82bcae26fbb453` | BackboneInterface: remove unused poll | Structurally covered | Rust performs one poll wait and consumes that batch; existing simultaneous two-client multiplexing regression passes |
-| 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Needs decision | Pending per-commit analysis |
+| 10 | `0c41027765a6c2e47660caca1b75bcf8c01d96d5` | Resource: avoid rebind of data variable | Structurally covered | Immutable original payload and separate parts storage; multipart regression verifies full-payload resource hash and proof |
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Needs decision | Pending per-commit analysis |
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Needs decision | Pending per-commit analysis |
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Needs decision | Pending per-commit analysis |
@@ -300,6 +300,27 @@ against the exact upstream reference checkout on 2026-08-20.
 
 **Final disposition:** Structurally covered.
 
+### 10. `0c410277` — Preserve full resource data during part mapping
+
+**Upstream change:** Renames the per-part slice from `data` to `part_data` while
+building a resource hashmap. Previously, that loop rebound the constructor's
+full payload variable; if a map-hash collision restarted the outer loop, the
+resource hash and expected proof were recomputed from a part instead of the
+complete original data.
+
+**Rust applicability:** Resource identity, proof generation, part splitting,
+and collision retry behavior are protocol-compatible. Rust stores the immutable
+complete payload as `uncompressed_data` and generated slices as `parts_data`;
+the collision loop always hashes the former and cannot rebind it.
+
+**Local handling and evidence:** Added a multipart resource regression that
+recomputes the sender's resource hash and expected proof from the full original
+payload and verifies that hashing the first generated part does not match. The
+focused test passed against the exact upstream reference checkout on
+2026-08-20. No production change is required.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -325,6 +346,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `0c410277` is structurally covered by Rust's separate
+  immutable payload and generated-part bindings. The multipart identity/proof
+  regression passed; the accepted reference checkout and drift checker resolved
+  exactly to `0c410277`, leaving 53 commits.
 - `2026-08-20`: Commit `691211bf` is structurally covered by Rust's single-wait
   Backbone poll loop. The simultaneous two-client multiplexing regression
   passed; the accepted reference checkout and drift checker resolved exactly to
