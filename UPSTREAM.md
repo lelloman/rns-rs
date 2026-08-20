@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.4.2`
 - Version metadata commit: `e3f1a5e7cdd6f0bf3c0c0a05b055c3f196b1fd15`
-- Normative commit: `9b4947ef4607113b5e4c48d1f38d37b500524f44`
-- Commit date: `2026-08-17 00:43:40 +0200`
-- Subject: `Destination: clean ratchets to retained_ratchets`
+- Normative commit: `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031`
+- Commit date: `2026-08-17 00:51:33 +0200`
+- Subject: `Transport: fix rebind of expires variable`
 
 The normative baseline is a 1.4.2 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -21,7 +21,7 @@ and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
 clone cannot fetch the accepted rgit commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`98fa2666acb8fc9060549d65005504e7a20302eb`. The CI interop lane remains pinned
+`c0308afed73dfe6aa997117428c614b5f7ab47ff`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -37,7 +37,7 @@ baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`9b4947ef4607113b5e4c48d1f38d37b500524f44`. The first commit fixes
+`e31c570d2be8a3e07c5c10b8f1ea4252abfd5031`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -81,7 +81,10 @@ transfer and link identifiers make that failure mode structurally absent. The
 fourteenth commit applies custom retention limits to locally generated
 destination ratchet history. That path is deferred because this port currently
 implements received remote ratchets, not local ratchet generation or rotation.
-The full
+The fifteenth commit prevents tunnel expiration from being rebound to a path
+expiration during persistence. Rust uses distinct typed fields; the tunnel
+round-trip regression now pins different expiry values through snapshot and
+restore. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

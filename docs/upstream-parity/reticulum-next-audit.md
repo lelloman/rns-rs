@@ -59,7 +59,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Non-runtime | No Android/Bluetooth RNode client or BLE discovery state exists locally; ESP32 BLE support is a peripheral bridge |
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Structurally covered | Rust's typed, lexically scoped transfer/link identifiers cannot produce the Python undefined-local failure; existing rncp unit tests pass |
 | 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Deferred | Depends on locally generated destination ratchet history, which is not yet implemented; received-remote-ratchet storage is a different path |
-| 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Needs decision | Pending per-commit analysis |
+| 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Structurally covered | Typed tunnel/path expiry fields remain distinct; persistence round-trip asserts differing values survive snapshot and restore |
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Needs decision | Pending per-commit analysis |
 | 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Needs decision | Pending per-commit analysis |
 | 18 | `9ebcb55cb5de86b6089b1c3dcb8e9f5728b43039` | Cleanup | Needs decision | Pending per-commit analysis |
@@ -401,6 +401,26 @@ this commit.
 ratcheted encryption, so custom generated-ratchet history limits are not
 exposed.
 
+### 15. `e31c570d` — Preserve tunnel expiry during persistence
+
+**Upstream change:** Renames the inner path expiry binding while loading and
+saving tunnel tables. Reusing `expires` for each path overwrote the containing
+tunnel's expiry, so the serialized or restored tunnel inherited its last path's
+deadline.
+
+**Rust applicability:** Tunnel and path persistence is compatible runtime state.
+Rust models the deadlines as separate typed fields on `PersistedTunnel` and
+`PersistedPath`; snapshot and restore copy each field independently, so lexical
+rebinding cannot conflate them.
+
+**Local handling and evidence:** Extended the detached-tunnel persistence test
+to use a tunnel expiry derived from `TUNNEL_TIMEOUT` and a distinct path expiry
+of `500.0`. Both values remain distinct in the initial snapshot and after
+restore/resnapshot. The focused regression passed against the exact upstream
+reference checkout on 2026-08-20. No production change is required.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -426,6 +446,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `e31c570d` is structurally covered by distinct typed
+  tunnel/path expiry fields. The differing-expiry persistence round-trip passed;
+  the accepted reference checkout and drift checker resolved exactly to
+  `e31c570d`, leaving 48 commits.
 - `2026-08-20`: Commit `9b4947ef` is deferred with explicit scope: generated
   local destination ratchets are not yet implemented, while the existing
   received-ratchet store is a different protocol direction. The reference

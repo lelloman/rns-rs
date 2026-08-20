@@ -482,6 +482,11 @@ mod tests {
             snapshot.tunnels[0].interface_hash,
             Some(hash::full_hash(b"tunnel-iface"))
         );
+        assert_eq!(
+            snapshot.tunnels[0].expires,
+            100.0 + constants::TUNNEL_TIMEOUT
+        );
+        assert_eq!(snapshot.tunnels[0].paths[0].expires, 500.0);
 
         let mut restored = TransportEngine::new(config(8));
         let stats = restored.restore_persistence_snapshot(snapshot, 101.0, |hash| {
@@ -491,6 +496,11 @@ mod tests {
         let round_trip = restored.persistence_snapshot();
         assert_eq!(round_trip.tunnels.len(), 1);
         assert_eq!(round_trip.tunnels[0].interface_hash, None);
+        assert_eq!(
+            round_trip.tunnels[0].expires,
+            100.0 + constants::TUNNEL_TIMEOUT
+        );
+        assert_eq!(round_trip.tunnels[0].paths[0].expires, 500.0);
         assert_eq!(round_trip.tunnels[0].paths[0].destination_hash, [5; 16]);
     }
 }
