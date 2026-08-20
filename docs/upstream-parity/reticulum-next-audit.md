@@ -58,7 +58,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 11 | `90ac62620dd35b84249c2bc0006477cc727363aa` | Transport: fix pending_links items removal while being iterated | Structurally covered | Closed link IDs are collected before removal; four-pending-link regression verifies complete cleanup and deregistration |
 | 12 | `c6f9ef1047c594e9d9e800692d3a0a68bd7a0c94` | RNodeInterface: fix stale ble_device | Non-runtime | No Android/Bluetooth RNode client or BLE discovery state exists locally; ESP32 BLE support is a peripheral bridge |
 | 13 | `0d9bf5b862bb2a340fe92ee7ab966fbacafb9e03` | rncp: fix variable name | Structurally covered | Rust's typed, lexically scoped transfer/link identifiers cannot produce the Python undefined-local failure; existing rncp unit tests pass |
-| 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Needs decision | Pending per-commit analysis |
+| 14 | `9b4947ef4607113b5e4c48d1f38d37b500524f44` | Destination: clean ratchets to retained_ratchets | Deferred | Depends on locally generated destination ratchet history, which is not yet implemented; received-remote-ratchet storage is a different path |
 | 15 | `e31c570d2be8a3e07c5c10b8f1ea4252abfd5031` | Transport: fix rebind of expires variable | Needs decision | Pending per-commit analysis |
 | 16 | `31298e5edad07d8a7029c5fe126d092200d6a3e0` | Fixed speedtest TX abort on link stale status | Needs decision | Pending per-commit analysis |
 | 17 | `bbc1a0d06b1bce3750935d1fd5787cca063be62c` | BackboneInterface: fix epoll RX starvation | Needs decision | Pending per-commit analysis |
@@ -378,6 +378,29 @@ Clippy validates all identifiers and branches with warnings denied.
 
 **Final disposition:** Structurally covered.
 
+### 14. `9b4947ef` — Configurable generated-ratchet retention
+
+**Upstream change:** Truncates a destination's locally generated ratchet history
+to its configured `retained_ratchets` value instead of the global default of
+512. Custom lower retention limits were therefore previously ignored.
+
+**Rust applicability:** The changed behavior belongs to inbound destinations
+that generate, rotate, advertise, and retain their own ratchet key history.
+Rust currently consumes and persists the latest ratchet announced by a remote
+destination for outbound encryption, but it does not yet generate or rotate
+ratchets for local destinations. The local singleton `RatchetStore` is the
+opposite direction of the affected feature and is not valid evidence here.
+
+**Local handling and evidence:** Deferred until local destination ratchet
+generation and rotation are ported as a cohesive feature. At that point, the
+retention limit must be configurable and tested below, at, and above the limit,
+including persistence/reload. No unrelated received-ratchet test is added for
+this commit.
+
+**Final disposition:** Deferred. Impact: local destinations still cannot offer
+ratcheted encryption, so custom generated-ratchet history limits are not
+exposed.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -403,6 +426,11 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-20`: Commit `9b4947ef` is deferred with explicit scope: generated
+  local destination ratchets are not yet implemented, while the existing
+  received-ratchet store is a different protocol direction. The reference
+  checkout and drift checker resolved exactly to `9b4947ef`, leaving 49
+  commits; formatting and warning-free host lint passed.
 - `2026-08-20`: Commit `0d9bf5b8` is structurally covered by Rust's compile-time
   local-name checking and typed rncp transfer state. Existing rncp tests passed;
   the accepted reference checkout and drift checker resolved exactly to
