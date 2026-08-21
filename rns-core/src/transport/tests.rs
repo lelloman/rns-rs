@@ -2862,6 +2862,38 @@ fn discovery_path_request_without_bitrate_uses_fixed_deadline() {
 }
 
 #[test]
+fn path_request_gate_registers_early_without_refresh_and_expires_at_45_seconds() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let destination = [0xd2; 16];
+
+    let first = make_path_request_data(&destination, &[0x12; 16]);
+    engine
+        .accept_path_request(&first, InterfaceId(1), 1000.0)
+        .expect("first unique request");
+    assert_eq!(engine.path_requests.get(&destination), Some(&1000.0));
+
+    let second = make_path_request_data(&destination, &[0x13; 16]);
+    engine
+        .accept_path_request(&second, InterfaceId(2), 1020.0)
+        .expect("different tag for the same destination");
+    assert_eq!(
+        engine.path_requests.get(&destination),
+        Some(&1000.0),
+        "inbound duplicates must not extend the gate"
+    );
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x21; 32]);
+    engine.tick(1044.0, &mut rng);
+    assert!(engine.path_requests.contains_key(&destination));
+    engine.tick(1050.0, &mut rng);
+    assert!(!engine.path_requests.contains_key(&destination));
+
+    engine.record_outbound_path_request(destination, 2000.0);
+    engine.record_outbound_path_request(destination, 2020.0);
+    assert_eq!(engine.path_requests.get(&destination), Some(&2020.0));
+}
+
+#[test]
 fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
     let mut engine = TransportEngine::new(make_config(true));
     let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);

@@ -172,6 +172,7 @@ pub struct TransportEngine {
     tunnel_table: TunnelTable,
     discovery_pr_tags: VecDeque<[u8; 32]>,
     discovery_pr_tag_set: BTreeSet<[u8; 32]>,
+    path_requests: BTreeMap<[u8; 16], f64>,
     discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
     discovery_path_request_deadlines: BTreeMap<[u8; 16], f64>,
     path_destination_cap_evict_count: usize,

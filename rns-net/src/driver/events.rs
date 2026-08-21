@@ -1966,11 +1966,13 @@ impl Driver {
             rns_core::constants::CONTEXT_NONE,
             &data,
         ) {
+            let now = time::now();
+            self.engine.record_outbound_path_request(dest_hash, now);
             let actions = self.engine.handle_outbound(
                 &packet,
                 rns_core::constants::DESTINATION_PLAIN,
                 None,
-                time::now(),
+                now,
             );
             self.dispatch_all(actions);
         }

@@ -111,7 +111,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Structurally covered | Native resource callbacks deliver owned bytes, so `rns-git` never moves an open transport temporary file; fetch E2E writes the materialized bundle and validates its refs |
 | 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Structurally covered | Rust already combines a `BTreeSet` membership index with an exact bounded FIFO; the regression proves duplicates neither grow nor refresh retention order |
 | 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Integrated | Driver ingress statistics are recorded only after core accepts a valid unique tag, preventing duplicate replays from inflating frequency or triggering limiting |
-| 64 | `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e` | Transport jobs optimizations | Needs decision | Pending per-commit analysis |
+| 64 | `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e` | Transport jobs optimizations | Integrated | Path-request gate state is registered before later processing, expires after 45 seconds, and refreshes for local outbound requests; unique-tag retention is 8,192, while Python lock/thread changes are structurally absent |
 | 65 | `614e7bd834fb69675965094cd01ed9255f36d6aa` | Improved path request handling, batch same-destination PRs when existing in-flight path request exists | Needs decision | Pending per-commit analysis |
 | 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Needs decision | Pending per-commit analysis |
 | 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Needs decision | Pending per-commit analysis |
@@ -1344,8 +1344,31 @@ failed before the fix with two samples and now retains one tag and one sample.
 
 **Final disposition:** Integrated.
 
-The first 63 commits have a final disposition. Detailed analysis for commits
-64–68 is pending.
+### 64. `386ef1f3` — Optimize Transport jobs and register PRs early
+
+**Upstream change:** Reduces the path-request gate timeout from 120 to 45
+seconds and the discovery-tag limit from 32,000 to 8,192. Valid unique inbound
+requests register their destination in the gate table before later filtering;
+locally generated requests refresh the same table immediately before send. The
+remaining changes shorten Python lock hold times and contain errors while
+launching worker threads.
+
+**Rust applicability:** Rust had indexed bounded tag retention but still used
+the old limit, and it had no equivalent destination-level in-flight gate. Its
+transport engine and driver are single-owner state machines, so copying tables
+outside a mutex and protecting Python thread startup do not apply.
+
+**Local handling and evidence:** Changed the tag default to 8,192 and added a
+private in-flight destination table. Unique inbound tags insert without
+refreshing an existing timestamp, locally generated requests refresh it, and
+periodic maintenance removes entries at the 45-second boundary. Focused tests
+pin both constants, early insertion, non-refresh behavior, outbound refresh,
+and survival/removal around the timeout.
+
+**Final disposition:** Integrated.
+
+The first 64 commits have a final disposition. Detailed analysis for commits
+65–68 is pending.
 
 ## Integration Plan
 
@@ -1368,6 +1391,10 @@ The first 63 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `386ef1f3` adds early path-request gate registration,
+  the 45-second lifecycle, local outbound refresh, and the upstream 8,192 tag
+  limit. Focused boundary tests, formatting, transport tests, host lint, exact
+  checkout, and drift checks passed, leaving 4 commits.
 - `2026-08-21`: Daily refresh succeeded for both remotes. Canonical rGit moved
   five commits beyond accepted `4ab0755d`; GitHub remains behind at signed
   `b48b96e6`. Both VPS snapshots were healthy with every public interface up,

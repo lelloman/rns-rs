@@ -34,6 +34,7 @@ impl TransportEngine {
             tunnel_table: TunnelTable::new(),
             discovery_pr_tags: VecDeque::new(),
             discovery_pr_tag_set: BTreeSet::new(),
+            path_requests: BTreeMap::new(),
             discovery_path_requests: BTreeMap::new(),
             discovery_path_request_deadlines: BTreeMap::new(),
             path_destination_cap_evict_count: 0,
