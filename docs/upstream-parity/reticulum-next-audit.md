@@ -16,9 +16,9 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 66 canonical commits are integrated, structurally covered, deferred,
+The first 67 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`74883369858303e89aa7861bdb64b1755b92a1c4`. The 2026-08-21 daily refresh found
+`5f2f4438d0412843167f43091f54af7fe39a8ed9`. The 2026-08-21 daily refresh found
 five newer rGit commits through `880db0a7b7776d407e44bb0a93541317a1f75487`;
 they are conservatively inventoried as **Needs decision** pending per-commit
 analysis. The GitHub mirror tip
@@ -114,7 +114,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 64 | `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e` | Transport jobs optimizations | Integrated | Path-request gate state is registered before later processing, expires after 45 seconds, and refreshes for local outbound requests; unique-tag retention is 8,192, while Python lock/thread changes are structurally absent |
 | 65 | `614e7bd834fb69675965094cd01ed9255f36d6aa` | Improved path request handling, batch same-destination PRs when existing in-flight path request exists | Integrated | Same-destination unique requests share one recursive search, retain all non-limited requester interfaces, and fan the path response back to each; tag retention is 16,000 |
 | 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Non-runtime | Removes a hard-coded verbosity override from one upstream Python test fixture; native Rust tests have no equivalent override |
-| 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Needs decision | Pending per-commit analysis |
+| 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Integrated | Accepted announce/unique-PR byte accounting, current-window rate sampling, listener aggregation, local/remote status fields, and `rnstatus` flow percentages/totals with focused regressions |
 | 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Needs decision | Pending per-commit analysis |
 
 ## Per-Commit Analysis
@@ -1419,8 +1419,39 @@ numeric log levels.
 
 **Final disposition:** Non-runtime.
 
-The first 66 commits have a final disposition. Detailed analysis for commits
-67–68 is pending.
+### 67. `5f2f4438` — Add detailed announce and path-request traffic statistics
+
+**Upstream change:** Adds cumulative announce and path-request RX/TX byte
+counters to every interface, samples total and class-specific bit rates once
+per second, aggregates dynamically spawned interfaces into their parent
+listener, exposes the values through local and remote status responses, and
+shows class flow percentages and optional detailed totals in `rnstatus`.
+
+**Rust applicability:** The native status API and CLI expose the same interface
+traffic surface, so the counters, current-rate semantics, aggregation, and
+rendering are directly applicable. Rust's single-owner driver does not need
+upstream's per-interface speed thread or exception guards around mutable Python
+attributes, but it must preserve the same accepted-packet accounting boundary.
+
+**Local handling and evidence:** Interface statistics now retain cumulative
+announce and path-request bytes plus current rates. The driver samples counter
+deltas after each complete one-second-or-longer window, reports zero before the
+first complete window and after idle windows, and sums child traffic for
+Backbone listener rows. Inbound announce bytes are added only after signature
+validation succeeds, including asynchronous verification; inbound path-request
+bytes are added only after unique-tag acceptance. Outbound accounting uses the
+actual transmitted length, including IFAC bytes. Local pickle RPC and remote
+MessagePack status responses include all ten traffic fields, while `rnstatus`
+renders independently calculated, capped RX/TX flow shares and class totals.
+Focused tests cover cumulative counters and timestamp bounds, valid and async
+announce acceptance, duplicate path requests, outbound packet lengths,
+deterministic current/idle sampling, Backbone child aggregation, RPC field
+round-trips, and CLI percentages/totals.
+
+**Final disposition:** Integrated.
+
+The first 67 commits have a final disposition. Detailed analysis for commit 68
+is pending.
 
 ## Integration Plan
 
@@ -1443,6 +1474,11 @@ The first 66 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `5f2f4438` adds detailed announce and path-request byte
+  counters, current-window rates, listener aggregation, status response fields,
+  and `rnstatus` flow shares/totals. Focused accounting, duplicate, sampling,
+  listener, RPC, remote-management, and CLI tests plus all 879 `rns-net` unit
+  tests passed, leaving 1 commit.
 - `2026-08-21`: PR #123 exposed a completed-search edge case in commit 65: a
   second rnx client was batched behind a retained gate timestamp after the path
   was already learned. The focused cached-path regression and exact failing

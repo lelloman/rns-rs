@@ -350,11 +350,15 @@ impl Driver {
         entry.stats.txb += send_len as u64;
         entry.stats.tx_packets += 1;
         if is_announce {
-            entry.stats.record_outgoing_announce(time::now());
+            entry
+                .stats
+                .record_outgoing_announce_bytes(time::now(), send_len);
         }
         if is_path_request {
             let now = time::now();
-            entry.stats.record_outgoing_path_request(now);
+            entry
+                .stats
+                .record_outgoing_path_request_bytes(now, send_len);
             self.engine.update_interface_freqs(
                 interface,
                 entry.stats.incoming_announce_freq(),
@@ -454,11 +458,15 @@ impl Driver {
                 entry.stats.txb += send_len as u64;
                 entry.stats.tx_packets += 1;
                 if is_announce {
-                    entry.stats.record_outgoing_announce(time::now());
+                    entry
+                        .stats
+                        .record_outgoing_announce_bytes(time::now(), send_len);
                 }
                 if is_path_request {
                     let now = time::now();
-                    entry.stats.record_outgoing_path_request(now);
+                    entry
+                        .stats
+                        .record_outgoing_path_request_bytes(now, send_len);
                     self.engine.update_interface_freqs(
                         entry.id,
                         entry.stats.incoming_announce_freq(),
@@ -537,7 +545,9 @@ impl Driver {
                     return;
                 };
                 if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
-                    entry.stats.record_incoming_path_request(now);
+                    entry
+                        .stats
+                        .record_incoming_path_request_bytes(now, raw.len());
                     self.engine.update_interface_freqs(
                         receiving_interface,
                         entry.stats.incoming_announce_freq(),

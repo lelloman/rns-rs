@@ -1,5 +1,33 @@
 use super::*;
 
+fn traffic_detail(stats: &crate::interface::InterfaceStats) -> TrafficDetail {
+    TrafficDetail {
+        rxs: stats.traffic_rates.rxs,
+        txs: stats.traffic_rates.txs,
+        arxb: stats.arxb,
+        atxb: stats.atxb,
+        arxs: stats.traffic_rates.arxs,
+        atxs: stats.traffic_rates.atxs,
+        prxb: stats.prxb,
+        ptxb: stats.ptxb,
+        prxs: stats.traffic_rates.prxs,
+        ptxs: stats.traffic_rates.ptxs,
+    }
+}
+
+fn add_traffic(total: &mut TrafficDetail, detail: TrafficDetail) {
+    total.rxs += detail.rxs;
+    total.txs += detail.txs;
+    total.arxb += detail.arxb;
+    total.atxb += detail.atxb;
+    total.arxs += detail.arxs;
+    total.atxs += detail.atxs;
+    total.prxb += detail.prxb;
+    total.ptxb += detail.ptxb;
+    total.prxs += detail.prxs;
+    total.ptxs += detail.ptxs;
+}
+
 impl Driver {
     pub(super) fn dynamic_burst_counts(&self, parent_id: InterfaceId) -> (usize, usize) {
         self.dynamic_interface_parents
@@ -23,12 +51,16 @@ impl Driver {
     }
 
     pub(crate) fn handle_interface_stats_query(&self) -> QueryResponse {
+        let now = time::now();
         let mut interfaces = Vec::new();
         let mut total_rxb: u64 = 0;
         let mut total_txb: u64 = 0;
+        let mut total_traffic = TrafficDetail::default();
         for entry in self.interfaces.values() {
             total_rxb += entry.stats.rxb;
             total_txb += entry.stats.txb;
+            let traffic = traffic_detail(&entry.stats);
+            add_traffic(&mut total_traffic, traffic);
             let interface_id = entry.info.id;
             interfaces.push(SingleInterfaceStat {
                 id: interface_id.0,
@@ -39,6 +71,7 @@ impl Driver {
                 announces_to_internal: entry.info.announces_to_internal,
                 rxb: entry.stats.rxb,
                 txb: entry.stats.txb,
+                traffic,
                 rx_packets: entry.stats.rx_packets,
                 tx_packets: entry.stats.tx_packets,
                 cpu_load: entry.stats.cpu_load,
@@ -82,6 +115,14 @@ impl Driver {
                     .map(|peer_ip| peer_ip.to_string())
                     .collect::<Vec<_>>();
             let blocked_ips = blocked_ip_list.len() as u64;
+            let mut traffic = TrafficDetail::default();
+            for (child_id, parent_id) in &self.dynamic_interface_parents {
+                if *parent_id == handle.interface_id {
+                    if let Some(child) = self.interfaces.get(child_id) {
+                        add_traffic(&mut traffic, traffic_detail(&child.stats));
+                    }
+                }
+            }
             interfaces.push(SingleInterfaceStat {
                 id: handle.interface_id.0,
                 name: handle.interface_name.clone(),
@@ -91,6 +132,7 @@ impl Driver {
                 announces_to_internal: handle.announces_to_internal,
                 rxb: 0,
                 txb: 0,
+                traffic,
                 rx_packets: 0,
                 tx_packets: 0,
                 cpu_load: None,
@@ -125,9 +167,10 @@ impl Driver {
             interfaces,
             transport_id: self.engine.identity_hash().copied(),
             transport_enabled: self.engine.transport_enabled(),
-            transport_uptime: time::now() - self.started,
+            transport_uptime: now - self.started,
             total_rxb,
             total_txb,
+            traffic: total_traffic,
             probe_responder: self.probe_responder_hash,
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: self.backbone_peer_pool_status(),

@@ -23,6 +23,8 @@ use rns_core::transport::types::InterfaceId;
 use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
+#[cfg(test)]
+use crate::event::TrafficDetail;
 use crate::event::{
     BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, BurstClassStats, DrainStatus,
     DynamicBurstStats, Event, EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry,
@@ -1081,6 +1083,46 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::String("txb".into()),
             PickleValue::Int(stats.total_txb as i64),
         ),
+        (
+            PickleValue::String("rxs".into()),
+            PickleValue::Float(stats.traffic.rxs),
+        ),
+        (
+            PickleValue::String("txs".into()),
+            PickleValue::Float(stats.traffic.txs),
+        ),
+        (
+            PickleValue::String("arxb".into()),
+            PickleValue::Int(stats.traffic.arxb as i64),
+        ),
+        (
+            PickleValue::String("atxb".into()),
+            PickleValue::Int(stats.traffic.atxb as i64),
+        ),
+        (
+            PickleValue::String("arxs".into()),
+            PickleValue::Float(stats.traffic.arxs),
+        ),
+        (
+            PickleValue::String("atxs".into()),
+            PickleValue::Float(stats.traffic.atxs),
+        ),
+        (
+            PickleValue::String("prxb".into()),
+            PickleValue::Int(stats.traffic.prxb as i64),
+        ),
+        (
+            PickleValue::String("ptxb".into()),
+            PickleValue::Int(stats.traffic.ptxb as i64),
+        ),
+        (
+            PickleValue::String("prxs".into()),
+            PickleValue::Float(stats.traffic.prxs),
+        ),
+        (
+            PickleValue::String("ptxs".into()),
+            PickleValue::Float(stats.traffic.ptxs),
+        ),
     ];
 
     if let Some(tid) = stats.transport_id {
@@ -1401,6 +1443,46 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         (
             PickleValue::String("txb".into()),
             PickleValue::Int(s.txb as i64),
+        ),
+        (
+            PickleValue::String("rxs".into()),
+            PickleValue::Float(s.traffic.rxs),
+        ),
+        (
+            PickleValue::String("txs".into()),
+            PickleValue::Float(s.traffic.txs),
+        ),
+        (
+            PickleValue::String("arxb".into()),
+            PickleValue::Int(s.traffic.arxb as i64),
+        ),
+        (
+            PickleValue::String("atxb".into()),
+            PickleValue::Int(s.traffic.atxb as i64),
+        ),
+        (
+            PickleValue::String("arxs".into()),
+            PickleValue::Float(s.traffic.arxs),
+        ),
+        (
+            PickleValue::String("atxs".into()),
+            PickleValue::Float(s.traffic.atxs),
+        ),
+        (
+            PickleValue::String("prxb".into()),
+            PickleValue::Int(s.traffic.prxb as i64),
+        ),
+        (
+            PickleValue::String("ptxb".into()),
+            PickleValue::Int(s.traffic.ptxb as i64),
+        ),
+        (
+            PickleValue::String("prxs".into()),
+            PickleValue::Float(s.traffic.prxs),
+        ),
+        (
+            PickleValue::String("ptxs".into()),
+            PickleValue::Float(s.traffic.ptxs),
         ),
         (
             PickleValue::String("rx_packets".into()),
@@ -2977,6 +3059,7 @@ mod tests {
                             announces_to_internal: Some(true),
                             rxb: 1000,
                             txb: 2000,
+                            traffic: TrafficDetail::default(),
                             rx_packets: 10,
                             tx_packets: 20,
                             cpu_load: None,
@@ -3010,6 +3093,7 @@ mod tests {
                         transport_uptime: 3600.0,
                         total_rxb: 1000,
                         total_txb: 2000,
+                        traffic: TrafficDetail::default(),
                         probe_responder: None,
                         backbone_peer_pool: None,
                     }));
@@ -3313,6 +3397,18 @@ mod tests {
 
     #[test]
     fn interface_stats_pickle_format() {
+        let traffic = TrafficDetail {
+            rxs: 800.0,
+            txs: 1600.0,
+            arxb: 11,
+            atxb: 22,
+            arxs: 88.0,
+            atxs: 176.0,
+            prxb: 33,
+            ptxb: 44,
+            prxs: 264.0,
+            ptxs: 352.0,
+        };
         let mut stats = InterfaceStatsResponse {
             interfaces: vec![SingleInterfaceStat {
                 id: 1,
@@ -3323,6 +3419,7 @@ mod tests {
                 announces_to_internal: Some(true),
                 rxb: 100,
                 txb: 200,
+                traffic,
                 rx_packets: 5,
                 tx_packets: 10,
                 cpu_load: Some(12.0),
@@ -3356,6 +3453,7 @@ mod tests {
             transport_uptime: 3600.0,
             total_rxb: 100,
             total_txb: 200,
+            traffic,
             probe_responder: None,
             backbone_peer_pool: None,
         };
@@ -3379,6 +3477,14 @@ mod tests {
         assert_eq!(ifaces[0].get("ip_freq").unwrap().as_float().unwrap(), 2.0);
         assert_eq!(ifaces[0].get("op_freq").unwrap().as_float().unwrap(), 3.0);
         assert_eq!(ifaces[0].get("oa_freq").unwrap().as_float().unwrap(), 4.0);
+        assert_eq!(ifaces[0].get("arxb").unwrap().as_int().unwrap(), 11);
+        assert_eq!(ifaces[0].get("atxb").unwrap().as_int().unwrap(), 22);
+        assert_eq!(ifaces[0].get("prxb").unwrap().as_int().unwrap(), 33);
+        assert_eq!(ifaces[0].get("ptxb").unwrap().as_int().unwrap(), 44);
+        assert_eq!(ifaces[0].get("arxs").unwrap().as_float().unwrap(), 88.0);
+        assert_eq!(ifaces[0].get("ptxs").unwrap().as_float().unwrap(), 352.0);
+        assert_eq!(decoded.get("arxb").unwrap().as_int().unwrap(), 11);
+        assert_eq!(decoded.get("prxb").unwrap().as_int().unwrap(), 33);
         assert!(ifaces[0].get("burst_active").unwrap().as_bool().unwrap());
         assert_eq!(
             ifaces[0]
@@ -3542,6 +3648,7 @@ mod tests {
             transport_uptime: 1.0,
             total_rxb: 0,
             total_txb: 0,
+            traffic: TrafficDetail::default(),
             probe_responder: None,
             backbone_peer_pool: Some(crate::event::BackbonePeerPoolStatus {
                 max_connected: 1,
@@ -3891,6 +3998,7 @@ mod tests {
             transport_uptime: 100.0,
             total_rxb: 0,
             total_txb: 0,
+            traffic: TrafficDetail::default(),
             probe_responder: Some(probe_hash),
             backbone_peer_pool: None,
         };

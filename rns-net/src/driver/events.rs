@@ -21,6 +21,7 @@ impl Driver {
         snr: Option<f32>,
         ingress_limited: bool,
     ) {
+        let received_size = data.len();
         if data.len() > 2 && (data[0] & 0x03) == 0x01 {
             log::debug!(
                 "Announce:frame from iface {} (len={}, flags=0x{:02x})",
@@ -168,6 +169,19 @@ impl Driver {
         } else {
             self.engine.handle_inbound(inbound_frame, &mut self.rng)
         };
+        if actions.iter().any(|action| {
+            matches!(
+                action,
+                TransportAction::AnnounceReceived {
+                    receiving_interface,
+                    ..
+                } if *receiving_interface == interface_id
+            )
+        }) {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
+            }
+        }
 
         #[cfg(feature = "hooks")]
         {
@@ -231,6 +245,8 @@ impl Driver {
             announce_queue.complete_success(&key)
         };
         if let Some(pending) = pending {
+            let interface = pending.interface;
+            let received_size = pending.original_raw.len();
             let actions = self.engine.complete_verified_announce(
                 pending,
                 validated,
@@ -238,6 +254,14 @@ impl Driver {
                 time::now(),
                 &mut self.rng,
             );
+            if actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::AnnounceReceived { .. }))
+            {
+                if let Some(entry) = self.interfaces.get_mut(&interface) {
+                    entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
+                }
+            }
             self.dispatch_all(actions);
         }
     }
@@ -267,6 +291,7 @@ impl Driver {
         }
 
         let now = time::now();
+        self.sample_interface_traffic(now);
         for (id, entry) in &self.interfaces {
             self.engine.update_interface_freqs(
                 *id,
@@ -396,6 +421,35 @@ impl Driver {
                 self.cache_cleanup_active_hashes = None;
                 self.cache_cleanup_entries = None;
             }
+        }
+    }
+
+    pub(super) fn sample_interface_traffic(&mut self, now: f64) {
+        self.traffic_samples
+            .retain(|id, _| self.interfaces.contains_key(id));
+        for (id, entry) in &mut self.interfaces {
+            let Some(previous) = self.traffic_samples.get(id).copied() else {
+                self.traffic_samples
+                    .insert(*id, TrafficSample::from_stats(now, &entry.stats));
+                entry.stats.traffic_rates = Default::default();
+                continue;
+            };
+            let elapsed = now - previous.sampled_at;
+            if elapsed < 1.0 {
+                continue;
+            }
+            let bps =
+                |current: u64, prior: u64| current.saturating_sub(prior) as f64 * 8.0 / elapsed;
+            entry.stats.traffic_rates = crate::interface::TrafficRates {
+                rxs: bps(entry.stats.rxb, previous.rxb),
+                txs: bps(entry.stats.txb, previous.txb),
+                arxs: bps(entry.stats.arxb, previous.arxb),
+                atxs: bps(entry.stats.atxb, previous.atxb),
+                prxs: bps(entry.stats.prxb, previous.prxb),
+                ptxs: bps(entry.stats.ptxb, previous.ptxb),
+            };
+            self.traffic_samples
+                .insert(*id, TrafficSample::from_stats(now, &entry.stats));
         }
     }
 

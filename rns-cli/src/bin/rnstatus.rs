@@ -452,8 +452,18 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     .get("announce_rate_penalty")
                     .and_then(|v| v.as_float());
                 let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
+                let flow = interface_flow_rates(iface, "arxs", "atxs");
                 for line in announce_status_lines(
-                    ia_freq, oa_freq, clients, peers, ar_target, ar_penalty, ar_grace,
+                    ia_freq,
+                    oa_freq,
+                    clients,
+                    peers,
+                    AnnounceRateControl {
+                        target: ar_target,
+                        penalty: ar_penalty,
+                        grace: ar_grace,
+                    },
+                    flow,
                 ) {
                     println!("{}", line);
                 }
@@ -477,7 +487,8 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     .and_then(|v| v.as_int())
                     .filter(|n| *n > 0)
                     .map(|n| n as u64);
-                for line in path_request_status_lines(ip_freq, op_freq, clients, peers) {
+                let flow = interface_flow_rates(iface, "prxs", "ptxs");
+                for line in path_request_status_lines(ip_freq, op_freq, clients, peers, flow) {
                     println!("{}", line);
                 }
             }
@@ -498,6 +509,12 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
             size_str(total_rxb),
         );
         println!();
+        for line in detailed_traffic_total_lines(response, show_pr_stats, show_announces) {
+            println!("{line}");
+        }
+        if show_pr_stats || show_announces {
+            println!();
+        }
     }
 
     if show_queues {
@@ -657,9 +674,8 @@ fn announce_status_lines(
     oa_freq: f64,
     clients: Option<u64>,
     peers: Option<u64>,
-    ar_target: Option<f64>,
-    ar_penalty: Option<f64>,
-    ar_grace: Option<i64>,
+    rate_control: AnnounceRateControl,
+    flow: Option<FlowRates>,
 ) -> Vec<String> {
     let mut line = format!(
         "    Announces : {} in  {} out",
@@ -673,14 +689,21 @@ fn announce_status_lines(
             label
         ));
     }
+    if let Some(flow) = flow {
+        line.push_str(&format!(
+            "  (\u{2193}{}% / \u{2191}{}% of flow)",
+            flow.rx_percent(),
+            flow.tx_percent()
+        ));
+    }
 
     let mut lines = vec![line];
-    if let Some(target) = ar_target {
+    if let Some(target) = rate_control.target {
         let mut parts = vec![format!("target {}", prettytime(target))];
-        if let Some(penalty) = ar_penalty {
+        if let Some(penalty) = rate_control.penalty {
             parts.push(format!("penalty {}", prettytime(penalty)));
         }
-        if let Some(grace) = ar_grace {
+        if let Some(grace) = rate_control.grace {
             parts.push(format!("grace {}", grace));
         }
         lines.push(format!("                {}", parts.join(", ")));
@@ -688,11 +711,19 @@ fn announce_status_lines(
     lines
 }
 
+#[derive(Clone, Copy, Default)]
+struct AnnounceRateControl {
+    target: Option<f64>,
+    penalty: Option<f64>,
+    grace: Option<i64>,
+}
+
 fn path_request_status_lines(
     ip_freq: f64,
     op_freq: f64,
     clients: Option<u64>,
     peers: Option<u64>,
+    flow: Option<FlowRates>,
 ) -> Vec<String> {
     let mut line = format!(
         "    Path reqs : {} in  {} out",
@@ -706,7 +737,110 @@ fn path_request_status_lines(
             label
         ));
     }
+    if let Some(flow) = flow {
+        line.push_str(&format!(
+            "  (\u{2193}{}% / \u{2191}{}% of flow)",
+            flow.rx_percent(),
+            flow.tx_percent()
+        ));
+    }
     vec![line]
+}
+
+#[derive(Clone, Copy)]
+struct FlowRates {
+    rx: f64,
+    tx: f64,
+    total_rx: f64,
+    total_tx: f64,
+}
+
+impl FlowRates {
+    fn rx_percent(self) -> u64 {
+        flow_percent(self.rx, self.total_rx)
+    }
+
+    fn tx_percent(self) -> u64 {
+        flow_percent(self.tx, self.total_tx)
+    }
+}
+
+fn flow_percent(class_rate: f64, total_rate: f64) -> u64 {
+    if class_rate <= 0.0 || total_rate <= 0.0 {
+        0
+    } else {
+        ((class_rate / total_rate) * 100.0).clamp(0.0, 100.0) as u64
+    }
+}
+
+fn numeric(value: Option<&PickleValue>) -> Option<f64> {
+    value.and_then(|value| {
+        value
+            .as_float()
+            .or_else(|| value.as_int().map(|number| number as f64))
+    })
+}
+
+fn interface_flow_rates(iface: &PickleValue, rx_key: &str, tx_key: &str) -> Option<FlowRates> {
+    Some(FlowRates {
+        rx: numeric(iface.get(rx_key))?,
+        tx: numeric(iface.get(tx_key))?,
+        total_rx: numeric(iface.get("rxs"))?,
+        total_tx: numeric(iface.get("txs"))?,
+    })
+}
+
+fn detailed_traffic_total_lines(
+    response: &PickleValue,
+    show_path_requests: bool,
+    show_announces: bool,
+) -> Vec<String> {
+    let total_rx = numeric(response.get("rxs")).unwrap_or(0.0);
+    let total_tx = numeric(response.get("txs")).unwrap_or(0.0);
+    let mut lines = Vec::new();
+    for (enabled, label, rxb, txb, rxs, txs) in [
+        (
+            show_path_requests,
+            " Path reqs   ",
+            "prxb",
+            "ptxb",
+            "prxs",
+            "ptxs",
+        ),
+        (
+            show_announces,
+            " Announces   ",
+            "arxb",
+            "atxb",
+            "arxs",
+            "atxs",
+        ),
+    ] {
+        if !enabled {
+            continue;
+        }
+        let Some(rx_bytes) = response.get(rxb).and_then(|value| value.as_int()) else {
+            continue;
+        };
+        let Some(tx_bytes) = response.get(txb).and_then(|value| value.as_int()) else {
+            continue;
+        };
+        let rx_rate = numeric(response.get(rxs)).unwrap_or(0.0);
+        let tx_rate = numeric(response.get(txs)).unwrap_or(0.0);
+        lines.push(format!(
+            "{label}: {} \u{2191}  {}  ({}% of flow)",
+            size_str(tx_bytes.max(0) as u64),
+            speed_str(tx_rate.max(0.0) as u64),
+            flow_percent(tx_rate, total_tx),
+        ));
+        lines.push(format!(
+            "              {} \u{2193}  {}  ({}% of flow)",
+            size_str(rx_bytes.max(0) as u64),
+            speed_str(rx_rate.max(0.0) as u64),
+            flow_percent(rx_rate, total_rx),
+        ));
+    }
+    lines
 }
 
 fn outgoing_denominator(clients: Option<u64>, peers: Option<u64>) -> Option<(u64, &'static str)> {
@@ -1308,46 +1442,135 @@ mod tests {
 
     #[test]
     fn announce_line_includes_per_client_outgoing_frequency_when_clients_present() {
-        let lines =
-            announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, Some(4), None, None, None, None);
+        let lines = announce_status_lines(
+            1.0 / 3600.0,
+            4.0 / 3600.0,
+            Some(4),
+            None,
+            AnnounceRateControl::default(),
+            None,
+        );
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out  1.0/h/c");
     }
 
     #[test]
     fn announce_line_omits_per_client_frequency_without_clients() {
-        let lines = announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, None, None, None, None);
+        let lines = announce_status_lines(
+            1.0 / 3600.0,
+            4.0 / 3600.0,
+            None,
+            None,
+            AnnounceRateControl::default(),
+            None,
+        );
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out");
     }
 
     #[test]
     fn announce_line_uses_per_peer_frequency_when_clients_are_absent() {
-        let lines =
-            announce_status_lines(1.0 / 3600.0, 4.0 / 3600.0, None, Some(2), None, None, None);
+        let lines = announce_status_lines(
+            1.0 / 3600.0,
+            4.0 / 3600.0,
+            None,
+            Some(2),
+            AnnounceRateControl::default(),
+            None,
+        );
 
         assert_eq!(lines[0], "    Announces : 1.0/h in  4.0/h out  2.0/h/p");
     }
 
     #[test]
     fn path_request_line_includes_per_client_outgoing_frequency_when_clients_present() {
-        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, Some(4), None);
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, Some(4), None, None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out  2.0/h/c");
     }
 
     #[test]
     fn path_request_line_uses_per_peer_frequency_when_clients_are_absent() {
-        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, Some(2));
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, Some(2), None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out  4.0/h/p");
     }
 
     #[test]
     fn path_request_line_omits_per_client_frequency_without_clients() {
-        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, None);
+        let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, None, None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out");
+    }
+
+    #[test]
+    fn class_lines_show_independent_capped_flow_percentages() {
+        let announce = announce_status_lines(
+            1.0,
+            2.0,
+            None,
+            None,
+            AnnounceRateControl::default(),
+            Some(FlowRates {
+                rx: 25.0,
+                tx: 250.0,
+                total_rx: 100.0,
+                total_tx: 200.0,
+            }),
+        );
+        assert!(announce[0].ends_with("(\u{2193}25% / \u{2191}100% of flow)"));
+
+        let path = path_request_status_lines(
+            1.0,
+            2.0,
+            None,
+            None,
+            Some(FlowRates {
+                rx: 10.0,
+                tx: 40.0,
+                total_rx: 100.0,
+                total_tx: 200.0,
+            }),
+        );
+        assert!(path[0].ends_with("(\u{2193}10% / \u{2191}20% of flow)"));
+    }
+
+    #[test]
+    fn detailed_totals_render_bytes_rates_and_independent_flow_shares() {
+        let response = PickleValue::Dict(vec![
+            (PickleValue::String("rxs".into()), PickleValue::Float(800.0)),
+            (
+                PickleValue::String("txs".into()),
+                PickleValue::Float(1600.0),
+            ),
+            (PickleValue::String("prxb".into()), PickleValue::Int(33)),
+            (PickleValue::String("ptxb".into()), PickleValue::Int(44)),
+            (PickleValue::String("prxs".into()), PickleValue::Float(80.0)),
+            (
+                PickleValue::String("ptxs".into()),
+                PickleValue::Float(320.0),
+            ),
+            (PickleValue::String("arxb".into()), PickleValue::Int(11)),
+            (PickleValue::String("atxb".into()), PickleValue::Int(22)),
+            (
+                PickleValue::String("arxs".into()),
+                PickleValue::Float(200.0),
+            ),
+            (
+                PickleValue::String("atxs".into()),
+                PickleValue::Float(400.0),
+            ),
+        ]);
+
+        assert_eq!(
+            detailed_traffic_total_lines(&response, true, true),
+            vec![
+                " Path reqs   : 44 B \u{2191}  320 b/s  (20% of flow)",
+                "              33 B \u{2193}  80 b/s  (10% of flow)",
+                " Announces   : 22 B \u{2191}  400 b/s  (25% of flow)",
+                "              11 B \u{2193}  200 b/s  (25% of flow)",
+            ]
+        );
     }
 
     #[test]

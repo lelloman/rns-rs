@@ -38,6 +38,7 @@ use crate::event::{
     LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
     QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    TrafficDetail,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -604,12 +605,39 @@ struct KnownDestinationCleanup {
     removed: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TrafficSample {
+    sampled_at: f64,
+    rxb: u64,
+    txb: u64,
+    arxb: u64,
+    atxb: u64,
+    prxb: u64,
+    ptxb: u64,
+}
+
+impl TrafficSample {
+    fn from_stats(sampled_at: f64, stats: &crate::interface::InterfaceStats) -> Self {
+        Self {
+            sampled_at,
+            rxb: stats.rxb,
+            txb: stats.txb,
+            arxb: stats.arxb,
+            atxb: stats.atxb,
+            prxb: stats.prxb,
+            ptxb: stats.ptxb,
+        }
+    }
+}
+
 /// The driver loop. Owns the engine and all interface entries.
 pub struct Driver {
     pub(crate) engine: TransportEngine,
     pub(crate) interfaces: HashMap<InterfaceId, InterfaceEntry>,
     /// Parent listener for dynamically spawned interfaces.
     pub(crate) dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
+    /// Previous cumulative counters used to calculate current one-second rates.
+    pub(crate) traffic_samples: HashMap<InterfaceId, TrafficSample>,
     pub(crate) rng: OsRng,
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
@@ -839,6 +867,7 @@ impl Driver {
             engine,
             interfaces: HashMap::new(),
             dynamic_interface_parents: HashMap::new(),
+            traffic_samples: HashMap::new(),
             rng: OsRng,
             rx,
             callbacks,
