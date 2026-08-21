@@ -78,7 +78,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Non-runtime | Adds only a TODO proposing future non-transport path-request filtering; executable behavior is unchanged |
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Structurally covered | Documentation-only grammar correction; native queue-tuning wording does not contain the typo |
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Structurally covered | Native documentation already labels `qlen_in_pr` and `qlen_in_il` as path-request and ingress-limited queues |
-| 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Needs decision | Pending per-commit analysis |
+| 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Integrated | Successful authenticated LRPROOF path rebalances now log on the dedicated pathing target |
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Needs decision | Pending per-commit analysis |
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Needs decision | Pending per-commit analysis |
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Needs decision | Pending per-commit analysis |
@@ -772,6 +772,22 @@ needed.
 
 **Final disposition:** Structurally covered.
 
+### 34. `636012bb` — Move link rebalance diagnostics to pathing
+
+**Upstream change:** Changes the successful LRPROOF path-rebalance diagnostic
+from generic debug logging to Reticulum's dedicated pathing level. Routing and
+wire behavior are unchanged.
+
+**Rust applicability:** Rust performs the same authenticated hop-count
+rebalance and emitted the corresponding diagnostic at ordinary debug level.
+
+**Local handling and evidence:** The successful rebalance now uses
+`PATHING_LOG_TARGET` at trace, which models Reticulum's numeric pathing level.
+The focused logging regression verifies that the event is hidden at numeric
+debug level 6 and enabled at pathing level 7.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -797,6 +813,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `636012bb` routes authenticated LRPROOF rebalance
+  diagnostics through the dedicated pathing target. The focused filter
+  regression, formatting, host lint, exact checkout, and drift check passed,
+  leaving 29 commits.
 - `2026-08-21`: Commit `e1b7bc31` corrects queue-class labels that were already
   correct in native documentation. Its unchanged `RNS` tree, exact checkout,
   formatting, host lint, and drift check passed, leaving 30 commits.

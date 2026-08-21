@@ -13,7 +13,7 @@ pub const LOG_PATHING: u8 = 7;
 pub const LOG_EXTREME: u8 = 8;
 
 /// Runtime level for authenticated link path rebalancing events.
-pub const REBALANCE_LOG_LEVEL: log::Level = log::Level::Debug;
+pub const REBALANCE_LOG_LEVEL: log::Level = log::Level::Trace;
 
 /// The two filters needed to represent Reticulum's pathing level with Rust's
 /// five-level `log` facade.
@@ -149,14 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn link_path_rebalancing_uses_debug_level() {
-        assert_eq!(REBALANCE_LOG_LEVEL, log::Level::Debug);
-        let logger = test_logger(numeric_log_filter(LOG_DEBUG));
+    fn link_path_rebalancing_uses_pathing_level() {
+        assert_eq!(REBALANCE_LOG_LEVEL, log::Level::Trace);
         let metadata = log::Metadata::builder()
             .level(REBALANCE_LOG_LEVEL)
-            .target("rns_net::driver::events")
+            .target(PATHING_LOG_TARGET)
             .build();
-        assert!(logger.enabled(&metadata));
+
+        let debug = test_logger(numeric_log_filter(LOG_DEBUG));
+        assert!(!debug.enabled(&metadata));
+
+        let pathing = test_logger(numeric_log_filter(LOG_PATHING));
+        assert!(pathing.enabled(&metadata));
     }
 
     #[test]
