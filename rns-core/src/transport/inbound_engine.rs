@@ -10,6 +10,12 @@ pub(super) fn extra_link_proof_timeout(interface: Option<&InterfaceInfo>) -> f64
 }
 
 impl TransportEngine {
+    /// Return whether an inbound frame passes parsing, hop, and packet filtering.
+    /// This does not mutate deduplication or routing state.
+    pub fn accepts_inbound_frame(&self, frame: InboundFrame<'_>) -> bool {
+        self.prepare_inbound_packet(frame).is_some()
+    }
+
     /// Process an inbound raw packet from a network interface.
     ///
     /// Returns a list of actions for the caller to execute.
@@ -274,6 +280,9 @@ impl TransportEngine {
         let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
             return;
         };
+        if !link_entry.validated {
+            return;
+        }
         let instance_local_link = self.interface_is_local_client(link_entry.next_hop_interface)
             && self.interface_is_local_client(link_entry.received_interface);
         let Some((outbound_iface, new_raw)) = route_via_link_table(
@@ -378,7 +387,10 @@ impl TransportEngine {
         // Unpack and validate announce
         let announce = match AnnounceData::unpack(&packet.data, has_ratchet) {
             Ok(a) => a,
-            Err(_) => return,
+            Err(_) => {
+                actions.push(TransportAction::ProtocolViolation { interface: iface });
+                return;
+            }
         };
 
         if self.should_hold_announce(packet, original_raw, iface, now) {
@@ -396,14 +408,20 @@ impl TransportEngine {
                     self.announce_sig_cache.insert(sig_cache_key, now);
                     v
                 }
-                Err(_) => return,
+                Err(_) => {
+                    actions.push(TransportAction::ProtocolViolation { interface: iface });
+                    return;
+                }
             }
         };
 
         let received_from = self.announce_received_from(packet, now);
         let random_blob = match extract_random_blob(&packet.data) {
             Some(b) => b,
-            None => return,
+            None => {
+                actions.push(TransportAction::ProtocolViolation { interface: iface });
+                return;
+            }
         };
         let announce_emitted = timebase_from_random_blob(&random_blob);
 
@@ -552,7 +570,12 @@ impl TransportEngine {
         let has_ratchet = ctx.packet.flags.context_flag == constants::FLAG_SET;
         let announce = match AnnounceData::unpack(&ctx.packet.data, has_ratchet) {
             Ok(a) => a,
-            Err(_) => return,
+            Err(_) => {
+                actions.push(TransportAction::ProtocolViolation {
+                    interface: ctx.iface,
+                });
+                return;
+            }
         };
 
         let received_from = self.announce_received_from(&ctx.packet, ctx.now);
@@ -607,6 +630,9 @@ impl TransportEngine {
 
         if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
             let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
+                actions.push(TransportAction::ProtocolViolation {
+                    interface: ctx.iface,
+                });
                 return;
             };
             self.announce_sig_cache.insert(sig_cache_key, ctx.now);
@@ -634,7 +660,12 @@ impl TransportEngine {
 
         let random_blob = match extract_random_blob(&ctx.packet.data) {
             Some(b) => b,
-            None => return,
+            None => {
+                actions.push(TransportAction::ProtocolViolation {
+                    interface: ctx.iface,
+                });
+                return;
+            }
         };
         let announce_emitted = timebase_from_random_blob(&random_blob);
         let key = AnnounceVerifyKey {

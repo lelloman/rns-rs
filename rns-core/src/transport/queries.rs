@@ -26,6 +26,16 @@ impl TransportEngine {
             .count()
     }
 
+    pub fn is_unvalidated_link_packet(&self, packet: &crate::packet::RawPacket) -> bool {
+        packet.flags.packet_type != crate::constants::PACKET_TYPE_ANNOUNCE
+            && packet.flags.packet_type != crate::constants::PACKET_TYPE_LINKREQUEST
+            && packet.context != crate::constants::CONTEXT_LRPROOF
+            && self
+                .link_table
+                .get(&packet.destination_hash)
+                .is_some_and(|entry| !entry.validated)
+    }
+
     pub fn path_table_count(&self) -> usize {
         self.path_table.len()
     }

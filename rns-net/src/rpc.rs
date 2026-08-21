@@ -1493,6 +1493,18 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Float(s.traffic.ptxs),
         ),
         (
+            PickleValue::String("protocol_violations".into()),
+            PickleValue::Int(s.protocol_violations as i64),
+        ),
+        (
+            PickleValue::String("ifac_violations".into()),
+            PickleValue::Int(s.ifac_violations as i64),
+        ),
+        (
+            PickleValue::String("packet_filter_hits".into()),
+            PickleValue::Int(s.packet_filter_hits as i64),
+        ),
+        (
             PickleValue::String("rx_packets".into()),
             PickleValue::Int(s.rx_packets as i64),
         ),
@@ -3071,6 +3083,9 @@ mod tests {
                             rxb: 1000,
                             txb: 2000,
                             traffic: TrafficDetail::default(),
+                            protocol_violations: 0,
+                            ifac_violations: 0,
+                            packet_filter_hits: 0,
                             rx_packets: 10,
                             tx_packets: 20,
                             cpu_load: None,
@@ -3441,6 +3456,9 @@ mod tests {
                 rxb: 100,
                 txb: 200,
                 traffic,
+                protocol_violations: 11,
+                ifac_violations: 12,
+                packet_filter_hits: 13,
                 rx_packets: 5,
                 tx_packets: 10,
                 cpu_load: Some(12.0),
@@ -3504,6 +3522,19 @@ mod tests {
         assert_eq!(ifaces[0].get("ptxb").unwrap().as_int().unwrap(), 44);
         assert_eq!(ifaces[0].get("arxs").unwrap().as_float().unwrap(), 88.0);
         assert_eq!(ifaces[0].get("ptxs").unwrap().as_float().unwrap(), 352.0);
+        assert_eq!(
+            ifaces[0]
+                .get("protocol_violations")
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            11
+        );
+        assert_eq!(ifaces[0].get("ifac_violations").unwrap().as_int(), Some(12));
+        assert_eq!(
+            ifaces[0].get("packet_filter_hits").unwrap().as_int(),
+            Some(13)
+        );
         assert_eq!(decoded.get("arxb").unwrap().as_int().unwrap(), 11);
         assert_eq!(decoded.get("prxb").unwrap().as_int().unwrap(), 33);
         assert!(ifaces[0].get("burst_active").unwrap().as_bool().unwrap());

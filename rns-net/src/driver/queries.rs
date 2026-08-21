@@ -72,6 +72,9 @@ impl Driver {
                 rxb: entry.stats.rxb,
                 txb: entry.stats.txb,
                 traffic,
+                protocol_violations: entry.stats.protocol_violations,
+                ifac_violations: entry.stats.ifac_violations,
+                packet_filter_hits: entry.stats.packet_filter_hits,
                 rx_packets: entry.stats.rx_packets,
                 tx_packets: entry.stats.tx_packets,
                 cpu_load: entry.stats.cpu_load,
@@ -116,10 +119,16 @@ impl Driver {
                     .collect::<Vec<_>>();
             let blocked_ips = blocked_ip_list.len() as u64;
             let mut traffic = TrafficDetail::default();
+            let mut protocol_violations = 0;
+            let mut ifac_violations = 0;
+            let mut packet_filter_hits = 0;
             for (child_id, parent_id) in &self.dynamic_interface_parents {
                 if *parent_id == handle.interface_id {
                     if let Some(child) = self.interfaces.get(child_id) {
                         add_traffic(&mut traffic, traffic_detail(&child.stats));
+                        protocol_violations += child.stats.protocol_violations;
+                        ifac_violations += child.stats.ifac_violations;
+                        packet_filter_hits += child.stats.packet_filter_hits;
                     }
                 }
             }
@@ -133,6 +142,9 @@ impl Driver {
                 rxb: 0,
                 txb: 0,
                 traffic,
+                protocol_violations,
+                ifac_violations,
+                packet_filter_hits,
                 rx_packets: 0,
                 tx_packets: 0,
                 cpu_load: None,

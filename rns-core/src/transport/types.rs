@@ -262,6 +262,8 @@ pub enum TransportAction {
     },
     /// A link entry expired and was removed from the link table.
     LinkClosed { link_id: [u8; 16] },
+    /// A malformed or cryptographically invalid packet was rejected.
+    ProtocolViolation { interface: InterfaceId },
 }
 
 /// A blackholed identity entry.

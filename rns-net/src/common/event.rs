@@ -775,6 +775,9 @@ pub struct SingleInterfaceStat {
     pub txb: u64,
     /// Byte counters and rates for total, announce and path-request traffic.
     pub traffic: TrafficDetail,
+    pub protocol_violations: u64,
+    pub ifac_violations: u64,
+    pub packet_filter_hits: u64,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub cpu_load: Option<f64>,
