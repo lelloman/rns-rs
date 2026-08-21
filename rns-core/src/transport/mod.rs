@@ -146,6 +146,7 @@ pub struct AcceptedPathRequest {
     interface_id: InterfaceId,
     now: f64,
     destination_hash: [u8; 16],
+    already_in_flight: bool,
 }
 
 /// The core transport/routing engine.

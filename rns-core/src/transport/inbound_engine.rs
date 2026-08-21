@@ -910,7 +910,9 @@ impl TransportEngine {
         }
 
         // Check for discovery path requests waiting for this announce
-        if let Some(pr_entry) = self.discovery_path_requests_waiting(&ctx.packet.destination_hash) {
+        if let Some(requesting_interfaces) =
+            self.discovery_path_requests_waiting(&ctx.packet.destination_hash)
+        {
             // Build a path response announce and queue it
             let entry = AnnounceEntry {
                 timestamp: ctx.now,
@@ -924,8 +926,17 @@ impl TransportEngine {
                 context_flag: ctx.packet.flags.context_flag,
                 local_rebroadcasts: 0,
                 block_rebroadcasts: true,
-                attached_interface: Some(pr_entry),
+                attached_interface: requesting_interfaces.first().copied(),
             };
+            if let Some(identity_hash) = self.config.identity_hash {
+                let raw = announce_proc::build_retransmit_announce(&entry, &identity_hash);
+                for interface in requesting_interfaces.iter().skip(1) {
+                    actions.push(TransportAction::SendOnInterface {
+                        interface: *interface,
+                        raw: raw.clone().into(),
+                    });
+                }
+            }
             self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
         }
     }
@@ -939,11 +950,11 @@ impl TransportEngine {
     pub(super) fn discovery_path_requests_waiting(
         &mut self,
         dest_hash: &[u8; 16],
-    ) -> Option<InterfaceId> {
+    ) -> Option<Vec<InterfaceId>> {
         let request = self
             .discovery_path_requests
             .remove(dest_hash)
-            .map(|req| req.requesting_interface);
+            .map(|req| req.requesting_interfaces);
         self.discovery_path_request_deadlines.remove(dest_hash);
         request
     }

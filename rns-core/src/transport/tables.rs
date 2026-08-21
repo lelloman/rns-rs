@@ -60,7 +60,8 @@ pub struct LinkEntry {
 #[derive(Debug, Clone)]
 pub struct DiscoveryPathRequest {
     pub timestamp: f64,
-    pub requesting_interface: InterfaceId,
+    pub requesting_interfaces: Vec<InterfaceId>,
+    pub engaged: bool,
 }
 
 /// Entry in the announce rate table, keyed by destination_hash.

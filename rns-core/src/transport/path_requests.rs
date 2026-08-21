@@ -66,6 +66,10 @@ impl TransportEngine {
             &ctx.destination_hash[..4],
             ctx.interface_id.0,
         );
+        if ctx.already_in_flight {
+            self.batch_inflight_path_request(&ctx, ingress_limited);
+            return Vec::new();
+        }
         if self.local_destinations.contains_key(&ctx.destination_hash) {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Ignoring path request for {:02x?}: destination is local",
@@ -126,6 +130,7 @@ impl TransportEngine {
             return None;
         }
 
+        let already_in_flight = self.path_requests.contains_key(&destination_hash);
         self.path_requests.entry(destination_hash).or_insert(now);
 
         let mut tag = [0u8; 16];
@@ -136,7 +141,45 @@ impl TransportEngine {
             interface_id,
             now,
             destination_hash,
+            already_in_flight,
         })
+    }
+
+    fn batch_inflight_path_request(&mut self, ctx: &AcceptedPathRequest, ingress_limited: bool) {
+        let Some((ingress_control, ip_freq, started)) = self
+            .interfaces
+            .get(&ctx.interface_id)
+            .map(|info| (info.ingress_control, info.ip_freq, info.started))
+        else {
+            return;
+        };
+        if ingress_limited
+            || self.ingress_control.should_ingress_limit_pr(
+                ctx.interface_id,
+                &ingress_control,
+                ip_freq,
+                started,
+                ctx.now,
+            )
+        {
+            return;
+        }
+
+        let timeout = discovery_path_request_timeout(&self.interfaces);
+        let request = self
+            .discovery_path_requests
+            .entry(ctx.destination_hash)
+            .or_insert_with(|| DiscoveryPathRequest {
+                timestamp: ctx.now,
+                requesting_interfaces: Vec::new(),
+                engaged: false,
+            });
+        if !request.requesting_interfaces.contains(&ctx.interface_id) {
+            request.requesting_interfaces.push(ctx.interface_id);
+        }
+        self.discovery_path_request_deadlines
+            .entry(ctx.destination_hash)
+            .or_insert(ctx.now + timeout);
     }
 
     /// Record a locally generated path request, refreshing its gate timeout.
@@ -317,13 +360,18 @@ impl TransportEngine {
                 ctx.interface_id.0,
                 actions.len(),
             );
-            self.discovery_path_requests.insert(
-                ctx.destination_hash,
-                DiscoveryPathRequest {
+            let request = self
+                .discovery_path_requests
+                .entry(ctx.destination_hash)
+                .or_insert_with(|| DiscoveryPathRequest {
                     timestamp: ctx.now,
-                    requesting_interface: ctx.interface_id,
-                },
-            );
+                    requesting_interfaces: Vec::new(),
+                    engaged: false,
+                });
+            if !request.requesting_interfaces.contains(&ctx.interface_id) {
+                request.requesting_interfaces.push(ctx.interface_id);
+            }
+            request.engaged = true;
             let timeout = discovery_path_request_timeout(&self.interfaces);
             self.discovery_path_request_deadlines
                 .insert(ctx.destination_hash, ctx.now + timeout);
