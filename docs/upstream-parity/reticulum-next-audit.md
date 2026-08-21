@@ -84,7 +84,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Structurally covered | Native `rnstatus` already renders announce and path-request pressure from `aqpressure` and `pqpressure` with distinct-value coverage |
 | 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Structurally covered | Rust maintains an interface-ID→hash map on registration/removal and snapshots it directly, with no throttled full lookup or timestamp |
 | 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Structurally covered | Rust replaces the matched queue vector slot directly; a multi-entry regression proves a newer duplicate cannot overwrite the trailing entry |
-| 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Needs decision | Pending per-commit analysis |
+| 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Structurally covered | Rust's `.position()` stops at the first destination match; a corruption-tolerance regression pins first-match replacement |
 | 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Needs decision | Pending per-commit analysis |
 | 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Needs decision | Pending per-commit analysis |
 | 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Needs decision | Pending per-commit analysis |
@@ -889,6 +889,23 @@ of the trailing entry unchanged.
 
 **Final disposition:** Structurally covered.
 
+### 40. `40a862ac` — Stop queued-announce lookup at first match
+
+**Upstream change:** Breaks the announce-queue scan immediately after finding a
+matching destination, avoiding needless traversal and ensuring the first match
+is the selected entry if duplicate corruption is already present.
+
+**Rust applicability:** Rust uses iterator `.position()`, which stops at the
+first matching vector element by definition. Normal insertion prevents new
+duplicates, but the public queue entries can represent pre-existing corrupted
+state in tests or callers.
+
+**Local handling and evidence:** Added a corruption-tolerance regression with
+two pre-existing entries for the same destination. Inserting a newer announce
+must update only the first entry while leaving the second duplicate unchanged.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -914,6 +931,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `40a862ac` adds first-match loop termination already
+  provided by Rust's `.position()`. The new duplicate-corruption regression,
+  full announce-queue tests, formatting, host lint, exact checkout, and drift
+  checks passed, leaving 23 commits.
 - `2026-08-21`: Commit `d825e393` fixes wrong-entry queued-announce mutation
   already absent from Rust's indexed replacement. The new multi-entry
   regression, full announce-queue tests, formatting, host lint, exact checkout,

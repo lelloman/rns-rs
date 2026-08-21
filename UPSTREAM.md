@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `d825e39379ebee2c69f0197567045eb5bd0e56e0`
-- Commit date: `2026-08-19 12:59:41 +0200`
-- Subject: `Transport: fix updating announce_queue`
+- Normative commit: `40a862acbd870cec0c803ed8726027b94a0e4150`
+- Commit date: `2026-08-19 13:02:28 +0200`
+- Subject: `Break loop on existing entry in announce queue`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`f0db9f445c4ea1945d78d5ba72d21bd07e549b7e`. The CI interop lane remains pinned
+`d1aae544606ffc2b595130dcbfa002a9dcd06608`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`d825e39379ebee2c69f0197567045eb5bd0e56e0`. The first commit fixes
+`40a862acbd870cec0c803ed8726027b94a0e4150`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -155,7 +155,9 @@ thirty-eighth commit repairs a Python persistence-loop cache timestamp; Rust
 maintains interface hashes incrementally and never performs the throttled scan.
 The thirty-ninth commit fixes Python updating the wrong queued announce on a
 newer duplicate; Rust already replaces the matched vector slot directly, now
-covered with a trailing-entry regression. The full
+covered with a trailing-entry regression. The fortieth commit stops upstream's
+queue scan at the first duplicate; Rust's indexed lookup already has that
+behavior, now covered even for pre-existing duplicate corruption. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
