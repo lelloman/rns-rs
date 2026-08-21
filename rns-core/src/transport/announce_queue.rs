@@ -462,6 +462,30 @@ mod tests {
     }
 
     #[test]
+    fn newer_duplicate_updates_matched_entry_not_trailing_entry() {
+        let mut queue = InterfaceAnnounceQueue::new();
+        queue.insert(make_entry(0x01, 3, 100.0));
+        queue.insert(make_entry(0x02, 4, 150.0));
+
+        let mut replacement = make_entry(0x01, 3, 200.0);
+        replacement.raw = vec![0x09, 0x08].into();
+        queue.insert(replacement);
+
+        assert_eq!(queue.entries.len(), 2);
+        assert_eq!(queue.entries[0].destination_hash, [0x01; 16]);
+        assert_eq!(queue.entries[0].time, 200.0);
+        assert_eq!(queue.entries[0].hops, 3);
+        assert_eq!(queue.entries[0].emitted, 200.0);
+        assert_eq!(&*queue.entries[0].raw, &[0x09, 0x08]);
+
+        assert_eq!(queue.entries[1].destination_hash, [0x02; 16]);
+        assert_eq!(queue.entries[1].time, 150.0);
+        assert_eq!(queue.entries[1].hops, 4);
+        assert_eq!(queue.entries[1].emitted, 150.0);
+        assert_eq!(&*queue.entries[1].raw, &[0x01, 0x02, 0x03]);
+    }
+
+    #[test]
     fn test_queue_stale_removal() {
         let mut queue = InterfaceAnnounceQueue::new();
         queue.insert(make_entry(0x01, 1, 100.0));
