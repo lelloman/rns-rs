@@ -91,7 +91,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Structurally covered | Rust has no receive watchdog mutex; malformed packets return normally, and a regression proves a subsequent valid packet is accepted on the same link |
 | 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Structurally covered | The changed message belongs to Python's catch-all Link receive exception boundary; Rust uses typed error branches and has no equivalent diagnostic |
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Structurally covered | Rust rejects malformed frames through typed parser branches; an event-loop regression proves the immediately following valid frame is still dispatched |
-| 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Needs decision | Pending per-commit analysis |
+| 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Structurally covered | Private Python `process_inbound` becomes `preprocess_inbound`; Rust's private boundary is independently named `handle_classified_frame_event` |
 | 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Needs decision | Pending per-commit analysis |
 | 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Needs decision | Pending per-commit analysis |
@@ -1020,6 +1020,24 @@ callback, demonstrating that invalid input is contained to its own delivery.
 
 **Final disposition:** Structurally covered.
 
+### 47. `db7daa4d` — Rename the private inbound implementation method
+
+**Upstream change:** Renames the private implementation called by Python's
+exception-handling `inbound()` wrapper from `process_inbound()` to
+`preprocess_inbound()`. The body and behavior are unchanged.
+
+**Rust applicability:** Rust does not expose either Python method. Its private
+driver entry is `handle_classified_frame_event()`, named for the additional
+ingress-classification state it accepts. Renaming it to mirror a private Python
+identifier would not improve source or protocol compatibility.
+
+**Local handling and evidence:** No production or test change is appropriate
+for a private, language-specific rename with an unchanged upstream `RNS`
+behavioral tree aside from the identifier edit. The preceding driver recovery
+regression remains valid.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1045,6 +1063,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `db7daa4d` only renames Python's private inbound
+  implementation method. Formatting, host lint, exact checkout, and drift
+  checks passed, leaving 16 commits.
 - `2026-08-21`: Commit `c95bb551` contains Python exceptions at the Transport
   inbound boundary. Rust's typed rejection path plus the malformed-then-valid
   driver regression, formatting, host lint, exact checkout, and drift checks
