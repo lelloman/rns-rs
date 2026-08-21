@@ -75,7 +75,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Integrated | Four positive `qlen_in_*` settings, upstream defaults, legacy scalar compatibility, private startup wiring, and independent saturation regressions |
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Documentation follow-up | README documents queue priority, all four keys/defaults, full-queue drops, and Rust control barriers |
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Structurally covered | Rust has no per-packet exception handler or mislabeled outbound-queue diagnostic in its inbound event loop |
-| 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Needs decision | Pending per-commit analysis |
+| 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Non-runtime | Adds only a TODO proposing future non-transport path-request filtering; executable behavior is unchanged |
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Needs decision | Pending per-commit analysis |
@@ -724,6 +724,22 @@ change or synthetic test is appropriate for a nonexistent message.
 
 **Final disposition:** Structurally covered.
 
+### 31. `1809461a` — Note possible early path-request filtering
+
+**Upstream change:** Adds a TODO suggesting that non-transport nodes could
+discard path requests earlier when the destination is not local, potentially
+with a new local-client destination map. No statement executes differently.
+
+**Rust applicability:** None for this commit. The proposal calls out unresolved
+state design and must be evaluated if upstream implements it; inferring and
+shipping speculative filtering now could change path-request routing ahead of
+the normative implementation.
+
+**Local handling and evidence:** Recorded the exact comments-only diff and
+advanced the baseline. No production code or synthetic test is appropriate.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -749,6 +765,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `1809461a` adds only a speculative early-filtering TODO.
+  The exact checkout and drift checker resolved to `1809461a`, leaving 32
+  commits; formatting and warning-free host lint passed.
 - `2026-08-21`: Commit `01a78bee` fixes a Python-only exception label that has
   no Rust equivalent. The exact checkout and drift checker resolved to
   `01a78bee`, leaving 33 commits; formatting and warning-free host lint passed.
