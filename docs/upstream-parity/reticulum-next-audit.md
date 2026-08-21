@@ -98,7 +98,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Structurally covered | Rust's writer accepts Link MDU and subtracts the 6-byte channel envelope plus 2-byte stream header exactly once; an exact-boundary regression pins full utilization |
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Structurally covered | Native `rnsh` already deducts the channel envelope and stream header once; its chunking regression now asserts that a full packed message exactly fills Link MDU |
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Integrated | `[reticulum] link_mtu_discovery = No` now omits MTU signalling while default/true retain it, without changing public programmatic constructors |
-| 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Needs decision | Pending per-commit analysis |
+| 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Non-runtime | Adds Python API documentation for the existing per-hop timeout constant and first-hop estimator; Rust already documents its corresponding constant and formula |
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Needs decision | Pending per-commit analysis |
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
@@ -1149,6 +1149,25 @@ representations remain unchanged.
 
 **Final disposition:** Integrated.
 
+### 54. `49918c7e` — Document first-hop timeout estimation
+
+**Upstream change:** Adds docstrings and generated API documentation for
+Python's existing six-second default per-hop timeout and
+`get_first_hop_timeout()` method, plus punctuation in `get_instance()`. No
+executable expressions change.
+
+**Rust applicability:** Rust already documents
+`LINK_ESTABLISHMENT_TIMEOUT_PER_HOP` as six seconds and the public
+`compute_establishment_timeout()` formula. Python's instance-oriented
+first-hop estimator has no source-compatible Rust API, and this commit does not
+introduce its behavior.
+
+**Local handling and evidence:** No production code or test is appropriate for
+an upstream documentation-only commit. Existing rustdoc accurately describes
+the native timeout primitives.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1174,6 +1193,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `49918c7e` only documents existing Python timeout APIs;
+  native timeout rustdoc already covers its corresponding constant and formula.
+  Formatting, host lint, exact checkout, and drift checks passed, leaving 9
+  commits.
 - `2026-08-21`: Commit `954567c5` makes false Link MTU discovery configuration
   effective. Config and packed-LINKREQUEST regressions, formatting, host lint,
   exact checkout, and drift checks passed, leaving 10 commits.
