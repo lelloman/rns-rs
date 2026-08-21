@@ -94,7 +94,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Structurally covered | Private Python `process_inbound` becomes `preprocess_inbound`; Rust's private boundary is independently named `handle_classified_frame_event` |
 | 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Integrated | Resource part matching now searches from `consecutive_completed_height + 1`, exactly matching the requested window and including its tail |
 | 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Structurally covered | Corrects `EPOLL_IN` to `EPOLLIN` in a Python Backbone warning; native diagnostics contain neither spelling |
-| 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Needs decision | Pending per-commit analysis |
+| 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Structurally covered | Python's cached aggregate refresh drops from 2.0s to 0.95s; Rust computes every Backbone child aggregate live with no throttle |
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Needs decision | Pending per-commit analysis |
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Needs decision | Pending per-commit analysis |
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Needs decision | Pending per-commit analysis |
@@ -1072,6 +1072,23 @@ for an absent diagnostic typo.
 
 **Final disposition:** Structurally covered.
 
+### 50. `0c0034f1` — Reduce the Backbone burst-stat cache throttle
+
+**Upstream change:** Introduces a shared 0.95-second throttle for six Python
+Backbone child burst aggregate properties, replacing their two-second refresh
+intervals.
+
+**Rust applicability:** Rust has no cached burst-stat property or refresh
+interval. Each listener aggregate query reads current child queue state and
+computes counts, active flags, and earliest activation immediately.
+
+**Local handling and evidence:** No code change is needed for the absent cache.
+The existing mixed-parent and disconnect-cleanup regressions pin immediate
+visibility of state changes, a stronger freshness property than either Python
+throttle.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1097,6 +1114,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `0c0034f1` reduces Python's Backbone cache throttle,
+  absent from Rust's live aggregate computation. Dynamic-state tests,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 13
+  commits.
 - `2026-08-21`: Commit `2e9443ff` only corrects a Python Backbone warning's
   `EPOLLIN` spelling, absent from Rust. Formatting, host lint, exact checkout,
   and drift checks passed, leaving 14 commits.
