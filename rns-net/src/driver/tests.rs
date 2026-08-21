@@ -7434,6 +7434,54 @@ fn queued_ingress_limited_path_request_remains_suppressed_during_dispatch() {
 }
 
 #[test]
+fn duplicate_path_request_is_not_counted_as_new_ingress() {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+    driver.engine.register_interface(make_interface_info(1));
+
+    let (writer, _) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+
+    let mut request_data = Vec::new();
+    request_data.extend_from_slice(&[0xdb; 16]);
+    request_data.extend_from_slice(&[0x0b; 16]);
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &request_data,
+    )
+    .unwrap();
+
+    for packet_hash in [[0xcc; 32], [0xdd; 32]] {
+        driver.dispatch_all(vec![TransportAction::DeliverLocal {
+            destination_hash: driver.path_request_dest,
+            raw: Arc::from(packet.raw.clone()),
+            packet_hash,
+            receiving_interface: InterfaceId(1),
+        }]);
+    }
+
+    assert_eq!(driver.engine.discovery_pr_tags_count(), 1);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.ip_timestamps.len(),
+        1,
+        "a duplicate tag must not contribute another ingress sample"
+    );
+}
+
+#[test]
 fn request_path_includes_transport_id() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

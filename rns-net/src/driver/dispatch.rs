@@ -530,6 +530,12 @@ impl Driver {
         } else if destination_hash == self.path_request_dest {
             if let Ok(packet) = RawPacket::unpack(&raw) {
                 let now = time::now();
+                let Some(request) =
+                    self.engine
+                        .accept_path_request(&packet.data, receiving_interface, now)
+                else {
+                    return;
+                };
                 if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
                     entry.stats.record_incoming_path_request(now);
                     self.engine.update_interface_freqs(
@@ -540,12 +546,9 @@ impl Driver {
                         entry.stats.outgoing_path_request_samples(),
                     );
                 }
-                let actions = self.engine.handle_path_request_with_ingress_limit(
-                    &packet.data,
-                    receiving_interface,
-                    now,
-                    ingress_limited,
-                );
+                let actions = self
+                    .engine
+                    .handle_accepted_path_request_with_ingress_limit(request, ingress_limited);
                 self.dispatch_all(actions);
             }
         } else if self.link_manager.is_link_destination(&destination_hash) {

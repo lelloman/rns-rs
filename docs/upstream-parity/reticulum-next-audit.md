@@ -107,7 +107,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Structurally covered | Rust represents the optional bitrate before calculating a numeric timeout and safely records the fixed 15-second deadline when no interface reports a usable rate; direct and end-to-end regressions cover the boundary |
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Structurally covered | Native resource callbacks deliver owned bytes, so `rns-git` never moves an open transport temporary file; fetch E2E writes the materialized bundle and validates its refs |
 | 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Structurally covered | Rust already combines a `BTreeSet` membership index with an exact bounded FIFO; the regression proves duplicates neither grow nor refresh retention order |
-| 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Needs decision | Pending per-commit analysis |
+| 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Integrated | Driver ingress statistics are recorded only after core accepts a valid unique tag, preventing duplicate replays from inflating frequency or triggering limiting |
 
 ## Per-Commit Analysis
 
@@ -1316,9 +1316,27 @@ position; inserting the next unique tag then evicts the original oldest tag.
 
 **Final disposition:** Structurally covered.
 
-Detailed analysis for the remaining commits is pending. As each commit is
-reviewed, replace its provisional **Needs decision** inventory entry and add a
-numbered analysis section here.
+### 63. `4ab0755d` — Account ingress only after unique-tag acceptance
+
+**Upstream change:** Moves `received_path_request()` after discovery-tag
+validation. Duplicate path-request replays no longer contribute inbound
+frequency samples or influence ingress-limiter classification.
+
+**Rust applicability:** Native driver dispatch previously recorded the incoming
+sample immediately after packet decoding, before `TransportEngine` rejected a
+duplicate tag. Replays therefore inflated `ip_freq` and could spuriously
+activate PR burst limiting, matching the upstream defect.
+
+**Local handling and evidence:** Added a two-phase accepted-request token while
+preserving the existing public path-request methods and return representations.
+Core now validates and inserts the unique tag first; only an accepted token lets
+the driver record the sample, refresh core frequency state, and continue path
+handling. A driver-level regression sends the same valid request twice. It
+failed before the fix with two samples and now retains one tag and one sample.
+
+**Final disposition:** Integrated.
+
+All 63 commits in the observed queue now have a final disposition.
 
 ## Integration Plan
 
@@ -1330,17 +1348,21 @@ numbered analysis section here.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
 - [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `4ab0755d` moves PR ingress accounting after unique-tag
+  acceptance. The driver regression reproduced two samples before the fix and
+  one after it; full relevant tests, formatting, host lint, exact checkout, and
+  zero-rgit-drift checks passed, leaving 0 commits.
 - `2026-08-21`: Commit `d478e380` switches Python discovery-tag lookup to sets.
   Rust's existing indexed bounded FIFO and strengthened duplicate-order
   regression, formatting, transport tests, host lint, exact checkout, and drift
