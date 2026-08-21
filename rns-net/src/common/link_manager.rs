@@ -1759,9 +1759,17 @@ impl LinkManager {
         }
     }
 
-    /// Get the number of active links.
+    /// Get the number of tracked links in any state.
     pub fn link_count(&self) -> usize {
         self.links.len()
+    }
+
+    /// Get the number of established, active links.
+    pub fn active_link_count(&self) -> usize {
+        self.links
+            .values()
+            .filter(|link| link.engine.state() == LinkState::Active)
+            .count()
     }
 
     /// Get the number of active resource transfers across all links.

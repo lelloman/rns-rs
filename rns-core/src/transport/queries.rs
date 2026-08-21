@@ -19,6 +19,13 @@ impl TransportEngine {
         self.link_table.len()
     }
 
+    pub fn active_link_count(&self) -> usize {
+        self.link_table
+            .values()
+            .filter(|entry| entry.validated)
+            .count()
+    }
+
     pub fn path_table_count(&self) -> usize {
         self.path_table.len()
     }

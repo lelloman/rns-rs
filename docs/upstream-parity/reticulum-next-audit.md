@@ -16,12 +16,11 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 67 canonical commits are integrated, structurally covered, deferred,
+All 68 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`5f2f4438d0412843167f43091f54af7fe39a8ed9`. The 2026-08-21 daily refresh found
+`880db0a7b7776d407e44bb0a93541317a1f75487`. The 2026-08-21 daily refresh found
 five newer rGit commits through `880db0a7b7776d407e44bb0a93541317a1f75487`;
-they are conservatively inventoried as **Needs decision** pending per-commit
-analysis. The GitHub mirror tip
+each now has the final disposition and evidence recorded below. The GitHub mirror tip
 `b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
 baseline, so the remotes do not agree.
 
@@ -115,7 +114,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 65 | `614e7bd834fb69675965094cd01ed9255f36d6aa` | Improved path request handling, batch same-destination PRs when existing in-flight path request exists | Integrated | Same-destination unique requests share one recursive search, retain all non-limited requester interfaces, and fan the path response back to each; tag retention is 16,000 |
 | 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Non-runtime | Removes a hard-coded verbosity override from one upstream Python test fixture; native Rust tests have no equivalent override |
 | 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Integrated | Accepted announce/unique-PR byte accounting, current-window rate sampling, listener aggregation, local/remote status fields, and `rnstatus` flow percentages/totals with focused regressions |
-| 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Needs decision | Pending per-commit analysis |
+| 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Integrated | Separate total and validated/established active counts across transport and managed links, local RPC, and accurate `rnstatus -l` rendering with state/display regressions |
 
 ## Per-Commit Analysis
 
@@ -1450,8 +1449,33 @@ round-trips, and CLI percentages/totals.
 
 **Final disposition:** Integrated.
 
-The first 67 commits have a final disposition. Detailed analysis for commit 68
-is pending.
+### 68. `880db0a7` — Show active links separately in `rnstatus`
+
+**Upstream change:** Keeps the existing total link-table count, adds a count of
+entries whose validation flag is set, exposes that count through the local RPC
+surface, and appends the active count to `rnstatus -l` output when nonzero.
+
+**Rust applicability:** Native `rnstatus -l` previously queried the total count
+but labelled it “Active links.” The distinction is directly applicable. Rust
+stores forwarded transport entries and locally terminated link state in two
+typed owners, so both sources must contribute using their corresponding
+validated and `Active` states.
+
+**Local handling and evidence:** The existing `link_count` query and response
+remain unchanged. A new additive `active_link_count` query counts validated
+transport entries plus established `LinkManager` entries, and the local RPC
+server exposes the upstream-compatible request name. The CLI now labels the
+total as link-table entries and appends a positive active count; zero or an
+unavailable active query leaves the total intact, including for older and
+remote-management peers. Core tests distinguish validated from unvalidated
+entries, LinkManager tests distinguish pending from established links, the
+driver and RPC round trips cover the new variants, and CLI tests pin singular,
+plural, positive-active, zero-active, and unavailable-active rendering.
+
+**Final disposition:** Integrated.
+
+All 68 commits have a final disposition; no canonical rGit commit remains ahead
+of the accepted baseline at this audit tip.
 
 ## Integration Plan
 
@@ -1474,6 +1498,10 @@ is pending.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `880db0a7` separates total link-table entries from
+  validated or established active links. Core, LinkManager, driver-query, local
+  RPC, and CLI display regressions passed; the accepted checkout and drift
+  checker resolved exactly to the canonical tip, leaving 0 commits.
 - `2026-08-21`: Commit `5f2f4438` adds detailed announce and path-request byte
   counters, current-window rates, listener aggregation, status response fields,
   and `rnstatus` flow shares/totals. Focused accounting, duplicate, sampling,

@@ -249,6 +249,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         } else {
             None
         };
+        let active_link_count = if show_links {
+            match client.call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("active_link_count".into()),
+            )])) {
+                Ok(r) => r.as_int(),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
 
         if monitor_mode {
             // Clear screen
@@ -276,7 +287,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         }
 
         if let Some(count) = link_count {
-            println!(" Active links  : {}", count);
+            println!("{}", link_status_line(count, active_link_count));
             println!();
         }
 
@@ -850,6 +861,15 @@ fn outgoing_denominator(clients: Option<u64>, peers: Option<u64>) -> Option<(u64
         .or_else(|| peers.filter(|count| *count > 0).map(|count| (count, "p")))
 }
 
+fn link_status_line(link_count: i64, active_link_count: Option<i64>) -> String {
+    let entry_word = if link_count == 1 { "entry" } else { "entries" };
+    let active = active_link_count
+        .filter(|count| *count > 0)
+        .map(|count| format!(" ({count} active)"))
+        .unwrap_or_default();
+    format!(" Link table    : {link_count} {entry_word}{active}")
+}
+
 fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
     let mut parts = Vec::new();
     if iface
@@ -1010,7 +1030,7 @@ fn remote_status(
                     );
                 }
                 if let Some(count) = remote.link_count {
-                    println!(" Active links  : {}", count);
+                    println!("{}", link_status_line(count, None));
                     println!();
                 }
             }
@@ -1501,6 +1521,20 @@ mod tests {
         let lines = path_request_status_lines(2.0 / 3600.0, 8.0 / 3600.0, None, None, None);
 
         assert_eq!(lines[0], "    Path reqs : 2.0/h in  8.0/h out");
+    }
+
+    #[test]
+    fn link_status_distinguishes_table_entries_from_active_links() {
+        assert_eq!(
+            link_status_line(1, Some(1)),
+            " Link table    : 1 entry (1 active)"
+        );
+        assert_eq!(
+            link_status_line(3, Some(2)),
+            " Link table    : 3 entries (2 active)"
+        );
+        assert_eq!(link_status_line(3, Some(0)), " Link table    : 3 entries");
+        assert_eq!(link_status_line(3, None), " Link table    : 3 entries");
     }
 
     #[test]
