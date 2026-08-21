@@ -89,7 +89,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Structurally covered | Backbone child burst counts, active state, and earliest activation are computed fresh under the queue-state lock with no timestamped caches |
 | 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Structurally covered | Rust evicts one oldest tag before appending and retains exactly the configured capacity; the FIFO regression now asserts every surviving tag including newest |
 | 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Structurally covered | Rust has no receive watchdog mutex; malformed packets return normally, and a regression proves a subsequent valid packet is accepted on the same link |
-| 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Needs decision | Pending per-commit analysis |
+| 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Structurally covered | The changed message belongs to Python's catch-all Link receive exception boundary; Rust uses typed error branches and has no equivalent diagnostic |
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Needs decision | Pending per-commit analysis |
 | 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Needs decision | Pending per-commit analysis |
 | 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Needs decision | Pending per-commit analysis |
@@ -983,6 +983,24 @@ the recovery property addressed upstream.
 
 **Final disposition:** Structurally covered.
 
+### 45. `acecc1f4` — Include the Link in receive exception logging
+
+**Upstream change:** Adds the Python Link object's identity to the catch-all
+receive exception message introduced by the preceding commit. Control flow and
+protocol behavior are unchanged.
+
+**Rust applicability:** Rust has no catch-all Link receive exception boundary
+or its associated generic log message. Packet framing, link parsing, and
+decryption failures are handled by typed result branches, with context-specific
+diagnostics where useful. There is therefore no corresponding string to amend.
+
+**Local handling and evidence:** No production code or new test is appropriate
+for a diagnostic that does not exist. The preceding malformed-then-valid
+same-link regression continues to cover the underlying receive recovery
+behavior.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1008,6 +1026,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `acecc1f4` only enriches Python's catch-all Link receive
+  exception message, which has no native equivalent. Formatting, host lint,
+  exact checkout, and drift checks passed, leaving 18 commits.
 - `2026-08-21`: Commit `39e3854d` guarantees Python's receive watchdog unlock
   after an exception. Rust has no equivalent lock; the malformed-then-valid
   same-link regression, formatting, host lint, exact checkout, and drift checks
