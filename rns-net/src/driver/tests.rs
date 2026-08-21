@@ -7369,6 +7369,63 @@ fn recursive_path_request_does_not_reach_offline_interface_writer() {
 }
 
 #[test]
+fn queued_ingress_limited_path_request_remains_suppressed_during_dispatch() {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
+
+    let mut ingress = make_interface_info(1);
+    ingress.recursive_prs = true;
+    ingress.ingress_control = rns_core::transport::types::IngressControlConfig::enabled();
+    driver.engine.register_interface(ingress);
+    driver.engine.register_interface(make_interface_info(2));
+
+    let (ingress_writer, _) = MockWriter::new();
+    driver.interfaces.insert(
+        InterfaceId(1),
+        make_entry(1, Box::new(ingress_writer), true),
+    );
+    let (egress_writer, sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(2), make_entry(2, Box::new(egress_writer), true));
+
+    let mut request_data = Vec::new();
+    request_data.extend_from_slice(&[0xDA; 16]);
+    request_data.extend_from_slice(&[0x0A; 16]);
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &request_data,
+    )
+    .unwrap();
+    driver.dispatch_all_with_ingress_class(
+        vec![TransportAction::DeliverLocal {
+            destination_hash: driver.path_request_dest,
+            raw: Arc::from(packet.raw),
+            packet_hash: [0xCC; 32],
+            receiving_interface: InterfaceId(1),
+        }],
+        true,
+    );
+
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "a queued ingress-limited request must not escape after live burst state clears"
+    );
+    assert!(!driver.engine.pr_burst_active(&InterfaceId(1)));
+}
+
+#[test]
 fn request_path_includes_transport_id() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

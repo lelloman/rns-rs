@@ -2728,6 +2728,28 @@ fn test_recursive_prs_still_obeys_ingress_control() {
 }
 
 #[test]
+fn test_queued_ingress_limited_path_request_cannot_escape_after_burst_clears() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut ingress = make_interface(1, constants::MODE_FULL);
+    ingress.recursive_prs = true;
+    ingress.ingress_control = crate::transport::types::IngressControlConfig::enabled();
+    ingress.ip_freq = 0.0;
+    ingress.started = 0.0;
+    engine.register_interface(ingress);
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let dest = [0xDB; 16];
+    let tag = [0x0B; 16];
+    let data = make_path_request_data(&dest, &tag);
+    let actions =
+        engine.handle_path_request_with_ingress_limit(&data, InterfaceId(1), 1000.0, true);
+
+    assert!(actions.is_empty());
+    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.pr_burst_active(&InterfaceId(1)));
+}
+
+#[test]
 fn test_duplicate_discovery_path_request_is_suppressed() {
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));

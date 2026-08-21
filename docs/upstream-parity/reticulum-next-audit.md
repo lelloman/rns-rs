@@ -80,7 +80,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Structurally covered | Native documentation already labels `qlen_in_pr` and `qlen_in_il` as path-request and ingress-limited queues |
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Integrated | Successful authenticated LRPROOF path rebalances now log on the dedicated pathing target |
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Integrated | Cumulative total and per-class drops are exposed as upstream-compatible RPC fields and rendered by `rnstatus` |
-| 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Needs decision | Pending per-commit analysis |
+| 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Integrated | PR burst deactivation has cooldown hysteresis and queued ingress-limited classification survives through dispatch |
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Needs decision | Pending per-commit analysis |
 | 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Needs decision | Pending per-commit analysis |
 | 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Needs decision | Pending per-commit analysis |
@@ -809,6 +809,31 @@ new output.
 
 **Final disposition:** Integrated.
 
+### 36. `503bd6c8` — Improve path-request ingress limiting
+
+**Upstream change:** Requires four consecutive below-threshold evaluations
+after the hold period before a path-request burst becomes inactive, resetting
+that cooldown when traffic rises again. It also carries ingress-limited queue
+classification into path-request handling so queued work cannot escape if live
+interface state changes before it drains.
+
+**Rust applicability:** Rust independently classified inbound queues and later
+re-evaluated ingress control during recursive path discovery. Queue class was
+not retained by the public `Event` representation, and path-request bursts
+deactivated on the first low evaluation after their hold period.
+
+**Local handling and evidence:** Added the matching three-count cooldown state,
+including upstream's fourth limited call that deactivates the state, and reset
+it on renewed traffic. A private classified receive/dispatch handoff preserves
+the queue class without changing the public `Event` enum or existing receiver
+methods. The existing public path-request handler remains source-compatible and
+delegates to a hidden classified entry point. Focused regressions cover full
+cooldown, partial-cooldown reset, classification surviving state removal,
+forced engine suppression with no live burst, and end-to-end driver dispatch
+without an escaped recursive request.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -834,6 +859,11 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `503bd6c8` adds PR limiter cooldown hysteresis and
+  preserves queued ingress-limited classification through dispatch. Focused
+  state, queue, engine, and driver regressions, full core/net library suites,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 27
+  commits.
 - `2026-08-21`: Commit `1a70bd3c` adds cumulative inbound queue-drop accounting,
   management fields, and `rnstatus` rendering. Per-class saturation, cumulative
   drain, RPC, CLI, formatting, host lint, exact checkout, and drift checks

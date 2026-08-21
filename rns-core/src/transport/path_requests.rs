@@ -7,6 +7,19 @@ impl TransportEngine {
         interface_id: InterfaceId,
         now: f64,
     ) -> Vec<TransportAction> {
+        self.handle_path_request_with_ingress_limit(data, interface_id, now, false)
+    }
+
+    /// Handle a path request while preserving an earlier ingress-limiter
+    /// classification made by an external prioritized queue.
+    #[doc(hidden)]
+    pub fn handle_path_request_with_ingress_limit(
+        &mut self,
+        data: &[u8],
+        interface_id: InterfaceId,
+        now: f64,
+        ingress_limited: bool,
+    ) -> Vec<TransportAction> {
         let Some(ctx) = self.parse_path_request(data, interface_id, now) else {
             return Vec::new();
         };
@@ -30,7 +43,7 @@ impl TransportEngine {
             return Vec::new();
         }
         if self.config.transport_enabled {
-            return self.handle_discovery_path_request(&ctx);
+            return self.handle_discovery_path_request(&ctx, ingress_limited);
         }
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
             "Ignoring path request for {:02x?}: transport is disabled",
@@ -141,7 +154,11 @@ impl TransportEngine {
         true
     }
 
-    fn handle_discovery_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> Vec<TransportAction> {
+    fn handle_discovery_path_request(
+        &mut self,
+        ctx: &PathRequestCtx<'_>,
+        ingress_limited: bool,
+    ) -> Vec<TransportAction> {
         let Some((mode, recursive_prs, ingress_control, ip_freq, started)) =
             self.interfaces.get(&ctx.interface_id).map(|info| {
                 (
@@ -171,13 +188,15 @@ impl TransportEngine {
             return Vec::new();
         };
 
-        if self.ingress_control.should_ingress_limit_pr(
-            ctx.interface_id,
-            &ingress_control,
-            ip_freq,
-            started,
-            ctx.now,
-        ) {
+        if ingress_limited
+            || self.ingress_control.should_ingress_limit_pr(
+                ctx.interface_id,
+                &ingress_control,
+                ip_freq,
+                started,
+                ctx.now,
+            )
+        {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Not discovering path to {:02x?}: ingress path-request limiting is active on interface {}",
                 &ctx.destination_hash[..4],
