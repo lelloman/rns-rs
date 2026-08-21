@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `acecc1f4907483927ed001d5c09ef8e61278dd96`
-- Commit date: `2026-08-19 13:39:53 +0200`
-- Subject: `Error logging`
+- Normative commit: `c95bb551ab2c5e702efe4fa77ae35c568e607b3b`
+- Commit date: `2026-08-19 14:19:49 +0200`
+- Subject: `Transport: handle exceptions in inbound()`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`0aa856d53d7b8a4302e30abdb0f4410683e3cf7e`. The CI interop lane remains pinned
+`04a387e9a2690853ce1baf5387bce0d620860779`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`acecc1f4907483927ed001d5c09ef8e61278dd96`. The first commit fixes
+`c95bb551ab2c5e702efe4fa77ae35c568e607b3b`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -171,7 +171,10 @@ returns an empty action set, and a recovery regression now proves that the same
 link immediately accepts a subsequent valid packet. The forty-fifth commit
 only adds the Python Link identity to that catch-all exception diagnostic;
 Rust's typed receive error branches have no equivalent catch-all message. The
-full
+forty-sixth commit contains Python exceptions at the Transport inbound
+boundary. Rust's typed parser rejects malformed frames without unwinding, and
+the driver event-loop regression now proves a valid following frame is still
+processed. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
