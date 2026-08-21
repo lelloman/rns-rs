@@ -76,7 +76,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Documentation follow-up | README documents queue priority, all four keys/defaults, full-queue drops, and Rust control barriers |
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Structurally covered | Rust has no per-packet exception handler or mislabeled outbound-queue diagnostic in its inbound event loop |
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Non-runtime | Adds only a TODO proposing future non-transport path-request filtering; executable behavior is unchanged |
-| 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Structurally covered | Documentation-only grammar correction; native queue-tuning wording does not contain the typo |
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Needs decision | Pending per-commit analysis |
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Needs decision | Pending per-commit analysis |
@@ -740,6 +740,22 @@ advanced the baseline. No production code or synthetic test is appropriate.
 
 **Final disposition:** Non-runtime.
 
+### 32. `1c488947` — Correct queue-documentation grammar
+
+**Upstream change:** Rephrases “if you're setup” as “if you're running a
+setup” in source and generated queue-tuning documentation. No configuration or
+runtime behavior changes.
+
+**Rust applicability:** The native README describes the same tuning scenario
+without the incorrect phrase. Generated upstream manual artifacts are not
+vendored.
+
+**Local handling and evidence:** Confirmed the native documentation is already
+grammatically correct. No file or test change is required beyond the audit and
+baseline record.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -765,6 +781,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `1c488947` corrects grammar absent from the native queue
+  documentation. Its unchanged `RNS` tree, exact checkout, formatting, host
+  lint, and drift check passed, leaving 31 commits.
 - `2026-08-21`: Commit `1809461a` adds only a speculative early-filtering TODO.
   The exact checkout and drift checker resolved to `1809461a`, leaving 32
   commits; formatting and warning-free host lint passed.
