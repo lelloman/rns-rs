@@ -2842,6 +2842,26 @@ fn discovery_path_request_timeout_defaults_and_clamps_safely() {
 }
 
 #[test]
+fn discovery_path_request_without_bitrate_uses_fixed_deadline() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+
+    let destination = [0xd1; 16];
+    let data = make_path_request_data(&destination, &[0x11; 16]);
+    assert_eq!(
+        engine
+            .handle_path_request(&data, InterfaceId(1), 2000.0)
+            .len(),
+        1
+    );
+    assert_eq!(
+        engine.discovery_path_request_deadlines.get(&destination),
+        Some(&2015.0)
+    );
+}
+
+#[test]
 fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
     let mut engine = TransportEngine::new(make_config(true));
     let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);
