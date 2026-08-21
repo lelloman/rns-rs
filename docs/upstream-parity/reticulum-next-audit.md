@@ -105,7 +105,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Integrated | Recursive discovery PR retention uses the slowest positive interface bitrate for an MTU round trip plus per-hop allowance, with fixed-floor, missing-rate, zero-rate, clamp, and lifecycle coverage |
 | 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Integrated | Native interface-discovery documentation explains the optional operator LXMF hash, format, remote display, coordination purpose, and invalid-value behavior |
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Structurally covered | Rust represents the optional bitrate before calculating a numeric timeout and safely records the fixed 15-second deadline when no interface reports a usable rate; direct and end-to-end regressions cover the boundary |
-| 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Needs decision | Pending per-commit analysis |
+| 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Structurally covered | Native resource callbacks deliver owned bytes, so `rns-git` never moves an open transport temporary file; fetch E2E writes the materialized bundle and validates its refs |
 | 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Needs decision | Pending per-commit analysis |
 | 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Needs decision | Pending per-commit analysis |
 
@@ -1279,6 +1279,25 @@ and zero bitrate.
 
 **Final disposition:** Structurally covered.
 
+### 61. `05e6717d` — Close rngit resource files before moving on Windows
+
+**Upstream change:** Closes a Python resource-response file before moving it
+into rngit's retained temporary directory. This avoids Windows rename failures
+caused by the still-open file descriptor.
+
+**Rust applicability:** Native resource callbacks deliver the complete response
+as an owned `Vec<u8>`. `rns-git` decodes those owned bytes and hands the bundle
+directly to Git; it neither receives a transport file handle nor moves a
+transport-managed temporary path.
+
+**Local handling and evidence:** No production change was appropriate because
+the ownership boundary structurally excludes the open-file rename. The existing
+repository fetch E2E exercises a resource response, extracts its owned bundle,
+writes it to a fresh path, and asks Git to validate the requested ref. The full
+`rns-git` test suite is the relevant regression gate.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1304,6 +1323,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `05e6717d` closes Python's temporary response file before
+  a Windows move. Native owned-byte responses have no open-file move; the full
+  `rns-git` suite, formatting, host lint, exact checkout, and drift checks
+  passed, leaving 2 commits.
 - `2026-08-21`: Commit `9ae3db16` fixes Python's invalid no-bitrate timeout
   initialization. Rust's type-safe fallback plus a new end-to-end fixed-deadline
   regression, formatting, transport tests, host lint, exact checkout, and drift
