@@ -101,7 +101,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Non-runtime | Adds Python API documentation for the existing per-hop timeout constant and first-hop estimator; Rust already documents its corresponding constant and formula |
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Non-runtime | Removes an unconditional Python `if True:` wrapper and dedents its body; whitespace-insensitive diff contains no executable change |
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Integrated | Transported link tracking adds one MTU of serialization time from the outbound next-hop bitrate, not the receiving interface bitrate |
-| 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Integrated | The private timeout helper returns zero for absent interfaces, missing bitrate, and zero bitrate, and computes serialization time only for positive rates |
 | 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Needs decision | Pending per-commit analysis |
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Needs decision | Pending per-commit analysis |
@@ -1203,6 +1203,23 @@ outbound rate.
 
 **Final disposition:** Integrated.
 
+### 57. `bde5611a` — Validate bitrate before calculating extra timeout
+
+**Upstream change:** Requires both an interface and a truthy bitrate before
+dividing to calculate extra link-proof timeout. Missing or zero rates now add no
+extra term instead of raising or dividing by zero.
+
+**Rust applicability:** The preceding native integration used `Option<u64>` and
+already filtered zero, safely covering the upstream correction while adding
+the timeout feature.
+
+**Local handling and evidence:** Extracted the calculation into a private
+transport helper and added direct boundary assertions for no interface,
+`bitrate = None`, zero, and a positive rate with an exact result. The
+end-to-end outbound-interface regression continues to cover call-site choice.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1228,6 +1245,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `bde5611a` validates bitrate before extra timeout
+  division. Missing, zero, positive, and end-to-end interface-basis tests,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 6
+  commits.
 - `2026-08-21`: Commit `49073fcc` fixes the interface basis for transported
   link-proof timeouts. The distinct-ingress/egress bitrate regression,
   formatting, host lint, exact checkout, and drift checks passed, leaving 7
