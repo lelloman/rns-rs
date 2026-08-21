@@ -1146,6 +1146,7 @@ mod tests {
     listen_port = 4242
     discoverable = yes
     discovery_name = Mobile Backbone
+    discovery_lxmf_address = 0123456789abcdef0123456789abcdef
     reachable_on = backbone.example.net
     location_cmd = ~/bin/reticulum-location"#;
         const OUTPUT: &str = "45.4642,9.1900,122.5\n";
@@ -1154,6 +1155,13 @@ mod tests {
         assert!(documentation.contains(OUTPUT.trim_end()));
 
         let parsed = crate::config::parse(STANZA).unwrap();
+        assert_eq!(
+            parsed.interfaces[0]
+                .params
+                .get("discovery_lxmf_address")
+                .map(String::as_str),
+            Some("0123456789abcdef0123456789abcdef")
+        );
         let command = parsed.interfaces[0].params.get("location_cmd").unwrap();
         let home = std::env::temp_dir().join(format!(
             "rns-documented-location-home-{}",
