@@ -83,7 +83,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Integrated | PR burst deactivation has cooldown hysteresis and queued ingress-limited classification survives through dispatch |
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Structurally covered | Native `rnstatus` already renders announce and path-request pressure from `aqpressure` and `pqpressure` with distinct-value coverage |
 | 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Structurally covered | Rust maintains an interface-ID→hash map on registration/removal and snapshots it directly, with no throttled full lookup or timestamp |
-| 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Needs decision | Pending per-commit analysis |
+| 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Structurally covered | Rust replaces the matched queue vector slot directly; a multi-entry regression proves a newer duplicate cannot overwrite the trailing entry |
 | 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Needs decision | Pending per-commit analysis |
 | 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Needs decision | Pending per-commit analysis |
 | 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Needs decision | Pending per-commit analysis |
@@ -870,6 +870,25 @@ Python-only recomputation bug.
 
 **Final disposition:** Structurally covered.
 
+### 39. `d825e393` — Update the matched queued announce
+
+**Upstream change:** When a newer announce duplicates a queued destination,
+updates `existing_entry` instead of the loop variable left pointing at the
+last queue item. The bug could overwrite an unrelated trailing announce while
+leaving the intended entry stale.
+
+**Rust applicability:** Rust locates the duplicate's vector index and assigns
+the replacement to that exact slot. It never retains or mutates a loop binding.
+The prior deduplication test used only one destination and therefore did not
+pin the specific multi-entry failure shape.
+
+**Local handling and evidence:** Added a regression with a matching first entry
+and unrelated trailing entry. A newer duplicate must replace the matched
+entry's time, hops, emission timestamp, and raw bytes while leaving every field
+of the trailing entry unchanged.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -895,6 +914,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `d825e393` fixes wrong-entry queued-announce mutation
+  already absent from Rust's indexed replacement. The new multi-entry
+  regression, full announce-queue tests, formatting, host lint, exact checkout,
+  and drift checks passed, leaving 24 commits.
 - `2026-08-21`: Commit `731a63b0` fixes a Python persistence scan throttle that
   has no native equivalent. Snapshot interface-presence tests, formatting, host
   lint, exact checkout, and drift checks passed, leaving 25 commits.
