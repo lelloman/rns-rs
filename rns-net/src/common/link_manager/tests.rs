@@ -2805,8 +2805,8 @@ fn test_generic_link_data_delivery() {
 }
 
 #[test]
-fn test_invalid_encrypted_contexts_are_ignored() {
-    let (_init_mgr, mut resp_mgr, link_id) = setup_active_link();
+fn test_invalid_encrypted_contexts_are_ignored_without_blocking_later_receive() {
+    let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
     let contexts = [
         constants::CONTEXT_CHANNEL,
@@ -2841,6 +2841,26 @@ fn test_invalid_encrypted_contexts_are_ignored() {
             "invalid ciphertext for context {context:#x} should be ignored"
         );
     }
+
+    let valid_actions = init_mgr.send_on_link(&link_id, b"still receiving", 0x42, &mut rng);
+    let valid_raw = extract_any_send_packet(&valid_actions);
+    let valid_packet = RawPacket::unpack(&valid_raw).expect("valid packet should unpack");
+    let recovered_actions = resp_mgr.handle_local_delivery(
+        valid_packet.destination_hash,
+        &valid_raw,
+        valid_packet.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+
+    assert!(recovered_actions.iter().any(|action| matches!(
+        action,
+        LinkManagerAction::LinkDataReceived {
+            context: 0x42,
+            data,
+            ..
+        } if data == b"still receiving"
+    )));
 }
 
 #[test]

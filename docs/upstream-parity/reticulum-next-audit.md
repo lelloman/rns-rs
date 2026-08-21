@@ -88,7 +88,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Structurally covered | Rust has no compound-entry pending transmit deque; exact duplicate tags are suppressed and discovery response state is keyed directly by destination hash |
 | 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Structurally covered | Backbone child burst counts, active state, and earliest activation are computed fresh under the queue-state lock with no timestamped caches |
 | 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Structurally covered | Rust evicts one oldest tag before appending and retains exactly the configured capacity; the FIFO regression now asserts every surviving tag including newest |
-| 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Needs decision | Pending per-commit analysis |
+| 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Structurally covered | Rust has no receive watchdog mutex; malformed packets return normally, and a regression proves a subsequent valid packet is accepted on the same link |
 | 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Needs decision | Pending per-commit analysis |
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Needs decision | Pending per-commit analysis |
 | 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Needs decision | Pending per-commit analysis |
@@ -962,6 +962,27 @@ The test also pins the exact configured length after each insertion.
 
 **Final disposition:** Structurally covered.
 
+### 44. `39e3854d` — Release the Link receive watchdog after exceptions
+
+**Upstream change:** Wraps Python's internal link receive implementation in a
+`try`/`finally` boundary so `watchdog_lock` is cleared even when packet handling
+raises. Previously an exception could leave the watchdog permanently locked
+and prevent its maintenance loop from progressing.
+
+**Rust applicability:** Rust has no receive watchdog lock or per-link receive
+worker. `LinkManager::handle_local_delivery()` runs synchronously on the driver
+thread, rejects malformed packet framing with an empty action set, and maps
+fallible link parsing and decryption to explicit error branches. Returning from
+one delivery therefore leaves no lock state that can block a later delivery.
+
+**Local handling and evidence:** Strengthened the invalid-encrypted-context
+regression to deliver malformed ciphertext across every encrypted receive
+context and then deliver a correctly encrypted generic packet through the same
+link manager. The valid payload must still produce `LinkDataReceived`, pinning
+the recovery property addressed upstream.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -987,6 +1008,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `39e3854d` guarantees Python's receive watchdog unlock
+  after an exception. Rust has no equivalent lock; the malformed-then-valid
+  same-link regression, formatting, host lint, exact checkout, and drift checks
+  passed, leaving 19 commits.
 - `2026-08-21`: Commit `6cd5be18` fixes an off-by-one retention slice absent
   from Rust's pop-front/append FIFO. The strengthened complete-set regression,
   formatting, host lint, exact checkout, and drift checks passed, leaving 20
