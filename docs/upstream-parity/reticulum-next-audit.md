@@ -81,7 +81,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Integrated | Successful authenticated LRPROOF path rebalances now log on the dedicated pathing target |
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Integrated | Cumulative total and per-class drops are exposed as upstream-compatible RPC fields and rendered by `rnstatus` |
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Integrated | PR burst deactivation has cooldown hysteresis and queued ingress-limited classification survives through dispatch |
-| 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Needs decision | Pending per-commit analysis |
+| 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Structurally covered | Native `rnstatus` already renders announce and path-request pressure from `aqpressure` and `pqpressure` with distinct-value coverage |
 | 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Needs decision | Pending per-commit analysis |
 | 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Needs decision | Pending per-commit analysis |
 | 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Needs decision | Pending per-commit analysis |
@@ -834,6 +834,23 @@ without an escaped recursive request.
 
 **Final disposition:** Integrated.
 
+### 37. `7c912d09` — Use independent queue pressure fields
+
+**Upstream change:** Fixes two `rnstatus` copy-and-paste errors that rendered
+announce and path-request pressure from the data queue's `dqpressure` field
+instead of `aqpressure` and `pqpressure`.
+
+**Rust applicability:** The native formatter already maps all five queue lines
+to independent pressure fields. Its regression intentionally uses different
+values for total, data, announce, path-request, and ingress-limited pressure,
+so substituting the data field would fail both affected assertions.
+
+**Local handling and evidence:** Re-ran the focused `rnstatus` queue formatter
+tests without changing code. No additional regression would cover a distinct
+behavioral branch.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -859,6 +876,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `7c912d09` fixes copied pressure keys already absent
+  from native `rnstatus`. Distinct-value formatter tests, formatting, host lint,
+  exact checkout, and drift checks passed, leaving 26 commits.
 - `2026-08-21`: Commit `503bd6c8` adds PR limiter cooldown hysteresis and
   preserves queued ingress-limited classification through dispatch. Focused
   state, queue, engine, and driver regressions, full core/net library suites,
