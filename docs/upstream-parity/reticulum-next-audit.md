@@ -100,7 +100,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Integrated | `[reticulum] link_mtu_discovery = No` now omits MTU signalling while default/true retain it, without changing public programmatic constructors |
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Non-runtime | Adds Python API documentation for the existing per-hop timeout constant and first-hop estimator; Rust already documents its corresponding constant and formula |
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Non-runtime | Removes an unconditional Python `if True:` wrapper and dedents its body; whitespace-insensitive diff contains no executable change |
-| 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Integrated | Transported link tracking adds one MTU of serialization time from the outbound next-hop bitrate, not the receiving interface bitrate |
 | 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Needs decision | Pending per-commit analysis |
@@ -1183,6 +1183,26 @@ coverage remain the relevant gates.
 
 **Final disposition:** Non-runtime.
 
+### 56. `49073fcc` — Base extra link-proof timeout on the outbound interface
+
+**Upstream change:** Passes the outbound next-hop interface, rather than the
+packet's receiving interface, to the extra link-proof timeout calculation for a
+transported LINKREQUEST. The extra term is one MTU of serialization time at the
+interface bitrate.
+
+**Rust applicability:** Rust's transported-link proof timeout previously used
+only the fixed per-hop term and omitted interface serialization time entirely.
+Its interface table already carries the required bitrate and the forwarding
+branch has resolved the outbound interface.
+
+**Local handling and evidence:** Added the serialization term using the
+outbound interface's positive bitrate. A focused transported LINKREQUEST
+regression assigns deliberately different ingress and egress rates, verifies
+both recorded interface roles, and pins the exact timeout to the slower
+outbound rate.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1208,6 +1228,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `49073fcc` fixes the interface basis for transported
+  link-proof timeouts. The distinct-ingress/egress bitrate regression,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 7
+  commits.
 - `2026-08-21`: Commit `6738db54` only removes an unconditional Python wrapper
   and dedents its body; the whitespace-insensitive diff confirms no behavior
   change. Formatting, host lint, exact checkout, and drift checks passed,

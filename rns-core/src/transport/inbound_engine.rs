@@ -207,8 +207,17 @@ impl TransportEngine {
         }
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
+            let extra_proof_timeout = self
+                .interfaces
+                .get(&outbound_interface)
+                .and_then(|interface| interface.bitrate)
+                .filter(|bitrate| *bitrate > 0)
+                .map_or(0.0, |bitrate| {
+                    (constants::MTU as f64 * 8.0) / bitrate as f64
+                });
             let proof_timeout = ctx.now
-                + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP * (remaining_hops.max(1) as f64);
+                + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP * (remaining_hops.max(1) as f64)
+                + extra_proof_timeout;
             let (link_id, link_entry) = create_link_entry(
                 &ctx.packet,
                 next_hop,

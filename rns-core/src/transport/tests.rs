@@ -3540,6 +3540,62 @@ fn test_local_client_forward_to_external_applies_local_hops_delta() {
 }
 
 #[test]
+fn transported_link_proof_timeout_uses_outbound_interface_bitrate() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut inbound = make_interface(1, constants::MODE_FULL);
+    inbound.bitrate = Some(4_000);
+    let mut outbound = make_interface(2, constants::MODE_FULL);
+    outbound.bitrate = Some(400);
+    engine.register_interface(inbound);
+    engine.register_interface(outbound);
+
+    let destination_hash = [0xb8; 16];
+    engine.inject_path(
+        destination_hash,
+        PathEntry {
+            timestamp: 900.0,
+            next_hop: [0x29; 16],
+            hops: 2,
+            expires: 2000.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(2),
+            packet_hash: [0x39; 32],
+            announce_raw: None,
+        },
+    );
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        },
+        0,
+        &destination_hash,
+        Some(&[0x42; 16]),
+        constants::CONTEXT_NONE,
+        &[0x49; 64],
+    )
+    .unwrap();
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x59; 32]);
+    engine.handle_inbound(
+        InboundFrame::new(&packet.raw, InterfaceId(1), 1000.0),
+        &mut rng,
+    );
+
+    let entry = engine
+        .link_table
+        .values()
+        .next()
+        .expect("transported link request should create tracking state");
+    assert_eq!(entry.next_hop_interface, InterfaceId(2));
+    assert_eq!(entry.received_interface, InterfaceId(1));
+    assert_eq!(entry.proof_timeout, 1022.0);
+}
+
+#[test]
 fn test_local_client_link_routing_to_external_applies_local_hops_delta() {
     let mut config = make_config(true);
     config.local_hops_delta = 5;
