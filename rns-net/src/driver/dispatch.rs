@@ -1123,6 +1123,11 @@ impl Driver {
                         let _ = link_id;
                     }
                 }
+                TransportAction::ProtocolViolation { interface } => {
+                    if let Some(entry) = self.interfaces.get_mut(&interface) {
+                        entry.stats.protocol_violations += 1;
+                    }
+                }
             }
         }
 

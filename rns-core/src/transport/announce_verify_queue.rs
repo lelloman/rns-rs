@@ -160,6 +160,12 @@ impl AnnounceVerifyQueue {
         self.remove_entry(key).is_some()
     }
 
+    pub fn pending_interface(&self, key: &AnnounceVerifyKey) -> Option<InterfaceId> {
+        self.pending
+            .get(key)
+            .map(|entry| pending_of(entry).interface)
+    }
+
     pub fn len(&self) -> usize {
         self.pending.len()
     }

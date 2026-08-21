@@ -430,6 +430,9 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 size_str(txb),
                 size_str(rxb),
             );
+            for line in violation_status_lines(iface) {
+                println!("{line}");
+            }
             if started > 0.0 {
                 let uptime = rns_net::time::now() - started;
                 if uptime > 0.0 {
@@ -617,6 +620,24 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
                 .and_then(|v| v.as_float())
                 .unwrap_or(0.0),
         ),
+        "pvs" => SortValue::Int(
+            iface
+                .get("protocol_violations")
+                .and_then(|value| value.as_int())
+                .unwrap_or(0),
+        ),
+        "ivs" => SortValue::Int(
+            iface
+                .get("ifac_violations")
+                .and_then(|value| value.as_int())
+                .unwrap_or(0),
+        ),
+        "flt" => SortValue::Int(
+            iface
+                .get("packet_filter_hits")
+                .and_then(|value| value.as_int())
+                .unwrap_or(0),
+        ),
         _ => SortValue::String(
             iface
                 .get("name")
@@ -625,6 +646,36 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
                 .to_string(),
         ),
     }
+}
+
+fn violation_status_lines(iface: &PickleValue) -> Vec<String> {
+    let protocol = iface
+        .get("protocol_violations")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let ifac = iface
+        .get("ifac_violations")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let filter = iface
+        .get("packet_filter_hits")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    if protocol > 0 || ifac > 0 {
+        lines.push(format!(
+            "    Violations: {protocol} protocol{}",
+            if ifac > 0 {
+                format!(", {ifac} IFAC")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    if filter > 0 {
+        lines.push(format!("    Flt. Hits : {filter}"));
+    }
+    lines
 }
 
 fn compare_sort_values(a: &SortValue, b: &SortValue) -> Ordering {
@@ -1711,6 +1762,31 @@ mod tests {
 
         assert_eq!(interface_sort_value(&iface, "prx"), SortValue::Float(1.25));
         assert_eq!(interface_sort_value(&iface, "ptx"), SortValue::Float(2.5));
+    }
+
+    #[test]
+    fn violation_stats_render_and_sort_independently() {
+        let iface = PickleValue::Dict(vec![
+            (
+                PickleValue::String("protocol_violations".into()),
+                PickleValue::Int(3),
+            ),
+            (
+                PickleValue::String("ifac_violations".into()),
+                PickleValue::Int(2),
+            ),
+            (
+                PickleValue::String("packet_filter_hits".into()),
+                PickleValue::Int(7),
+            ),
+        ]);
+        assert_eq!(
+            violation_status_lines(&iface),
+            vec!["    Violations: 3 protocol, 2 IFAC", "    Flt. Hits : 7"]
+        );
+        assert_eq!(interface_sort_value(&iface, "pvs"), SortValue::Int(3));
+        assert_eq!(interface_sort_value(&iface, "ivs"), SortValue::Int(2));
+        assert_eq!(interface_sort_value(&iface, "flt"), SortValue::Int(7));
     }
 
     #[test]

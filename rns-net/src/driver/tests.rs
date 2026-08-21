@@ -3447,6 +3447,79 @@ fn frame_updates_rx_stats() {
 }
 
 #[test]
+fn inbound_rejections_are_counted_by_reason() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "violations");
+
+    driver.handle_frame_event(InterfaceId(1), vec![0x00], None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        1
+    );
+
+    driver.interfaces.get_mut(&InterfaceId(1)).unwrap().ifac =
+        Some(crate::ifac::derive_ifac(Some("network"), Some("key"), 8).unwrap());
+    driver.handle_frame_event(InterfaceId(1), vec![0x00; 32], None, None);
+    assert_eq!(driver.interfaces[&InterfaceId(1)].stats.ifac_violations, 1);
+    driver.interfaces.get_mut(&InterfaceId(1)).unwrap().ifac = None;
+
+    let path_request_flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let tagless = RawPacket::pack(
+        path_request_flags,
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &[0x44; 16],
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), tagless.raw, None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        2
+    );
+
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let packet = RawPacket::pack(
+        flags,
+        0,
+        &[0x55; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"duplicate",
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), packet.raw.clone(), None, None);
+    driver.handle_frame_event(InterfaceId(1), packet.raw, None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.packet_filter_hits,
+        1
+    );
+
+    let identity = Identity::new(&mut OsRng);
+    let mut invalid_announce = build_announce_packet(&identity);
+    let last = invalid_announce.len() - 1;
+    invalid_announce[last] ^= 0x01;
+    driver.handle_frame_event(InterfaceId(1), invalid_announce, None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        3
+    );
+}
+
+#[test]
 fn send_updates_tx_stats() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
@@ -5366,6 +5439,9 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     child.stats.atxb = 202;
     child.stats.prxb = 303;
     child.stats.ptxb = 404;
+    child.stats.protocol_violations = 5;
+    child.stats.ifac_violations = 6;
+    child.stats.packet_filter_hits = 7;
     driver.interfaces.insert(child_id, child);
     driver
         .dynamic_interface_parents
@@ -5386,6 +5462,9 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     assert_eq!(public.blocked_ip_list, Some(vec![peer_ip.to_string()]));
     assert_eq!((public.traffic.arxb, public.traffic.atxb), (101, 202));
     assert_eq!((public.traffic.prxb, public.traffic.ptxb), (303, 404));
+    assert_eq!(public.protocol_violations, 5);
+    assert_eq!(public.ifac_violations, 6);
+    assert_eq!(public.packet_filter_hits, 7);
 }
 
 #[cfg(feature = "iface-backbone")]

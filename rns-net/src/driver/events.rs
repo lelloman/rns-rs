@@ -48,6 +48,9 @@ impl Driver {
                     Some(unmasked) => unmasked,
                     None => {
                         log::debug!("[{}] IFAC rejected packet", interface_id.0);
+                        if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                            entry.stats.ifac_violations += 1;
+                        }
                         return;
                     }
                 }
@@ -57,6 +60,9 @@ impl Driver {
                         "[{}] dropping packet with IFAC flag on non-IFAC interface",
                         interface_id.0
                     );
+                    if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                        entry.stats.protocol_violations += 1;
+                    }
                     return;
                 }
                 data
@@ -64,6 +70,36 @@ impl Driver {
         } else {
             data
         };
+
+        let parsed_packet = match RawPacket::unpack(&packet) {
+            Ok(packet) => packet,
+            Err(_) => {
+                if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                    entry.stats.protocol_violations += 1;
+                }
+                return;
+            }
+        };
+        let tagless_path_request = parsed_packet.destination_hash == self.path_request_dest
+            && parsed_packet.data.len() <= 32;
+        if tagless_path_request || self.engine.is_unvalidated_link_packet(&parsed_packet) {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            return;
+        }
+        let filter_frame = InboundFrame {
+            raw: &packet,
+            iface: interface_id,
+            now: time::now(),
+            rx: RxMetadata { rssi, snr },
+        };
+        if !self.engine.accepts_inbound_frame(filter_frame) {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.packet_filter_hits += 1;
+            }
+            return;
+        }
 
         #[cfg(feature = "hooks")]
         {
@@ -916,7 +952,12 @@ impl Driver {
                         .announce_verify_queue
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let _ = announce_queue.complete_failure(&key);
+                    let interface = announce_queue.pending_interface(&key);
+                    if announce_queue.complete_failure(&key) {
+                        if let Some(entry) = interface.and_then(|id| self.interfaces.get_mut(&id)) {
+                            entry.stats.protocol_violations += 1;
+                        }
+                    }
                 }
                 Event::Tick => self.handle_tick_event(),
                 Event::BeginDrain { timeout } => {

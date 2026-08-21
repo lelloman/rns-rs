@@ -16,9 +16,9 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 69 canonical commits are integrated, structurally covered, deferred,
+The first 70 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8`. A fresh 2026-08-21 refresh found
+`42f6d64b9cc379aad73a6a8927dadec91f7031d7`. A fresh 2026-08-21 refresh found
 five newer rGit commits after commit 68 through
 `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; commit 69 is integrated and the
 remaining four are inventoried pending per-commit analysis. The GitHub mirror tip
@@ -117,7 +117,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Integrated | Accepted announce/unique-PR byte accounting, current-window rate sampling, listener aggregation, local/remote status fields, and `rnstatus` flow percentages/totals with focused regressions |
 | 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Integrated | Separate total and validated/established active counts across transport and managed links, local RPC, and accurate `rnstatus -l` rendering with state/display regressions |
 | 69 | `6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8` | Added data flow speeds to rnstatus | Integrated | Detailed totals derive clamped directional non-pathing data percentages and speeds from total minus announce/PR current rates, with enabled/disabled rendering coverage |
-| 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Needs decision | Pending per-commit analysis |
+| 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Integrated | Per-interface protocol/IFAC/filter counters at typed rejection boundaries, pre-validation link forwarding guard, listener aggregation, status/RPC fields, CLI rendering/sorting, and focused rejection regressions |
 | 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Needs decision | Pending per-commit analysis |
 | 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Needs decision | Pending per-commit analysis |
 | 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Needs decision | Pending per-commit analysis |
@@ -1499,8 +1499,34 @@ the suffix remains absent when detailed pathing display is disabled.
 
 **Final disposition:** Integrated.
 
-The first 69 commits have a final disposition. Detailed analysis for commits
-70–73 is pending.
+### 70. `42f6d64b` — Track per-interface protocol violations
+
+**Upstream change:** Adds cumulative protocol, IFAC, and packet-filter rejection
+counters to interfaces; records malformed/invalid packets at their rejection
+boundaries; prevents link packets from forwarding before validation; exposes
+the counters in status; and renders and sorts them in `rnstatus`.
+
+**Rust applicability:** The rejection boundaries exist across the native IFAC
+adapter, typed packet parser, transport filter, announce validator, and link
+forwarding table. Rust's fixed-size parser already rejects malformed transport
+and destination fields and its outbound packet builder enforces wire bounds,
+but counters and the pre-validation forwarding guard were absent.
+
+**Local handling and evidence:** `InterfaceStats` now separates protocol, IFAC,
+and ordinary filter counts. The driver records malformed frames, unexpected or
+invalid IFAC, tagless path requests, duplicate/filter rejection, invalid sync
+and async announces, and pre-validation link packets. The transport engine now
+refuses to forward an unvalidated link entry. Dynamic child counters aggregate
+into Backbone listener rows, local pickle and remote MessagePack status include
+the fields, and `rnstatus` renders nonzero counters and supports `pvs`, `ivs`,
+and `flt` sorting. Focused tests independently trigger malformed parsing, IFAC
+failure, tagless requests, duplicate filtering, invalid signatures, pending-link
+state, RPC values, and CLI rendering/sorting.
+
+**Final disposition:** Integrated.
+
+The first 70 commits have a final disposition. Detailed analysis for commits
+71–73 is pending.
 
 ## Integration Plan
 
@@ -1523,6 +1549,11 @@ The first 69 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `42f6d64b` adds per-interface protocol, IFAC, and
+  packet-filter counters plus the pre-validation link forwarding guard. Focused
+  rejection, status/RPC, listener, and CLI tests, full relevant suites,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 3
+  commits.
 - `2026-08-21`: Commit `6ba7cc8c` adds non-pathing data speeds to detailed
   `rnstatus` totals. Directionally distinct percentage/speed and disabled-detail
   regressions, CLI tests, formatting, host lint, exact checkout, and drift checks
