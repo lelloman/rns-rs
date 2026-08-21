@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `7c912d0936be42bccb75163c8914991de42fbf8e`
-- Commit date: `2026-08-19 12:53:15 +0200`
-- Subject: `rnstatus: use proper stats`
+- Normative commit: `731a63b01b255e270f9a4a962b7b837950863235`
+- Commit date: `2026-08-19 12:54:49 +0200`
+- Subject: `Transport: update interface_hashes_updated_at timestamp`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`59b0a886f00f73443c6b1766cda52ab5ab97f35f`. The CI interop lane remains pinned
+`8cc0870694459ce5f5e22671c4f7d9e756dc731b`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`7c912d0936be42bccb75163c8914991de42fbf8e`. The first commit fixes
+`731a63b01b255e270f9a4a962b7b837950863235`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -150,7 +150,10 @@ thirty-sixth commit adds path-request limiter cooldown hysteresis and preserves
 ingress-limited classification across queued processing; Rust now retains both
 invariants through its internal queue handoff. The thirty-seventh commit fixes
 upstream's copied data-pressure keys in `rnstatus`; Rust already renders
-announce and path-request pressure from their independent fields. The full
+announce and path-request pressure from their independent fields. The
+thirty-eighth commit repairs a Python persistence-loop cache timestamp; Rust
+maintains interface hashes incrementally and never performs the throttled scan.
+The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

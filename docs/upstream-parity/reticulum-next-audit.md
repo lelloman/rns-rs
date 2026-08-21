@@ -82,7 +82,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Integrated | Cumulative total and per-class drops are exposed as upstream-compatible RPC fields and rendered by `rnstatus` |
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Integrated | PR burst deactivation has cooldown hysteresis and queued ingress-limited classification survives through dispatch |
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Structurally covered | Native `rnstatus` already renders announce and path-request pressure from `aqpressure` and `pqpressure` with distinct-value coverage |
-| 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Needs decision | Pending per-commit analysis |
+| 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Structurally covered | Rust maintains an interface-ID→hash map on registration/removal and snapshots it directly, with no throttled full lookup or timestamp |
 | 39 | `d825e39379ebee2c69f0197567045eb5bd0e56e0` | Transport: fix updating announce_queue | Needs decision | Pending per-commit analysis |
 | 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Needs decision | Pending per-commit analysis |
 | 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Needs decision | Pending per-commit analysis |
@@ -851,6 +851,25 @@ behavioral branch.
 
 **Final disposition:** Structurally covered.
 
+### 38. `731a63b0` — Refresh persistence interface-hash throttle
+
+**Upstream change:** Updates a local timestamp after refreshing the set of live
+interface hashes during path-table persistence. Without it, every later entry
+after the two-second boundary recomputes all interface hashes instead of
+honoring the intended throttle. Persisted content is unchanged.
+
+**Rust applicability:** Rust maintains interface hashes incrementally in a
+`BTreeMap` as interfaces register and deregister. A persistence snapshot looks
+up each path's receiving interface directly in that map; there is no full hash
+scan, throttle timestamp, or equivalent stale-cache control flow.
+
+**Local handling and evidence:** The existing snapshot regression proves that
+registered paths receive the correct interface hash, while a path whose
+interface is absent is skipped. No code or new test is needed for the
+Python-only recomputation bug.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -876,6 +895,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `731a63b0` fixes a Python persistence scan throttle that
+  has no native equivalent. Snapshot interface-presence tests, formatting, host
+  lint, exact checkout, and drift checks passed, leaving 25 commits.
 - `2026-08-21`: Commit `7c912d09` fixes copied pressure keys already absent
   from native `rnstatus`. Distinct-value formatter tests, formatting, host lint,
   exact checkout, and drift checks passed, leaving 26 commits.
