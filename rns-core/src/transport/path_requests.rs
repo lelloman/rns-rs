@@ -126,6 +126,8 @@ impl TransportEngine {
             return None;
         }
 
+        self.path_requests.entry(destination_hash).or_insert(now);
+
         let mut tag = [0u8; 16];
         tag[..tag_len].copy_from_slice(&tag_bytes[..tag_len]);
         Some(AcceptedPathRequest {
@@ -135,6 +137,12 @@ impl TransportEngine {
             now,
             destination_hash,
         })
+    }
+
+    /// Record a locally generated path request, refreshing its gate timeout.
+    #[doc(hidden)]
+    pub fn record_outbound_path_request(&mut self, destination_hash: [u8; 16], now: f64) {
+        self.path_requests.insert(destination_hash, now);
     }
 
     fn handle_known_path_request(&mut self, ctx: &AcceptedPathRequest) -> bool {

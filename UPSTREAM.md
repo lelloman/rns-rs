@@ -10,19 +10,19 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `4ab0755d0acc19eb45f729257b8976fde61146bf`
-- Commit date: `2026-08-20 17:16:01 +0200`
-- Subject: `Changed PR ingress accounting point`
+- Normative commit: `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e`
+- Commit date: `2026-08-20 22:08:06 +0200`
+- Subject: `Transport jobs optimizations`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
-and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
+and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
 1.5.0 but has not tagged this development line. GitHub `master` remains at the
 signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`6f0efb5512f6c9f4d7328eb4b8e14b324e554f60`. The CI interop lane remains pinned
+`6972fded8b4c48e91a82bce9eb0fd345632b602a`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`4ab0755d0acc19eb45f729257b8976fde61146bf`. The first commit fixes
+`386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -222,6 +222,12 @@ The sixty-third commit moves path-request ingress accounting after unique-tag
 acceptance. Native accounting now follows the same boundary, so replayed tags
 cannot inflate frequency or spuriously activate ingress limiting; a driver-level
 regression first reproduced and then pinned the correction.
+The sixty-fourth commit reduces path-request gate retention to 45 seconds,
+temporarily lowers unique-tag retention to 8,192, and registers accepted
+destinations as in-flight before subsequent processing. Rust now records that
+private state in its single-owner engine, expires it at the exact boundary, and
+refreshes it for locally generated requests; Python's lock snapshot and thread
+exception containment have no native concurrency equivalent.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
