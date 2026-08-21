@@ -1818,7 +1818,7 @@ fn build_announce_packet(identity: &Identity) -> Vec<u8> {
 }
 
 #[test]
-fn process_inbound_frame() {
+fn malformed_inbound_frame_does_not_block_later_valid_frame() {
     let (tx, rx) = event::channel();
     let (cbs, announces, _, _, _, _) = MockCallbacks::new();
     let mut driver = Driver::new(
@@ -1856,7 +1856,15 @@ fn process_inbound_frame() {
     let identity = Identity::new(&mut OsRng);
     let announce_raw = build_announce_packet(&identity);
 
-    // Send frame then shutdown
+    // A malformed frame must be contained to this delivery; the event loop
+    // must continue and process the valid announce that follows it.
+    tx.send(Event::Frame {
+        interface_id: InterfaceId(1),
+        data: vec![0xff],
+        rssi: None,
+        snr: None,
+    })
+    .unwrap();
     tx.send(Event::Frame {
         interface_id: InterfaceId(1),
         data: announce_raw,
