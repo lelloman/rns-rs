@@ -267,16 +267,12 @@ impl ResourceReceiver {
         // Compute map hash for this part
         let part_hash = map_hash(part_data, &self.random_hash);
 
-        // Search in the window around consecutive_completed_height
-        let consecutive_idx = if self.consecutive_completed_height >= 0 {
-            self.consecutive_completed_height as usize
-        } else {
-            0
-        };
-
+        // Align with request_next(): the completed height itself is not part
+        // of the outstanding window, which starts at the following index.
+        let search_start = (self.consecutive_completed_height + 1) as usize;
         let mut matched = false;
-        let search_end = core::cmp::min(consecutive_idx + self.window.window, self.total_parts);
-        for i in consecutive_idx..search_end {
+        let search_end = core::cmp::min(search_start + self.window.window, self.total_parts);
+        for i in search_start..search_end {
             if let Some(ref h) = self.hashmap[i] {
                 if *h == part_hash {
                     if self.parts[i].is_none() {
@@ -284,11 +280,6 @@ impl ResourceReceiver {
                         self.rtt_rxd_bytes += part_data.len();
                         self.received_count += 1;
                         self.outstanding_parts = self.outstanding_parts.saturating_sub(1);
-
-                        // Update consecutive completed height
-                        if i as isize == self.consecutive_completed_height + 1 {
-                            self.consecutive_completed_height = i as isize;
-                        }
 
                         // Walk forward to extend consecutive height
                         let mut cp = (self.consecutive_completed_height + 1) as usize;
@@ -1064,6 +1055,93 @@ mod tests {
             // This only applies to multi-part transfers
             assert_eq!(receiver.consecutive_completed_height, -1);
         }
+    }
+
+    #[test]
+    fn receive_part_search_window_matches_request_after_completed_height() {
+        let mut rng = rns_crypto::FixedRng::new(&[0x5a; 64]);
+        let data: Vec<u8> = (0..48).collect();
+        let mut sender = ResourceSender::new(
+            &data,
+            None,
+            8,
+            &identity_encrypt,
+            &NoopCompressor,
+            &mut rng,
+            1000.0,
+            false,
+            false,
+            None,
+            1,
+            1,
+            None,
+            0.5,
+            6.0,
+        )
+        .unwrap();
+        assert!(sender.total_parts() > 5);
+
+        let advertisement = sender.get_advertisement(0);
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&advertisement, 8, 0.5, 1000.0, None, None)
+                .unwrap();
+        let first_request = receiver
+            .accept(1000.0)
+            .into_iter()
+            .find_map(|action| match action {
+                ResourceAction::SendRequest(data) => Some(data),
+                _ => None,
+            })
+            .unwrap();
+        let first_parts = sender.handle_request(&first_request, 1001.0);
+        let first_part = first_parts
+            .iter()
+            .find_map(|action| match action {
+                ResourceAction::SendPart(data)
+                    if map_hash(data, &receiver.random_hash) == sender.part_hashes[0] =>
+                {
+                    Some(data.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        receiver.receive_part(&first_part, 1002.0);
+        assert_eq!(receiver.consecutive_completed_height, 0);
+
+        let next_request = receiver
+            .request_next(1003.0)
+            .into_iter()
+            .find_map(|action| match action {
+                ResourceAction::SendRequest(data) => Some(data),
+                _ => None,
+            })
+            .unwrap();
+        let next_parts = sender.handle_request(&next_request, 1004.0);
+        let window_tail_index = receiver.window.window;
+        let window_tail = next_parts
+            .iter()
+            .find_map(|action| match action {
+                ResourceAction::SendPart(data)
+                    if map_hash(data, &receiver.random_hash)
+                        == sender.part_hashes[window_tail_index] =>
+                {
+                    Some(data.clone())
+                }
+                _ => None,
+            })
+            .expect("request must include the inclusive tail of the next window");
+
+        let actions = receiver.receive_part(&window_tail, 1005.0);
+        assert!(receiver.parts[window_tail_index].is_some());
+        assert_eq!(receiver.received_count, 2);
+        assert_eq!(receiver.consecutive_completed_height, 0);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            ResourceAction::ProgressUpdate {
+                received: 2,
+                total,
+            } if *total == receiver.total_parts
+        )));
     }
 
     #[test]

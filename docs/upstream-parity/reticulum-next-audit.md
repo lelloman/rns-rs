@@ -92,7 +92,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Structurally covered | The changed message belongs to Python's catch-all Link receive exception boundary; Rust uses typed error branches and has no equivalent diagnostic |
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Structurally covered | Rust rejects malformed frames through typed parser branches; an event-loop regression proves the immediately following valid frame is still dispatched |
 | 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Structurally covered | Private Python `process_inbound` becomes `preprocess_inbound`; Rust's private boundary is independently named `handle_classified_frame_event` |
-| 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Needs decision | Pending per-commit analysis |
+| 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Integrated | Resource part matching now searches from `consecutive_completed_height + 1`, exactly matching the requested window and including its tail |
 | 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Needs decision | Pending per-commit analysis |
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Needs decision | Pending per-commit analysis |
@@ -1038,6 +1038,26 @@ regression remains valid.
 
 **Final disposition:** Structurally covered.
 
+### 48. `65222e0d` — Align received Resource part indexes with requests
+
+**Upstream change:** Starts `receive_part()` hash matching one index after the
+consecutive completed height, matching `request_next()`. The previous window
+included the already-completed index and excluded the requested tail; it also
+removes a redundant one-step height update before the existing forward scan.
+
+**Rust applicability:** Rust carried the same arithmetic: `request_next()`
+started at `consecutive_completed_height + 1`, while `receive_part()` started
+at the completed index (or zero). A part at the inclusive tail of the requested
+window could therefore be ignored, leaving outstanding progress inconsistent.
+
+**Local handling and evidence:** Changed receive matching to use the exact
+request start and retained the single forward scan that advances completed
+height. A focused multi-part regression completes part zero, requests the next
+window, delivers its tail before the intervening parts, and verifies that the
+tail is stored and reported without incorrectly advancing contiguous height.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1063,6 +1083,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `65222e0d` fixes Resource receive-window indexing that
+  was also present in Rust. The new out-of-order tail regression, full receiver
+  tests, formatting, host lint, exact checkout, and drift checks passed, leaving
+  15 commits.
 - `2026-08-21`: Commit `db7daa4d` only renames Python's private inbound
   implementation method. Formatting, host lint, exact checkout, and drift
   checks passed, leaving 16 commits.
