@@ -16,9 +16,9 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 65 canonical commits are integrated, structurally covered, deferred,
+The first 66 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`614e7bd834fb69675965094cd01ed9255f36d6aa`. The 2026-08-21 daily refresh found
+`74883369858303e89aa7861bdb64b1755b92a1c4`. The 2026-08-21 daily refresh found
 five newer rGit commits through `880db0a7b7776d407e44bb0a93541317a1f75487`;
 they are conservatively inventoried as **Needs decision** pending per-commit
 analysis. The GitHub mirror tip
@@ -113,7 +113,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Integrated | Driver ingress statistics are recorded only after core accepts a valid unique tag, preventing duplicate replays from inflating frequency or triggering limiting |
 | 64 | `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e` | Transport jobs optimizations | Integrated | Path-request gate state is registered before later processing, expires after 45 seconds, and refreshes for local outbound requests; unique-tag retention is 8,192, while Python lock/thread changes are structurally absent |
 | 65 | `614e7bd834fb69675965094cd01ed9255f36d6aa` | Improved path request handling, batch same-destination PRs when existing in-flight path request exists | Integrated | Same-destination unique requests share one recursive search, retain all non-limited requester interfaces, and fan the path response back to each; tag retention is 16,000 |
-| 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Needs decision | Pending per-commit analysis |
+| 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Non-runtime | Removes a hard-coded verbosity override from one upstream Python test fixture; native Rust tests have no equivalent override |
 | 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Needs decision | Pending per-commit analysis |
 | 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Needs decision | Pending per-commit analysis |
 
@@ -1395,8 +1395,29 @@ arrives. The constants test pins the new 16,000 tag limit.
 
 **Final disposition:** Integrated.
 
-The first 65 commits have a final disposition. Detailed analysis for commits
-66–68 is pending.
+### 66. `74883369` — Let the link test use configured logging
+
+**Upstream change:** Removes the explicit `LOG_EXTREME` argument from the
+Reticulum instance constructed by `tests/link.py`. The upstream link test now
+uses the log level from its `tests/rnsconfig` fixture instead of overriding it
+in code.
+
+**Rust applicability:** This changes only an upstream Python test runner and
+does not alter Reticulum runtime behavior or protocol output. Native link tests
+run inside Cargo's standard test harness and do not construct a daemon with a
+forced extreme log-level argument. Rust production configuration parsing is a
+separate path with existing coverage for configured levels.
+
+**Local handling and evidence:** No production or test change is appropriate:
+there is no native hard-coded test override to remove and no compatible runtime
+contract changed. Repository search confirmed that test logging is opt-in via
+`RUST_LOG`, while daemon configuration tests already exercise configured
+numeric log levels.
+
+**Final disposition:** Non-runtime.
+
+The first 66 commits have a final disposition. Detailed analysis for commits
+67–68 is pending.
 
 ## Integration Plan
 
@@ -1419,6 +1440,10 @@ The first 65 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `74883369` only removes a hard-coded Python link-test
+  log-level override. Native tests have no equivalent override; formatting,
+  warning-free host lint, exact checkout, and drift checks passed, leaving 2
+  commits.
 - `2026-08-21`: Commit `614e7bd8` batches different-tag requests for an
   already in-flight destination. Focused tests prove one recursive search and
   path responses to both requesters, while ingress limiting and tag retention
