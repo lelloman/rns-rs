@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `c95bb551ab2c5e702efe4fa77ae35c568e607b3b`
-- Commit date: `2026-08-19 14:19:49 +0200`
-- Subject: `Transport: handle exceptions in inbound()`
+- Normative commit: `db7daa4d9412e98273ce58d47286f36afce1d5ae`
+- Commit date: `2026-08-19 14:22:36 +0200`
+- Subject: `Method naming`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`04a387e9a2690853ce1baf5387bce0d620860779`. The CI interop lane remains pinned
+`9a254f8c4b00e89f4337519af68c68cd414e1424`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`c95bb551ab2c5e702efe4fa77ae35c568e607b3b`. The first commit fixes
+`db7daa4d9412e98273ce58d47286f36afce1d5ae`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -174,7 +174,9 @@ Rust's typed receive error branches have no equivalent catch-all message. The
 forty-sixth commit contains Python exceptions at the Transport inbound
 boundary. Rust's typed parser rejects malformed frames without unwinding, and
 the driver event-loop regression now proves a valid following frame is still
-processed. The full
+processed. The forty-seventh commit only renames Python's private inbound
+implementation method; Rust's corresponding private driver boundary already
+has an implementation-specific name and needs no rename. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
