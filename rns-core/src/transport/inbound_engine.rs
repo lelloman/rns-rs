@@ -10,6 +10,19 @@ pub(super) fn extra_link_proof_timeout(interface: Option<&InterfaceInfo>) -> f64
 }
 
 impl TransportEngine {
+    fn record_invalid_announce(
+        &self,
+        announce: &AnnounceData,
+        interface: InterfaceId,
+        now: f64,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        let identity_hash = crate::hash::truncated_hash(&announce.public_key);
+        if !self.is_blackholed(&identity_hash, now) {
+            actions.push(TransportAction::ProtocolViolation { interface });
+        }
+    }
+
     /// Return whether an inbound frame passes parsing, hop, and packet filtering.
     /// This does not mutate deduplication or routing state.
     pub fn accepts_inbound_frame(&self, frame: InboundFrame<'_>) -> bool {
@@ -409,7 +422,7 @@ impl TransportEngine {
                     v
                 }
                 Err(_) => {
-                    actions.push(TransportAction::ProtocolViolation { interface: iface });
+                    self.record_invalid_announce(&announce, iface, now, actions);
                     return;
                 }
             }
@@ -630,9 +643,7 @@ impl TransportEngine {
 
         if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
             let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
-                actions.push(TransportAction::ProtocolViolation {
-                    interface: ctx.iface,
-                });
+                self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
                 return;
             };
             self.announce_sig_cache.insert(sig_cache_key, ctx.now);

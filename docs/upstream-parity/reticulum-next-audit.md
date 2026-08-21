@@ -16,9 +16,9 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 70 canonical commits are integrated, structurally covered, deferred,
+The first 71 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`42f6d64b9cc379aad73a6a8927dadec91f7031d7`. A fresh 2026-08-21 refresh found
+`60eb0509f25632dbc6e4cea07751eca70b80a8a5`. A fresh 2026-08-21 refresh found
 five newer rGit commits after commit 68 through
 `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; commit 69 is integrated and the
 remaining four are inventoried pending per-commit analysis. The GitHub mirror tip
@@ -118,7 +118,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Integrated | Separate total and validated/established active counts across transport and managed links, local RPC, and accurate `rnstatus -l` rendering with state/display regressions |
 | 69 | `6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8` | Added data flow speeds to rnstatus | Integrated | Detailed totals derive clamped directional non-pathing data percentages and speeds from total minus announce/PR current rates, with enabled/disabled rendering coverage |
 | 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Integrated | Per-interface protocol/IFAC/filter counters at typed rejection boundaries, pre-validation link forwarding guard, listener aggregation, status/RPC fields, CLI rendering/sorting, and focused rejection regressions |
-| 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Needs decision | Pending per-commit analysis |
+| 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Integrated | Invalid-announce accounting distinguishes blackhole policy drops for synchronous and asynchronous verification; tampered blackholed announce regression |
 | 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Needs decision | Pending per-commit analysis |
 | 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Needs decision | Pending per-commit analysis |
 
@@ -1525,8 +1525,29 @@ state, RPC values, and CLI rendering/sorting.
 
 **Final disposition:** Integrated.
 
-The first 70 commits have a final disposition. Detailed analysis for commits
-71–73 is pending.
+### 71. `60eb0509` — Signal blackholed announce validation
+
+**Upstream change:** Adds a distinct blackholed result to announce validation so
+early ingress validation can drop a blackholed identity without recording it as
+an interface protocol violation.
+
+**Rust applicability:** Native announce validation already checks the engine's
+blackhole table after signature verification. Commit 70's new violation action
+made the earlier rejection reason observable, so the same policy distinction is
+required for both synchronous and queued verification.
+
+**Local handling and evidence:** Invalid-announce accounting derives the
+announced identity hash from its public key and consults the current blackhole
+table before emitting a protocol-violation action. The asynchronous failure path
+retains enough pending announce context to apply the same check before removing
+the verification entry. A focused test tampers two otherwise valid announces:
+the ordinary identity increments the counter, while the blackholed identity is
+dropped with the counter unchanged.
+
+**Final disposition:** Integrated.
+
+The first 71 commits have a final disposition. Detailed analysis for commits
+72–73 is pending.
 
 ## Integration Plan
 
@@ -1549,6 +1570,10 @@ The first 70 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `60eb0509` distinguishes blackhole policy drops from
+  invalid announce violations in synchronous and queued verification. The
+  tampered ordinary/blackholed announce regression, relevant suites, formatting,
+  host lint, exact checkout, and drift checks passed, leaving 2 commits.
 - `2026-08-21`: Commit `42f6d64b` adds per-interface protocol, IFAC, and
   packet-filter counters plus the pre-validation link forwarding guard. Focused
   rejection, status/RPC, listener, and CLI tests, full relevant suites,

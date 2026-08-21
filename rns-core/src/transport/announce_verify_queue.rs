@@ -166,6 +166,11 @@ impl AnnounceVerifyQueue {
             .map(|entry| pending_of(entry).interface)
     }
 
+    pub fn pending_identity_hash(&self, key: &AnnounceVerifyKey) -> Option<[u8; 16]> {
+        let packet = &pending_of(self.pending.get(key)?).packet;
+        Some(crate::hash::truncated_hash(packet.data.get(..64)?))
+    }
+
     pub fn len(&self) -> usize {
         self.pending.len()
     }

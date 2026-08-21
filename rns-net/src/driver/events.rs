@@ -953,9 +953,14 @@ impl Driver {
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let interface = announce_queue.pending_interface(&key);
+                    let blackholed = announce_queue
+                        .pending_identity_hash(&key)
+                        .is_some_and(|hash| self.engine.is_blackholed(&hash, time::now()));
                     if announce_queue.complete_failure(&key) {
                         if let Some(entry) = interface.and_then(|id| self.interfaces.get_mut(&id)) {
-                            entry.stats.protocol_violations += 1;
+                            if !blackholed {
+                                entry.stats.protocol_violations += 1;
+                            }
                         }
                     }
                 }

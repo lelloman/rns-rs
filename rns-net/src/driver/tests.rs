@@ -3517,6 +3517,23 @@ fn inbound_rejections_are_counted_by_reason() {
         driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
         3
     );
+
+    let blocked_identity = Identity::new(&mut OsRng);
+    driver.engine.blackhole_identity(
+        *blocked_identity.hash(),
+        time::now(),
+        None,
+        Some("test".into()),
+    );
+    let mut blocked_announce = build_announce_packet(&blocked_identity);
+    let last = blocked_announce.len() - 1;
+    blocked_announce[last] ^= 0x01;
+    driver.handle_frame_event(InterfaceId(1), blocked_announce, None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        3,
+        "blackholed identities are policy drops, not peer protocol violations"
+    );
 }
 
 #[test]
