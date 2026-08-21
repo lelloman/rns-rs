@@ -77,7 +77,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Structurally covered | Rust has no per-packet exception handler or mislabeled outbound-queue diagnostic in its inbound event loop |
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Non-runtime | Adds only a TODO proposing future non-transport path-request filtering; executable behavior is unchanged |
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Structurally covered | Documentation-only grammar correction; native queue-tuning wording does not contain the typo |
-| 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Structurally covered | Native documentation already labels `qlen_in_pr` and `qlen_in_il` as path-request and ingress-limited queues |
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Needs decision | Pending per-commit analysis |
 | 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Needs decision | Pending per-commit analysis |
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Needs decision | Pending per-commit analysis |
@@ -756,6 +756,22 @@ baseline record.
 
 **Final disposition:** Structurally covered.
 
+### 33. `e1b7bc31` — Correct path-request and ingress queue labels
+
+**Upstream change:** Replaces two copied “data queue” descriptions with “path
+request queue” and “ingress limiter queue” in source and generated manuals.
+Runtime behavior is unchanged.
+
+**Rust applicability:** The native queue-tuning section already calls these
+classes path requests and ingress-limited traffic. Upstream's generated manuals
+are not vendored.
+
+**Local handling and evidence:** Confirmed both native labels were correct when
+the queue documentation was introduced. No local prose or test change is
+needed.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -781,6 +797,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `e1b7bc31` corrects queue-class labels that were already
+  correct in native documentation. Its unchanged `RNS` tree, exact checkout,
+  formatting, host lint, and drift check passed, leaving 30 commits.
 - `2026-08-21`: Commit `1c488947` corrects grammar absent from the native queue
   documentation. Its unchanged `RNS` tree, exact checkout, formatting, host
   lint, and drift check passed, leaving 31 commits.
