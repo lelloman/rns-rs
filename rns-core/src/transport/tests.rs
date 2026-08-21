@@ -2894,6 +2894,54 @@ fn path_request_gate_registers_early_without_refresh_and_expires_at_45_seconds()
 }
 
 #[test]
+fn same_destination_path_requests_share_one_search_and_batch_requesters() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_ACCESS_POINT));
+    let mut second_requester = make_interface(2, constants::MODE_ACCESS_POINT);
+    second_requester.out_capable = false;
+    engine.register_interface(second_requester);
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+    let mut limited_requester = make_interface(4, constants::MODE_ACCESS_POINT);
+    limited_requester.out_capable = false;
+    engine.register_interface(limited_requester);
+
+    let destination = [0xd3; 16];
+    let first = make_path_request_data(&destination, &[0x21; 16]);
+    let first_actions = engine.handle_path_request(&first, InterfaceId(1), 1000.0);
+    assert_eq!(first_actions.len(), 1);
+    assert!(matches!(
+        &first_actions[0],
+        TransportAction::SendOnInterface {
+            interface: InterfaceId(3),
+            ..
+        }
+    ));
+
+    let second = make_path_request_data(&destination, &[0x22; 16]);
+    assert!(engine
+        .handle_path_request(&second, InterfaceId(2), 1000.1)
+        .is_empty());
+
+    let limited = make_path_request_data(&destination, &[0x23; 16]);
+    let limited = engine
+        .accept_path_request(&limited, InterfaceId(4), 1000.2)
+        .expect("the limited request still has a unique tag");
+    assert!(engine
+        .handle_accepted_path_request_with_ingress_limit(limited, true)
+        .is_empty());
+
+    let request = engine
+        .discovery_path_requests
+        .get(&destination)
+        .expect("the shared search remains pending");
+    assert!(request.engaged);
+    assert_eq!(
+        request.requesting_interfaces,
+        vec![InterfaceId(1), InterfaceId(2)]
+    );
+}
+
+#[test]
 fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
     let mut engine = TransportEngine::new(make_config(true));
     let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);
@@ -3391,13 +3439,14 @@ fn test_discovery_request_consumed_on_announce() {
         dest,
         DiscoveryPathRequest {
             timestamp: 900.0,
-            requesting_interface: InterfaceId(1),
+            requesting_interfaces: vec![InterfaceId(1)],
+            engaged: true,
         },
     );
 
     // Consume it
     let iface = engine.discovery_path_requests_waiting(&dest);
-    assert_eq!(iface, Some(InterfaceId(1)));
+    assert_eq!(iface, Some(vec![InterfaceId(1)]));
 
     // Should be gone now
     assert!(!engine.discovery_path_requests.contains_key(&dest));
@@ -3413,6 +3462,7 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
     inbound.started = 0.0;
     engine.register_interface(inbound);
     engine.register_interface(make_interface(2, constants::MODE_ACCESS_POINT));
+    engine.register_interface(make_interface(3, constants::MODE_ACCESS_POINT));
 
     let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
     let dest_hash =
@@ -3424,7 +3474,8 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
         dest_hash,
         DiscoveryPathRequest {
             timestamp: 999.0,
-            requesting_interface: InterfaceId(2),
+            requesting_interfaces: vec![InterfaceId(2), InterfaceId(3)],
+            engaged: true,
         },
     );
 
@@ -3454,6 +3505,14 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
                 ..
             } if *destination_hash == dest_hash
         )
+    }));
+    assert!(actions.iter().any(|action| {
+        let TransportAction::SendOnInterface { interface, raw } = action else {
+            return false;
+        };
+        *interface == InterfaceId(3)
+            && RawPacket::unpack(raw)
+                .is_ok_and(|packet| packet.context == constants::CONTEXT_PATH_RESPONSE)
     }));
 
     let entry = engine

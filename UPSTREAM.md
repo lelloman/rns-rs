@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e`
-- Commit date: `2026-08-20 22:08:06 +0200`
-- Subject: `Transport jobs optimizations`
+- Normative commit: `614e7bd834fb69675965094cd01ed9255f36d6aa`
+- Commit date: `2026-08-21 00:54:08 +0200`
+- Subject: `Improved path request handling, batch same-destination PRs when existing in-flight path request exists`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`6972fded8b4c48e91a82bce9eb0fd345632b602a`. The CI interop lane remains pinned
+`2711e58b8c40207ea8804d252dba858df74c5919`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e`. The first commit fixes
+`614e7bd834fb69675965094cd01ed9255f36d6aa`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -228,6 +228,12 @@ destinations as in-flight before subsequent processing. Rust now records that
 private state in its single-owner engine, expires it at the exact boundary, and
 refreshes it for locally generated requests; Python's lock snapshot and thread
 exception containment have no native concurrency equivalent.
+The sixty-fifth commit batches unique requests for a destination whose search
+is already in flight. Rust now forwards only the first recursive search,
+retains every distinct requesting interface behind the same destination, and
+fans the matching path response back to all of them. Ingress-limited requests
+remain excluded from batching, and the unique-tag retention limit is raised to
+16,000 as upstream specifies.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

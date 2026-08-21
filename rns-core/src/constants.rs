@@ -238,7 +238,7 @@ pub const PATH_REQUEST_RG: f64 = 1.5;
 pub const PATH_REQUEST_MI: f64 = 20.0;
 
 /// Maximum amount of unique path request tags to remember
-pub const MAX_PR_TAGS: usize = 8192;
+pub const MAX_PR_TAGS: usize = 16_000;
 
 // --- Job intervals ---
 
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(REVERSE_TIMEOUT, 8.0 * 60.0);
 
         assert_eq!(PATH_REQUEST_GATE_TIMEOUT, 45.0);
-        assert_eq!(MAX_PR_TAGS, 8192);
+        assert_eq!(MAX_PR_TAGS, 16_000);
 
         // DESTINATION_TIMEOUT = 7 days
         assert_eq!(DESTINATION_TIMEOUT, 60.0 * 60.0 * 24.0 * 7.0);
