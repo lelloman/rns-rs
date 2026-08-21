@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d`
-- Commit date: `2026-08-18 12:34:18 +0200`
-- Subject: `Added queue drop stats`
+- Normative commit: `503bd6c87bda7780f613255257ab0095eb57661d`
+- Commit date: `2026-08-18 13:17:34 +0200`
+- Subject: `Improved PR ingress limiter`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`c039441f5090ac928a2225becbdca8c30f9ef45a`. The CI interop lane remains pinned
+`e401b5955b68fadcc5c92e241bd84ed4fb5019fe`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`1a70bd3cd1390c0e27edc0f5ec1626553e84c17d`. The first commit fixes
+`503bd6c87bda7780f613255257ab0095eb57661d`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -145,7 +145,10 @@ correct. The thirty-fourth commit moves successful authenticated link-path
 rebalance diagnostics to the dedicated pathing log level; Rust now emits the
 equivalent event on its pathing target. The thirty-fifth commit adds cumulative
 per-class queue-drop counters to runtime statistics and displays nonzero counts
-in `rnstatus`; Rust now tracks and exposes the same five fields. The full
+in `rnstatus`; Rust now tracks and exposes the same five fields. The
+thirty-sixth commit adds path-request limiter cooldown hysteresis and preserves
+ingress-limited classification across queued processing; Rust now retains both
+invariants through its internal queue handoff. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

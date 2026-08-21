@@ -26,6 +26,7 @@ struct IngressControlState {
     burst_activated: f64,
     pr_burst_active: bool,
     pr_burst_activated: f64,
+    pr_burst_cooldown: u8,
     held_release: f64,
     held_announces: BTreeMap<[u8; 16], HeldAnnounce>,
 }
@@ -37,6 +38,7 @@ impl IngressControlState {
             burst_activated: 0.0,
             pr_burst_active: false,
             pr_burst_activated: 0.0,
+            pr_burst_cooldown: 0,
             held_release: 0.0,
             held_announces: BTreeMap::new(),
         }
@@ -131,13 +133,19 @@ impl IngressControl {
 
         if state.pr_burst_active {
             if pr_freq < threshold && now > state.pr_burst_activated + config.burst_hold {
-                state.pr_burst_active = false;
-                return false;
+                if state.pr_burst_cooldown == 0 {
+                    state.pr_burst_active = false;
+                } else {
+                    state.pr_burst_cooldown -= 1;
+                }
+            } else {
+                state.pr_burst_cooldown = 3;
             }
             true
         } else if pr_freq > threshold {
             state.pr_burst_active = true;
             state.pr_burst_activated = now;
+            state.pr_burst_cooldown = 3;
             true
         } else {
             false
@@ -905,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_burst_deactivates_after_hold_period() {
+    fn test_pr_burst_deactivation_requires_sustained_cooldown() {
         let mut ic = IngressControl::new();
         let config = IngressControlConfig::enabled();
         let started = 0.0;
@@ -925,13 +933,64 @@ mod tests {
             started,
             now + constants::IC_BURST_HOLD - 1.0
         ));
+        for offset in 1..=4 {
+            assert!(ic.should_ingress_limit_pr(
+                iface(1),
+                &config,
+                0.1,
+                started,
+                now + constants::IC_BURST_HOLD + f64::from(offset)
+            ));
+        }
+        assert!(!ic.pr_burst_active(&iface(1)));
         assert!(!ic.should_ingress_limit_pr(
             iface(1),
             &config,
             0.1,
             started,
-            now + constants::IC_BURST_HOLD + 1.0
+            now + constants::IC_BURST_HOLD + 5.0
         ));
+    }
+
+    #[test]
+    fn test_pr_burst_activity_resets_partial_cooldown() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let started = 0.0;
+        let now = 10000.0;
+
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            constants::IC_PR_BURST_FREQ + 1.0,
+            started,
+            now
+        ));
+        for offset in 1..=2 {
+            assert!(ic.should_ingress_limit_pr(
+                iface(1),
+                &config,
+                0.1,
+                started,
+                now + constants::IC_BURST_HOLD + f64::from(offset)
+            ));
+        }
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            constants::IC_PR_BURST_FREQ + 1.0,
+            started,
+            now + constants::IC_BURST_HOLD + 3.0
+        ));
+        for offset in 4..=7 {
+            assert!(ic.should_ingress_limit_pr(
+                iface(1),
+                &config,
+                0.1,
+                started,
+                now + constants::IC_BURST_HOLD + f64::from(offset)
+            ));
+        }
         assert!(!ic.pr_burst_active(&iface(1)));
     }
 

@@ -2,12 +2,24 @@ use super::*;
 use rns_core::transport::{InboundFrame, RxMetadata};
 
 impl Driver {
+    #[cfg(test)]
     pub(crate) fn handle_frame_event(
         &mut self,
         interface_id: InterfaceId,
         data: Vec<u8>,
         rssi: Option<i16>,
         snr: Option<f32>,
+    ) {
+        self.handle_classified_frame_event(interface_id, data, rssi, snr, false);
+    }
+
+    fn handle_classified_frame_event(
+        &mut self,
+        interface_id: InterfaceId,
+        data: Vec<u8>,
+        rssi: Option<i16>,
+        snr: Option<f32>,
+        ingress_limited: bool,
     ) {
         if data.len() > 2 && (data[0] & 0x03) == 0x01 {
             log::debug!(
@@ -193,7 +205,7 @@ impl Driver {
             }
         }
 
-        self.dispatch_all(actions);
+        self.dispatch_all_with_ingress_class(actions, ingress_limited);
         self.event_tx.set_ingress_bursts(
             interface_id,
             self.engine
@@ -818,19 +830,25 @@ impl Driver {
     /// Run the event loop. Blocks until Shutdown or all senders are dropped.
     pub fn run(&mut self) {
         loop {
-            let event = match self.rx.recv() {
+            let received = match self.rx.recv_classified() {
                 Ok(e) => e,
                 Err(_) => break, // all senders dropped
             };
 
-            match event {
+            match received.event {
                 Event::Frame {
                     interface_id,
                     data,
                     rssi,
                     snr,
                 } => {
-                    self.handle_frame_event(interface_id, data, rssi, snr);
+                    self.handle_classified_frame_event(
+                        interface_id,
+                        data,
+                        rssi,
+                        snr,
+                        received.ingress_limited,
+                    );
                 }
                 Event::AnnounceVerified {
                     key,

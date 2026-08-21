@@ -483,6 +483,7 @@ impl Driver {
         raw: rns_core::transport::types::PacketBytes,
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
+        ingress_limited: bool,
         _hook_injected: &mut Vec<TransportAction>,
     ) {
         #[cfg(feature = "hooks")]
@@ -539,9 +540,12 @@ impl Driver {
                         entry.stats.outgoing_path_request_samples(),
                     );
                 }
-                let actions =
-                    self.engine
-                        .handle_path_request(&packet.data, receiving_interface, now);
+                let actions = self.engine.handle_path_request_with_ingress_limit(
+                    &packet.data,
+                    receiving_interface,
+                    now,
+                    ingress_limited,
+                );
                 self.dispatch_all(actions);
             }
         } else if self.link_manager.is_link_destination(&destination_hash) {
@@ -586,6 +590,14 @@ impl Driver {
 
     /// Dispatch a list of transport actions.
     pub(crate) fn dispatch_all(&mut self, actions: Vec<TransportAction>) {
+        self.dispatch_all_with_ingress_class(actions, false);
+    }
+
+    pub(crate) fn dispatch_all_with_ingress_class(
+        &mut self,
+        actions: Vec<TransportAction>,
+        ingress_limited: bool,
+    ) {
         #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
         #[cfg(not(feature = "hooks"))]
@@ -610,6 +622,7 @@ impl Driver {
                         raw,
                         packet_hash,
                         receiving_interface,
+                        ingress_limited,
                         &mut hook_injected,
                     );
                 }

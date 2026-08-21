@@ -93,6 +93,11 @@ struct QueueState {
     dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
 }
 
+pub(crate) struct ReceivedEvent {
+    pub event: Event,
+    pub ingress_limited: bool,
+}
+
 impl QueueState {
     fn new() -> Self {
         Self {
@@ -111,16 +116,22 @@ impl QueueState {
         !self.control.is_empty() || self.inbound.iter().any(|queue| !queue.is_empty())
     }
 
-    fn pop_next(&mut self) -> Option<Event> {
+    fn pop_next(&mut self) -> Option<ReceivedEvent> {
         let control_barrier = self.control.front().map(|queued| queued.sequence);
-        for queue in &mut self.inbound {
+        for (index, queue) in self.inbound.iter_mut().enumerate() {
             if queue.front().is_some_and(|queued| {
                 control_barrier.is_none_or(|barrier| queued.sequence < barrier)
             }) {
-                return queue.pop_front().map(|queued| queued.event);
+                return queue.pop_front().map(|queued| ReceivedEvent {
+                    event: queued.event,
+                    ingress_limited: index == QueueClass::IngressLimited as usize,
+                });
             }
         }
-        self.control.pop_front().map(|queued| queued.event)
+        self.control.pop_front().map(|queued| ReceivedEvent {
+            event: queued.event,
+            ingress_limited: false,
+        })
     }
 }
 
@@ -387,7 +398,7 @@ impl Drop for EventReceiver {
 }
 
 impl EventReceiver {
-    fn pop_locked(&self, state: &mut QueueState) -> Option<Event> {
+    fn pop_locked(&self, state: &mut QueueState) -> Option<ReceivedEvent> {
         let event = state.pop_next();
         if event.is_some() {
             self.shared.changed.notify_all();
@@ -396,6 +407,10 @@ impl EventReceiver {
     }
 
     pub fn recv(&self) -> Result<Event, std::sync::mpsc::RecvError> {
+        self.recv_classified().map(|received| received.event)
+    }
+
+    pub(crate) fn recv_classified(&self) -> Result<ReceivedEvent, std::sync::mpsc::RecvError> {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(event) = self.pop_locked(&mut state) {
@@ -415,7 +430,7 @@ impl EventReceiver {
     pub fn try_recv(&self) -> Result<Event, std::sync::mpsc::TryRecvError> {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(event) = self.pop_locked(&mut state) {
-            return Ok(event);
+            return Ok(event.event);
         }
         if self.shared.sender_count.load(Ordering::Acquire) == 0 {
             Err(std::sync::mpsc::TryRecvError::Disconnected)
@@ -432,7 +447,7 @@ impl EventReceiver {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         loop {
             if let Some(event) = self.pop_locked(&mut state) {
-                return Ok(event);
+                return Ok(event.event);
             }
             if self.shared.sender_count.load(Ordering::Acquire) == 0 {
                 return Err(std::sync::mpsc::RecvTimeoutError::Disconnected);
@@ -697,6 +712,21 @@ mod tests {
         assert_eq!(tx.inbound_queue_snapshot().heights, [1, 2, 3, 4]);
         assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 1, 1, 1]);
         assert_eq!(tx.inbound_queue_snapshot().total_dropped(), 4);
+    }
+
+    #[test]
+    fn ingress_limited_classification_survives_limiter_state_change() {
+        let (tx, rx) = channel_with_capacity(2);
+        let path_dest =
+            rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
+        tx.set_ingress_bursts(InterfaceId(4), None, Some(1.0));
+        tx.send(frame(4, path_dest, rns_core::constants::PACKET_TYPE_DATA))
+            .unwrap();
+
+        tx.set_ingress_bursts(InterfaceId(4), None, None);
+        let received = rx.recv_classified().unwrap();
+        assert!(received.ingress_limited);
+        assert_eq!(frame_interface(received.event), 4);
     }
 
     #[test]
