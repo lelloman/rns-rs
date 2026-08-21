@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `49918c7e1d524e4abf61b5714b3b5bd66350ae1b`
-- Commit date: `2026-08-19 19:57:17 +0200`
-- Subject: `Updated docs`
+- Normative commit: `6738db54378821f27e2224bb014d6f5b04e9bc54`
+- Commit date: `2026-08-19 20:08:34 +0200`
+- Subject: `Cleaned up deprecated logic block indent in relation to inbound processing refactor`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`fa2b9b7c3593c5d8e11d1c96311577a5f062022e`. The CI interop lane remains pinned
+`3a000a1aeeafbec4f8496c62740c949308ca2bcb`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`49918c7e1d524e4abf61b5714b3b5bd66350ae1b`. The first commit fixes
+`6738db54378821f27e2224bb014d6f5b04e9bc54`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -194,7 +194,8 @@ supports both values without changing programmatic constructors and omits MTU
 signalling when disabled. The fifty-fourth commit adds only Python API
 documentation for the existing six-second per-hop timeout and first-hop
 estimator; Rust already documents its corresponding constant and establishment
-formula. The full
+formula. The fifty-fifth commit only removes a Python `if True:` wrapper and
+dedents its inbound body; Rust has no equivalent deprecated wrapper. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
