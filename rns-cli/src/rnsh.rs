@@ -2645,6 +2645,12 @@ mod tests {
                 RnshMessage::StreamData(stream) => {
                     assert_eq!(stream.stream_id, STREAM_STDOUT);
                     assert!(!stream.eof);
+                    if payload.is_empty() {
+                        assert_eq!(
+                            stream.pack().len() + rns_core::constants::CHANNEL_ENVELOPE_OVERHEAD,
+                            rns_core::constants::LINK_MDU
+                        );
+                    }
                     payload.extend_from_slice(&stream.data);
                 }
                 other => panic!("expected stream data, got {other:?}"),

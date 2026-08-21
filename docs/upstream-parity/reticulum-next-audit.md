@@ -96,7 +96,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Structurally covered | Corrects `EPOLL_IN` to `EPOLLIN` in a Python Backbone warning; native diagnostics contain neither spelling |
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Structurally covered | Python's cached aggregate refresh drops from 2.0s to 0.95s; Rust computes every Backbone child aggregate live with no throttle |
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Structurally covered | Rust's writer accepts Link MDU and subtracts the 6-byte channel envelope plus 2-byte stream header exactly once; an exact-boundary regression pins full utilization |
-| 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Needs decision | Pending per-commit analysis |
+| 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Structurally covered | Native `rnsh` already deducts the channel envelope and stream header once; its chunking regression now asserts that a full packed message exactly fills Link MDU |
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Needs decision | Pending per-commit analysis |
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Needs decision | Pending per-commit analysis |
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Needs decision | Pending per-commit analysis |
@@ -1110,6 +1110,24 @@ message. All buffer tests cover reassembly and compression alongside it.
 
 **Final disposition:** Structurally covered.
 
+### 52. `77a1bb9b` — Use the full Link MDU in rnsh streams
+
+**Upstream change:** Applies the preceding buffer fix to Python `rnsh` on both
+initiator and listener sides, subtracting only the stream header from the
+already-reduced Channel MDU when sizing compressed chunks.
+
+**Rust applicability:** Native `rnsh` defines `CHANNEL_PAYLOAD_MAX` as Link MDU
+minus the six-byte channel envelope, then `STREAM_CHUNK_MAX` as that value minus
+the two-byte stream header. The overheads are already deducted exactly once,
+and the same helper sends stdin, stdout, and stderr for both roles.
+
+**Local handling and evidence:** Strengthened the large-payload chunking test
+to assert that the first packed `StreamDataMessage` plus its channel envelope
+equals Link MDU exactly. Existing assertions still prove complete payload
+reassembly and EOF placement across multiple chunks.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1135,6 +1153,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `77a1bb9b` applies full-MDU sizing to Python `rnsh`,
+  already present in native `rnsh`. The strengthened chunk/reassembly test,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 11
+  commits.
 - `2026-08-21`: Commit `df801810` removes a duplicate channel-overhead
   deduction already absent from Rust's Link-MDU-based writer. The exact-boundary
   regression, full buffer tests, formatting, host lint, exact checkout, and
