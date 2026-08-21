@@ -233,7 +233,8 @@ is already in flight. Rust now forwards only the first recursive search,
 retains every distinct requesting interface behind the same destination, and
 fans the matching path response back to all of them. Ingress-limited requests
 remain excluded from batching, and the unique-tag retention limit is raised to
-16,000 as upstream specifies.
+16,000 as upstream specifies. A retained gate timestamp does not suppress a
+later request once the path is known; cached paths are answered immediately.
 The sixty-sixth commit removes an `LOG_EXTREME` override from upstream's Python
 link test so its fixture configuration controls logging. Native tests use
 Rust's standard harness and contain no equivalent forced override; production
