@@ -768,14 +768,14 @@ fn burst_status_lines(iface: &PickleValue, now: f64) -> Vec<String> {
 
 fn queue_status_lines(stats: &PickleValue) -> Vec<String> {
     let fields = [
-        ("tqpressure", "rxqt", "total"),
-        ("dqpressure", "rxqd", "data"),
-        ("aqpressure", "rxqa", "announce"),
-        ("pqpressure", "rxqp", "path request"),
-        ("ilqpressure", "rxqil", "ingress limiter"),
+        ("tqpressure", "rxqt", "rxqtd", "total"),
+        ("dqpressure", "rxqd", "rxqdd", "data"),
+        ("aqpressure", "rxqa", "rxqad", "announce"),
+        ("pqpressure", "rxqp", "rxqpd", "path request"),
+        ("ilqpressure", "rxqil", "rxqild", "ingress limiter"),
     ];
     let mut lines = Vec::new();
-    for (index, (pressure_key, count_key, label)) in fields.into_iter().enumerate() {
+    for (index, (pressure_key, count_key, dropped_key, label)) in fields.into_iter().enumerate() {
         let Some(pressure) = stats.get(pressure_key).and_then(|value| value.as_float()) else {
             continue;
         };
@@ -787,9 +787,15 @@ fn queue_status_lines(stats: &PickleValue) -> Vec<String> {
         } else {
             "               "
         };
+        let dropped = stats
+            .get(dropped_key)
+            .and_then(|value| value.as_int())
+            .filter(|dropped| *dropped > 0)
+            .map(|dropped| format!(", {dropped} dropped"))
+            .unwrap_or_default();
         lines.push(format!(
-            "{prefix} {:.1}% {label}, {count} pkts",
-            pressure * 100.0
+            "{prefix} {:.1}% {label}, {count} pkts{dropped}",
+            pressure * 100.0,
         ));
     }
     lines
@@ -1421,36 +1427,41 @@ mod tests {
                 PickleValue::Float(0.11),
             ),
             (PickleValue::String("rxqt".into()), PickleValue::Int(15)),
+            (PickleValue::String("rxqtd".into()), PickleValue::Int(10)),
             (
                 PickleValue::String("dqpressure".into()),
                 PickleValue::Float(0.22),
             ),
             (PickleValue::String("rxqd".into()), PickleValue::Int(1)),
+            (PickleValue::String("rxqdd".into()), PickleValue::Int(0)),
             (
                 PickleValue::String("aqpressure".into()),
                 PickleValue::Float(0.33),
             ),
             (PickleValue::String("rxqa".into()), PickleValue::Int(2)),
+            (PickleValue::String("rxqad".into()), PickleValue::Int(3)),
             (
                 PickleValue::String("pqpressure".into()),
                 PickleValue::Float(0.44),
             ),
             (PickleValue::String("rxqp".into()), PickleValue::Int(4)),
+            (PickleValue::String("rxqpd".into()), PickleValue::Int(2)),
             (
                 PickleValue::String("ilqpressure".into()),
                 PickleValue::Float(0.55),
             ),
             (PickleValue::String("rxqil".into()), PickleValue::Int(8)),
+            (PickleValue::String("rxqild".into()), PickleValue::Int(5)),
         ]);
 
         assert_eq!(
             queue_status_lines(&stats),
             vec![
-                " Qu. Pressure : 11.0% total, 15 pkts",
+                " Qu. Pressure : 11.0% total, 15 pkts, 10 dropped",
                 "                22.0% data, 1 pkts",
-                "                33.0% announce, 2 pkts",
-                "                44.0% path request, 4 pkts",
-                "                55.0% ingress limiter, 8 pkts",
+                "                33.0% announce, 2 pkts, 3 dropped",
+                "                44.0% path request, 4 pkts, 2 dropped",
+                "                55.0% ingress limiter, 8 pkts, 5 dropped",
             ]
         );
     }
@@ -1458,5 +1469,21 @@ mod tests {
     #[test]
     fn queue_status_ignores_unavailable_statistics() {
         assert!(queue_status_lines(&PickleValue::Dict(Vec::new())).is_empty());
+    }
+
+    #[test]
+    fn queue_status_supports_remotes_without_drop_statistics() {
+        let stats = PickleValue::Dict(vec![
+            (
+                PickleValue::String("tqpressure".into()),
+                PickleValue::Float(0.5),
+            ),
+            (PickleValue::String("rxqt".into()), PickleValue::Int(7)),
+        ]);
+
+        assert_eq!(
+            queue_status_lines(&stats),
+            vec![" Qu. Pressure : 50.0% total, 7 pkts"]
+        );
     }
 }

@@ -85,6 +85,7 @@ struct QueuedEvent {
 struct QueueState {
     control: VecDeque<QueuedEvent>,
     inbound: [VecDeque<QueuedEvent>; INBOUND_QUEUE_COUNT],
+    inbound_dropped: [usize; INBOUND_QUEUE_COUNT],
     next_sequence: u64,
     receiver_alive: bool,
     announce_bursts: HashMap<InterfaceId, f64>,
@@ -97,6 +98,7 @@ impl QueueState {
         Self {
             control: VecDeque::new(),
             inbound: std::array::from_fn(|_| VecDeque::new()),
+            inbound_dropped: [0; INBOUND_QUEUE_COUNT],
             next_sequence: 0,
             receiver_alive: true,
             announce_bursts: HashMap::new(),
@@ -140,6 +142,7 @@ pub struct EventSender {
 pub(crate) struct InboundQueueSnapshot {
     pub heights: [usize; INBOUND_QUEUE_COUNT],
     pub capacities: [usize; INBOUND_QUEUE_COUNT],
+    pub dropped: [usize; INBOUND_QUEUE_COUNT],
 }
 
 impl InboundQueueSnapshot {
@@ -149,6 +152,10 @@ impl InboundQueueSnapshot {
 
     pub fn total_capacity(self) -> usize {
         self.capacities.iter().sum()
+    }
+
+    pub fn total_dropped(self) -> usize {
+        self.dropped.iter().sum()
     }
 }
 
@@ -224,6 +231,7 @@ impl EventSender {
         if let Some(class) = class {
             let index = class as usize;
             if state.inbound[index].len() >= self.shared.inbound_capacities[index] {
+                state.inbound_dropped[index] = state.inbound_dropped[index].saturating_add(1);
                 return if drop_full_inbound {
                     Ok(())
                 } else {
@@ -319,6 +327,7 @@ impl EventSender {
         InboundQueueSnapshot {
             heights: std::array::from_fn(|index| state.inbound[index].len()),
             capacities: self.shared.inbound_capacities,
+            dropped: state.inbound_dropped,
         }
     }
 
@@ -686,6 +695,8 @@ mod tests {
             capacities.as_array()
         );
         assert_eq!(tx.inbound_queue_snapshot().heights, [1, 2, 3, 4]);
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 1, 1, 1]);
+        assert_eq!(tx.inbound_queue_snapshot().total_dropped(), 4);
     }
 
     #[test]
@@ -695,9 +706,17 @@ mod tests {
             .unwrap();
         tx.send(frame(2, [0xD2; 16], rns_core::constants::PACKET_TYPE_DATA))
             .expect("a full inbound class must drop instead of blocking its reader");
-        tx.send(Event::Shutdown).unwrap();
-
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [1, 0, 0, 0]);
         assert_eq!(frame_interface(rx.recv().unwrap()), 1);
+
+        tx.send(frame(3, [0xD3; 16], rns_core::constants::PACKET_TYPE_DATA))
+            .unwrap();
+        tx.send(frame(4, [0xD4; 16], rns_core::constants::PACKET_TYPE_DATA))
+            .unwrap();
+        assert_eq!(tx.inbound_queue_snapshot().dropped, [2, 0, 0, 0]);
+
+        tx.send(Event::Shutdown).unwrap();
+        assert_eq!(frame_interface(rx.recv().unwrap()), 3);
         assert!(matches!(rx.recv().unwrap(), Event::Shutdown));
     }
 }

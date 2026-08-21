@@ -33,8 +33,9 @@ Options:
 
 An optional `FILTER` limits output to interface names containing the supplied
 text. Queue statistics report total, data, announce, path-request, and
-ingress-limited queue occupancy. Backbone listener burst lines include the
-number of affected child interfaces when that count is available.
+ingress-limited queue occupancy, and append cumulative drop counts when they
+are nonzero. Backbone listener burst lines include the number of affected child
+interfaces when that count is available.
 
 For remote status, `-R HASH` requires the management identity selected with
 `-i PATH`, and the remote transport must authorize that identity.
