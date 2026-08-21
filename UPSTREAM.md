@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `9ae3db169ed464d37f90ac6371af09708ca96eda`
-- Commit date: `2026-08-20 08:38:09 +0200`
-- Subject: `Fixed medium_timeout init`
+- Normative commit: `05e6717d210aa330a0ed6def109c47d3f3cfc71d`
+- Commit date: `2026-08-20 10:14:49 +0200`
+- Subject: `Fixed rngit file resource operations failing on Windows`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`9ae3db169ed464d37f90ac6371af09708ca96eda`. The first commit fixes
+`05e6717d210aa330a0ed6def109c47d3f3cfc71d`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -212,7 +212,11 @@ format, remote display, coordination purpose, and invalid-value behavior. The
 sixtieth commit fixes Python's no-bitrate initialization for the new discovery
 deadline. Rust's timeout helper already returns the fixed floor in this case,
 and an end-to-end recursive-request regression now pins the recorded deadline.
-The full moving-target inventory and evidence are maintained in
+The sixty-first commit closes Python's resource response file before moving it
+on Windows. Native `rns-git` receives fully owned response bytes and never moves
+an open transport temporary file; its fetch E2E materializes and validates the
+resulting bundle. The full moving-target inventory and evidence are maintained
+in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
 ## Completed 1.4.2..1.4.2-rgit Porting Queue
