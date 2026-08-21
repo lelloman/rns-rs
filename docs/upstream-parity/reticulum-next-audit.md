@@ -74,7 +74,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 27 | `f366dd9cf214859a0ea82047f4625e06a8239cc2` | Cleanup | Integrated | Tagless path-request rejection now logs on the dedicated pathing target; removed Python queue block has no Rust equivalent |
 | 28 | `efb8c8500d87df13d42011cc5c1595beebe44837` | Made queue lengths configurable | Integrated | Four positive `qlen_in_*` settings, upstream defaults, legacy scalar compatibility, private startup wiring, and independent saturation regressions |
 | 29 | `8c08b9ce09ee79117020cf58686bcce953d0d5e9` | Added queue config to documentation | Documentation follow-up | README documents queue priority, all four keys/defaults, full-queue drops, and Rust control barriers |
-| 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 30 | `01a78bee2a0a1e780e058a4d9edcdc0f4416547b` | Fixed typo | Structurally covered | Rust has no per-packet exception handler or mislabeled outbound-queue diagnostic in its inbound event loop |
 | 31 | `1809461a07bdb4530529d44c668742b6e26aefa5` | Early filtering note | Needs decision | Pending per-commit analysis |
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Needs decision | Pending per-commit analysis |
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Needs decision | Pending per-commit analysis |
@@ -707,6 +707,23 @@ No test is appropriate for this documentation-only change.
 
 **Final disposition:** Documentation follow-up.
 
+### 30. `01a78bee` — Correct inbound queue exception label
+
+**Upstream change:** Changes “outbound queue” to “inbound queue” in the
+exception message emitted by Python's inbound queue worker. Runtime behavior is
+unchanged.
+
+**Rust applicability:** Rust's event loop receives typed events and dispatches
+them without a Python-style catch-all exception boundary. A disconnected event
+channel ends the loop normally, and there is no inbound-worker diagnostic that
+misnames an outbound queue.
+
+**Local handling and evidence:** A repository search and inspection of the
+driver loop confirmed the incorrect diagnostic is structurally absent. No code
+change or synthetic test is appropriate for a nonexistent message.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -732,6 +749,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `01a78bee` fixes a Python-only exception label that has
+  no Rust equivalent. The exact checkout and drift checker resolved to
+  `01a78bee`, leaving 33 commits; formatting and warning-free host lint passed.
 - `2026-08-20`: Commit `8c08b9ce` is covered by native inbound-queue tuning
   documentation with correct class labels and Rust barrier semantics. No test
   was added for documentation-only content; formatting, host lint, and the
