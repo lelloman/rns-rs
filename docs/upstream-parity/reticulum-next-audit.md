@@ -95,7 +95,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Integrated | Resource part matching now searches from `consecutive_completed_height + 1`, exactly matching the requested window and including its tail |
 | 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Structurally covered | Corrects `EPOLL_IN` to `EPOLLIN` in a Python Backbone warning; native diagnostics contain neither spelling |
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Structurally covered | Python's cached aggregate refresh drops from 2.0s to 0.95s; Rust computes every Backbone child aggregate live with no throttle |
-| 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Needs decision | Pending per-commit analysis |
+| 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Structurally covered | Rust's writer accepts Link MDU and subtracts the 6-byte channel envelope plus 2-byte stream header exactly once; an exact-boundary regression pins full utilization |
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Needs decision | Pending per-commit analysis |
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Needs decision | Pending per-commit analysis |
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Needs decision | Pending per-commit analysis |
@@ -1089,6 +1089,27 @@ throttle.
 
 **Final disposition:** Structurally covered.
 
+### 51. `df801810` — Use the full Link MDU in RawChannelWriter
+
+**Upstream change:** Changes Python's writer limit from `channel.mdu` minus the
+combined stream-and-channel overhead to `channel.mdu` minus only the stream
+header. Since `channel.mdu` already excludes its envelope, this removes a
+second six-byte deduction. Compression and raw chunk limits now use the
+per-channel result.
+
+**Rust applicability:** Rust's `BufferWriter::write()` accepts the Link MDU,
+not the already-reduced Channel MDU. `StreamDataMessage::max_data_len()`
+subtracts `STREAM_DATA_OVERHEAD`, defined as the two-byte stream header plus
+the six-byte channel envelope, exactly once. It therefore already implements
+the corrected capacity and also naturally honors negotiated Link MDU values.
+
+**Local handling and evidence:** Added an exact-boundary chunk regression. For
+a deliberately small Link MDU, the first packed stream message plus the channel
+envelope must equal the Link MDU exactly, while the next byte begins a second
+message. All buffer tests cover reassembly and compression alongside it.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1114,6 +1135,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `df801810` removes a duplicate channel-overhead
+  deduction already absent from Rust's Link-MDU-based writer. The exact-boundary
+  regression, full buffer tests, formatting, host lint, exact checkout, and
+  drift checks passed, leaving 12 commits.
 - `2026-08-21`: Commit `0c0034f1` reduces Python's Backbone cache throttle,
   absent from Rust's live aggregate computation. Dynamic-state tests,
   formatting, host lint, exact checkout, and drift checks passed, leaving 13

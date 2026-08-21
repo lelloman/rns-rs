@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::constants::STREAM_DATA_OVERHEAD;
 #[cfg(test)]
-use crate::constants::STREAM_ID_MAX;
+use crate::constants::{CHANNEL_ENVELOPE_OVERHEAD, STREAM_ID_MAX};
 
 pub use types::{BufferError, Compressor, DecompressError, NoopCompressor, StreamId};
 
@@ -313,6 +313,24 @@ mod tests {
         for msg in &msgs {
             assert!(msg.data.len() <= max_data);
         }
+    }
+
+    #[test]
+    fn writer_uses_full_link_mdu_after_channel_and_stream_headers() {
+        let link_mdu = 64;
+        let max_data = StreamDataMessage::max_data_len(link_mdu);
+        let data = vec![0x42; max_data + 1];
+        let mut writer = BufferWriter::new(1);
+
+        let messages = writer.write(&data, link_mdu, &NoopCompressor);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].data.len(), max_data);
+        assert_eq!(
+            messages[0].pack().len() + CHANNEL_ENVELOPE_OVERHEAD,
+            link_mdu
+        );
+        assert_eq!(messages[1].data, vec![0x42]);
     }
 
     #[test]
