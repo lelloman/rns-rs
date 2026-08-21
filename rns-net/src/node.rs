@@ -607,6 +607,7 @@ struct NodeQueueConfig {
     announce_ttl_secs: f64,
     announce_overflow_policy: AnnounceQueueOverflowPolicy,
     inbound_capacities: crate::event::InboundQueueCapacities,
+    link_mtu_discovery: bool,
 }
 
 impl Default for NodeQueueConfig {
@@ -618,6 +619,7 @@ impl Default for NodeQueueConfig {
             announce_ttl_secs: 30.0,
             announce_overflow_policy: AnnounceQueueOverflowPolicy::DropWorst,
             inbound_capacities: crate::event::InboundQueueCapacities::default(),
+            link_mtu_discovery: true,
         }
     }
 }
@@ -749,14 +751,15 @@ impl RnsNode {
 
         // Parse config file
         let config_file = config_dir.join("config");
-        let rns_config = if config_file.exists() {
-            config::parse_file(&config_file)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
+        let config_content = if config_file.exists() {
+            std::fs::read_to_string(&config_file)?
         } else {
-            // No config file, use defaults
-            config::parse("")
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
+            String::new()
         };
+        let rns_config = config::parse(&config_content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
+        let link_mtu_discovery = config::parse_link_mtu_discovery(&config_content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
 
         // Load or create identity
         let identity = if let Some(ref id_path_str) = rns_config.reticulum.network_identity {
@@ -1124,6 +1127,7 @@ impl RnsNode {
                     _ => AnnounceQueueOverflowPolicy::DropWorst,
                 },
                 inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
+                link_mtu_discovery,
             },
         )?;
 
@@ -1226,6 +1230,9 @@ impl RnsNode {
         );
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver
+            .link_manager
+            .set_link_mtu_discovery(queue_config.link_mtu_discovery);
         driver.set_announce_verify_queue_config(
             queue_config.announce_max_entries,
             queue_config.announce_max_bytes,

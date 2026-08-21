@@ -59,6 +59,25 @@ fn test_create_link() {
 }
 
 #[test]
+fn link_mtu_discovery_can_be_disabled_without_changing_public_create_api() {
+    let mut mgr = LinkManager::new();
+    mgr.set_link_mtu_discovery(false);
+    let mut rng = make_rng(0x18);
+    let dest_hash = [0x18; 16];
+    let (link_id, actions) = mgr.create_link(&dest_hash, &[0x28; 32], 1, 1200, &mut rng);
+    let raw = extract_any_send_packet(&actions);
+    let packet = RawPacket::unpack(&raw).unwrap();
+    let (_, _, signalled_mtu, _) =
+        rns_core::link::handshake::parse_linkrequest_data(&packet.data).unwrap();
+
+    assert_eq!(signalled_mtu, None);
+    assert_eq!(
+        mgr.links.get(&link_id).unwrap().engine.mtu(),
+        constants::MTU as u32
+    );
+}
+
+#[test]
 fn test_full_handshake_via_manager() {
     let mut rng = OsRng;
     let dest_hash = [0xDD; 16];

@@ -97,7 +97,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Structurally covered | Python's cached aggregate refresh drops from 2.0s to 0.95s; Rust computes every Backbone child aggregate live with no throttle |
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Structurally covered | Rust's writer accepts Link MDU and subtracts the 6-byte channel envelope plus 2-byte stream header exactly once; an exact-boundary regression pins full utilization |
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Structurally covered | Native `rnsh` already deducts the channel envelope and stream header once; its chunking regression now asserts that a full packed message exactly fills Link MDU |
-| 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Needs decision | Pending per-commit analysis |
+| 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Integrated | `[reticulum] link_mtu_discovery = No` now omits MTU signalling while default/true retain it, without changing public programmatic constructors |
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Needs decision | Pending per-commit analysis |
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Needs decision | Pending per-commit analysis |
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
@@ -1128,6 +1128,27 @@ reassembly and EOF placement across multiple chunks.
 
 **Final disposition:** Structurally covered.
 
+### 53. `954567c5` — Allow disabling Link MTU discovery
+
+**Upstream change:** Assigns both true and false values from the
+`link_mtu_discovery` configuration option. Previously only true was applied, so
+an explicit false could not override enabled process state.
+
+**Rust applicability:** Rust always included the selected interface MTU in
+outbound link requests and did not consume this upstream configuration key.
+The core handshake already supports an absent MTU signal and falls back to the
+protocol MTU, so only configuration and link creation needed wiring.
+
+**Local handling and evidence:** Config-file startup now reads the option with
+a true default, validates both boolean values, and configures the private link
+manager. Disabled discovery passes `None` into the existing initiator engine,
+omitting the three signalling bytes and retaining the protocol-default MTU.
+Focused tests cover default, true, false, invalid, wrong-section, and packed
+LINKREQUEST behavior. Public `NodeConfig` and `LinkManager::create_link()`
+representations remain unchanged.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1153,6 +1174,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `954567c5` makes false Link MTU discovery configuration
+  effective. Config and packed-LINKREQUEST regressions, formatting, host lint,
+  exact checkout, and drift checks passed, leaving 10 commits.
 - `2026-08-21`: Commit `77a1bb9b` applies full-MDU sizing to Python `rnsh`,
   already present in native `rnsh`. The strengthened chunk/reassembly test,
   formatting, host lint, exact checkout, and drift checks passed, leaving 11

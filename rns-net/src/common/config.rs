@@ -483,6 +483,31 @@ pub fn parse_file(path: &Path) -> Result<RnsConfig, ConfigError> {
     parse(&content)
 }
 
+pub(crate) fn parse_link_mtu_discovery(input: &str) -> Result<bool, ConfigError> {
+    let mut in_reticulum = false;
+    for line in input.lines() {
+        let trimmed = strip_comment(line).trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_reticulum = trimmed.eq_ignore_ascii_case("[reticulum]");
+            continue;
+        }
+        if !in_reticulum {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "link_mtu_discovery" {
+            let value = value.trim();
+            return parse_bool(value).ok_or_else(|| ConfigError::InvalidValue {
+                key: "link_mtu_discovery".into(),
+                value: value.into(),
+            });
+        }
+    }
+    Ok(true)
+}
+
 /// Strip `#` comments from a line (simple: not inside quotes).
 fn strip_comment(line: &str) -> &str {
     // Find # that is not inside quotes
@@ -2340,5 +2365,14 @@ direct_connect_policy = identified_only
             crate::event::HolePunchPolicy::AcceptAll
         );
         assert!(parse("[reticulum]\ndirect_connect_policy = sometimes\n").is_err());
+    }
+
+    #[test]
+    fn link_mtu_discovery_defaults_true_and_honors_both_boolean_values() {
+        assert!(parse_link_mtu_discovery("").unwrap());
+        assert!(parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = Yes\n").unwrap());
+        assert!(!parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = False\n").unwrap());
+        assert!(parse_link_mtu_discovery("[logging]\nlink_mtu_discovery = No\n").unwrap());
+        assert!(parse_link_mtu_discovery("[reticulum]\nlink_mtu_discovery = maybe\n").is_err());
     }
 }

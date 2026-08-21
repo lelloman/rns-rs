@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `77a1bb9b194a0e1199131c3ca9f1f01b42885526`
-- Commit date: `2026-08-19 18:03:23 +0200`
-- Subject: `Consistency`
+- Normative commit: `954567c581f63b20b85863f1ecf2fa3044d64ebe`
+- Commit date: `2026-08-19 18:06:17 +0200`
+- Subject: `Allow disabling link MTU discovery`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`8432d741a9aac4c52a00942de0b0474dea1db180`. The CI interop lane remains pinned
+`1caed6a3587e55e20d295369c99d33396d95cd12`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`77a1bb9b194a0e1199131c3ca9f1f01b42885526`. The first commit fixes
+`954567c581f63b20b85863f1ecf2fa3044d64ebe`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -188,7 +188,10 @@ channel writer use the full Link MDU. Rust already subtracts the channel and
 stream headers exactly once from the Link MDU, now pinned by an exact-boundary
 chunk test. The fifty-second commit applies the same correction to Python
 `rnsh`; native `rnsh` already uses `Link MDU - channel envelope - stream header`
-and now asserts the exact packed boundary. The full
+and now asserts the exact packed boundary. The fifty-third commit makes an
+explicit false `link_mtu_discovery` setting effective. Native config now
+supports both values without changing programmatic constructors and omits MTU
+signalling when disabled. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
