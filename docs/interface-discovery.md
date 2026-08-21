@@ -44,9 +44,16 @@ announce:
     listen_port = 4242
     discoverable = yes
     discovery_name = Mobile Backbone
+    discovery_lxmf_address = 0123456789abcdef0123456789abcdef
     reachable_on = backbone.example.net
     location_cmd = ~/bin/reticulum-location
 ```
+
+`discovery_lxmf_address` is an optional 32-character hexadecimal LXMF
+destination hash for contacting the interface operator. Remote systems retain
+and display it in detailed discovery information, making it possible to
+coordinate interconnections and network coverage. Invalid or incorrectly sized
+values are ignored.
 
 On Unix, `location_cmd` must name an executable regular file. A leading `~/`
 is expanded to the current home directory. The executable is started directly,

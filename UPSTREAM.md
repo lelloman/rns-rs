@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `4b914fb9a4973b5b1452875b8d514876c85b89ae`
-- Commit date: `2026-08-19 21:07:50 +0200`
-- Subject: `Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith`
+- Normative commit: `68cda4a8557f223ed2ac8e4907968a0037424c30`
+- Commit date: `2026-08-19 21:15:30 +0200`
+- Subject: `Added discovery_lxmf_address to documentation`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`4b914fb9a4973b5b1452875b8d514876c85b89ae`. The first commit fixes
+`68cda4a8557f223ed2ac8e4907968a0037424c30`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -206,8 +206,10 @@ slow interface is online. Rust now uses the slowest positive registered
 bitrate to cover one MTU round trip plus the per-hop allowance, retains the
 fixed 15-second floor, clamps implausibly low rates, and safely defaults when
 no usable rate is known. Focused lifecycle tests pin the deadline and cleanup.
-The full
-moving-target inventory and evidence are maintained in
+The fifty-ninth commit documents the optional LXMF operator address for
+discoverable interfaces. The native interface-discovery guide now explains its
+format, remote display, coordination purpose, and invalid-value behavior. The
+full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
 ## Completed 1.4.2..1.4.2-rgit Porting Queue
