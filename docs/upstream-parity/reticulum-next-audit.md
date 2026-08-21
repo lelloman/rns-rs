@@ -16,9 +16,9 @@
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The first 71 canonical commits are integrated, structurally covered, deferred,
+The first 72 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`60eb0509f25632dbc6e4cea07751eca70b80a8a5`. A fresh 2026-08-21 refresh found
+`cab513fa31c70e52ba735ec0668d22b148522679`. A fresh 2026-08-21 refresh found
 five newer rGit commits after commit 68 through
 `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; commit 69 is integrated and the
 remaining four are inventoried pending per-commit analysis. The GitHub mirror tip
@@ -119,7 +119,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 69 | `6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8` | Added data flow speeds to rnstatus | Integrated | Detailed totals derive clamped directional non-pathing data percentages and speeds from total minus announce/PR current rates, with enabled/disabled rendering coverage |
 | 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Integrated | Per-interface protocol/IFAC/filter counters at typed rejection boundaries, pre-validation link forwarding guard, listener aggregation, status/RPC fields, CLI rendering/sorting, and focused rejection regressions |
 | 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Integrated | Invalid-announce accounting distinguishes blackhole policy drops for synchronous and asynchronous verification; tampered blackholed announce regression |
-| 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Needs decision | Pending per-commit analysis |
+| 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Structurally covered | Native code has no misleading batching diagnostic and already restricts batching to non-ingress-limited requests, covered by limiter/batching regressions |
 | 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Needs decision | Pending per-commit analysis |
 
 ## Per-Commit Analysis
@@ -1546,8 +1546,27 @@ dropped with the counter unchanged.
 
 **Final disposition:** Integrated.
 
-The first 71 commits have a final disposition. Detailed analysis for commits
-72–73 is pending.
+### 72. `cab513fa` — Restrict batching diagnostic to actual batching
+
+**Upstream change:** Moves the “already in-flight, batching” pathing log inside
+the non-ingress-limited branch. Ingress-limited requests were already excluded
+from the batch; only the diagnostic was misleading.
+
+**Rust applicability:** Native path-request batching already tests the traffic
+class before retaining a requester and emits no corresponding batching message.
+There is therefore no diagnostic placement bug to port and no runtime behavior
+change.
+
+**Local handling and evidence:** Repository search confirms no equivalent log.
+The existing queued ingress-limited regression proves that a request classified
+as limited remains suppressed during dispatch, while the same-destination batch
+tests prove ordinary requests are retained and answered. No additional code or
+duplicative test is appropriate.
+
+**Final disposition:** Structurally covered.
+
+The first 72 commits have a final disposition. Detailed analysis for commit 73
+is pending.
 
 ## Integration Plan
 
@@ -1570,6 +1589,11 @@ The first 71 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `cab513fa` only corrects placement of a Python batching
+  diagnostic. Native code has no equivalent message and already excludes
+  ingress-limited requesters; existing limiter and batching regressions,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 1
+  commit.
 - `2026-08-21`: Commit `60eb0509` distinguishes blackhole policy drops from
   invalid announce violations in synchronous and queued verification. The
   tampered ordinary/blackholed announce regression, relevant suites, formatting,
