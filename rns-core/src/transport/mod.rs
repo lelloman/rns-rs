@@ -135,8 +135,14 @@ struct TickCtx<'a> {
     actions: Vec<TransportAction>,
 }
 
-struct PathRequestCtx<'a> {
-    tag: &'a [u8],
+/// Validated, uniquely tagged path request awaiting ingress accounting.
+///
+/// This two-phase token is intended for the network driver; applications
+/// should use [`TransportEngine::handle_path_request`] instead.
+#[doc(hidden)]
+pub struct AcceptedPathRequest {
+    tag: [u8; 16],
+    tag_len: usize,
     interface_id: InterfaceId,
     now: f64,
     destination_hash: [u8; 16],

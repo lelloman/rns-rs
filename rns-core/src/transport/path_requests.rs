@@ -37,13 +37,34 @@ impl TransportEngine {
         now: f64,
         ingress_limited: bool,
     ) -> Vec<TransportAction> {
-        let Some(ctx) = self.parse_path_request(data, interface_id, now) else {
+        let Some(request) = self.accept_path_request(data, interface_id, now) else {
             return Vec::new();
         };
+        self.handle_accepted_path_request_with_ingress_limit(request, ingress_limited)
+    }
+
+    /// Validate and deduplicate a path request before recording ingress stats.
+    #[doc(hidden)]
+    pub fn accept_path_request(
+        &mut self,
+        data: &[u8],
+        interface_id: InterfaceId,
+        now: f64,
+    ) -> Option<AcceptedPathRequest> {
+        self.parse_path_request(data, interface_id, now)
+    }
+
+    /// Process a request returned by [`Self::accept_path_request`].
+    #[doc(hidden)]
+    pub fn handle_accepted_path_request_with_ingress_limit(
+        &mut self,
+        ctx: AcceptedPathRequest,
+        ingress_limited: bool,
+    ) -> Vec<TransportAction> {
         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
             "Path request for {:02x?} on interface {}",
             &ctx.destination_hash[..4],
-            interface_id.0,
+            ctx.interface_id.0,
         );
         if self.local_destinations.contains_key(&ctx.destination_hash) {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
@@ -69,12 +90,12 @@ impl TransportEngine {
         Vec::new()
     }
 
-    fn parse_path_request<'a>(
+    fn parse_path_request(
         &mut self,
-        data: &'a [u8],
+        data: &[u8],
         interface_id: InterfaceId,
         now: f64,
-    ) -> Option<PathRequestCtx<'a>> {
+    ) -> Option<AcceptedPathRequest> {
         if data.len() < 16 {
             return None;
         }
@@ -105,15 +126,18 @@ impl TransportEngine {
             return None;
         }
 
-        Some(PathRequestCtx {
-            tag: &tag_bytes[..tag_len],
+        let mut tag = [0u8; 16];
+        tag[..tag_len].copy_from_slice(&tag_bytes[..tag_len]);
+        Some(AcceptedPathRequest {
+            tag,
+            tag_len,
             interface_id,
             now,
             destination_hash,
         })
     }
 
-    fn handle_known_path_request(&mut self, ctx: &PathRequestCtx<'_>) -> bool {
+    fn handle_known_path_request(&mut self, ctx: &AcceptedPathRequest) -> bool {
         let Some(path) = self
             .path_table
             .get(&ctx.destination_hash)
@@ -173,7 +197,7 @@ impl TransportEngine {
 
     fn handle_discovery_path_request(
         &mut self,
-        ctx: &PathRequestCtx<'_>,
+        ctx: &AcceptedPathRequest,
         ingress_limited: bool,
     ) -> Vec<TransportAction> {
         let Some((mode, recursive_prs, ingress_control, ip_freq, started)) =
@@ -243,7 +267,7 @@ impl TransportEngine {
         let Some((path_request_raw, path_request_len)) = build_path_request_packet(
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
-            ctx.tag,
+            &ctx.tag[..ctx.tag_len],
         ) else {
             return Vec::new();
         };

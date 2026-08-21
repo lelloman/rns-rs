@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `d478e380c93dc892879d3800adee321a6b5733aa`
-- Commit date: `2026-08-20 17:08:22 +0200`
-- Subject: `Use sets for discovery pr tags`
+- Normative commit: `4ab0755d0acc19eb45f729257b8976fde61146bf`
+- Commit date: `2026-08-20 17:16:01 +0200`
+- Subject: `Changed PR ingress accounting point`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`d478e380c93dc892879d3800adee321a6b5733aa`. The first commit fixes
+`4ab0755d0acc19eb45f729257b8976fde61146bf`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -218,6 +218,10 @@ an open transport temporary file; its fetch E2E materializes and validates the
 resulting bundle. The sixty-second commit switches Python discovery tag
 membership to sets. Rust already combines an indexed `BTreeSet` with exact FIFO
 retention; its regression now proves duplicates do not refresh eviction order.
+The sixty-third commit moves path-request ingress accounting after unique-tag
+acceptance. Native accounting now follows the same boundary, so replayed tags
+cannot inflate frequency or spuriously activate ingress limiting; a driver-level
+regression first reproduced and then pinned the correction.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
