@@ -7,20 +7,21 @@
 - previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
 - target version: `1.5.0`
 - target tag or ref: `rgit/master`
-- target normative commit: `880db0a7b7776d407e44bb0a93541317a1f75487`
-- target root tree: `e83fd29ea4db00bcee56f50c5df46c0e887b2d4e`
-- target `RNS` tree: `63b43201b190e857af4eb9b63d574d03acf01cef`
+- target normative commit: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
+- target root tree: `63406bb90d4d3125a9cba3b0811297d58435f4e2`
+- target `RNS` tree: `6aa6691d8dcca0d9aa7b6f7affed803185d20e69`
 - version assertion: `RNS.__version__ == "1.5.0"`
-- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..880db0a7b7776d407e44bb0a93541317a1f75487`
-- commits in range: `68`
+- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
+- commits in range: `73`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
 - local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-All 68 canonical commits are integrated, structurally covered, deferred,
+The first 69 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`880db0a7b7776d407e44bb0a93541317a1f75487`. The 2026-08-21 daily refresh found
-five newer rGit commits through `880db0a7b7776d407e44bb0a93541317a1f75487`;
-each now has the final disposition and evidence recorded below. The GitHub mirror tip
+`6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8`. A fresh 2026-08-21 refresh found
+five newer rGit commits after commit 68 through
+`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; commit 69 is integrated and the
+remaining four are inventoried pending per-commit analysis. The GitHub mirror tip
 `b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
 baseline, so the remotes do not agree.
 
@@ -115,6 +116,11 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Non-runtime | Removes a hard-coded verbosity override from one upstream Python test fixture; native Rust tests have no equivalent override |
 | 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Integrated | Accepted announce/unique-PR byte accounting, current-window rate sampling, listener aggregation, local/remote status fields, and `rnstatus` flow percentages/totals with focused regressions |
 | 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Integrated | Separate total and validated/established active counts across transport and managed links, local RPC, and accurate `rnstatus -l` rendering with state/display regressions |
+| 69 | `6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8` | Added data flow speeds to rnstatus | Integrated | Detailed totals derive clamped directional non-pathing data percentages and speeds from total minus announce/PR current rates, with enabled/disabled rendering coverage |
+| 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Needs decision | Pending per-commit analysis |
+| 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Needs decision | Pending per-commit analysis |
+| 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Needs decision | Pending per-commit analysis |
+| 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Needs decision | Pending per-commit analysis |
 
 ## Per-Commit Analysis
 
@@ -1474,8 +1480,27 @@ plural, positive-active, zero-active, and unavailable-active rendering.
 
 **Final disposition:** Integrated.
 
-All 68 commits have a final disposition; no canonical rGit commit remains ahead
-of the accepted baseline at this audit tip.
+### 69. `6ba7cc8c` — Add data-flow speeds to `rnstatus`
+
+**Upstream change:** Extends detailed traffic totals so the non-announce,
+non-path-request data share includes both a percentage and its corresponding
+current bit rate in each direction.
+
+**Rust applicability:** Native `rnstatus` gained the detailed class rates in
+commit 67 and therefore has the same inputs. The display calculation is directly
+applicable without changing accounting or status response formats.
+
+**Local handling and evidence:** Detailed totals now subtract the combined
+announce/path-request current rate from each total rate, clamp the residual to
+zero through one hundred percent, and render its speed beside the integer data
+percentage. A focused formatter regression uses distinct RX/TX totals and class
+rates to pin 65%/520 b/s receive data and 55%/880 b/s transmit data, and proves
+the suffix remains absent when detailed pathing display is disabled.
+
+**Final disposition:** Integrated.
+
+The first 69 commits have a final disposition. Detailed analysis for commits
+70–73 is pending.
 
 ## Integration Plan
 
@@ -1498,6 +1523,10 @@ of the accepted baseline at this audit tip.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `6ba7cc8c` adds non-pathing data speeds to detailed
+  `rnstatus` totals. Directionally distinct percentage/speed and disabled-detail
+  regressions, CLI tests, formatting, host lint, exact checkout, and drift checks
+  passed, leaving 4 commits.
 - `2026-08-21`: Commit `880db0a7` separates total link-table entries from
   validated or established active links. Core, LinkManager, driver-query, local
   RPC, and CLI display regressions passed; the accepted checkout and drift

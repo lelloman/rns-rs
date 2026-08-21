@@ -512,13 +512,9 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
 
     // Show traffic totals
     if show_totals {
-        let total_rxb = response.get("rxb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
-        let total_txb = response.get("txb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
-        println!(
-            " Traffic totals: {} \u{2191}  {} \u{2193}",
-            size_str(total_txb),
-            size_str(total_rxb),
-        );
+        for line in traffic_total_lines(response, show_pr_stats || show_announces) {
+            println!("{line}");
+        }
         println!();
         for line in detailed_traffic_total_lines(response, show_pr_stats, show_announces) {
             println!("{line}");
@@ -852,6 +848,50 @@ fn detailed_traffic_total_lines(
         ));
     }
     lines
+}
+
+fn traffic_total_lines(response: &PickleValue, show_data_flow: bool) -> Vec<String> {
+    let rx_bytes = response
+        .get("rxb")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let tx_bytes = response
+        .get("txb")
+        .and_then(|value| value.as_int())
+        .unwrap_or(0);
+    let rx_rate = numeric(response.get("rxs")).unwrap_or(0.0).max(0.0);
+    let tx_rate = numeric(response.get("txs")).unwrap_or(0.0).max(0.0);
+    let flow_suffix = |total: f64, class: f64| {
+        if !show_data_flow || total <= 0.0 {
+            String::new()
+        } else {
+            let fraction = (1.0 - class.max(0.0) / total).clamp(0.0, 1.0);
+            let rate = total * fraction;
+            format!(
+                ", {}% data ({})",
+                (fraction * 100.0) as u64,
+                speed_str(rate as u64)
+            )
+        }
+    };
+    let class_rx =
+        numeric(response.get("prxs")).unwrap_or(0.0) + numeric(response.get("arxs")).unwrap_or(0.0);
+    let class_tx =
+        numeric(response.get("ptxs")).unwrap_or(0.0) + numeric(response.get("atxs")).unwrap_or(0.0);
+    vec![
+        format!(
+            " Traffic totals: {} \u{2191}  {}{}",
+            size_str(tx_bytes.max(0) as u64),
+            speed_str(tx_rate as u64),
+            flow_suffix(tx_rate, class_tx),
+        ),
+        format!(
+            "                 {} \u{2193}  {}{}",
+            size_str(rx_bytes.max(0) as u64),
+            speed_str(rx_rate as u64),
+            flow_suffix(rx_rate, class_rx),
+        ),
+    ]
 }
 
 fn outgoing_denominator(clients: Option<u64>, peers: Option<u64>) -> Option<(u64, &'static str)> {
@@ -1605,6 +1645,38 @@ mod tests {
                 "              11 B \u{2193}  200 b/s  (25% of flow)",
             ]
         );
+    }
+
+    #[test]
+    fn traffic_totals_show_non_pathing_data_percentage_and_speed() {
+        let response = PickleValue::Dict(vec![
+            (PickleValue::String("rxb".into()), PickleValue::Int(100)),
+            (PickleValue::String("txb".into()), PickleValue::Int(200)),
+            (PickleValue::String("rxs".into()), PickleValue::Float(800.0)),
+            (
+                PickleValue::String("txs".into()),
+                PickleValue::Float(1600.0),
+            ),
+            (
+                PickleValue::String("arxs".into()),
+                PickleValue::Float(200.0),
+            ),
+            (
+                PickleValue::String("atxs".into()),
+                PickleValue::Float(400.0),
+            ),
+            (PickleValue::String("prxs".into()), PickleValue::Float(80.0)),
+            (
+                PickleValue::String("ptxs".into()),
+                PickleValue::Float(320.0),
+            ),
+        ]);
+
+        let lines = traffic_total_lines(&response, true);
+        assert!(lines[0].contains("55% data (880 b/s)"));
+        assert!(lines[1].contains("65% data (520 b/s)"));
+        let without_detail = traffic_total_lines(&response, false);
+        assert!(!without_detail.iter().any(|line| line.contains("% data")));
     }
 
     #[test]

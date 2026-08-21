@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `880db0a7b7776d407e44bb0a93541317a1f75487`
-- Commit date: `2026-08-21 13:23:30 +0200`
-- Subject: `Added active links stat to rnstatus`
+- Normative commit: `6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8`
+- Commit date: `2026-08-21 13:37:09 +0200`
+- Subject: `Added data flow speeds to rnstatus`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`63b43201b190e857af4eb9b63d574d03acf01cef`. The CI interop lane remains pinned
+`dff522d10de454f09c119db5ac4debb407b5d260`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`880db0a7b7776d407e44bb0a93541317a1f75487`. The first commit fixes
+`6ba7cc8cb451b4e187abe7c1a2ee8bf0480086f8`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -251,6 +251,10 @@ established active links in `rnstatus`. Rust preserves the existing total-count
 query, adds an active-count query across transport forwarding entries and local
 managed links, and labels the CLI output accurately. Pending, validated,
 established, pluralization, zero-active, RPC, and driver-query cases are covered.
+The sixty-ninth commit adds the calculated non-pathing data speed alongside its
+percentage in detailed traffic totals. Native `rnstatus` now derives both from
+the total minus announce and path-request current rates, clamps the result, and
+covers directional values plus the detail-disabled case.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
