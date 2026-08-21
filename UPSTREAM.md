@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb`
-- Commit date: `2026-08-19 15:44:53 +0200`
-- Subject: `Resource: align indexes in receive_part with request_next`
+- Normative commit: `2e9443ffe2f6e130cae094ebc898c02d8cbde56e`
+- Commit date: `2026-08-19 15:49:09 +0200`
+- Subject: `Fixed typo`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`83efa733196405e720737650998e26e25dbdb2b4`. The CI interop lane remains pinned
+`c7ddc9b5a5819769af49dda8c9c784465abf34b1`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`65222e0de8355fa4e7bfd6fe6ad76116b155aeeb`. The first commit fixes
+`2e9443ffe2f6e130cae094ebc898c02d8cbde56e`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -180,7 +180,8 @@ has an implementation-specific name and needs no rename. The forty-eighth
 commit aligns Resource part matching with the requested window after the
 completed height. Rust had the same off-by-one search and now starts at the
 next part, covered at the inclusive tail of an out-of-order receive window. The
-full
+forty-ninth commit only corrects `EPOLL_IN` to `EPOLLIN` in a Python Backbone
+warning; Rust has no equivalent diagnostic typo. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
