@@ -3485,6 +3485,24 @@ fn inbound_rejections_are_counted_by_reason() {
         2
     );
 
+    let mut tagged_request_data = vec![0x55; 16];
+    tagged_request_data.extend_from_slice(&[0x66; 16]);
+    let tagged_request = RawPacket::pack(
+        path_request_flags,
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &tagged_request_data,
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), tagged_request.raw, None, None);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        2,
+        "destination plus tag is a valid non-transport path request"
+    );
+
     let flags = PacketFlags {
         header_type: constants::HEADER_1,
         context_flag: constants::FLAG_UNSET,
