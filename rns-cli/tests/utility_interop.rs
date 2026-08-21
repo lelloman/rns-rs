@@ -2,11 +2,29 @@ use std::fs::{self, OpenOptions};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
+static HARNESS_START_LOCK: Mutex<()> = Mutex::new(());
+
+struct TcpPortReservation {
+    listener: TcpListener,
+}
+
+impl TcpPortReservation {
+    fn new() -> Self {
+        Self {
+            listener: TcpListener::bind("127.0.0.1:0").expect("reserve TCP test port"),
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.listener.local_addr().unwrap().port()
+    }
+}
 
 struct ProcessGuard {
     child: Child,
@@ -43,6 +61,13 @@ struct Harness {
 
 impl Harness {
     fn start(label: &str) -> Self {
+        // rnsd is a separate process, so the test cannot hand a bound listener
+        // directly to it. Retain every reservation until its owning daemon is
+        // ready to start, and serialize the short release/spawn handoff across
+        // parallel harnesses in this test binary.
+        let _startup_guard = HARNESS_START_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = tempfile::tempdir().expect("temporary integration directory");
         let client_config = root.path().join("client-reticulum");
         let listener_config = root.path().join("listener-reticulum");
@@ -56,11 +81,16 @@ impl Harness {
         ] {
             fs::create_dir_all(directory).unwrap();
         }
-        let client_shared_port = free_port();
-        let listener_shared_port = free_port();
-        let client_control_port = free_port();
-        let listener_control_port = free_port();
-        let transport_port = free_port();
+        let client_shared_reservation = TcpPortReservation::new();
+        let listener_shared_reservation = TcpPortReservation::new();
+        let client_control_reservation = TcpPortReservation::new();
+        let listener_control_reservation = TcpPortReservation::new();
+        let transport_reservation = TcpPortReservation::new();
+        let client_shared_port = client_shared_reservation.port();
+        let listener_shared_port = listener_shared_reservation.port();
+        let client_control_port = client_control_reservation.port();
+        let listener_control_port = listener_control_reservation.port();
+        let transport_port = transport_reservation.port();
         let client_instance = format!("utility-{label}-client-{}", std::process::id());
         let listener_instance = format!("utility-{label}-listener-{}", std::process::id());
         fs::write(
@@ -108,6 +138,9 @@ impl Harness {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rnsd"));
         command.args(["--config", &listener_config.to_string_lossy()]);
         command.env("HOME", &listener_home);
+        drop(listener_shared_reservation);
+        drop(listener_control_reservation);
+        drop(transport_reservation);
         let mut listener_daemon = spawn_logged(command, &listener_log);
         wait_for_port(
             listener_control_port,
@@ -120,6 +153,8 @@ impl Harness {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rnsd"));
         command.args(["--config", &client_config.to_string_lossy()]);
         command.env("HOME", &client_home);
+        drop(client_shared_reservation);
+        drop(client_control_reservation);
         let mut client_daemon = spawn_logged(command, &client_log);
         wait_for_port(
             client_control_port,
@@ -261,14 +296,6 @@ enum Implementation {
 enum Side {
     Client,
     Listener,
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 fn wait_for_port(port: u16, process: &mut ProcessGuard, description: &str) {
@@ -707,11 +734,26 @@ fn python_rnx_client_executes_on_rust_listener() {
     );
     assert_success(&output, "Python rnx to Rust listener");
     assert!(String::from_utf8_lossy(&output.stdout).contains("python-rnx-ok"));
+
+    // Each Python utility invocation is a new shared client. A rapid second
+    // request for the same destination can fall inside the path-request
+    // suppression interval after missing the listener's one-shot announce.
+    // Use an independently announced destination to exercise the large
+    // Resource response without depending on path cache timing.
+    let large_listener_identity = harness.path("large-listener.identity");
+    let large_destination =
+        harness.destination(Implementation::Rust, "rnx", &large_listener_identity);
+    let _large_listener = harness.listener(
+        Implementation::Rust,
+        "rnx",
+        &large_listener_identity,
+        &["--noauth".into()],
+    );
     let large = rnx_execute_command(
         &harness,
         Implementation::Python,
         &client_identity,
-        &destination,
+        &large_destination,
         "/usr/bin/seq 1 1000",
     );
     assert_large_rnx_response(&large, "Python rnx Resource response from Rust");
