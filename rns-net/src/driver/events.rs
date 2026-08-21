@@ -127,6 +127,7 @@ impl Driver {
                     &sig_pub,
                 ) {
                     log::log!(
+                        target: crate::logging::PATHING_LOG_TARGET,
                         crate::logging::REBALANCE_LOG_LEVEL,
                         "Re-balanced path to {:02x?} from link-request proof",
                         &destination_hash[..4],

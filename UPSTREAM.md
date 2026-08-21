@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7`
-- Commit date: `2026-08-18 12:02:44 +0200`
-- Subject: `Fixed typo`
+- Normative commit: `636012bbe515be1692e03a78fe7e55363d0753c1`
+- Commit date: `2026-08-18 12:17:14 +0200`
+- Subject: `Cleanup`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`47d3a0f06a696014b0d1e237e61ef77f572d576c`. The CI interop lane remains pinned
+`6c25b13a128928a15a8037ef38fa1a04506c591e`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`e1b7bc316c289a72ba9c7f7ad0b00558845b52a7`. The first commit fixes
+`636012bbe515be1692e03a78fe7e55363d0753c1`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -141,7 +141,9 @@ behavior. The thirty-second commit corrects grammar only in upstream's
 generated and source queue documentation; the native wording did not contain
 the typo. The thirty-third commit corrects the path-request and ingress-limiter
 queue labels in upstream documentation; both native labels were already
-correct. The full
+correct. The thirty-fourth commit moves successful authenticated link-path
+rebalance diagnostics to the dedicated pathing log level; Rust now emits the
+equivalent event on its pathing target. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
