@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `614e7bd834fb69675965094cd01ed9255f36d6aa`
-- Commit date: `2026-08-21 00:54:08 +0200`
-- Subject: `Improved path request handling, batch same-destination PRs when existing in-flight path request exists`
+- Normative commit: `74883369858303e89aa7861bdb64b1755b92a1c4`
+- Commit date: `2026-08-21 11:32:53 +0200`
+- Subject: `Use test runner config loglevel setting`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`614e7bd834fb69675965094cd01ed9255f36d6aa`. The first commit fixes
+`74883369858303e89aa7861bdb64b1755b92a1c4`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -234,6 +234,10 @@ retains every distinct requesting interface behind the same destination, and
 fans the matching path response back to all of them. Ingress-limited requests
 remain excluded from batching, and the unique-tag retention limit is raised to
 16,000 as upstream specifies.
+The sixty-sixth commit removes an `LOG_EXTREME` override from upstream's Python
+link test so its fixture configuration controls logging. Native tests use
+Rust's standard harness and contain no equivalent forced override; production
+log-level parsing remains covered independently.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
