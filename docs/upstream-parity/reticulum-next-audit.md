@@ -2,25 +2,28 @@
 
 ## Scope and Baseline
 
-- audit date: `2026-08-20`
+- audit date: `2026-08-21`
 - previous accepted version: `1.4.2`
 - previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
 - target version: `1.5.0`
 - target tag or ref: `rgit/master`
-- target normative commit: `4ab0755d0acc19eb45f729257b8976fde61146bf`
-- target root tree: `120e47a62072c34108b582c8569b807bd2143636`
-- target `RNS` tree: `fd4c58a1048681afab8d159b7ea64ec180d3aa85`
+- target normative commit: `880db0a7b7776d407e44bb0a93541317a1f75487`
+- target root tree: `e83fd29ea4db00bcee56f50c5df46c0e887b2d4e`
+- target `RNS` tree: `63b43201b190e857af4eb9b63d574d03acf01cef`
 - version assertion: `RNS.__version__ == "1.5.0"`
-- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..4ab0755d0acc19eb45f729257b8976fde61146bf`
-- commits in range: `63`
+- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..880db0a7b7776d407e44bb0a93541317a1f75487`
+- commits in range: `68`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
-- local branch and revision inspected: `dev@53b458ec00c175257b866fae1df261b9ace37d59`
+- local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
 
-The canonical rGit tip is 63 commits ahead of the accepted baseline. The GitHub
-mirror tip `b48b96e61676504e0a4e527b33b9a0b4495c6872` is behind the accepted
-baseline, so the remotes do not agree. This initial daily inventory records all
-canonical commits conservatively as **Needs decision**; it does not claim that
-any behavior has already been integrated.
+The first 63 canonical commits are integrated, structurally covered, deferred,
+or non-runtime as recorded below, and the accepted baseline is
+`4ab0755d0acc19eb45f729257b8976fde61146bf`. The 2026-08-21 daily refresh found
+five newer rGit commits through `880db0a7b7776d407e44bb0a93541317a1f75487`;
+they are conservatively inventoried as **Needs decision** pending per-commit
+analysis. The GitHub mirror tip
+`b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
+baseline, so the remotes do not agree.
 
 ## Audit Vocabulary
 
@@ -108,6 +111,11 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Structurally covered | Native resource callbacks deliver owned bytes, so `rns-git` never moves an open transport temporary file; fetch E2E writes the materialized bundle and validates its refs |
 | 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Structurally covered | Rust already combines a `BTreeSet` membership index with an exact bounded FIFO; the regression proves duplicates neither grow nor refresh retention order |
 | 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Integrated | Driver ingress statistics are recorded only after core accepts a valid unique tag, preventing duplicate replays from inflating frequency or triggering limiting |
+| 64 | `386ef1f370c4f9cdb38957c7119c3cdf3abb6d8e` | Transport jobs optimizations | Needs decision | Pending per-commit analysis |
+| 65 | `614e7bd834fb69675965094cd01ed9255f36d6aa` | Improved path request handling, batch same-destination PRs when existing in-flight path request exists | Needs decision | Pending per-commit analysis |
+| 66 | `74883369858303e89aa7861bdb64b1755b92a1c4` | Use test runner config loglevel setting | Needs decision | Pending per-commit analysis |
+| 67 | `5f2f4438d0412843167f43091f54af7fe39a8ed9` | Added detailed announce and path request traffic stats | Needs decision | Pending per-commit analysis |
+| 68 | `880db0a7b7776d407e44bb0a93541317a1f75487` | Added active links stat to rnstatus | Needs decision | Pending per-commit analysis |
 
 ## Per-Commit Analysis
 
@@ -1336,7 +1344,8 @@ failed before the fix with two samples and now retains one tag and one sample.
 
 **Final disposition:** Integrated.
 
-All 63 commits in the observed queue now have a final disposition.
+The first 63 commits have a final disposition. Detailed analysis for commits
+64–68 is pending.
 
 ## Integration Plan
 
@@ -1348,17 +1357,23 @@ All 63 commits in the observed queue now have a final disposition.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
-- [x] Focused regressions pass for every applicable behavior change.
+- [ ] Every upstream commit has a final disposition.
+- [ ] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
 - [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [x] Native documentation is updated for user-visible behavior.
+- [ ] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
+- `2026-08-21`: Daily refresh succeeded for both remotes. Canonical rGit moved
+  five commits beyond accepted `4ab0755d`; GitHub remains behind at signed
+  `b48b96e6`. Both VPS snapshots were healthy with every public interface up,
+  and the daily impaired Backbone smoke passed packets, channels, concurrent
+  Resources/links, and forced reconnect recovery. Commits 64–68 are inventoried
+  without an integration claim.
 - `2026-08-21`: Commit `4ab0755d` moves PR ingress accounting after unique-tag
   acceptance. The driver regression reproduced two samples before the fix and
   one after it; full relevant tests, formatting, host lint, exact checkout, and
