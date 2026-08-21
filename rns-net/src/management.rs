@@ -206,6 +206,14 @@ mod tests {
                             .map(|(_, v)| v.as_uint().unwrap());
                         assert_eq!(txb, Some(5678));
 
+                        for key in ["arxf", "atxf", "prxf", "ptxf"] {
+                            let frequency = map
+                                .iter()
+                                .find(|(candidate, _)| *candidate == Value::Str(key.into()))
+                                .and_then(|(_, value)| value.as_float());
+                            assert_eq!(frequency, Some(0.0), "missing {key}");
+                        }
+
                         let ifaces = map
                             .iter()
                             .find(|(k, _)| *k == Value::Str("interfaces".into()))

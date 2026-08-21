@@ -12,6 +12,10 @@ fn traffic_detail(stats: &crate::interface::InterfaceStats) -> TrafficDetail {
         ptxb: stats.ptxb,
         prxs: stats.traffic_rates.prxs,
         ptxs: stats.traffic_rates.ptxs,
+        arxf: stats.incoming_announce_freq(),
+        atxf: stats.outgoing_announce_freq(),
+        prxf: stats.incoming_path_request_freq(),
+        ptxf: stats.outgoing_path_request_freq(),
     }
 }
 
@@ -26,6 +30,10 @@ fn add_traffic(total: &mut TrafficDetail, detail: TrafficDetail) {
     total.ptxb += detail.ptxb;
     total.prxs += detail.prxs;
     total.ptxs += detail.ptxs;
+    total.arxf += detail.arxf;
+    total.atxf += detail.atxf;
+    total.prxf += detail.prxf;
+    total.ptxf += detail.ptxf;
 }
 
 impl Driver {

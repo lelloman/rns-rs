@@ -734,6 +734,10 @@ pub struct TrafficDetail {
     pub ptxb: u64,
     pub prxs: f64,
     pub ptxs: f64,
+    pub arxf: f64,
+    pub atxf: f64,
+    pub prxf: f64,
+    pub ptxf: f64,
 }
 
 /// Runtime status for the outbound Backbone peer pool.

@@ -3681,6 +3681,10 @@ fn query_interface_stats() {
         prxs: 240.0,
         ptxs: 320.0,
     };
+    entry.stats.ia_timestamps = vec![1.0, 2.0, 3.0];
+    entry.stats.oa_timestamps = vec![1.0, 3.0];
+    entry.stats.ip_timestamps = vec![1.0, 3.0, 5.0];
+    entry.stats.op_timestamps = vec![1.0, 5.0];
     driver.interfaces.insert(InterfaceId(1), entry);
 
     let (resp_tx, resp_rx) = mpsc::channel();
@@ -3702,6 +3706,8 @@ fn query_interface_stats() {
             assert_eq!((stats.traffic.rxs, stats.traffic.txs), (800.0, 1_600.0));
             assert_eq!((stats.traffic.arxs, stats.traffic.atxs), (80.0, 160.0));
             assert_eq!((stats.traffic.prxs, stats.traffic.ptxs), (240.0, 320.0));
+            assert_eq!((stats.traffic.arxf, stats.traffic.atxf), (1.5, 1.0));
+            assert_eq!((stats.traffic.prxf, stats.traffic.ptxf), (0.75, 0.5));
         }
         _ => panic!("unexpected response"),
     }

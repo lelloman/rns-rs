@@ -1131,6 +1131,22 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::String("ptxs".into()),
             PickleValue::Float(stats.traffic.ptxs),
         ),
+        (
+            PickleValue::String("arxf".into()),
+            PickleValue::Float(stats.traffic.arxf),
+        ),
+        (
+            PickleValue::String("atxf".into()),
+            PickleValue::Float(stats.traffic.atxf),
+        ),
+        (
+            PickleValue::String("prxf".into()),
+            PickleValue::Float(stats.traffic.prxf),
+        ),
+        (
+            PickleValue::String("ptxf".into()),
+            PickleValue::Float(stats.traffic.ptxf),
+        ),
     ];
 
     if let Some(tid) = stats.transport_id {
@@ -3444,6 +3460,10 @@ mod tests {
             ptxb: 44,
             prxs: 264.0,
             ptxs: 352.0,
+            arxf: 1.0,
+            atxf: 2.0,
+            prxf: 3.0,
+            ptxf: 4.0,
         };
         let mut stats = InterfaceStatsResponse {
             interfaces: vec![SingleInterfaceStat {
@@ -3504,6 +3524,10 @@ mod tests {
         let decoded = pickle::decode(&encoded).unwrap();
         assert!(decoded.get("transport_enabled").unwrap().as_bool().unwrap());
         let ifaces = decoded.get("interfaces").unwrap().as_list().unwrap();
+        assert_eq!(decoded.get("arxf").unwrap().as_float(), Some(1.0));
+        assert_eq!(decoded.get("atxf").unwrap().as_float(), Some(2.0));
+        assert_eq!(decoded.get("prxf").unwrap().as_float(), Some(3.0));
+        assert_eq!(decoded.get("ptxf").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
         assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);

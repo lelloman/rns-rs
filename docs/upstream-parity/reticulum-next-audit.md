@@ -14,14 +14,14 @@
 - audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
 - commits in range: `73`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
-- local branch and revision inspected: `dev@e0585ab70715058cd8ce4eab723b190f269c5d66`
+- local branch and revision inspected: `dev@56e8792e9b8393976c9492d230269bb359594111`
 
-The first 72 canonical commits are integrated, structurally covered, deferred,
+All 73 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
-`cab513fa31c70e52ba735ec0668d22b148522679`. A fresh 2026-08-21 refresh found
+`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`. A fresh 2026-08-21 refresh found
 five newer rGit commits after commit 68 through
-`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; commit 69 is integrated and the
-remaining four are inventoried pending per-commit analysis. The GitHub mirror tip
+`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; all five now have final
+dispositions below. The GitHub mirror tip
 `b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
 baseline, so the remotes do not agree.
 
@@ -120,7 +120,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 70 | `42f6d64b9cc379aad73a6a8927dadec91f7031d7` | Implemented per-interface protocol violation tracking | Integrated | Per-interface protocol/IFAC/filter counters at typed rejection boundaries, pre-validation link forwarding guard, listener aggregation, status/RPC fields, CLI rendering/sorting, and focused rejection regressions |
 | 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Integrated | Invalid-announce accounting distinguishes blackhole policy drops for synchronous and asynchronous verification; tampered blackholed announce regression |
 | 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Structurally covered | Native code has no misleading batching diagnostic and already restricts batching to non-ingress-limited requests, covered by limiter/batching regressions |
-| 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Needs decision | Pending per-commit analysis |
+| 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Integrated | Aggregate announce/PR RX/TX frequencies from existing bounded interface estimators, local/remote status fields, and detailed CLI totals with query/RPC/formatter regressions |
 
 ## Per-Commit Analysis
 
@@ -1565,8 +1565,32 @@ duplicative test is appropriate.
 
 **Final disposition:** Structurally covered.
 
-The first 72 commits have a final disposition. Detailed analysis for commit 73
-is pending.
+### 73. `b3ef214e` — Add aggregate announce and path-request frequencies
+
+**Upstream change:** Sums incoming/outgoing announce and path-request frequency
+estimators across interfaces, exposes four top-level status fields (`arxf`,
+`atxf`, `prxf`, and `ptxf`), and appends the formatted frequencies to detailed
+`rnstatus` traffic totals.
+
+**Rust applicability:** Native interfaces already retain the bounded timestamp
+samples and compute the same four directional estimators. Only aggregate status
+transport and total rendering were missing.
+
+**Local handling and evidence:** `TrafficDetail` transparently carries the four
+aggregate frequencies. The driver sums every real interface once, which is
+equivalent to upstream's parent aggregation for dynamic children without
+double-counting synthetic listener rows. Local pickle RPC and remote MessagePack
+status include the new top-level keys. Detailed path-request and announce totals
+append `prettyfrequency` output when the peer supplies the keys and remain
+compatible with older peers when it does not. A deterministic query test pins
+all four sample-derived totals, the RPC round trip pins distinct values, and the
+CLI formatter test pins directional frequencies alongside bytes, speeds, and
+flow shares.
+
+**Final disposition:** Integrated.
+
+All 73 commits have a final disposition; no canonical rGit commit remains ahead
+of the accepted baseline at this audit tip.
 
 ## Integration Plan
 
@@ -1589,6 +1613,10 @@ is pending.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `b3ef214e` adds aggregate announce/path-request
+  frequencies to local and remote status and detailed `rnstatus` totals.
+  Deterministic query, RPC, remote-status, CLI, relevant full suites, formatting,
+  host lint, exact checkout, and fresh drift checks passed, leaving 0 commits.
 - `2026-08-21`: Commit `cab513fa` only corrects placement of a Python batching
   diagnostic. Native code has no equivalent message and already excludes
   ingress-limited requesters; existing limiter and batching regressions,
