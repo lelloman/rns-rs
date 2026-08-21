@@ -532,6 +532,8 @@ pub enum QueryRequest {
     NextHopIfName { dest_hash: [u8; 16] },
     /// Get link table entry count.
     LinkCount,
+    /// Get validated or established link count.
+    ActiveLinkCount,
     /// Drop a specific path.
     DropPath { dest_hash: [u8; 16] },
     /// Drop all paths that route via a given transport hash.
@@ -649,6 +651,7 @@ pub enum QueryResponse {
     NextHop(Option<NextHopResponse>),
     NextHopIfName(Option<String>),
     LinkCount(usize),
+    ActiveLinkCount(usize),
     DropPath(bool),
     DropAllVia(usize),
     DropAnnounceQueues,

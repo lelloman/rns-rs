@@ -689,6 +689,7 @@ fn test_teardown_link() {
         .any(|a| matches!(a, LinkManagerAction::DeregisterLinkDest { .. }));
     assert!(has_deregister);
     assert_eq!(mgr.link_count(), 0);
+    assert_eq!(mgr.active_link_count(), 0);
 }
 
 #[test]
@@ -888,9 +889,15 @@ fn test_link_count() {
     let dummy_sig = [0xAA; 32];
     mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
     assert_eq!(mgr.link_count(), 1);
+    assert_eq!(mgr.active_link_count(), 0);
 
     mgr.create_link(&[0x22; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
     assert_eq!(mgr.link_count(), 2);
+    assert_eq!(mgr.active_link_count(), 0);
+
+    let (active, _, _) = setup_active_link();
+    assert_eq!(active.link_count(), 1);
+    assert_eq!(active.active_link_count(), 1);
 }
 
 // --- Test helpers ---

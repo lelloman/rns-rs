@@ -427,6 +427,14 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "active_link_count" => {
+                    let resp = send_query(event_tx, QueryRequest::ActiveLinkCount)?;
+                    if let QueryResponse::ActiveLinkCount(n) = resp {
+                        Ok(PickleValue::Int(n as i64))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 "transport_identity" => {
                     let resp = send_query(event_tx, QueryRequest::TransportIdentity)?;
                     if let QueryResponse::TransportIdentity(Some(hash)) = resp {
@@ -3048,6 +3056,9 @@ mod tests {
                 Ok(Event::Query(QueryRequest::LinkCount, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::LinkCount(42));
                 }
+                Ok(Event::Query(QueryRequest::ActiveLinkCount, resp_tx)) => {
+                    let _ = resp_tx.send(QueryResponse::ActiveLinkCount(7));
+                }
                 Ok(Event::Query(QueryRequest::InterfaceStats, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
                         interfaces: vec![SingleInterfaceStat {
@@ -3122,6 +3133,16 @@ mod tests {
             .unwrap();
         assert_eq!(response.as_int().unwrap(), 42);
         drop(client);
+
+        let mut active_client = RpcClient::connect(&server_addr, &key).unwrap();
+        let active_response = active_client
+            .call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("active_link_count".into()),
+            )]))
+            .unwrap();
+        assert_eq!(active_response.as_int().unwrap(), 7);
+        drop(active_client);
 
         // Client: query interface stats
         let mut client2 = RpcClient::connect(&server_addr, &key).unwrap();

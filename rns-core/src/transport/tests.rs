@@ -201,16 +201,32 @@ fn test_deregister_interface_removes_transport_state() {
             proof_timeout: 1100.0,
         },
     );
+    engine.register_link(
+        [0x77; 16],
+        LinkEntry {
+            timestamp: 1000.0,
+            next_hop_transport_id: [0x88; 16],
+            next_hop_interface: InterfaceId(1),
+            remaining_hops: 1,
+            received_interface: InterfaceId(2),
+            taken_hops: 1,
+            destination_hash,
+            validated: false,
+            proof_timeout: 1100.0,
+        },
+    );
 
     assert_eq!(engine.path_table_count(), 1);
     assert_eq!(engine.reverse_table_count(), 1);
-    assert_eq!(engine.link_table_count(), 1);
+    assert_eq!(engine.link_table_count(), 2);
+    assert_eq!(engine.active_link_count(), 1);
 
     engine.deregister_interface(InterfaceId(1));
 
     assert_eq!(engine.path_table_count(), 0);
     assert_eq!(engine.reverse_table_count(), 0);
     assert_eq!(engine.link_table_count(), 0);
+    assert_eq!(engine.active_link_count(), 0);
 }
 
 #[test]

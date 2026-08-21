@@ -3993,14 +3993,21 @@ fn query_link_count() {
         Box::new(cbs),
     );
 
-    let (resp_tx, resp_rx) = mpsc::channel();
-    tx.send(Event::Query(QueryRequest::LinkCount, resp_tx))
+    let (count_tx, count_rx) = mpsc::channel();
+    tx.send(Event::Query(QueryRequest::LinkCount, count_tx))
+        .unwrap();
+    let (active_tx, active_rx) = mpsc::channel();
+    tx.send(Event::Query(QueryRequest::ActiveLinkCount, active_tx))
         .unwrap();
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    match resp_rx.recv().unwrap() {
+    match count_rx.recv().unwrap() {
         QueryResponse::LinkCount(count) => assert_eq!(count, 0),
+        _ => panic!("unexpected response"),
+    }
+    match active_rx.recv().unwrap() {
+        QueryResponse::ActiveLinkCount(count) => assert_eq!(count, 0),
         _ => panic!("unexpected response"),
     }
 }

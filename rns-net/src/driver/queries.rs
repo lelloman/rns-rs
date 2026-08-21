@@ -516,6 +516,9 @@ impl Driver {
             QueryRequest::LinkCount => QueryResponse::LinkCount(
                 self.engine.link_table_count() + self.link_manager.link_count(),
             ),
+            QueryRequest::ActiveLinkCount => QueryResponse::ActiveLinkCount(
+                self.engine.active_link_count() + self.link_manager.active_link_count(),
+            ),
             QueryRequest::DropPath { .. } => {
                 // Mutating queries are handled by handle_query_mut
                 QueryResponse::DropPath(false)
