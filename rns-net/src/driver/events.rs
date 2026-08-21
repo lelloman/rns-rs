@@ -81,7 +81,7 @@ impl Driver {
             }
         };
         let tagless_path_request = parsed_packet.destination_hash == self.path_request_dest
-            && parsed_packet.data.len() <= 32;
+            && parsed_packet.data.len() <= 16;
         if tagless_path_request || self.engine.is_unvalidated_link_packet(&parsed_packet) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                 entry.stats.protocol_violations += 1;
