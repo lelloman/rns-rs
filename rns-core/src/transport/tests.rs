@@ -2950,6 +2950,7 @@ fn test_discovery_pr_tags_fifo_eviction() {
 
     let unique1 = make_unique_tag(dest1, &tag1);
     let unique2 = make_unique_tag(dest2, &tag2);
+    let unique3 = make_unique_tag(dest3, &tag3);
     assert!(engine.has_discovery_pr_tag(&unique1));
     assert!(engine.has_discovery_pr_tag(&unique2));
 
@@ -2961,6 +2962,7 @@ fn test_discovery_pr_tags_fifo_eviction() {
     assert_eq!(engine.discovery_pr_tags_count(), 2);
     assert!(!engine.has_discovery_pr_tag(&unique1));
     assert!(engine.has_discovery_pr_tag(&unique2));
+    assert!(engine.has_discovery_pr_tag(&unique3));
 
     engine.handle_path_request(
         &make_path_request_data(&dest1, &tag1),
@@ -2969,6 +2971,8 @@ fn test_discovery_pr_tags_fifo_eviction() {
     );
     assert_eq!(engine.discovery_pr_tags_count(), 2);
     assert!(engine.has_discovery_pr_tag(&unique1));
+    assert!(!engine.has_discovery_pr_tag(&unique2));
+    assert!(engine.has_discovery_pr_tag(&unique3));
 }
 
 #[test]

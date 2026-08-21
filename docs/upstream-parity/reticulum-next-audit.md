@@ -87,7 +87,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 40 | `40a862acbd870cec0c803ed8726027b94a0e4150` | Break loop on existing entry in announce queue | Structurally covered | Rust's `.position()` stops at the first destination match; a corruption-tolerance regression pins first-match replacement |
 | 41 | `338173802d5a0e21515036512180d421c7d3544a` | Transport: fix destination_hash check in pending_discovery_prs | Structurally covered | Rust has no compound-entry pending transmit deque; exact duplicate tags are suppressed and discovery response state is keyed directly by destination hash |
 | 42 | `0e2041c8372b33fd9d60114b0b1305cff836eef4` | BackboneInterface: update timestamps in ic checks | Structurally covered | Backbone child burst counts, active state, and earliest activation are computed fresh under the queue-state lock with no timestamped caches |
-| 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Needs decision | Pending per-commit analysis |
+| 43 | `6cd5be18ec69a3f5e4dcd7e9ff12fa78eb21f5ef` | Transport: slice discovery_pr_tags to the end | Structurally covered | Rust evicts one oldest tag before appending and retains exactly the configured capacity; the FIFO regression now asserts every surviving tag including newest |
 | 44 | `39e3854daca7b29c585ebaa0dee412ccd429d1e0` | Link: reset watchdog if exception happens in receive | Needs decision | Pending per-commit analysis |
 | 45 | `acecc1f4907483927ed001d5c09ef8e61278dd96` | Error logging | Needs decision | Pending per-commit analysis |
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Needs decision | Pending per-commit analysis |
@@ -944,6 +944,24 @@ needed for the absent cache mechanism.
 
 **Final disposition:** Structurally covered.
 
+### 43. `6cd5be18` — Retain the newest discovery request tag
+
+**Upstream change:** Removes an end index of `len-1` from the discovery-tag
+retention slice. The old exclusive bound retained only `max-1` entries and
+discarded the newest tag; slicing to the end preserves exactly the newest
+configured maximum.
+
+**Rust applicability:** Rust uses a `VecDeque` plus membership set. At capacity
+it pops exactly one oldest tag, removes that tag from the set, then appends the
+new tag. No slicing or exclusive-end arithmetic is involved.
+
+**Local handling and evidence:** Strengthened the bounded FIFO regression to
+assert that the newest tag survives the first eviction and remains present
+after a second eviction, while precisely the expected oldest tag is absent.
+The test also pins the exact configured length after each insertion.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -969,6 +987,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `6cd5be18` fixes an off-by-one retention slice absent
+  from Rust's pop-front/append FIFO. The strengthened complete-set regression,
+  formatting, host lint, exact checkout, and drift checks passed, leaving 20
+  commits.
 - `2026-08-21`: Commit `0e2041c8` fixes stale Backbone aggregate cache
   timestamps absent from Rust's live-state computation. Dynamic parent burst
   and cleanup tests, formatting, host lint, exact checkout, and drift checks
