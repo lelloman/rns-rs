@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `49073fcca59561ce5ecbe56c99b36816ecbacfde`
-- Commit date: `2026-08-19 20:13:32 +0200`
-- Subject: `Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith`
+- Normative commit: `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0`
+- Commit date: `2026-08-19 20:15:17 +0200`
+- Subject: `Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`fc9352489207dceccf7840e87c36ee9a32b237ec`. The CI interop lane remains pinned
+`6f0efb5512f6c9f4d7328eb4b8e14b324e554f60`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`49073fcca59561ce5ecbe56c99b36816ecbacfde`. The first commit fixes
+`bde5611a0d6651e5c9e6357d7259770fdb4ff7d0`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -198,7 +198,9 @@ formula. The fifty-fifth commit only removes a Python `if True:` wrapper and
 dedents its inbound body; Rust has no equivalent deprecated wrapper. The
 fifty-sixth commit bases extra transported LRPROOF time on the outbound next-hop
 interface. Rust now adds one MTU of outbound serialization time, covered with
-different ingress and egress bitrates. The full
+different ingress and egress bitrates. The fifty-seventh commit guards the
+calculation when bitrate is missing or zero; the native helper safely returns
+no extra time for both cases, with explicit boundaries covered. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

@@ -3596,6 +3596,28 @@ fn transported_link_proof_timeout_uses_outbound_interface_bitrate() {
 }
 
 #[test]
+fn extra_link_proof_timeout_requires_positive_interface_bitrate() {
+    let mut interface = make_interface(1, constants::MODE_FULL);
+    assert_eq!(super::inbound_engine::extra_link_proof_timeout(None), 0.0);
+    assert_eq!(
+        super::inbound_engine::extra_link_proof_timeout(Some(&interface)),
+        0.0
+    );
+
+    interface.bitrate = Some(0);
+    assert_eq!(
+        super::inbound_engine::extra_link_proof_timeout(Some(&interface)),
+        0.0
+    );
+
+    interface.bitrate = Some(400);
+    assert_eq!(
+        super::inbound_engine::extra_link_proof_timeout(Some(&interface)),
+        10.0
+    );
+}
+
+#[test]
 fn test_local_client_link_routing_to_external_applies_local_hops_delta() {
     let mut config = make_config(true);
     config.local_hops_delta = 5;
