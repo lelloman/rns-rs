@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `cab513fa31c70e52ba735ec0668d22b148522679`
-- Commit date: `2026-08-21 18:08:35 +0200`
-- Subject: `Logging`
+- Normative commit: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
+- Commit date: `2026-08-21 18:25:59 +0200`
+- Subject: `Added total announce/pr frequency stats`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`f5d6ce4a71b1630115c127d8b13a1326ce318857`. The CI interop lane remains pinned
+`6aa6691d8dcca0d9aa7b6f7affed803185d20e69`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`cab513fa31c70e52ba735ec0668d22b148522679`. The first commit fixes
+`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -268,6 +268,10 @@ The seventy-second commit moves a Python batching diagnostic inside the branch
 that actually batches non-ingress-limited requests. Rust emits no equivalent
 misleading diagnostic and already excludes ingress-limited requests from the
 batch, so the change is structurally covered by the existing limiter regression.
+The seventy-third commit adds aggregate announce and path-request frequencies
+to status totals. Rust now sums the existing bounded per-interface frequency
+estimators, exposes `arxf`, `atxf`, `prxf`, and `ptxf` through local and remote
+status, and appends their human-readable values to detailed `rnstatus` totals.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

@@ -856,7 +856,7 @@ fn detailed_traffic_total_lines(
     let total_rx = numeric(response.get("rxs")).unwrap_or(0.0);
     let total_tx = numeric(response.get("txs")).unwrap_or(0.0);
     let mut lines = Vec::new();
-    for (enabled, label, rxb, txb, rxs, txs) in [
+    for (enabled, label, rxb, txb, rxs, txs, rxf, txf) in [
         (
             show_path_requests,
             " Path reqs   ",
@@ -864,6 +864,8 @@ fn detailed_traffic_total_lines(
             "ptxb",
             "prxs",
             "ptxs",
+            "prxf",
+            "ptxf",
         ),
         (
             show_announces,
@@ -872,6 +874,8 @@ fn detailed_traffic_total_lines(
             "atxb",
             "arxs",
             "atxs",
+            "arxf",
+            "atxf",
         ),
     ] {
         if !enabled {
@@ -885,17 +889,26 @@ fn detailed_traffic_total_lines(
         };
         let rx_rate = numeric(response.get(rxs)).unwrap_or(0.0);
         let tx_rate = numeric(response.get(txs)).unwrap_or(0.0);
+        let rx_frequency = numeric(response.get(rxf));
+        let tx_frequency = numeric(response.get(txf));
+        let frequency_suffix = |frequency: Option<f64>| {
+            frequency
+                .map(|value| format!(", {}", prettyfrequency(value)))
+                .unwrap_or_default()
+        };
         lines.push(format!(
-            "{label}: {} \u{2191}  {}  ({}% of flow)",
+            "{label}: {} \u{2191}  {}  ({}% of flow){}",
             size_str(tx_bytes.max(0) as u64),
             speed_str(tx_rate.max(0.0) as u64),
             flow_percent(tx_rate, total_tx),
+            frequency_suffix(tx_frequency),
         ));
         lines.push(format!(
-            "              {} \u{2193}  {}  ({}% of flow)",
+            "              {} \u{2193}  {}  ({}% of flow){}",
             size_str(rx_bytes.max(0) as u64),
             speed_str(rx_rate.max(0.0) as u64),
             flow_percent(rx_rate, total_rx),
+            frequency_suffix(rx_frequency),
         ));
     }
     lines
@@ -1685,15 +1698,19 @@ mod tests {
                 PickleValue::String("atxs".into()),
                 PickleValue::Float(400.0),
             ),
+            (PickleValue::String("arxf".into()), PickleValue::Float(0.5)),
+            (PickleValue::String("atxf".into()), PickleValue::Float(1.0)),
+            (PickleValue::String("prxf".into()), PickleValue::Float(2.0)),
+            (PickleValue::String("ptxf".into()), PickleValue::Float(4.0)),
         ]);
 
         assert_eq!(
             detailed_traffic_total_lines(&response, true, true),
             vec![
-                " Path reqs   : 44 B \u{2191}  320 b/s  (20% of flow)",
-                "              33 B \u{2193}  80 b/s  (10% of flow)",
-                " Announces   : 22 B \u{2191}  400 b/s  (25% of flow)",
-                "              11 B \u{2193}  200 b/s  (25% of flow)",
+                " Path reqs   : 44 B \u{2191}  320 b/s  (20% of flow), 240.0/m",
+                "              33 B \u{2193}  80 b/s  (10% of flow), 120.0/m",
+                " Announces   : 22 B \u{2191}  400 b/s  (25% of flow), 60.0/m",
+                "              11 B \u{2193}  200 b/s  (25% of flow), 30.0/m",
             ]
         );
     }

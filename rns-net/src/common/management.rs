@@ -162,6 +162,10 @@ pub fn handle_status_request(
     let mut total_atxs = 0.0;
     let mut total_prxs = 0.0;
     let mut total_ptxs = 0.0;
+    let mut total_arxf = 0.0;
+    let mut total_atxf = 0.0;
+    let mut total_prxf = 0.0;
+    let mut total_ptxf = 0.0;
 
     for entry in interfaces {
         let id = entry.id();
@@ -180,6 +184,10 @@ pub fn handle_status_request(
         total_atxs += stats.traffic_rates.atxs;
         total_prxs += stats.traffic_rates.prxs;
         total_ptxs += stats.traffic_rates.ptxs;
+        total_arxf += stats.incoming_announce_freq();
+        total_atxf += stats.outgoing_announce_freq();
+        total_prxf += stats.incoming_path_request_freq();
+        total_ptxf += stats.outgoing_path_request_freq();
 
         let mut ifstats: Vec<(&str, Value)> = vec![
             ("name", Value::Str(info.name.clone())),
@@ -262,6 +270,10 @@ pub fn handle_status_request(
         ("ptxb", Value::UInt(total_ptxb)),
         ("prxs", Value::Float(total_prxs)),
         ("ptxs", Value::Float(total_ptxs)),
+        ("arxf", Value::Float(total_arxf)),
+        ("atxf", Value::Float(total_atxf)),
+        ("prxf", Value::Float(total_prxf)),
+        ("ptxf", Value::Float(total_ptxf)),
     ];
 
     if let Some(identity_hash) = engine.config().identity_hash {
