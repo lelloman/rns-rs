@@ -10,8 +10,8 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `1c488947bdc8eae32f55736679856064580e1631`
-- Commit date: `2026-08-18 12:00:42 +0200`
+- Normative commit: `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7`
+- Commit date: `2026-08-18 12:02:44 +0200`
 - Subject: `Fixed typo`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`1c488947bdc8eae32f55736679856064580e1631`. The first commit fixes
+`e1b7bc316c289a72ba9c7f7ad0b00558845b52a7`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -139,7 +139,9 @@ absent. The thirty-first commit adds only a TODO proposing future early
 path-request filtering on non-transport nodes and changes no executable
 behavior. The thirty-second commit corrects grammar only in upstream's
 generated and source queue documentation; the native wording did not contain
-the typo. The full
+the typo. The thirty-third commit corrects the path-request and ingress-limiter
+queue labels in upstream documentation; both native labels were already
+correct. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
