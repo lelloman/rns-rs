@@ -93,7 +93,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 46 | `c95bb551ab2c5e702efe4fa77ae35c568e607b3b` | Transport: handle exceptions in inbound() | Structurally covered | Rust rejects malformed frames through typed parser branches; an event-loop regression proves the immediately following valid frame is still dispatched |
 | 47 | `db7daa4d9412e98273ce58d47286f36afce1d5ae` | Method naming | Structurally covered | Private Python `process_inbound` becomes `preprocess_inbound`; Rust's private boundary is independently named `handle_classified_frame_event` |
 | 48 | `65222e0de8355fa4e7bfd6fe6ad76116b155aeeb` | Resource: align indexes in receive_part with request_next | Integrated | Resource part matching now searches from `consecutive_completed_height + 1`, exactly matching the requested window and including its tail |
-| 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Needs decision | Pending per-commit analysis |
+| 49 | `2e9443ffe2f6e130cae094ebc898c02d8cbde56e` | Fixed typo | Structurally covered | Corrects `EPOLL_IN` to `EPOLLIN` in a Python Backbone warning; native diagnostics contain neither spelling |
 | 50 | `0c0034f1ae81e2475c6f43dee6537b6d29e7691b` | Tuned burst stats throttle | Needs decision | Pending per-commit analysis |
 | 51 | `df80181006882f035e36a6e4673118bd7d13191c` | Utilize full link MDU in RawChannelWriter | Needs decision | Pending per-commit analysis |
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Needs decision | Pending per-commit analysis |
@@ -1058,6 +1058,20 @@ tail is stored and reported without incorrectly advancing contiguous height.
 
 **Final disposition:** Integrated.
 
+### 49. `2e9443ff` — Correct the EPOLLIN diagnostic spelling
+
+**Upstream change:** Changes `EPOLL_IN` to the actual `EPOLLIN` constant name
+in the warning emitted when Python Backbone file-descriptor registration fails.
+Runtime behavior is unchanged.
+
+**Rust applicability:** Rust's Backbone listener uses its own poll-loop error
+handling and does not emit the changed Python sentence or the misspelled token.
+
+**Local handling and evidence:** No production or test change is appropriate
+for an absent diagnostic typo.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1083,6 +1097,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `2e9443ff` only corrects a Python Backbone warning's
+  `EPOLLIN` spelling, absent from Rust. Formatting, host lint, exact checkout,
+  and drift checks passed, leaving 14 commits.
 - `2026-08-21`: Commit `65222e0d` fixes Resource receive-window indexing that
   was also present in Rust. The new out-of-order tail regression, full receiver
   tests, formatting, host lint, exact checkout, and drift checks passed, leaving
