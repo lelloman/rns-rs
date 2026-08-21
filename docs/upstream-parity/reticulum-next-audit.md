@@ -79,7 +79,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 32 | `1c488947bdc8eae32f55736679856064580e1631` | Fixed typo | Structurally covered | Documentation-only grammar correction; native queue-tuning wording does not contain the typo |
 | 33 | `e1b7bc316c289a72ba9c7f7ad0b00558845b52a7` | Fixed typo | Structurally covered | Native documentation already labels `qlen_in_pr` and `qlen_in_il` as path-request and ingress-limited queues |
 | 34 | `636012bbe515be1692e03a78fe7e55363d0753c1` | Cleanup | Integrated | Successful authenticated LRPROOF path rebalances now log on the dedicated pathing target |
-| 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Needs decision | Pending per-commit analysis |
+| 35 | `1a70bd3cd1390c0e27edc0f5ec1626553e84c17d` | Added queue drop stats | Integrated | Cumulative total and per-class drops are exposed as upstream-compatible RPC fields and rendered by `rnstatus` |
 | 36 | `503bd6c87bda7780f613255257ab0095eb57661d` | Improved PR ingress limiter | Needs decision | Pending per-commit analysis |
 | 37 | `7c912d0936be42bccb75163c8914991de42fbf8e` | rnstatus: use proper stats | Needs decision | Pending per-commit analysis |
 | 38 | `731a63b01b255e270f9a4a962b7b837950863235` | Transport: update interface_hashes_updated_at timestamp | Needs decision | Pending per-commit analysis |
@@ -788,6 +788,27 @@ debug level 6 and enabled at pathing level 7.
 
 **Final disposition:** Integrated.
 
+### 35. `1a70bd3c` — Add inbound queue drop statistics
+
+**Upstream change:** Counts every insertion rejected by a full inbound queue,
+exports cumulative total and per-class drop fields in management statistics,
+and appends nonzero drop counts to `rnstatus` queue lines.
+
+**Rust applicability:** Rust has the same four bounded inbound traffic classes,
+management pickle dictionary, and queue-status formatter. Full-queue drops were
+enforced but not counted or visible to operators.
+
+**Local handling and evidence:** Added saturating cumulative counters under the
+queue-state lock and exported `rxqtd`, `rxqdd`, `rxqad`, `rxqpd`, and `rxqild`.
+Both silently dropped blocking sends and failed nonblocking sends are counted,
+matching upstream's queue insertion point. Saturation regressions cover every
+class, independent counters, totals, and persistence across a drain; RPC and
+CLI regressions cover all five fields, zero suppression, and compatibility
+when an older remote omits them. Native `rnstatus` documentation records the
+new output.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -813,6 +834,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `1a70bd3c` adds cumulative inbound queue-drop accounting,
+  management fields, and `rnstatus` rendering. Per-class saturation, cumulative
+  drain, RPC, CLI, formatting, host lint, exact checkout, and drift checks
+  passed, leaving 28 commits.
 - `2026-08-21`: Commit `636012bb` routes authenticated LRPROOF rebalance
   diagnostics through the dedicated pathing target. The focused filter
   regression, formatting, host lint, exact checkout, and drift check passed,

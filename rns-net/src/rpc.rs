@@ -1278,6 +1278,7 @@ fn add_inbound_runtime_stats(
     let snapshot = event_tx.inbound_queue_snapshot();
     let total_height = snapshot.total_height();
     let total_capacity = snapshot.total_capacity();
+    let total_dropped = snapshot.total_dropped();
     let pressure = |height: usize, capacity: usize| {
         if height == 0 {
             0.0
@@ -1305,6 +1306,26 @@ fn add_inbound_runtime_stats(
         (
             PickleValue::String("rxqil".into()),
             PickleValue::Int(snapshot.heights[3] as i64),
+        ),
+        (
+            PickleValue::String("rxqtd".into()),
+            PickleValue::Int(total_dropped as i64),
+        ),
+        (
+            PickleValue::String("rxqdd".into()),
+            PickleValue::Int(snapshot.dropped[0] as i64),
+        ),
+        (
+            PickleValue::String("rxqad".into()),
+            PickleValue::Int(snapshot.dropped[1] as i64),
+        ),
+        (
+            PickleValue::String("rxqpd".into()),
+            PickleValue::Int(snapshot.dropped[2] as i64),
+        ),
+        (
+            PickleValue::String("rxqild".into()),
+            PickleValue::Int(snapshot.dropped[3] as i64),
         ),
         (
             PickleValue::String("tqpressure".into()),
@@ -3415,11 +3436,27 @@ mod tests {
         );
 
         stats.interfaces[0].interface_type = "BackboneInterface".into();
-        let (event_tx, _event_rx) = crate::event::channel_with_capacity(4);
+        let (event_tx, _event_rx) = crate::event::channel_with_capacity(1);
         event_tx.register_dynamic_parent(InterfaceId(2), InterfaceId(1));
         event_tx.set_ingress_bursts(InterfaceId(2), Some(10.0), Some(20.0));
         event_tx
             .try_send(Event::Frame {
+                interface_id: InterfaceId(2),
+                data: vec![0],
+                rssi: None,
+                snr: None,
+            })
+            .unwrap();
+        assert!(event_tx
+            .try_send(Event::Frame {
+                interface_id: InterfaceId(2),
+                data: vec![0],
+                rssi: None,
+                snr: None,
+            })
+            .is_err());
+        event_tx
+            .send(Event::Frame {
                 interface_id: InterfaceId(2),
                 data: vec![0],
                 rssi: None,
@@ -3473,13 +3510,18 @@ mod tests {
         );
         assert_eq!(runtime_pickle.get("rxqt").unwrap().as_int().unwrap(), 1);
         assert_eq!(runtime_pickle.get("rxqd").unwrap().as_int().unwrap(), 1);
+        assert_eq!(runtime_pickle.get("rxqtd").unwrap().as_int().unwrap(), 2);
+        assert_eq!(runtime_pickle.get("rxqdd").unwrap().as_int().unwrap(), 2);
+        assert_eq!(runtime_pickle.get("rxqad").unwrap().as_int().unwrap(), 0);
+        assert_eq!(runtime_pickle.get("rxqpd").unwrap().as_int().unwrap(), 0);
+        assert_eq!(runtime_pickle.get("rxqild").unwrap().as_int().unwrap(), 0);
         assert_eq!(
             runtime_pickle
                 .get("dqpressure")
                 .unwrap()
                 .as_float()
                 .unwrap(),
-            0.25
+            1.0
         );
         assert_eq!(
             runtime_pickle
@@ -3487,7 +3529,7 @@ mod tests {
                 .unwrap()
                 .as_float()
                 .unwrap(),
-            1.0 / 16.0
+            0.25
         );
     }
 
