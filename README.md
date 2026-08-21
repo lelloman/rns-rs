@@ -186,6 +186,13 @@ The values above are the defaults. A packet is dropped when its class queue is
 full. A lower-priority queue begins draining only after all higher-priority
 queues before the same control-event barrier are empty.
 
+Link MTU discovery is enabled by default. To omit MTU signalling from outbound
+link requests and use the protocol-default Link MTU, set this in `[reticulum]`:
+
+```ini
+link_mtu_discovery = No
+```
+
 ## Low-Level Tools
 
 These are lower-level building blocks for development, debugging, custom setups,

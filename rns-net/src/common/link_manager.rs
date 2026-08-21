@@ -238,6 +238,7 @@ pub struct LinkManager {
     /// Path hashes that should be handled externally (by the driver) rather than
     /// by registered handler closures. Used for management destinations.
     management_paths: Vec<[u8; 16]>,
+    link_mtu_discovery: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,7 +337,12 @@ impl LinkManager {
             request_handlers: Vec::new(),
             deferred_request_handlers: Vec::new(),
             management_paths: Vec::new(),
+            link_mtu_discovery: true,
         }
+    }
+
+    pub(crate) fn set_link_mtu_discovery(&mut self, enabled: bool) {
+        self.link_mtu_discovery = enabled;
     }
 
     /// Register a path hash as a management path.
@@ -512,8 +518,9 @@ impl LinkManager {
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
         let mode = LinkMode::Aes256Cbc;
+        let signalled_mtu = self.link_mtu_discovery.then_some(mtu);
         let (mut engine, request_data) =
-            LinkEngine::new_initiator(dest_hash, hops, mode, Some(mtu), time::now(), rng);
+            LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng);
 
         // Build the LINKREQUEST packet to compute link_id
         let flags = PacketFlags {
