@@ -486,6 +486,25 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_lookup_updates_only_first_preexisting_match() {
+        let mut queue = InterfaceAnnounceQueue::new();
+        queue.entries.push(make_entry(0x01, 3, 100.0));
+        queue.entries.push(make_entry(0x01, 3, 150.0));
+
+        let mut replacement = make_entry(0x01, 3, 200.0);
+        replacement.raw = vec![0x09].into();
+        queue.insert(replacement);
+
+        assert_eq!(queue.entries.len(), 2);
+        assert_eq!(queue.entries[0].time, 200.0);
+        assert_eq!(queue.entries[0].emitted, 200.0);
+        assert_eq!(&*queue.entries[0].raw, &[0x09]);
+        assert_eq!(queue.entries[1].time, 150.0);
+        assert_eq!(queue.entries[1].emitted, 150.0);
+        assert_eq!(&*queue.entries[1].raw, &[0x01, 0x02, 0x03]);
+    }
+
+    #[test]
     fn test_queue_stale_removal() {
         let mut queue = InterfaceAnnounceQueue::new();
         queue.insert(make_entry(0x01, 1, 100.0));
