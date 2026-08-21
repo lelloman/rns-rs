@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `338173802d5a0e21515036512180d421c7d3544a`
-- Commit date: `2026-08-19 13:07:55 +0200`
-- Subject: `Transport: fix destination_hash check in pending_discovery_prs`
+- Normative commit: `0e2041c8372b33fd9d60114b0b1305cff836eef4`
+- Commit date: `2026-08-19 13:23:16 +0200`
+- Subject: `BackboneInterface: update timestamps in ic checks`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`d49b25adb194e714f235f60e8b8e288a50b89c4e`. The CI interop lane remains pinned
+`18490cee75a525b41e6a4cc3a882a20ea71df7ba`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`338173802d5a0e21515036512180d421c7d3544a`. The first commit fixes
+`0e2041c8372b33fd9d60114b0b1305cff836eef4`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -160,7 +160,9 @@ queue scan at the first duplicate; Rust's indexed lookup already has that
 behavior, now covered even for pre-existing duplicate corruption. The
 forty-first commit fixes membership testing against Python compound pending-PR
 entries; Rust has no such transmit deque and keys tracking state directly by
-destination hash. The full
+destination hash. The forty-second commit refreshes Python Backbone aggregate
+cache timestamps; Rust computes those child burst aggregates from live state
+without caches. The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 
