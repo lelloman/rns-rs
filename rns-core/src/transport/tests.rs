@@ -2771,6 +2771,77 @@ fn test_duplicate_discovery_path_request_is_suppressed() {
 }
 
 #[test]
+fn discovery_path_request_timeout_covers_slowest_interface_round_trip() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);
+    ingress.bitrate = Some(4_000);
+    let mut slow_egress = make_interface(2, constants::MODE_FULL);
+    slow_egress.bitrate = Some(400);
+    engine.register_interface(ingress);
+    engine.register_interface(slow_egress);
+
+    assert_eq!(
+        super::path_requests::discovery_path_request_timeout(&engine.interfaces),
+        26.0
+    );
+
+    let destination = [0xd0; 16];
+    let data = make_path_request_data(&destination, &[0x10; 16]);
+    assert_eq!(
+        engine
+            .handle_path_request(&data, InterfaceId(1), 1000.0)
+            .len(),
+        1
+    );
+    assert_eq!(
+        engine.discovery_path_request_deadlines.get(&destination),
+        Some(&1026.0)
+    );
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x20; 32]);
+    engine.tick(1016.0, &mut rng);
+    assert!(engine.discovery_path_requests.contains_key(&destination));
+    engine.tick(1027.0, &mut rng);
+    assert!(!engine.discovery_path_requests.contains_key(&destination));
+    assert!(!engine
+        .discovery_path_request_deadlines
+        .contains_key(&destination));
+}
+
+#[test]
+fn discovery_path_request_timeout_defaults_and_clamps_safely() {
+    let mut interfaces = BTreeMap::new();
+    assert_eq!(
+        super::path_requests::discovery_path_request_timeout(&interfaces),
+        constants::PATH_REQUEST_TIMEOUT
+    );
+
+    let mut fast = make_interface(1, constants::MODE_FULL);
+    fast.bitrate = Some(1_000);
+    interfaces.insert(fast.id, fast);
+    assert_eq!(
+        super::path_requests::discovery_path_request_timeout(&interfaces),
+        constants::PATH_REQUEST_TIMEOUT
+    );
+
+    let mut zero = make_interface(2, constants::MODE_FULL);
+    zero.bitrate = Some(0);
+    interfaces.insert(zero.id, zero);
+    assert_eq!(
+        super::path_requests::discovery_path_request_timeout(&interfaces),
+        constants::PATH_REQUEST_TIMEOUT
+    );
+
+    let mut below_minimum = make_interface(3, constants::MODE_FULL);
+    below_minimum.bitrate = Some(1);
+    interfaces.insert(below_minimum.id, below_minimum);
+    assert_eq!(
+        super::path_requests::discovery_path_request_timeout(&interfaces),
+        1606.0
+    );
+}
+
+#[test]
 fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
     let mut engine = TransportEngine::new(make_config(true));
     let mut ingress = make_interface(1, constants::MODE_ACCESS_POINT);

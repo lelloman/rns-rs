@@ -83,8 +83,16 @@ impl TransportEngine {
         ctx.actions.extend(link_closed_actions);
         jobs::cull_path_states(&mut self.path_states, &self.path_table);
         self.cull_blackholed(ctx.now);
-        self.discovery_path_requests
-            .retain(|_, req| ctx.now - req.timestamp < constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
+        self.discovery_path_requests.retain(|destination, req| {
+            let deadline = self
+                .discovery_path_request_deadlines
+                .get(destination)
+                .copied()
+                .unwrap_or(req.timestamp + constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
+            ctx.now < deadline
+        });
+        self.discovery_path_request_deadlines
+            .retain(|destination, _| self.discovery_path_requests.contains_key(destination));
         self.tunnel_table
             .void_missing_interfaces(|id| self.interfaces.contains_key(id));
         self.tunnel_table.cull(ctx.now);

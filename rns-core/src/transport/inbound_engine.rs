@@ -940,9 +940,12 @@ impl TransportEngine {
         &mut self,
         dest_hash: &[u8; 16],
     ) -> Option<InterfaceId> {
-        self.discovery_path_requests
+        let request = self
+            .discovery_path_requests
             .remove(dest_hash)
-            .map(|req| req.requesting_interface)
+            .map(|req| req.requesting_interface);
+        self.discovery_path_request_deadlines.remove(dest_hash);
+        request
     }
 
     // =========================================================================

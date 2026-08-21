@@ -222,6 +222,9 @@ pub const LINK_ESTABLISHMENT_TIMEOUT_PER_HOP: f64 = 6.0;
 /// Default timeout for path requests (seconds)
 pub const PATH_REQUEST_TIMEOUT: f64 = 15.0;
 
+/// Minimum usable interface bitrate for timeout calculations (bits/second).
+pub const MINIMUM_BITRATE: u64 = 5;
+
 /// Grace time before a path announcement is made (seconds)
 pub const PATH_REQUEST_GRACE: f64 = 0.4;
 

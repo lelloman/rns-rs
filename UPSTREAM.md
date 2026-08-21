@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0`
-- Commit date: `2026-08-19 20:15:17 +0200`
-- Subject: `Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith`
+- Normative commit: `4b914fb9a4973b5b1452875b8d514876c85b89ae`
+- Commit date: `2026-08-19 21:07:50 +0200`
+- Subject: `Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-20. It follows the signed `1.4.2` tag target
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`bde5611a0d6651e5c9e6357d7259770fdb4ff7d0`. The first commit fixes
+`4b914fb9a4973b5b1452875b8d514876c85b89ae`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -200,7 +200,13 @@ fifty-sixth commit bases extra transported LRPROOF time on the outbound next-hop
 interface. Rust now adds one MTU of outbound serialization time, covered with
 different ingress and egress bitrates. The fifty-seventh commit guards the
 calculation when bitrate is missing or zero; the native helper safely returns
-no extra time for both cases, with explicit boundaries covered. The full
+no extra time for both cases, with explicit boundaries covered. The
+fifty-eighth commit extends recursive discovery-path-request retention when a
+slow interface is online. Rust now uses the slowest positive registered
+bitrate to cover one MTU round trip plus the per-hop allowance, retains the
+fixed 15-second floor, clamps implausibly low rates, and safely defaults when
+no usable rate is known. Focused lifecycle tests pin the deadline and cleanup.
+The full
 moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

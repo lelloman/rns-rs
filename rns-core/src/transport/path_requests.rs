@@ -1,5 +1,22 @@
 use super::*;
 
+pub(super) fn discovery_path_request_timeout(
+    interfaces: &BTreeMap<InterfaceId, InterfaceInfo>,
+) -> f64 {
+    let Some(lowest_bitrate) = interfaces
+        .values()
+        .filter_map(|interface| interface.bitrate)
+        .filter(|bitrate| *bitrate > 0)
+        .min()
+    else {
+        return constants::PATH_REQUEST_TIMEOUT;
+    };
+    let effective_bitrate = lowest_bitrate.max(constants::MINIMUM_BITRATE);
+    let medium_timeout = 2.0 * (constants::MTU as f64 * 8.0 / effective_bitrate as f64)
+        + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP;
+    constants::PATH_REQUEST_TIMEOUT.max(medium_timeout)
+}
+
 impl TransportEngine {
     pub fn handle_path_request(
         &mut self,
@@ -275,6 +292,9 @@ impl TransportEngine {
                     requesting_interface: ctx.interface_id,
                 },
             );
+            let timeout = discovery_path_request_timeout(&self.interfaces);
+            self.discovery_path_request_deadlines
+                .insert(ctx.destination_hash, ctx.now + timeout);
         } else {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Not discovering path to {:02x?}: no eligible egress interface",

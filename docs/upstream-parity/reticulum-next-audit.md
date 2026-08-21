@@ -102,7 +102,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Non-runtime | Removes an unconditional Python `if True:` wrapper and dedents its body; whitespace-insensitive diff contains no executable change |
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Integrated | Transported link tracking adds one MTU of serialization time from the outbound next-hop bitrate, not the receiving interface bitrate |
 | 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Integrated | The private timeout helper returns zero for absent interfaces, missing bitrate, and zero bitrate, and computes serialization time only for positive rates |
-| 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Needs decision | Pending per-commit analysis |
+| 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Integrated | Recursive discovery PR retention uses the slowest positive interface bitrate for an MTU round trip plus per-hop allowance, with fixed-floor, missing-rate, zero-rate, clamp, and lifecycle coverage |
 | 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Needs decision | Pending per-commit analysis |
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Needs decision | Pending per-commit analysis |
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Needs decision | Pending per-commit analysis |
@@ -1220,6 +1220,28 @@ end-to-end outbound-interface regression continues to cover call-site choice.
 
 **Final disposition:** Integrated.
 
+### 58. `4b914fb9` — Extend discovery PR timeout for slow interfaces
+
+**Upstream change:** Records a per-request deadline for recursive discovery
+path requests. When online interfaces advertise a bitrate, the deadline covers
+an MTU round trip on the slowest medium plus the default per-hop timeout, while
+never dropping below the existing fixed discovery timeout.
+
+**Rust applicability:** Rust previously retained every recursive discovery
+request for the fixed 15-second interval. On a sufficiently slow interface,
+the forwarded request and returning announce can legitimately require longer,
+causing the pending response route to be discarded prematurely.
+
+**Local handling and evidence:** Added private per-destination deadlines without
+changing the public `DiscoveryPathRequest` layout. The timeout uses the slowest
+positive registered bitrate, clamps it to the protocol's five-bit minimum, and
+safely falls back to the fixed timeout when no usable bitrate is known. Focused
+tests pin fast, absent, zero, below-minimum, and mixed-interface calculations,
+then prove a slow-medium request survives the old cutoff and is removed with
+its deadline after the extended cutoff.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1245,6 +1267,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `4b914fb9` extends recursive discovery-path-request
+  retention for slow interfaces. Exact timeout boundaries and lifecycle
+  cleanup, formatting, transport tests, host lint, exact checkout, and drift
+  checks passed, leaving 5 commits.
 - `2026-08-21`: Commit `bde5611a` validates bitrate before extra timeout
   division. Missing, zero, positive, and end-to-end interface-basis tests,
   formatting, host lint, exact checkout, and drift checks passed, leaving 6
