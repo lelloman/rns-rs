@@ -130,7 +130,9 @@ impl TransportEngine {
             return None;
         }
 
-        let already_in_flight = self.path_requests.contains_key(&destination_hash);
+        let already_in_flight = self.path_requests.contains_key(&destination_hash)
+            && !self.path_table.contains_key(&destination_hash)
+            && !self.local_destinations.contains_key(&destination_hash);
         self.path_requests.entry(destination_hash).or_insert(now);
 
         let mut tag = [0u8; 16];

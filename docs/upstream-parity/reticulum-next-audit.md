@@ -1391,7 +1391,10 @@ retry/queue path and emits equivalent path-response actions for every additional
 requester, preserving the engine's one announce-table entry per destination.
 Focused regressions prove two tags and two ingress interfaces produce one
 recursive send, retain both interfaces, and answer both when the announce
-arrives. The constants test pins the new 16,000 tag limit.
+arrives. A separate regression and the Rust rnx end-to-end test prove that a
+second local client is answered from a newly learned cached path even while the
+45-second gate timestamp remains; only unknown destinations are considered
+in-flight. The constants test pins the new 16,000 tag limit.
 
 **Final disposition:** Integrated.
 
@@ -1440,6 +1443,10 @@ The first 66 commits have a final disposition. Detailed analysis for commits
 
 ## Acceptance Record
 
+- `2026-08-21`: PR #123 exposed a completed-search edge case in commit 65: a
+  second rnx client was batched behind a retained gate timestamp after the path
+  was already learned. The focused cached-path regression and exact failing
+  rnx Resource E2E now pass with batching restricted to unknown destinations.
 - `2026-08-21`: Commit `74883369` only removes a hard-coded Python link-test
   log-level override. Native tests have no equivalent override; formatting,
   warning-free host lint, exact checkout, and drift checks passed, leaving 2

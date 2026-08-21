@@ -3346,7 +3346,7 @@ fn make_announce_raw(dest_hash: &[u8; 16], payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn test_path_request_populates_announce_entry_from_raw() {
+fn learned_path_is_answered_while_request_gate_timestamp_remains() {
     let mut engine = TransportEngine::new(make_config(true));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
@@ -3371,6 +3371,7 @@ fn test_path_request_populates_announce_entry_from_raw() {
             1,
         ),
     );
+    engine.record_outbound_path_request(dest, 999.0);
 
     let tag = [0x05; 16];
     let data = make_path_request_data(&dest, &tag);
@@ -3384,6 +3385,8 @@ fn test_path_request_populates_announce_entry_from_raw() {
     assert_eq!(entry.packet_raw, announce_raw);
     assert_eq!(entry.packet_data, payload);
     assert!(entry.block_rebroadcasts);
+    assert!(engine.path_requests.contains_key(&dest));
+    assert!(!engine.discovery_path_requests.contains_key(&dest));
 }
 
 #[test]
