@@ -91,6 +91,11 @@ mod tests {
                 stats: InterfaceStats {
                     rxb: 1234,
                     txb: 5678,
+                    arxb: 0,
+                    atxb: 0,
+                    prxb: 0,
+                    ptxb: 0,
+                    traffic_rates: Default::default(),
                     rx_packets: 10,
                     tx_packets: 20,
                     cpu_load: None,

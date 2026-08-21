@@ -11,10 +11,26 @@ pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
 pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 
 /// Traffic statistics for an interface.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrafficRates {
+    pub rxs: f64,
+    pub txs: f64,
+    pub arxs: f64,
+    pub atxs: f64,
+    pub prxs: f64,
+    pub ptxs: f64,
+}
+
+/// Traffic statistics for an interface.
 #[derive(Debug, Clone, Default)]
 pub struct InterfaceStats {
     pub rxb: u64,
     pub txb: u64,
+    pub arxb: u64,
+    pub atxb: u64,
+    pub prxb: u64,
+    pub ptxb: u64,
+    pub traffic_rates: TrafficRates,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub cpu_load: Option<f64>,
@@ -35,6 +51,12 @@ pub struct InterfaceStats {
 }
 
 impl InterfaceStats {
+    /// Record incoming announce traffic after the packet has been accepted.
+    pub fn record_incoming_announce_bytes(&mut self, now: f64, size: usize) {
+        self.arxb = self.arxb.saturating_add(size as u64);
+        self.record_incoming_announce(now);
+    }
+
     /// Record an incoming announce timestamp.
     pub fn record_incoming_announce(&mut self, now: f64) {
         self.ia_timestamps.push(now);
@@ -51,6 +73,12 @@ impl InterfaceStats {
         }
     }
 
+    /// Record outgoing announce traffic.
+    pub fn record_outgoing_announce_bytes(&mut self, now: f64, size: usize) {
+        self.atxb = self.atxb.saturating_add(size as u64);
+        self.record_outgoing_announce(now);
+    }
+
     /// Record an incoming path request timestamp.
     pub fn record_incoming_path_request(&mut self, now: f64) {
         self.ip_timestamps.push(now);
@@ -59,12 +87,24 @@ impl InterfaceStats {
         }
     }
 
+    /// Record accepted incoming path-request traffic.
+    pub fn record_incoming_path_request_bytes(&mut self, now: f64, size: usize) {
+        self.prxb = self.prxb.saturating_add(size as u64);
+        self.record_incoming_path_request(now);
+    }
+
     /// Record an outgoing path request timestamp.
     pub fn record_outgoing_path_request(&mut self, now: f64) {
         self.op_timestamps.push(now);
         if self.op_timestamps.len() > PATH_REQUEST_SAMPLE_MAX {
             self.op_timestamps.remove(0);
         }
+    }
+
+    /// Record outgoing path-request traffic.
+    pub fn record_outgoing_path_request_bytes(&mut self, now: f64, size: usize) {
+        self.ptxb = self.ptxb.saturating_add(size as u64);
+        self.record_outgoing_path_request(now);
     }
 
     /// Compute announce frequency (per second) from timestamps.
@@ -176,6 +216,23 @@ mod tests {
         assert_eq!(stats.incoming_path_request_freq(), 3.0 / 2.0);
         assert_eq!(stats.outgoing_path_request_freq(), 2.0 / 2.0);
         assert_eq!(stats.outgoing_path_request_samples(), 2);
+    }
+
+    #[test]
+    fn detailed_traffic_counts_bytes_without_changing_timestamp_bounds() {
+        let mut stats = InterfaceStats::default();
+
+        stats.record_incoming_announce_bytes(1.0, 101);
+        stats.record_outgoing_announce_bytes(2.0, 202);
+        stats.record_incoming_path_request_bytes(3.0, 303);
+        stats.record_outgoing_path_request_bytes(4.0, 404);
+
+        assert_eq!((stats.arxb, stats.atxb), (101, 202));
+        assert_eq!((stats.prxb, stats.ptxb), (303, 404));
+        assert_eq!(stats.ia_timestamps, vec![1.0]);
+        assert_eq!(stats.oa_timestamps, vec![2.0]);
+        assert_eq!(stats.ip_timestamps, vec![3.0]);
+        assert_eq!(stats.op_timestamps, vec![4.0]);
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub use event::{
     LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
     RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
     RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    SingleInterfaceStat, TrafficDetail,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]

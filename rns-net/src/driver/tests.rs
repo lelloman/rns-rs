@@ -3442,6 +3442,7 @@ fn frame_updates_rx_stats() {
 
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.rxb, announce_len);
+    assert_eq!(stats.arxb, announce_len);
     assert_eq!(stats.rx_packets, 1);
 }
 
@@ -3486,6 +3487,7 @@ fn send_updates_tx_stats() {
 
     let stats = &driver.interfaces[&InterfaceId(1)].stats;
     assert_eq!(stats.txb, 3);
+    assert_eq!(stats.atxb, 3);
     assert_eq!(stats.tx_packets, 1);
 
     drop(tx);
@@ -3573,9 +3575,23 @@ fn query_interface_stats() {
         Box::new(cbs),
     );
     let (writer, _sent) = MockWriter::new();
-    driver
-        .interfaces
-        .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+    let mut entry = make_entry(1, Box::new(writer), true);
+    entry.stats.started = time::now() - 10.0;
+    entry.stats.rxb = 1_000;
+    entry.stats.txb = 2_000;
+    entry.stats.arxb = 100;
+    entry.stats.atxb = 200;
+    entry.stats.prxb = 300;
+    entry.stats.ptxb = 400;
+    entry.stats.traffic_rates = crate::interface::TrafficRates {
+        rxs: 800.0,
+        txs: 1_600.0,
+        arxs: 80.0,
+        atxs: 160.0,
+        prxs: 240.0,
+        ptxs: 320.0,
+    };
+    driver.interfaces.insert(InterfaceId(1), entry);
 
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
@@ -3591,9 +3607,58 @@ fn query_interface_stats() {
             assert!(stats.interfaces[0].status);
             assert_eq!(stats.transport_id, Some([0x42; 16]));
             assert!(stats.transport_enabled);
+            assert_eq!((stats.traffic.arxb, stats.traffic.atxb), (100, 200));
+            assert_eq!((stats.traffic.prxb, stats.traffic.ptxb), (300, 400));
+            assert_eq!((stats.traffic.rxs, stats.traffic.txs), (800.0, 1_600.0));
+            assert_eq!((stats.traffic.arxs, stats.traffic.atxs), (80.0, 160.0));
+            assert_eq!((stats.traffic.prxs, stats.traffic.ptxs), (240.0, 320.0));
         }
         _ => panic!("unexpected response"),
     }
+}
+
+#[test]
+fn traffic_sampler_reports_current_window_and_resets_idle_rates() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "sampler");
+    {
+        let stats = &mut driver.interfaces.get_mut(&InterfaceId(1)).unwrap().stats;
+        stats.rxb = 100;
+        stats.txb = 200;
+        stats.arxb = 10;
+        stats.atxb = 20;
+        stats.prxb = 30;
+        stats.ptxb = 40;
+    }
+
+    driver.sample_interface_traffic(1_000.0);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.traffic_rates.rxs,
+        0.0
+    );
+
+    {
+        let stats = &mut driver.interfaces.get_mut(&InterfaceId(1)).unwrap().stats;
+        stats.rxb += 100;
+        stats.txb += 200;
+        stats.arxb += 10;
+        stats.atxb += 20;
+        stats.prxb += 30;
+        stats.ptxb += 40;
+    }
+    driver.sample_interface_traffic(1_002.0);
+
+    let rates = driver.interfaces[&InterfaceId(1)].stats.traffic_rates;
+    assert_eq!((rates.rxs, rates.txs), (400.0, 800.0));
+    assert_eq!((rates.arxs, rates.atxs), (40.0, 80.0));
+    assert_eq!((rates.prxs, rates.ptxs), (120.0, 160.0));
+
+    driver.sample_interface_traffic(1_003.0);
+    let idle = driver.interfaces[&InterfaceId(1)].stats.traffic_rates;
+    assert_eq!(
+        (idle.rxs, idle.txs, idle.arxs, idle.atxs, idle.prxs, idle.ptxs),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    );
 }
 
 #[test]
@@ -5287,6 +5352,17 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
             )
             .unwrap();
     }
+    let child_id = InterfaceId(999);
+    let (writer, _) = MockWriter::new();
+    let mut child = make_entry(child_id.0, Box::new(writer), true);
+    child.stats.arxb = 101;
+    child.stats.atxb = 202;
+    child.stats.prxb = 303;
+    child.stats.ptxb = 404;
+    driver.interfaces.insert(child_id, child);
+    driver
+        .dynamic_interface_parents
+        .insert(child_id, handle.interface_id);
 
     let QueryResponse::InterfaceStats(stats) = driver.handle_query(QueryRequest::InterfaceStats)
     else {
@@ -5301,6 +5377,8 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     assert_eq!(public.clients, Some(2));
     assert_eq!(public.blocked_ips, Some(1));
     assert_eq!(public.blocked_ip_list, Some(vec![peer_ip.to_string()]));
+    assert_eq!((public.traffic.arxb, public.traffic.atxb), (101, 202));
+    assert_eq!((public.traffic.prxb, public.traffic.ptxb), (303, 404));
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -7316,6 +7394,10 @@ fn request_path_sends_packet() {
         !sent_packets.is_empty(),
         "Path request should be sent on wire"
     );
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.ptxb,
+        sent_packets[0].len() as u64
+    );
 
     // Verify the sent packet is a DATA PLAIN BROADCAST packet
     let raw = &sent_packets[0];
@@ -7474,6 +7556,11 @@ fn duplicate_path_request_is_not_counted_as_new_ingress() {
     }
 
     assert_eq!(driver.engine.discovery_pr_tags_count(), 1);
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.prxb,
+        packet.raw.len() as u64,
+        "a duplicate tag must not contribute duplicate path-request bytes"
+    );
     assert_eq!(
         driver.interfaces[&InterfaceId(1)].stats.ip_timestamps.len(),
         1,

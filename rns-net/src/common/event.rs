@@ -710,10 +710,27 @@ pub struct InterfaceStatsResponse {
     pub total_rxb: u64,
     /// Total transmitted bytes across all interfaces.
     pub total_txb: u64,
+    /// Aggregate byte counters and rates for total, announce and path-request traffic.
+    pub traffic: TrafficDetail,
     /// Probe responder destination hash (if enabled).
     pub probe_responder: Option<[u8; 16]>,
     /// Outbound Backbone peer-pool state, if enabled.
     pub backbone_peer_pool: Option<BackbonePeerPoolStatus>,
+}
+
+/// Detailed traffic counters and average rates in bits per second.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrafficDetail {
+    pub rxs: f64,
+    pub txs: f64,
+    pub arxb: u64,
+    pub atxb: u64,
+    pub arxs: f64,
+    pub atxs: f64,
+    pub prxb: u64,
+    pub ptxb: u64,
+    pub prxs: f64,
+    pub ptxs: f64,
 }
 
 /// Runtime status for the outbound Backbone peer pool.
@@ -753,6 +770,8 @@ pub struct SingleInterfaceStat {
     pub announces_to_internal: Option<bool>,
     pub rxb: u64,
     pub txb: u64,
+    /// Byte counters and rates for total, announce and path-request traffic.
+    pub traffic: TrafficDetail,
     pub rx_packets: u64,
     pub tx_packets: u64,
     pub cpu_load: Option<f64>,

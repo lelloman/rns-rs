@@ -152,6 +152,16 @@ pub fn handle_status_request(
     let mut iface_list = Vec::new();
     let mut total_rxb: u64 = 0;
     let mut total_txb: u64 = 0;
+    let mut total_arxb: u64 = 0;
+    let mut total_atxb: u64 = 0;
+    let mut total_prxb: u64 = 0;
+    let mut total_ptxb: u64 = 0;
+    let mut total_rxs = 0.0;
+    let mut total_txs = 0.0;
+    let mut total_arxs = 0.0;
+    let mut total_atxs = 0.0;
+    let mut total_prxs = 0.0;
+    let mut total_ptxs = 0.0;
 
     for entry in interfaces {
         let id = entry.id();
@@ -160,6 +170,16 @@ pub fn handle_status_request(
 
         total_rxb += stats.rxb;
         total_txb += stats.txb;
+        total_arxb += stats.arxb;
+        total_atxb += stats.atxb;
+        total_prxb += stats.prxb;
+        total_ptxb += stats.ptxb;
+        total_rxs += stats.traffic_rates.rxs;
+        total_txs += stats.traffic_rates.txs;
+        total_arxs += stats.traffic_rates.arxs;
+        total_atxs += stats.traffic_rates.atxs;
+        total_prxs += stats.traffic_rates.prxs;
+        total_ptxs += stats.traffic_rates.ptxs;
 
         let mut ifstats: Vec<(&str, Value)> = vec![
             ("name", Value::Str(info.name.clone())),
@@ -168,6 +188,16 @@ pub fn handle_status_request(
             ("mode", Value::UInt(info.mode as u64)),
             ("rxb", Value::UInt(stats.rxb)),
             ("txb", Value::UInt(stats.txb)),
+            ("rxs", Value::Float(stats.traffic_rates.rxs)),
+            ("txs", Value::Float(stats.traffic_rates.txs)),
+            ("arxb", Value::UInt(stats.arxb)),
+            ("atxb", Value::UInt(stats.atxb)),
+            ("arxs", Value::Float(stats.traffic_rates.arxs)),
+            ("atxs", Value::Float(stats.traffic_rates.atxs)),
+            ("prxb", Value::UInt(stats.prxb)),
+            ("ptxb", Value::UInt(stats.ptxb)),
+            ("prxs", Value::Float(stats.traffic_rates.prxs)),
+            ("ptxs", Value::Float(stats.traffic_rates.ptxs)),
         ];
         if let Some(br) = info.bitrate {
             ifstats.push(("bitrate", Value::UInt(br)));
@@ -202,8 +232,6 @@ pub fn handle_status_request(
         // Unused by Rust but expected by Python clients
         ifstats.push(("clients", Value::Nil));
         ifstats.push(("announce_queue", Value::Nil));
-        ifstats.push(("rxs", Value::UInt(0)));
-        ifstats.push(("txs", Value::UInt(0)));
 
         // Build as map
         let map = ifstats
@@ -218,8 +246,16 @@ pub fn handle_status_request(
         ("interfaces", Value::Array(iface_list)),
         ("rxb", Value::UInt(total_rxb)),
         ("txb", Value::UInt(total_txb)),
-        ("rxs", Value::UInt(0)),
-        ("txs", Value::UInt(0)),
+        ("rxs", Value::Float(total_rxs)),
+        ("txs", Value::Float(total_txs)),
+        ("arxb", Value::UInt(total_arxb)),
+        ("atxb", Value::UInt(total_atxb)),
+        ("arxs", Value::Float(total_arxs)),
+        ("atxs", Value::Float(total_atxs)),
+        ("prxb", Value::UInt(total_prxb)),
+        ("ptxb", Value::UInt(total_ptxb)),
+        ("prxs", Value::Float(total_prxs)),
+        ("ptxs", Value::Float(total_ptxs)),
     ];
 
     if let Some(identity_hash) = engine.config().identity_hash {

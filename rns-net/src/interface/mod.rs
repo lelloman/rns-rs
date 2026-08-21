@@ -234,7 +234,7 @@ fn async_writer_loop(
     metrics.worker_alive.store(false, Ordering::Relaxed);
 }
 
-pub use crate::common::interface_stats::{InterfaceStats, ANNOUNCE_SAMPLE_MAX};
+pub use crate::common::interface_stats::{InterfaceStats, TrafficRates, ANNOUNCE_SAMPLE_MAX};
 
 use crate::common::management::InterfaceStatusView;
 

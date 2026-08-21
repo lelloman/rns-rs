@@ -10,9 +10,9 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `74883369858303e89aa7861bdb64b1755b92a1c4`
-- Commit date: `2026-08-21 11:32:53 +0200`
-- Subject: `Use test runner config loglevel setting`
+- Normative commit: `5f2f4438d0412843167f43091f54af7fe39a8ed9`
+- Commit date: `2026-08-21 13:06:48 +0200`
+- Subject: `Added detailed announce and path request traffic stats`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
 and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
@@ -22,7 +22,7 @@ signed-release target and a clean GitHub clone cannot fetch the accepted rgit
 commit by SHA. Exact-target local interop
 for runtime behavior remains recorded at the previous accepted commit. The
 current normative checkout asserts `RNS` tree
-`2711e58b8c40207ea8804d252dba858df74c5919`. The CI interop lane remains pinned
+`145106d2f926fba2b990735955427cae163577a3`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
@@ -38,7 +38,7 @@ status-display baseline advancement.
 ## In-Progress 1.5.0 Development Porting Queue
 
 The normative baseline has advanced through
-`74883369858303e89aa7861bdb64b1755b92a1c4`. The first commit fixes
+`5f2f4438d0412843167f43091f54af7fe39a8ed9`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
 commit adds an optional operator LXMF destination hash to interface discovery,
@@ -239,6 +239,13 @@ The sixty-sixth commit removes an `LOG_EXTREME` override from upstream's Python
 link test so its fixture configuration controls logging. Native tests use
 Rust's standard harness and contain no equivalent forced override; production
 log-level parsing remains covered independently.
+The sixty-seventh commit adds detailed byte counters and current rates for
+announce and path-request traffic. Rust now accounts only accepted announces
+and unique path requests, samples per-interface rates over one-second-or-longer
+windows, aggregates dynamic children into Backbone listener rows, exposes the
+fields through local and remote status responses, and renders independent RX/TX
+flow shares plus detailed totals in `rnstatus`. Deterministic counter, sampling,
+duplicate, listener, RPC, and CLI regressions cover the new behavior.
 The full moving-target inventory and evidence are maintained in
 [`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
 

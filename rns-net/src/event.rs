@@ -16,7 +16,7 @@ pub use crate::common::event::{
     LocalDestinationEntry, NextHopResponse, PathTableEntry, ProviderBridgeConsumerStats,
     ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry,
     RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
-    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat, TrafficDetail,
 };
 
 /// Concrete Event type using boxed sync Writer.
