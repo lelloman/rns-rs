@@ -106,7 +106,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Integrated | Native interface-discovery documentation explains the optional operator LXMF hash, format, remote display, coordination purpose, and invalid-value behavior |
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Structurally covered | Rust represents the optional bitrate before calculating a numeric timeout and safely records the fixed 15-second deadline when no interface reports a usable rate; direct and end-to-end regressions cover the boundary |
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Structurally covered | Native resource callbacks deliver owned bytes, so `rns-git` never moves an open transport temporary file; fetch E2E writes the materialized bundle and validates its refs |
-| 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Needs decision | Pending per-commit analysis |
+| 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Structurally covered | Rust already combines a `BTreeSet` membership index with an exact bounded FIFO; the regression proves duplicates neither grow nor refresh retention order |
 | 63 | `4ab0755d0acc19eb45f729257b8976fde61146bf` | Changed PR ingress accounting point | Needs decision | Pending per-commit analysis |
 
 ## Per-Commit Analysis
@@ -1298,6 +1298,24 @@ writes it to a fresh path, and asks Git to validate the requested ref. The full
 
 **Final disposition:** Structurally covered.
 
+### 62. `d478e380` — Use sets for discovery path-request tags
+
+**Upstream change:** Replaces the linear tag list with current and previous
+sets, making duplicate membership checks indexed while rotating whole
+generations when the current set exceeds its configured size.
+
+**Rust applicability:** Rust already stores tags in both a private `BTreeSet`
+membership index and a `VecDeque` retention order. Membership is indexed, while
+the queue keeps the configured bound exact instead of temporarily retaining up
+to two upstream generations.
+
+**Local handling and evidence:** Retained the existing indexed FIFO design and
+strengthened its regression. Replaying an existing tag now explicitly proves
+the index rejects it without increasing the count or refreshing its FIFO
+position; inserting the next unique tag then evicts the original oldest tag.
+
+**Final disposition:** Structurally covered.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1323,6 +1341,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `d478e380` switches Python discovery-tag lookup to sets.
+  Rust's existing indexed bounded FIFO and strengthened duplicate-order
+  regression, formatting, transport tests, host lint, exact checkout, and drift
+  checks passed, leaving 1 commit.
 - `2026-08-21`: Commit `05e6717d` closes Python's temporary response file before
   a Windows move. Native owned-byte responses have no open-file move; the full
   `rns-git` suite, formatting, host lint, exact checkout, and drift checks

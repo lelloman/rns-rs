@@ -3046,6 +3046,13 @@ fn test_discovery_pr_tags_fifo_eviction() {
     assert!(engine.has_discovery_pr_tag(&unique2));
 
     engine.handle_path_request(
+        &make_path_request_data(&dest1, &tag1),
+        InterfaceId(1),
+        1001.5,
+    );
+    assert_eq!(engine.discovery_pr_tags_count(), 2);
+
+    engine.handle_path_request(
         &make_path_request_data(&dest3, &tag3),
         InterfaceId(1),
         1002.0,
