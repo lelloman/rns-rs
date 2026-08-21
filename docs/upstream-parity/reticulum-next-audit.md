@@ -103,7 +103,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Integrated | Transported link tracking adds one MTU of serialization time from the outbound next-hop bitrate, not the receiving interface bitrate |
 | 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Integrated | The private timeout helper returns zero for absent interfaces, missing bitrate, and zero bitrate, and computes serialization time only for positive rates |
 | 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Integrated | Recursive discovery PR retention uses the slowest positive interface bitrate for an MTU round trip plus per-hop allowance, with fixed-floor, missing-rate, zero-rate, clamp, and lifecycle coverage |
-| 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Needs decision | Pending per-commit analysis |
+| 59 | `68cda4a8557f223ed2ac8e4907968a0037424c30` | Added discovery_lxmf_address to documentation | Integrated | Native interface-discovery documentation explains the optional operator LXMF hash, format, remote display, coordination purpose, and invalid-value behavior |
 | 60 | `9ae3db169ed464d37f90ac6371af09708ca96eda` | Fixed medium_timeout init | Needs decision | Pending per-commit analysis |
 | 61 | `05e6717d210aa330a0ed6def109c47d3f3cfc71d` | Fixed rngit file resource operations failing on Windows | Needs decision | Pending per-commit analysis |
 | 62 | `d478e380c93dc892879d3800adee321a6b5733aa` | Use sets for discovery pr tags | Needs decision | Pending per-commit analysis |
@@ -1242,6 +1242,24 @@ its deadline after the extended cutoff.
 
 **Final disposition:** Integrated.
 
+### 59. `68cda4a8` — Document the discovery operator LXMF address
+
+**Upstream change:** Adds the `discovery_lxmf_address` option to the interface
+discovery manual, describing it as an optional way for remote users to contact
+an interface operator and coordinate interconnections or coverage.
+
+**Rust applicability:** The wire field, configuration parser, persistence, RPC,
+and detailed `rnstatus` output were integrated with upstream commit 2, but the
+native operator guide did not document how to configure the address.
+
+**Local handling and evidence:** Added the setting to the discoverable-interface
+example and documented its exact 16-byte/32-hex-character representation, remote
+display, purpose, and invalid-value handling. No regression test was added for
+documentation-only content; the parser and display tests remain recorded under
+commit 2.
+
+**Final disposition:** Integrated.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1267,6 +1285,9 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `68cda4a8` documents the already integrated optional
+  discovery operator LXMF address. Native documentation, formatting, host lint,
+  exact checkout, and drift checks passed, leaving 4 commits.
 - `2026-08-21`: Commit `4b914fb9` extends recursive discovery-path-request
   retention for slow interfaces. Exact timeout boundaries and lifecycle
   cleanup, formatting, transport tests, host lint, exact checkout, and drift
