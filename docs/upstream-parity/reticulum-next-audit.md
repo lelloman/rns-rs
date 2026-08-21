@@ -99,7 +99,7 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 52 | `77a1bb9b194a0e1199131c3ca9f1f01b42885526` | Consistency | Structurally covered | Native `rnsh` already deducts the channel envelope and stream header once; its chunking regression now asserts that a full packed message exactly fills Link MDU |
 | 53 | `954567c581f63b20b85863f1ecf2fa3044d64ebe` | Allow disabling link MTU discovery | Integrated | `[reticulum] link_mtu_discovery = No` now omits MTU signalling while default/true retain it, without changing public programmatic constructors |
 | 54 | `49918c7e1d524e4abf61b5714b3b5bd66350ae1b` | Updated docs | Non-runtime | Adds Python API documentation for the existing per-hop timeout constant and first-hop estimator; Rust already documents its corresponding constant and formula |
-| 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Needs decision | Pending per-commit analysis |
+| 55 | `6738db54378821f27e2224bb014d6f5b04e9bc54` | Cleaned up deprecated logic block indent in relation to inbound processing refactor | Non-runtime | Removes an unconditional Python `if True:` wrapper and dedents its body; whitespace-insensitive diff contains no executable change |
 | 56 | `49073fcca59561ce5ecbe56c99b36816ecbacfde` | Fixed invalid interface basis for extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 57 | `bde5611a0d6651e5c9e6357d7259770fdb4ff7d0` | Fixed missing interface.bitrate validation in extra link proof timeout calculation, thanks to Zenith | Needs decision | Pending per-commit analysis |
 | 58 | `4b914fb9a4973b5b1452875b8d514876c85b89ae` | Include extra timeout for discovery PRs when slow interfaces are online, thanks to Zenith | Needs decision | Pending per-commit analysis |
@@ -1168,6 +1168,21 @@ the native timeout primitives.
 
 **Final disposition:** Non-runtime.
 
+### 55. `6738db54` — Remove the deprecated inbound wrapper indentation
+
+**Upstream change:** Removes an unconditional `if True:` and its cleanup TODO,
+then dedents roughly 750 lines of Python Transport inbound handling.
+
+**Rust applicability:** A whitespace-insensitive diff reduces the commit to
+only the two removed wrapper lines. Rust's inbound implementation is already
+split across cohesive modules and has no unconditional wrapper block.
+
+**Local handling and evidence:** No production or test change is appropriate
+for a mechanically removed no-op branch. Formatting and existing Transport
+coverage remain the relevant gates.
+
+**Final disposition:** Non-runtime.
+
 Detailed analysis for the remaining commits is pending. As each commit is
 reviewed, replace its provisional **Needs decision** inventory entry and add a
 numbered analysis section here.
@@ -1193,6 +1208,10 @@ numbered analysis section here.
 
 ## Acceptance Record
 
+- `2026-08-21`: Commit `6738db54` only removes an unconditional Python wrapper
+  and dedents its body; the whitespace-insensitive diff confirms no behavior
+  change. Formatting, host lint, exact checkout, and drift checks passed,
+  leaving 8 commits.
 - `2026-08-21`: Commit `49918c7e` only documents existing Python timeout APIs;
   native timeout rustdoc already covers its corresponding constant and formula.
   Formatting, host lint, exact checkout, and drift checks passed, leaving 9
