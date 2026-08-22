@@ -36,6 +36,24 @@ impl TransportEngine {
                 .is_some_and(|entry| !entry.validated)
     }
 
+    /// Classify packet-filter rejections that are peer protocol violations.
+    pub fn is_packet_filter_protocol_violation(
+        &self,
+        packet: &crate::packet::RawPacket,
+        interface: InterfaceId,
+    ) -> bool {
+        let mut hops = packet.hops.saturating_add(1);
+        if self.interface_is_local_client(interface) {
+            hops = hops.saturating_sub(1);
+        }
+        if packet.flags.packet_type == crate::constants::PACKET_TYPE_ANNOUNCE {
+            return packet.flags.destination_type != crate::constants::DESTINATION_SINGLE;
+        }
+        (packet.flags.destination_type == crate::constants::DESTINATION_PLAIN
+            || packet.flags.destination_type == crate::constants::DESTINATION_GROUP)
+            && hops > 1
+    }
+
     pub fn path_table_count(&self) -> usize {
         self.path_table.len()
     }
