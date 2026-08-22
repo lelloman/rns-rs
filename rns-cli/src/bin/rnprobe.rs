@@ -46,9 +46,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         .init();
 
     let config_path = args.config_path().map(|s| s.to_string());
-    let timeout: f64 = args
-        .get("t")
-        .or_else(|| args.get("timeout"))
+    let timeout_arg = args.get("t").or_else(|| args.get("timeout"));
+    let timeout: f64 = timeout_arg
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_TIMEOUT);
     let payload_size: usize = args
@@ -134,7 +133,12 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
 
     // First, ensure we have a path
-    let timeout_dur = Duration::from_secs_f64(timeout);
+    let adaptive_timeout = if timeout_arg.is_some() {
+        timeout
+    } else {
+        timeout.max(query_medium_path_timeout(&rpc_addr, &auth_key).unwrap_or(0.0))
+    };
+    let timeout_dur = Duration::from_secs_f64(adaptive_timeout);
     if !wait_for_path(&rpc_addr, &auth_key, &dest_hash, timeout_dur, verbosity) {
         process::exit(1);
     }
@@ -161,6 +165,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if any_failed {
         process::exit(1);
     }
+}
+
+fn query_medium_path_timeout(addr: &RpcAddr, auth_key: &[u8; 32]) -> Option<f64> {
+    let mut client = RpcClient::connect(addr, auth_key).ok()?;
+    client
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("medium_path_timeout".into()),
+        )]))
+        .ok()?
+        .as_float()
 }
 
 /// Wait for a path to the destination, requesting it if needed.

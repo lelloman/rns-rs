@@ -702,7 +702,8 @@ fn connect(
     options: &Options,
     rx: &mpsc::Receiver<RnxEvent>,
 ) -> Result<[u8; 16], Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs_f64(options.timeout);
+    let configured_timeout = Duration::from_secs_f64(options.timeout);
+    let deadline = Instant::now() + app::adaptive_path_timeout(node, configured_timeout);
     if !node.has_path(&DestHash(destination))? {
         node.request_path(&DestHash(destination))?;
     }
@@ -718,8 +719,10 @@ fn connect(
     let mut signature_public = [0u8; 32];
     signature_public.copy_from_slice(&recalled.public_key[32..]);
     let link_id = node.create_link(destination, signature_public)?;
+    let link_deadline =
+        Instant::now() + configured_timeout.max(app::link_establishment_timeout(node, destination));
     loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))? {
+        match rx.recv_timeout(link_deadline.saturating_duration_since(Instant::now()))? {
             RnxEvent::LinkEstablished(id, true) if id == link_id => break,
             RnxEvent::LinkClosed(id) if id == link_id => {
                 return Err("link establishment failed".into())

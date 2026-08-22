@@ -141,12 +141,16 @@ pub fn remote_query(
     };
 
     let node = RnsNode::connect_shared(shared_config, Box::new(callbacks)).ok()?;
+    let timeout = timeout.max(Duration::from_secs_f64(
+        node.medium_path_timeout().unwrap_or(0.0).max(0.0),
+    ));
 
     // Wait briefly for connection
     std::thread::sleep(Duration::from_millis(500));
 
     // Create link to management destination
     let link_id = node.create_link(dest_hash, dest_sig_pub).ok()?;
+    let timeout = timeout.max(crate::app::link_establishment_timeout(&node, dest_hash));
 
     // Wait for link establishment
     let _established_link_id = wait_for_link_established(&link_rx, &closed_rx, timeout)?;

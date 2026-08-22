@@ -574,7 +574,8 @@ fn connect(
     timeout: Duration,
     rx: &mpsc::Receiver<RncpEvent>,
 ) -> Result<[u8; 16], Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + timeout;
+    let path_timeout = app::adaptive_path_timeout(node, timeout);
+    let deadline = Instant::now() + path_timeout;
     if !node.has_path(&DestHash(destination))? {
         node.request_path(&DestHash(destination))?;
     }
@@ -590,8 +591,10 @@ fn connect(
     let mut signature_public = [0u8; 32];
     signature_public.copy_from_slice(&recalled.public_key[32..]);
     let link_id = node.create_link(destination, signature_public)?;
+    let link_deadline =
+        Instant::now() + timeout.max(app::link_establishment_timeout(node, destination));
     loop {
-        let event = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        let event = rx.recv_timeout(link_deadline.saturating_duration_since(Instant::now()))?;
         match event {
             RncpEvent::LinkEstablished(id, true) if id == link_id => break,
             RncpEvent::LinkClosed(id) if id == link_id => {
