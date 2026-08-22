@@ -63,13 +63,12 @@ subject where practical, and add this trailer with the full canonical hash:
 Upstream-Commit: <40-character canonical commit hash>
 ```
 
-An `Integrated` change gets its code, focused tests, and audit disposition in
-that one commit. A `Structurally covered`, `Non-runtime`, or deliberately
-`Deferred` change still gets one documentation-only mapping commit containing
-its analysis and evidence. Do not use an empty commit: the audit update is the
-durable local application of a change that needs no runtime diff. If a commit
-cannot stand alone because an earlier dependency is absent, integrate the
-dependency first; do not squash the commits together.
+An `Integrated` change gets its code and focused tests in that one mapping
+commit. A `Structurally covered`, `Non-runtime`, or deliberately `Deferred`
+change still gets one non-empty mapping commit that strengthens a regression,
+documents the relevant invariant in code, or records its analysis. Do not use
+an empty commit. If a commit cannot stand alone because an earlier dependency
+is absent, integrate the dependency first; do not squash the commits together.
 
 1. Refresh both upstream remotes with `scripts/check_upstream_drift.py` and
    require a fresh, complete result. Keep the configured checkout at the
@@ -96,11 +95,12 @@ dependency first; do not squash the commits together.
    exact upstream checkout is required for that test, create a disposable
    worktree under `/tmp` at the reviewed commit instead of moving the accepted
    checkout.
-7. Update the audit entry with the final disposition, exact test
-   commands/results, and any deliberate caveat. Commit the code, tests, and
-   audit entry together as the sole rns-rs mapping for that upstream commit;
-   then add the resulting local commit hash to the next audit update. Do not
-   record planned tests as passed evidence.
+7. Commit the code, focused tests, and any commit-local documentation as the
+   sole rns-rs mapping for that upstream commit. Then update the audit entry
+   with the resulting local hash, final disposition, exact test results, and
+   any deliberate caveat. The audit update may be a separate summary commit,
+   but it must not carry an `Upstream-Commit` trailer. Do not record planned
+   tests as passed evidence.
 8. Verify the mapping before continuing: the working tree must be clean, the
    new local commit must carry the exact `Upstream-Commit` trailer, and no other
    local commit may carry that upstream hash.

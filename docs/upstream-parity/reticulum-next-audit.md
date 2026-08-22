@@ -2,7 +2,7 @@
 
 ## Scope and Baseline
 
-- audit date: `2026-08-21`
+- audit date: `2026-08-22`
 - previous accepted version: `1.4.2`
 - previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
 - target version: `1.5.0`
@@ -14,7 +14,7 @@
 - audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
 - commits in range: `73`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
-- local branch and revision inspected: `dev@56e8792e9b8393976c9492d230269bb359594111`
+- local integration range: `db809ef..ddfc829` on `dev`
 
 All 73 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
@@ -24,6 +24,15 @@ five newer rGit commits after commit 68 through
 dispositions below. The GitHub mirror tip
 `b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
 baseline, so the remotes do not agree.
+
+A fresh 2026-08-22 refresh found eight additional canonical rGit commits after
+the accepted baseline, through
+`fc69f323a82a0f3d76b2b3b90d16850ff25b4cf1`. The GitHub mirror remains at
+`b48b96e61676504e0a4e527b33b9a0b4495c6872`, behind the baseline. All eight
+have now been reviewed in ancestry order and have final dispositions below.
+Each maps to exactly one ancestry-ordered rns-rs commit in
+`db809ef..ddfc829`. This does not promote the accepted baseline or claim that
+the complete promotion gates have passed.
 
 ## Audit Vocabulary
 
@@ -121,6 +130,19 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 71 | `60eb0509f25632dbc6e4cea07751eca70b80a8a5` | Signal blackholed status in validate_announce | Integrated | Invalid-announce accounting distinguishes blackhole policy drops for synchronous and asynchronous verification; tampered blackholed announce regression |
 | 72 | `cab513fa31c70e52ba735ec0668d22b148522679` | Logging | Structurally covered | Native code has no misleading batching diagnostic and already restricts batching to non-ingress-limited requests, covered by limiter/batching regressions |
 | 73 | `b3ef214e7257a1e5b674f8b1f002f05e78b090b8` | Added total announce/pr frequency stats | Integrated | Aggregate announce/PR RX/TX frequencies from existing bounded interface estimators, local/remote status fields, and detailed CLI totals with query/RPC/formatter regressions |
+
+### Post-baseline drift observed 2026-08-22
+
+| # | Upstream commit | Subject | Final disposition | Local evidence |
+|---:|---|---|---|---|
+| 74 | `7b8923b61f2d075ac6819cfd2cccf3f7d93df1a4` | Added protocol violations | Integrated | Local `db809ef`; packet-filter rejections distinguish protocol-invalid announce/transport combinations from duplicate-filter hits |
+| 75 | `378840a6bf827063d7558417301d00a33ea9eeb5` | Added total announce/pr count stats per interface | Integrated | Local `6308ec6`; saturating interface counts, aggregation, RPC/remote status, `rnstatus`, and sustained burst timing |
+| 76 | `2b1b9589f1341dc8adca42b210bab48c6e19789b` | Added medium bitrate based timeout calculation helpers and RPC functions and added dynamic timeout calculation to rngit, by Zenith | Integrated | Local `1c4d062`; slowest-interface and timeout core/query/RPC APIs plus dynamic `rns-git` deadlines |
+| 77 | `4c69b376b2a7ef8cf5771ab62034428a7cf77a2a` | Added adaptive timeouts to utilities, by Zenith | Integrated | Local `d960f3e`; adaptive `rncp`, `rnx`, `rnprobe`, and remote-management deadlines |
+| 78 | `b1aa527861137e92942ab85753b99c14795cdb48` | Track in-flight path requests separately | Structurally covered | Local `e3d8428`; dedicated request gate and strengthened learned-path regression |
+| 79 | `3885d2329350451e822705ea13b8625aedf8938a` | Added protocol violations | Integrated | Local `5c0ef93`; excess PR data, malformed link requests, and invalid tunnel synthesis count violations |
+| 80 | `6b2c5bcf0bc8308f94c9387de54eba4d1122d009` | Don't reprocess IFAC for held announces | Structurally covered | Local `268edb7`; driver-only IFAC boundary documented on held announce bytes |
+| 81 | `fc69f323a82a0f3d76b2b3b90d16850ff25b4cf1` | Cleanup | Integrated | Local `ddfc829`; corrected no-IFAC classification with focused regression; queued sends already use normal dispatch |
 
 ## Per-Commit Analysis
 
@@ -1589,21 +1611,118 @@ flow shares.
 
 **Final disposition:** Integrated.
 
-All 73 commits have a final disposition; no canonical rGit commit remains ahead
-of the accepted baseline at this audit tip.
+### 74. `7b8923b6` — Classify more packet-filter protocol violations
+
+**Upstream change:** Counts invalid announce context/header combinations and
+transported plain/group packets with an impossible hop count as protocol
+violations instead of ordinary duplicate-filter rejections.
+
+**Local handling and evidence:** Added a pure core classifier and used it at
+the driver's packet-filter boundary, preserving the duplicate filter counter
+for ordinary repeats. A focused driver regression exercises each invalid class
+and a true duplicate. **Final disposition:** Integrated.
+
+### 75. `378840a6` — Add packet counts and sustained burst timing
+
+**Upstream change:** Adds cumulative announce/path-request RX/TX counts to each
+interface and status output. It also keeps burst state active for a full hold
+interval after the last above-threshold sample.
+
+**Local handling and evidence:** Interface statistics now increment four
+saturating counts alongside the existing byte totals. Driver queries, listener
+aggregation, pickle RPC, remote MessagePack status, and `rnstatus` totals/sort
+keys expose them. Announce and PR ingress state separately tracks the last
+sustained sample. Interface, RPC, CLI, and cooldown regressions cover the new
+behavior. **Final disposition:** Integrated.
+
+### 76. `2b1b9589` — Expose medium-bitrate adaptive timeouts
+
+**Upstream change:** Calculates a medium path timeout from the slowest usable
+interface bitrate, exposes the bitrate and timeout over RPC, and uses adaptive
+path/link deadlines in `rngit`.
+
+**Local handling and evidence:** Core exposes the slowest positive bitrate and
+compatible timeout formula; node queries and pickle RPC expose both values.
+`rns-git` now raises path and link deadlines to those calculated bounds. Core
+formula and RPC round-trip regressions passed. **Final disposition:** Integrated.
+
+### 77. `4c69b376` — Use adaptive timeouts in utilities
+
+**Upstream change:** Applies the new path timeout and per-hop link-establishment
+timeout to client utilities, while retaining an explicitly supplied probe
+timeout.
+
+**Local handling and evidence:** Shared helpers apply the medium path bound and
+the existing link per-hop formula. `rncp`, `rnx`, `rnprobe`, and remote
+management use those bounds; `rnprobe` only adapts its default. The complete
+`rns-cli` suite, including native rncp/rnx E2E, passed. `rnpath` has no
+link-establishing client operation to change locally. **Final disposition:**
+Integrated.
+
+### 78. `b1aa5278` — Separate in-flight path-request state
+
+**Upstream change:** Separates path-request batching gates from discovered path
+state so a retained request timestamp cannot make a known destination appear
+in flight.
+
+**Local handling and evidence:** Rust already stores request gates in the
+dedicated `path_requests` map and checks actual path/local state before
+batching. The existing learned-path regression keeps the gate timestamp and
+still answers immediately. **Final disposition:** Structurally covered.
+
+### 79. `3885d232` — Count additional protocol and IFAC violations
+
+**Upstream change:** Extends violation accounting to oversized path requests,
+malformed link requests, tunnel synthesis failures, invalid frame sizes, and
+IFAC failures, while ensuring cached announce replay is not authenticated
+twice.
+
+**Local handling and evidence:** The driver counts excessive PR data and
+invalid tunnel synthesis; LinkManager reports malformed link requests back to
+the receiving interface. Per-interface decoders already enforce exact frame
+bounds, and the driver/core split performs IFAC handling only before core
+ingress. Focused driver and LinkManager regressions passed. **Final
+disposition:** Integrated.
+
+### 80. `6b2c5bcf` — Do not reprocess IFAC for held announces
+
+**Upstream change:** Marks held announces as already IFAC-processed before
+reinjection.
+
+**Local handling and evidence:** Native IFAC authentication and mask removal
+belong exclusively to the network driver. The transport core stores and
+reinjects decoded announce bytes and preserved reception metadata, never
+calling the IFAC layer. Existing held/cached announce regressions pin this
+boundary. **Final disposition:** Structurally covered.
+
+### 81. `fc69f323` — Route queued announces normally and correct IFAC category
+
+**Upstream change:** Sends queued announces through the standard Transport
+transmit path and classifies an IFAC flag received on a non-IFAC interface as
+an IFAC violation.
+
+**Local handling and evidence:** Core queued announces already emit the same
+`SendOnInterface` action used by ordinary traffic, after which the driver
+performs outbound IFAC and accounting. The inbound category is now corrected
+to the interface IFAC counter; the focused rejection regression covers it.
+**Final disposition:** Integrated.
+
+All 81 commits through the observed canonical tip have a final disposition.
+The accepted baseline remains commit 73 until the full promotion gates pass.
 
 ## Integration Plan
 
-1. Group the 63 commits into protocol/runtime, interfaces, utilities,
-   documentation, tests, and non-runtime changes.
+1. Inventory the eight post-baseline commits in ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
-3. Add focused regression tests before porting applicable behavior.
-4. Record local implementation commits and evidence, then run promotion gates.
+3. Add focused regressions and port applicable behavior across protocol, RPC,
+   utilities, status output, and documentation.
+4. Record working-tree evidence and run the affected suites and host lint.
+5. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
@@ -1613,6 +1732,15 @@ of the accepted baseline at this audit tip.
 
 ## Acceptance Record
 
+- `2026-08-22`: Commits `7b8923b6..fc69f323` were reviewed in ancestry
+  order. Packet classification and violation accounting, cumulative
+  announce/PR counts, sustained burst timing, timeout RPC and adaptive utility
+  deadlines were integrated; separate in-flight state and held-announce IFAC
+  behavior are structurally covered. `cargo test -p rns-core`, `cargo test -p
+  rns-net --all-features`, `cargo test -p rns-cli`, and `cargo test -p
+  rns-git` passed, as did formatting, diff checks, and warning-free host lint.
+  A fresh two-remote drift check still resolves canonical rGit to `fc69f323`
+  with exactly these eight commits; GitHub remains behind at `b48b96e6`.
 - `2026-08-21`: Commit `b3ef214e` adds aggregate announce/path-request
   frequencies to local and remote status and detailed `rnstatus` totals.
   Deterministic query, RPC, remote-status, CLI, relevant full suites, formatting,
