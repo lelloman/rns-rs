@@ -3630,6 +3630,35 @@ fn excessive_path_request_data_counts_a_protocol_violation() {
 }
 
 #[test]
+fn ifac_flag_without_ifac_counts_an_ifac_violation() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "ifac-violations");
+
+    let mut flagged = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0x33; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"ifac flag",
+    )
+    .unwrap()
+    .raw;
+    flagged[0] |= 0x80;
+    driver.handle_frame_event(InterfaceId(1), flagged, None, None);
+
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.ifac_violations, 1);
+    assert_eq!(stats.protocol_violations, 0);
+}
+
+#[test]
 fn send_updates_tx_stats() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
