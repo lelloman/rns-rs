@@ -7,7 +7,9 @@ use super::RxMetadata;
 /// A held announce waiting for release after burst conditions subside.
 #[derive(Debug, Clone)]
 pub struct HeldAnnounce {
-    /// Original raw bytes (pre-hop-increment).
+    /// Original transport-frame bytes after driver IFAC authentication and
+    /// unmasking (pre-hop-increment). Release stays inside the transport core
+    /// and must not send these bytes through IFAC processing again.
     pub raw: Vec<u8>,
     /// Hop count (post-increment, for priority selection).
     pub hops: u8,
