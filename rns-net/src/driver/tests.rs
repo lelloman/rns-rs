@@ -3599,6 +3599,37 @@ fn packet_filter_protocol_rejections_are_not_counted_as_duplicate_hits() {
 }
 
 #[test]
+fn excessive_path_request_data_counts_a_protocol_violation() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "path-request-violations");
+
+    let mut request_data = vec![0x44; 16];
+    request_data.extend_from_slice(&[0x55; 16]);
+    request_data.extend_from_slice(&[0x66; 17]);
+    let request = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &driver.path_request_dest,
+        None,
+        constants::CONTEXT_NONE,
+        &request_data,
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), request.raw, None, None);
+
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        1
+    );
+}
+
+#[test]
 fn send_updates_tx_stats() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();

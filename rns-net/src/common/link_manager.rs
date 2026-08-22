@@ -227,6 +227,10 @@ pub enum LinkManagerAction {
         link_id: LinkId,
         receiving_interface: rns_core::transport::types::InterfaceId,
     },
+    /// A malformed link request was rejected on an interface.
+    ProtocolViolation {
+        receiving_interface: rns_core::transport::types::InterfaceId,
+    },
 }
 
 /// Manages multiple links, link destinations, and request/response.
@@ -670,7 +674,9 @@ impl LinkManager {
             Ok(r) => r,
             Err(e) => {
                 log::debug!("LINKREQUEST rejected: {}", e);
-                return Vec::new();
+                return vec![LinkManagerAction::ProtocolViolation {
+                    receiving_interface,
+                }];
             }
         };
 

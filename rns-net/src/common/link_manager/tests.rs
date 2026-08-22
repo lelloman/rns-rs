@@ -59,6 +59,47 @@ fn test_create_link() {
 }
 
 #[test]
+fn malformed_linkrequest_reports_protocol_violation() {
+    let mut manager = LinkManager::new();
+    let mut rng = make_rng(0x19);
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let destination = [0x19; 16];
+    manager.register_link_destination(
+        destination,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let packet = RawPacket::pack(
+        rns_core::packet::PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        },
+        0,
+        &destination,
+        None,
+        constants::CONTEXT_NONE,
+        &[0x20; 65],
+    )
+    .unwrap();
+    let interface = rns_core::transport::types::InterfaceId(7);
+    let actions = manager.handle_local_delivery(
+        destination,
+        &packet.raw,
+        packet.packet_hash,
+        interface,
+        &mut rng,
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [LinkManagerAction::ProtocolViolation { receiving_interface }] if *receiving_interface == interface
+    ));
+}
+
+#[test]
 fn link_mtu_discovery_can_be_disabled_without_changing_public_create_api() {
     let mut mgr = LinkManager::new();
     mgr.set_link_mtu_discovery(false);
