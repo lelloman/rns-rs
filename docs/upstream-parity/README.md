@@ -45,6 +45,96 @@ working audit can have only a parity record.
 Never edit an old audit to make its point-in-time pre-integration findings look
 final. The corresponding parity record records the final outcome.
 
+## Per-Commit Integration Procedure
+
+Process upstream commits in ancestry order. Do not combine unrelated commits
+merely because they appeared in the same drift report. Every upstream commit
+must map to exactly one rns-rs commit, even when adjacent changes depend on each
+other. The resulting local commits must remain in the same ancestry order as
+upstream.
+
+Start from a clean rns-rs working tree. Do not accumulate a drift report into
+one working-tree bundle or use a stash as the integration record. Finish,
+validate, document, and commit the current upstream change before beginning the
+next one. Use the commit subject prefix `upstream:`, preserve the upstream
+subject where practical, and add this trailer with the full canonical hash:
+
+```text
+Upstream-Commit: <40-character canonical commit hash>
+```
+
+An `Integrated` change gets its code, focused tests, and audit disposition in
+that one commit. A `Structurally covered`, `Non-runtime`, or deliberately
+`Deferred` change still gets one documentation-only mapping commit containing
+its analysis and evidence. Do not use an empty commit: the audit update is the
+durable local application of a change that needs no runtime diff. If a commit
+cannot stand alone because an earlier dependency is absent, integrate the
+dependency first; do not squash the commits together.
+
+1. Refresh both upstream remotes with `scripts/check_upstream_drift.py` and
+   require a fresh, complete result. Keep the configured checkout at the
+   accepted `UPSTREAM.md` normative commit. Inspect newer objects with `git
+   show`; do not advance that checkout merely to read a diff.
+2. Record the full hash, subject, changed paths, and dependency on earlier
+   unintegrated commits in the active audit. Read the complete diff and enough
+   surrounding upstream code to identify the observable behavior, not only the
+   lines changed.
+3. Locate the corresponding Rust protocol, state, RPC, CLI, persistence, and
+   documentation surfaces. Search for an existing invariant or test that may
+   already cover the behavior before deciding that code is required.
+4. Assign one explicit disposition from the audit vocabulary:
+   `Integrated`, `Structurally covered`, `Non-runtime`, `Deferred`, `Needs
+   port`, `Needs coordinated port`, or `Needs decision`. A subject line or
+   architectural intuition alone is not evidence for `Structurally covered`.
+5. For an applicable change, first add or identify a focused regression that
+   fails for the missing behavior. Implement the smallest compatible Rust
+   change across all affected surfaces. Preserve native APIs unless upstream
+   wire, configuration, or RPC compatibility requires an observable change.
+6. Run the focused test, the complete test suite for every changed crate, code
+   formatting, and warning-free host lint. Run Python/Rust interoperability
+   when wire encoding or externally visible protocol behavior changes. If an
+   exact upstream checkout is required for that test, create a disposable
+   worktree under `/tmp` at the reviewed commit instead of moving the accepted
+   checkout.
+7. Update the audit entry with the final disposition, exact test
+   commands/results, and any deliberate caveat. Commit the code, tests, and
+   audit entry together as the sole rns-rs mapping for that upstream commit;
+   then add the resulting local commit hash to the next audit update. Do not
+   record planned tests as passed evidence.
+8. Verify the mapping before continuing: the working tree must be clean, the
+   new local commit must carry the exact `Upstream-Commit` trailer, and no other
+   local commit may carry that upstream hash.
+9. Re-run the drift checker after each commit. Continue with the next commit
+   only after the current behavior and evidence are understood. Promote
+   `UPSTREAM.md` only after every commit has a final disposition and all parity
+   gates in the parity template have passed.
+
+Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
+`.local/reticulum-upstream.path`:
+
+```bash
+git -C "$UPSTREAM_REPO" log --reverse --format='%H %s' <baseline>..<target>
+git -C "$UPSTREAM_REPO" show --stat --oneline <commit>
+git -C "$UPSTREAM_REPO" show --no-ext-diff <commit> -- <changed-paths>
+rg -n '<symbol-or-field>' rns-* docs scripts
+```
+
+Before moving to the next commit, the audit should answer four questions:
+
+- What observable behavior changed upstream?
+- Where is the equivalent Rust behavior, or why is there no equivalent?
+- What code or invariant supplies compatibility?
+- What focused evidence demonstrates the disposition?
+
+The history should also satisfy this one-to-one check:
+
+```bash
+git log --format='%H%n%(trailers:key=Upstream-Commit,valueonly)' <range>
+```
+
+Each reviewed upstream hash must appear exactly once, and each corresponding
+rns-rs commit must contain exactly one `Upstream-Commit` trailer.
+
 ## Records
 
 | Version | Audit | Final parity record |
