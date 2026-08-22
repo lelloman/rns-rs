@@ -3391,6 +3391,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
         ),
     );
     engine.record_outbound_path_request(dest, 999.0);
+    let gate_before = engine.path_requests[&dest];
 
     let tag = [0x05; 16];
     let data = make_path_request_data(&dest, &tag);
@@ -3405,6 +3406,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
     assert_eq!(entry.packet_data, payload);
     assert!(entry.block_rebroadcasts);
     assert!(engine.path_requests.contains_key(&dest));
+    assert_eq!(engine.path_requests[&dest], gate_before);
     assert!(!engine.discovery_path_requests.contains_key(&dest));
 }
 
