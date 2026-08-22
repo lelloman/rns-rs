@@ -154,8 +154,12 @@ pub fn handle_status_request(
     let mut total_txb: u64 = 0;
     let mut total_arxb: u64 = 0;
     let mut total_atxb: u64 = 0;
+    let mut total_arxc: u64 = 0;
+    let mut total_atxc: u64 = 0;
     let mut total_prxb: u64 = 0;
     let mut total_ptxb: u64 = 0;
+    let mut total_prxc: u64 = 0;
+    let mut total_ptxc: u64 = 0;
     let mut total_rxs = 0.0;
     let mut total_txs = 0.0;
     let mut total_arxs = 0.0;
@@ -176,8 +180,12 @@ pub fn handle_status_request(
         total_txb += stats.txb;
         total_arxb += stats.arxb;
         total_atxb += stats.atxb;
+        total_arxc += stats.arxc;
+        total_atxc += stats.atxc;
         total_prxb += stats.prxb;
         total_ptxb += stats.ptxb;
+        total_prxc += stats.prxc;
+        total_ptxc += stats.ptxc;
         total_rxs += stats.traffic_rates.rxs;
         total_txs += stats.traffic_rates.txs;
         total_arxs += stats.traffic_rates.arxs;
@@ -200,10 +208,14 @@ pub fn handle_status_request(
             ("txs", Value::Float(stats.traffic_rates.txs)),
             ("arxb", Value::UInt(stats.arxb)),
             ("atxb", Value::UInt(stats.atxb)),
+            ("arxc", Value::UInt(stats.arxc)),
+            ("atxc", Value::UInt(stats.atxc)),
             ("arxs", Value::Float(stats.traffic_rates.arxs)),
             ("atxs", Value::Float(stats.traffic_rates.atxs)),
             ("prxb", Value::UInt(stats.prxb)),
             ("ptxb", Value::UInt(stats.ptxb)),
+            ("prxc", Value::UInt(stats.prxc)),
+            ("ptxc", Value::UInt(stats.ptxc)),
             ("prxs", Value::Float(stats.traffic_rates.prxs)),
             ("ptxs", Value::Float(stats.traffic_rates.ptxs)),
             (
@@ -264,10 +276,14 @@ pub fn handle_status_request(
         ("txs", Value::Float(total_txs)),
         ("arxb", Value::UInt(total_arxb)),
         ("atxb", Value::UInt(total_atxb)),
+        ("arxc", Value::UInt(total_arxc)),
+        ("atxc", Value::UInt(total_atxc)),
         ("arxs", Value::Float(total_arxs)),
         ("atxs", Value::Float(total_atxs)),
         ("prxb", Value::UInt(total_prxb)),
         ("ptxb", Value::UInt(total_ptxb)),
+        ("prxc", Value::UInt(total_prxc)),
+        ("ptxc", Value::UInt(total_ptxc)),
         ("prxs", Value::Float(total_prxs)),
         ("ptxs", Value::Float(total_ptxs)),
         ("arxf", Value::Float(total_arxf)),

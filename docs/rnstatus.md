@@ -10,7 +10,8 @@ Options:
   --config PATH, -c PATH  Path to config directory
   -a                      Show all interfaces
   -j                      JSON output
-  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx
+  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx,
+                          arxc, atxc, prxc, ptxc, vio, ifac, flt
   -r                      Reverse sort order
   -t                      Show traffic totals
   -l                      Show link count
@@ -36,6 +37,12 @@ text. Queue statistics report total, data, announce, path-request, and
 ingress-limited queue occupancy, and append cumulative drop counts when they
 are nonzero. Backbone listener burst lines include the number of affected child
 interfaces when that count is available.
+
+With `-A` or `-P`, each interface includes cumulative incoming and outgoing
+packet counts as well as byte totals, current rates, and frequencies. The
+`arxc`, `atxc`, `prxc`, and `ptxc` sort keys order interfaces by those announce
+and path-request counts. `vio`, `ifac`, and `flt` sort by protocol, IFAC, and
+duplicate-filter violations respectively.
 
 For remote status, `-R HASH` requires the management identity selected with
 `-i PATH`, and the remote transport must authorize that identity.

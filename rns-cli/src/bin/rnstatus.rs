@@ -467,7 +467,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     .and_then(|v| v.as_float());
                 let ar_grace = iface.get("announce_rate_grace").and_then(|v| v.as_int());
                 let flow = interface_flow_rates(iface, "arxs", "atxs");
-                for line in announce_status_lines(
+                let lines = announce_status_lines(
                     ia_freq,
                     oa_freq,
                     clients,
@@ -478,7 +478,10 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                         grace: ar_grace,
                     },
                     flow,
-                ) {
+                );
+                let arxc = iface.get("arxc").and_then(|v| v.as_int()).unwrap_or(0);
+                let atxc = iface.get("atxc").and_then(|v| v.as_int()).unwrap_or(0);
+                for line in traffic_count_lines("Announces", arxc, atxc, lines) {
                     println!("{}", line);
                 }
             }
@@ -502,7 +505,10 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                     .filter(|n| *n > 0)
                     .map(|n| n as u64);
                 let flow = interface_flow_rates(iface, "prxs", "ptxs");
-                for line in path_request_status_lines(ip_freq, op_freq, clients, peers, flow) {
+                let lines = path_request_status_lines(ip_freq, op_freq, clients, peers, flow);
+                let prxc = iface.get("prxc").and_then(|v| v.as_int()).unwrap_or(0);
+                let ptxc = iface.get("ptxc").and_then(|v| v.as_int()).unwrap_or(0);
+                for line in traffic_count_lines("Path reqs", prxc, ptxc, lines) {
                     println!("{}", line);
                 }
             }
@@ -620,6 +626,12 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
                 .and_then(|v| v.as_float())
                 .unwrap_or(0.0),
         ),
+        "arxc" | "atxc" | "prxc" | "ptxc" => SortValue::Int(
+            iface
+                .get(sort_key)
+                .and_then(|value| value.as_int())
+                .unwrap_or(0),
+        ),
         "pvs" => SortValue::Int(
             iface
                 .get("protocol_violations")
@@ -675,6 +687,27 @@ fn violation_status_lines(iface: &PickleValue) -> Vec<String> {
     if filter > 0 {
         lines.push(format!("    Flt. Hits : {filter}"));
     }
+    lines
+}
+
+fn traffic_count_lines(
+    label: &str,
+    inbound: i64,
+    outbound: i64,
+    rate_lines: Vec<String>,
+) -> Vec<String> {
+    if inbound <= 0 || outbound <= 0 || rate_lines.is_empty() {
+        return rate_lines;
+    }
+    let mut lines = vec![format!(
+        "    {label:<10}: {inbound}\u{2193} {outbound}\u{2191} total"
+    )];
+    let prefix = format!("    {label:<10}:");
+    lines.extend(rate_lines.into_iter().map(|line| {
+        line.strip_prefix(&prefix)
+            .map(|suffix| format!("                {suffix}"))
+            .unwrap_or(line)
+    }));
     lines
 }
 
@@ -1414,7 +1447,7 @@ fn print_usage(usage_name: &str) {
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -l                      Show link count");
@@ -1779,6 +1812,30 @@ mod tests {
 
         assert_eq!(interface_sort_value(&iface, "prx"), SortValue::Float(1.25));
         assert_eq!(interface_sort_value(&iface, "ptx"), SortValue::Float(2.5));
+    }
+
+    #[test]
+    fn total_packet_counts_render_and_sort_independently() {
+        let iface = PickleValue::Dict(vec![
+            (PickleValue::String("arxc".into()), PickleValue::Int(11)),
+            (PickleValue::String("atxc".into()), PickleValue::Int(22)),
+            (PickleValue::String("prxc".into()), PickleValue::Int(33)),
+            (PickleValue::String("ptxc".into()), PickleValue::Int(44)),
+        ]);
+        assert_eq!(interface_sort_value(&iface, "arxc"), SortValue::Int(11));
+        assert_eq!(interface_sort_value(&iface, "ptxc"), SortValue::Int(44));
+        assert_eq!(
+            traffic_count_lines(
+                "Announces",
+                11,
+                22,
+                vec!["    Announces : 1.0/h in  2.0/h out".into()],
+            ),
+            vec![
+                "    Announces : 11\u{2193} 22\u{2191} total",
+                "                 1.0/h in  2.0/h out",
+            ]
+        );
     }
 
     #[test]
