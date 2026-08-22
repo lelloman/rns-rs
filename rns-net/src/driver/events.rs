@@ -61,7 +61,7 @@ impl Driver {
                         interface_id.0
                     );
                     if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                        entry.stats.protocol_violations += 1;
+                        entry.stats.ifac_violations += 1;
                     }
                     return;
                 }
