@@ -534,7 +534,7 @@ impl Driver {
         }
 
         if destination_hash == self.tunnel_synth_dest {
-            self.handle_tunnel_synth_delivery(&raw);
+            self.handle_tunnel_synth_delivery(&raw, receiving_interface);
         } else if destination_hash == self.path_request_dest {
             if let Ok(packet) = RawPacket::unpack(&raw) {
                 let now = time::now();
@@ -1544,6 +1544,13 @@ impl Driver {
                     #[cfg(not(feature = "hooks"))]
                     {
                         let _ = (link_id, receiving_interface);
+                    }
+                }
+                LinkManagerAction::ProtocolViolation {
+                    receiving_interface,
+                } => {
+                    if let Some(entry) = self.interfaces.get_mut(&receiving_interface) {
+                        entry.stats.protocol_violations += 1;
                     }
                 }
             }
