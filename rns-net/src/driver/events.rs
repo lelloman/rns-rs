@@ -96,7 +96,14 @@ impl Driver {
         };
         if !self.engine.accepts_inbound_frame(filter_frame) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
-                entry.stats.packet_filter_hits += 1;
+                if self
+                    .engine
+                    .is_packet_filter_protocol_violation(&parsed_packet, interface_id)
+                {
+                    entry.stats.protocol_violations += 1;
+                } else {
+                    entry.stats.packet_filter_hits += 1;
+                }
             }
             return;
         }

@@ -3555,6 +3555,50 @@ fn inbound_rejections_are_counted_by_reason() {
 }
 
 #[test]
+fn packet_filter_protocol_rejections_are_not_counted_as_duplicate_hits() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "filter-violations");
+
+    let plain_data = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        1,
+        &[0x11; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"transported plain",
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), plain_data.raw, None, None);
+
+    let plain_announce = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        0,
+        &[0x22; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"invalid announce",
+    )
+    .unwrap();
+    driver.handle_frame_event(InterfaceId(1), plain_announce.raw, None, None);
+
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.protocol_violations, 2);
+    assert_eq!(stats.packet_filter_hits, 0);
+}
+
+#[test]
 fn send_updates_tx_stats() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
