@@ -28,8 +28,12 @@ pub struct InterfaceStats {
     pub txb: u64,
     pub arxb: u64,
     pub atxb: u64,
+    pub arxc: u64,
+    pub atxc: u64,
     pub prxb: u64,
     pub ptxb: u64,
+    pub prxc: u64,
+    pub ptxc: u64,
     pub protocol_violations: u64,
     pub ifac_violations: u64,
     pub packet_filter_hits: u64,
@@ -56,6 +60,7 @@ pub struct InterfaceStats {
 impl InterfaceStats {
     /// Record incoming announce traffic after the packet has been accepted.
     pub fn record_incoming_announce_bytes(&mut self, now: f64, size: usize) {
+        self.arxc = self.arxc.saturating_add(1);
         self.arxb = self.arxb.saturating_add(size as u64);
         self.record_incoming_announce(now);
     }
@@ -78,6 +83,7 @@ impl InterfaceStats {
 
     /// Record outgoing announce traffic.
     pub fn record_outgoing_announce_bytes(&mut self, now: f64, size: usize) {
+        self.atxc = self.atxc.saturating_add(1);
         self.atxb = self.atxb.saturating_add(size as u64);
         self.record_outgoing_announce(now);
     }
@@ -92,6 +98,7 @@ impl InterfaceStats {
 
     /// Record accepted incoming path-request traffic.
     pub fn record_incoming_path_request_bytes(&mut self, now: f64, size: usize) {
+        self.prxc = self.prxc.saturating_add(1);
         self.prxb = self.prxb.saturating_add(size as u64);
         self.record_incoming_path_request(now);
     }
@@ -106,6 +113,7 @@ impl InterfaceStats {
 
     /// Record outgoing path-request traffic.
     pub fn record_outgoing_path_request_bytes(&mut self, now: f64, size: usize) {
+        self.ptxc = self.ptxc.saturating_add(1);
         self.ptxb = self.ptxb.saturating_add(size as u64);
         self.record_outgoing_path_request(now);
     }
@@ -231,7 +239,9 @@ mod tests {
         stats.record_outgoing_path_request_bytes(4.0, 404);
 
         assert_eq!((stats.arxb, stats.atxb), (101, 202));
+        assert_eq!((stats.arxc, stats.atxc), (1, 1));
         assert_eq!((stats.prxb, stats.ptxb), (303, 404));
+        assert_eq!((stats.prxc, stats.ptxc), (1, 1));
         assert_eq!(stats.ia_timestamps, vec![1.0]);
         assert_eq!(stats.oa_timestamps, vec![2.0]);
         assert_eq!(stats.ip_timestamps, vec![3.0]);

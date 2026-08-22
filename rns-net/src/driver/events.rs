@@ -222,6 +222,7 @@ impl Driver {
             )
         }) {
             if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.arxc = entry.stats.arxc.saturating_add(1);
                 entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
             }
         }
@@ -302,6 +303,7 @@ impl Driver {
                 .any(|action| matches!(action, TransportAction::AnnounceReceived { .. }))
             {
                 if let Some(entry) = self.interfaces.get_mut(&interface) {
+                    entry.stats.arxc = entry.stats.arxc.saturating_add(1);
                     entry.stats.arxb = entry.stats.arxb.saturating_add(received_size as u64);
                 }
             }

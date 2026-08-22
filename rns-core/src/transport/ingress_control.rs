@@ -24,8 +24,10 @@ pub struct HeldAnnounce {
 struct IngressControlState {
     burst_active: bool,
     burst_activated: f64,
+    burst_sustained: f64,
     pr_burst_active: bool,
     pr_burst_activated: f64,
+    pr_burst_sustained: f64,
     pr_burst_cooldown: u8,
     held_release: f64,
     held_announces: BTreeMap<[u8; 16], HeldAnnounce>,
@@ -36,8 +38,10 @@ impl IngressControlState {
         IngressControlState {
             burst_active: false,
             burst_activated: 0.0,
+            burst_sustained: 0.0,
             pr_burst_active: false,
             pr_burst_activated: 0.0,
+            pr_burst_sustained: 0.0,
             pr_burst_cooldown: 0,
             held_release: 0.0,
             held_announces: BTreeMap::new(),
@@ -87,15 +91,22 @@ impl IngressControl {
 
         if state.burst_active {
             // Check if burst can deactivate
-            if ia_freq < threshold && now > state.burst_activated + config.burst_hold {
+            if ia_freq < threshold
+                && now > state.burst_activated + config.burst_hold
+                && now > state.burst_sustained + config.burst_hold
+            {
                 state.burst_active = false;
                 return false;
+            }
+            if ia_freq >= threshold {
+                state.burst_sustained = now;
             }
             true
         } else if ia_freq > threshold {
             // Activate burst
             state.burst_active = true;
             state.burst_activated = now;
+            state.burst_sustained = now;
             state.held_release = now + config.burst_penalty;
             true
         } else {
@@ -132,7 +143,10 @@ impl IngressControl {
         };
 
         if state.pr_burst_active {
-            if pr_freq < threshold && now > state.pr_burst_activated + config.burst_hold {
+            if pr_freq < threshold
+                && now > state.pr_burst_activated + config.burst_hold
+                && now > state.pr_burst_sustained + config.burst_hold
+            {
                 if state.pr_burst_cooldown == 0 {
                     state.pr_burst_active = false;
                 } else {
@@ -140,11 +154,15 @@ impl IngressControl {
                 }
             } else {
                 state.pr_burst_cooldown = 3;
+                if pr_freq >= threshold {
+                    state.pr_burst_sustained = now;
+                }
             }
             true
         } else if pr_freq > threshold {
             state.pr_burst_active = true;
             state.pr_burst_activated = now;
+            state.pr_burst_sustained = now;
             state.pr_burst_cooldown = 3;
             true
         } else {
@@ -428,6 +446,51 @@ mod tests {
             1.0,
             started,
             now2
+        ));
+    }
+
+    #[test]
+    fn sustained_announce_burst_holds_for_full_interval_after_last_high_sample() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let started = 0.0;
+        let activated = 10_000.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, started, activated));
+
+        let sustained = activated + config.burst_hold + 1.0;
+        assert!(ic.should_ingress_limit(iface(1), &config, 36.0, started, sustained));
+        assert!(ic.should_ingress_limit(
+            iface(1),
+            &config,
+            1.0,
+            started,
+            sustained + config.burst_hold - 1.0
+        ));
+        assert!(!ic.should_ingress_limit(
+            iface(1),
+            &config,
+            1.0,
+            started,
+            sustained + config.burst_hold + 1.0
+        ));
+    }
+
+    #[test]
+    fn sustained_path_request_burst_holds_after_last_high_sample() {
+        let mut ic = IngressControl::new();
+        let config = IngressControlConfig::enabled();
+        let started = 0.0;
+        let activated = 10_000.0;
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, started, activated));
+
+        let sustained = activated + config.burst_hold + 1.0;
+        assert!(ic.should_ingress_limit_pr(iface(1), &config, 36.0, started, sustained));
+        assert!(ic.should_ingress_limit_pr(
+            iface(1),
+            &config,
+            1.0,
+            started,
+            sustained + config.burst_hold - 1.0
         ));
     }
 
@@ -982,13 +1045,14 @@ mod tests {
             started,
             now + constants::IC_BURST_HOLD + 3.0
         ));
-        for offset in 4..=7 {
+        let sustained_at = now + constants::IC_BURST_HOLD + 3.0;
+        for offset in 1..=4 {
             assert!(ic.should_ingress_limit_pr(
                 iface(1),
                 &config,
                 0.1,
                 started,
-                now + constants::IC_BURST_HOLD + f64::from(offset)
+                sustained_at + constants::IC_BURST_HOLD + f64::from(offset)
             ));
         }
         assert!(!ic.pr_burst_active(&iface(1)));

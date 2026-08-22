@@ -1108,6 +1108,14 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::Int(stats.traffic.atxb as i64),
         ),
         (
+            PickleValue::String("arxc".into()),
+            PickleValue::Int(stats.traffic.arxc as i64),
+        ),
+        (
+            PickleValue::String("atxc".into()),
+            PickleValue::Int(stats.traffic.atxc as i64),
+        ),
+        (
             PickleValue::String("arxs".into()),
             PickleValue::Float(stats.traffic.arxs),
         ),
@@ -1122,6 +1130,14 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
         (
             PickleValue::String("ptxb".into()),
             PickleValue::Int(stats.traffic.ptxb as i64),
+        ),
+        (
+            PickleValue::String("prxc".into()),
+            PickleValue::Int(stats.traffic.prxc as i64),
+        ),
+        (
+            PickleValue::String("ptxc".into()),
+            PickleValue::Int(stats.traffic.ptxc as i64),
         ),
         (
             PickleValue::String("prxs".into()),
@@ -1485,6 +1501,14 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.traffic.atxb as i64),
         ),
         (
+            PickleValue::String("arxc".into()),
+            PickleValue::Int(s.traffic.arxc as i64),
+        ),
+        (
+            PickleValue::String("atxc".into()),
+            PickleValue::Int(s.traffic.atxc as i64),
+        ),
+        (
             PickleValue::String("arxs".into()),
             PickleValue::Float(s.traffic.arxs),
         ),
@@ -1499,6 +1523,14 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         (
             PickleValue::String("ptxb".into()),
             PickleValue::Int(s.traffic.ptxb as i64),
+        ),
+        (
+            PickleValue::String("prxc".into()),
+            PickleValue::Int(s.traffic.prxc as i64),
+        ),
+        (
+            PickleValue::String("ptxc".into()),
+            PickleValue::Int(s.traffic.ptxc as i64),
         ),
         (
             PickleValue::String("prxs".into()),
@@ -3454,10 +3486,14 @@ mod tests {
             txs: 1600.0,
             arxb: 11,
             atxb: 22,
+            arxc: 1,
+            atxc: 2,
             arxs: 88.0,
             atxs: 176.0,
             prxb: 33,
             ptxb: 44,
+            prxc: 3,
+            ptxc: 4,
             prxs: 264.0,
             ptxs: 352.0,
             arxf: 1.0,
