@@ -2796,6 +2796,9 @@ fn discovery_path_request_timeout_covers_slowest_interface_round_trip() {
     engine.register_interface(ingress);
     engine.register_interface(slow_egress);
 
+    assert_eq!(engine.lowest_interface_bitrate(), Some(400));
+    assert_eq!(engine.medium_path_timeout(), 26.0);
+
     assert_eq!(
         super::path_requests::discovery_path_request_timeout(&engine.interfaces),
         26.0

@@ -1,20 +1,26 @@
 use super::*;
 
-pub(super) fn discovery_path_request_timeout(
-    interfaces: &BTreeMap<InterfaceId, InterfaceInfo>,
-) -> f64 {
-    let Some(lowest_bitrate) = interfaces
+pub fn lowest_interface_bitrate(interfaces: &BTreeMap<InterfaceId, InterfaceInfo>) -> Option<u64> {
+    interfaces
         .values()
         .filter_map(|interface| interface.bitrate)
         .filter(|bitrate| *bitrate > 0)
         .min()
-    else {
-        return constants::PATH_REQUEST_TIMEOUT;
+}
+
+pub fn medium_path_timeout(interfaces: &BTreeMap<InterfaceId, InterfaceInfo>) -> f64 {
+    let Some(lowest_bitrate) = lowest_interface_bitrate(interfaces) else {
+        return 0.0;
     };
     let effective_bitrate = lowest_bitrate.max(constants::MINIMUM_BITRATE);
-    let medium_timeout = 2.0 * (constants::MTU as f64 * 8.0 / effective_bitrate as f64)
-        + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP;
-    constants::PATH_REQUEST_TIMEOUT.max(medium_timeout)
+    2.0 * (constants::MTU as f64 * 8.0 / effective_bitrate as f64)
+        + constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP
+}
+
+pub(super) fn discovery_path_request_timeout(
+    interfaces: &BTreeMap<InterfaceId, InterfaceInfo>,
+) -> f64 {
+    constants::PATH_REQUEST_TIMEOUT.max(medium_path_timeout(interfaces))
 }
 
 impl TransportEngine {
