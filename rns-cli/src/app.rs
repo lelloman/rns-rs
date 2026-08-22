@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
@@ -135,4 +136,21 @@ pub fn bool_value(value: bool) -> Vec<u8> {
 
 pub fn uint_value(value: u64) -> Vec<u8> {
     msgpack::pack(&Value::UInt(value))
+}
+
+pub fn adaptive_path_timeout(node: &rns_net::RnsNode, configured: Duration) -> Duration {
+    let medium = node.medium_path_timeout().unwrap_or(0.0).max(0.0);
+    configured.max(Duration::from_secs_f64(medium))
+}
+
+pub fn link_establishment_timeout(node: &rns_net::RnsNode, destination: [u8; 16]) -> Duration {
+    let hops = node
+        .hops_to(&rns_core::types::DestHash(destination))
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+    Duration::from_secs_f64(rns_core::link::keepalive::compute_establishment_timeout(
+        rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
+        hops,
+    ))
 }
