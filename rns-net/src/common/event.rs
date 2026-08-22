@@ -526,6 +526,10 @@ pub enum QueryRequest {
     PathTable { max_hops: Option<u8> },
     /// Get rate table entries.
     RateTable,
+    /// Get the slowest positive bitrate among online interfaces.
+    LowestInterfaceBitrate,
+    /// Estimate an MTU round trip on the slowest interface plus hop grace.
+    MediumPathTimeout,
     /// Look up the next hop for a destination.
     NextHop { dest_hash: [u8; 16] },
     /// Look up the next hop interface name for a destination.
@@ -648,6 +652,8 @@ pub enum QueryResponse {
     InterfaceStats(InterfaceStatsResponse),
     PathTable(Vec<PathTableEntry>),
     RateTable(Vec<RateTableEntry>),
+    LowestInterfaceBitrate(Option<u64>),
+    MediumPathTimeout(f64),
     NextHop(Option<NextHopResponse>),
     NextHopIfName(Option<String>),
     LinkCount(usize),

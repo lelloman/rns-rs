@@ -519,6 +519,12 @@ impl Driver {
                     .collect();
                 QueryResponse::RateTable(entries)
             }
+            QueryRequest::LowestInterfaceBitrate => {
+                QueryResponse::LowestInterfaceBitrate(self.engine.lowest_interface_bitrate())
+            }
+            QueryRequest::MediumPathTimeout => {
+                QueryResponse::MediumPathTimeout(self.engine.medium_path_timeout())
+            }
             QueryRequest::NextHop { dest_hash } => {
                 let resp = self
                     .engine

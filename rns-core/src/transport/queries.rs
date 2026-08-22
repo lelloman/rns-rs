@@ -1,6 +1,14 @@
 use super::*;
 
 impl TransportEngine {
+    pub fn lowest_interface_bitrate(&self) -> Option<u64> {
+        super::path_requests::lowest_interface_bitrate(&self.interfaces)
+    }
+
+    pub fn medium_path_timeout(&self) -> f64 {
+        super::path_requests::medium_path_timeout(&self.interfaces)
+    }
+
     pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
         self.path_table
             .iter()

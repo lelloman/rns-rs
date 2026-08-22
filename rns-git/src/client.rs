@@ -301,7 +301,10 @@ impl SyncClient {
         eprintln!("Requesting path to {}...", crate::util::hex(&dest_hash));
         node.request_path(&dest)
             .map_err(|_| Error::msg("failed to request destination path"))?;
-        let deadline = Instant::now() + Duration::from_secs(config.connect_timeout_secs);
+        let configured_timeout = Duration::from_secs(config.connect_timeout_secs);
+        let medium_timeout =
+            Duration::from_secs_f64(node.medium_path_timeout().unwrap_or(0.0).max(0.0));
+        let deadline = Instant::now() + configured_timeout.max(medium_timeout);
         while !node.has_path(&dest).unwrap_or(false) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -319,11 +322,13 @@ impl SyncClient {
             .create_link(dest_hash, sig_pub)
             .map_err(|_| Error::msg("failed to create RNS link"))?;
         eprintln!("Establishing link...");
-        wait_for_link(
-            &state,
-            link_id,
-            Duration::from_secs(config.connect_timeout_secs),
-        )?;
+        let hops = node.hops_to(&dest).unwrap_or(None).unwrap_or(1);
+        let link_timeout =
+            Duration::from_secs_f64(rns_core::link::keepalive::compute_establishment_timeout(
+                rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
+                hops,
+            ));
+        wait_for_link(&state, link_id, configured_timeout.max(link_timeout))?;
         eprintln!("Link established.");
 
         let private_key = client_identity

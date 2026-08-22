@@ -2065,6 +2065,22 @@ impl RnsNode {
         resp_rx.recv().map_err(|_| SendError)
     }
 
+    /// Return the slowest positive bitrate among currently registered interfaces.
+    pub fn lowest_interface_bitrate(&self) -> Result<Option<u64>, SendError> {
+        match self.query(QueryRequest::LowestInterfaceBitrate)? {
+            QueryResponse::LowestInterfaceBitrate(bitrate) => Ok(bitrate),
+            _ => Err(SendError),
+        }
+    }
+
+    /// Return the adaptive medium path timeout advertised by the transport engine.
+    pub fn medium_path_timeout(&self) -> Result<f64, SendError> {
+        match self.query(QueryRequest::MediumPathTimeout)? {
+            QueryResponse::MediumPathTimeout(timeout) => Ok(timeout),
+            _ => Err(SendError),
+        }
+    }
+
     /// Enter drain mode and stop admitting new work.
     pub fn begin_drain(&self, timeout: Duration) -> Result<(), SendError> {
         self.tx

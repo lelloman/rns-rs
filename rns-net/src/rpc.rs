@@ -400,6 +400,22 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "lowest_interface_bitrate" => {
+                    let resp = send_query(event_tx, QueryRequest::LowestInterfaceBitrate)?;
+                    if let QueryResponse::LowestInterfaceBitrate(Some(bitrate)) = resp {
+                        Ok(PickleValue::Int(bitrate as i64))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
+                "medium_path_timeout" => {
+                    let resp = send_query(event_tx, QueryRequest::MediumPathTimeout)?;
+                    if let QueryResponse::MediumPathTimeout(timeout) = resp {
+                        Ok(PickleValue::Float(timeout))
+                    } else {
+                        Ok(PickleValue::Int(0))
+                    }
+                }
                 "next_hop" => {
                     let hash = extract_dest_hash(request, "destination_hash")?;
                     let resp = send_query(event_tx, QueryRequest::NextHop { dest_hash: hash })?;
@@ -3119,6 +3135,12 @@ mod tests {
                 Ok(Event::Query(QueryRequest::ActiveLinkCount, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::ActiveLinkCount(7));
                 }
+                Ok(Event::Query(QueryRequest::LowestInterfaceBitrate, resp_tx)) => {
+                    let _ = resp_tx.send(QueryResponse::LowestInterfaceBitrate(Some(400)));
+                }
+                Ok(Event::Query(QueryRequest::MediumPathTimeout, resp_tx)) => {
+                    let _ = resp_tx.send(QueryResponse::MediumPathTimeout(26.0));
+                }
                 Ok(Event::Query(QueryRequest::InterfaceStats, resp_tx)) => {
                     let _ = resp_tx.send(QueryResponse::InterfaceStats(InterfaceStatsResponse {
                         interfaces: vec![SingleInterfaceStat {
@@ -3206,6 +3228,25 @@ mod tests {
             .unwrap();
         assert_eq!(active_response.as_int().unwrap(), 7);
         drop(active_client);
+
+        let mut timeout_client = RpcClient::connect(&server_addr, &key).unwrap();
+        let bitrate = timeout_client
+            .call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("lowest_interface_bitrate".into()),
+            )]))
+            .unwrap();
+        assert_eq!(bitrate.as_int(), Some(400));
+        drop(timeout_client);
+        let mut timeout_client = RpcClient::connect(&server_addr, &key).unwrap();
+        let timeout = timeout_client
+            .call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("medium_path_timeout".into()),
+            )]))
+            .unwrap();
+        assert_eq!(timeout.as_float(), Some(26.0));
+        drop(timeout_client);
 
         // Client: query interface stats
         let mut client2 = RpcClient::connect(&server_addr, &key).unwrap();
