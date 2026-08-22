@@ -71,7 +71,7 @@ jobs:
             rns-esp32-${{ steps.version.outputs.tag }}-esp32s3.bin
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "rns-esp32 ${{ steps.version.outputs.version }}"
           generate_release_notes: true
