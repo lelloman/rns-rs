@@ -144,6 +144,28 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 | 80 | `6b2c5bcf0bc8308f94c9387de54eba4d1122d009` | Don't reprocess IFAC for held announces | Structurally covered | Local `268edb7`; driver-only IFAC boundary documented on held announce bytes |
 | 81 | `fc69f323a82a0f3d76b2b3b90d16850ff25b4cf1` | Cleanup | Integrated | Local `ddfc829`; corrected no-IFAC classification with focused regression; queued sends already use normal dispatch |
 
+### Additional drift observed 2026-08-23
+
+A fresh two-remote refresh found eleven commits after `fc69f323`, through
+`b123a756b0e203070f7ff6325aaa2168504e0d82`. Canonical rGit and the GitHub
+mirror now agree at that tip. These entries are an inventory only: their
+dispositions remain provisional until each complete diff is reviewed and
+mapped to exactly one rns-rs commit under the per-commit integration procedure.
+
+| # | Upstream commit | Subject | Provisional disposition | Review scope |
+|---:|---|---|---|---|
+| 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Needs port | Packet-filter control flow and violation accounting for packets exceeding the allowed hop count |
+| 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Needs decision | Outbound path lookup consistency and any observable race or stale-entry behavior |
+| 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Needs coordinated port | Preemptive and late path-request egress limiting under concurrent inbound load |
+| 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Needs decision | Changed upstream diagnostic levels and corresponding native operational visibility |
+| 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Changelog-only content unless the diff identifies an undocumented compatibility requirement |
+| 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Documentation follow-up | Upstream user-facing behavior and any equivalent native documentation changes |
+| 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Needs coordinated port | Per-interface PPS fields, aggregation/RPC/CLI rendering, and exclusion of the local shared instance |
+| 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Needs coordinated port | Discovery metadata, interface state, serialization, and status presentation for shared-medium hints |
+| 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Needs port | Packet hash-list ownership and removal during the affected transport edge case |
+| 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
+| 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
+
 ## Per-Commit Analysis
 
 ### 1. `ebd9b862` — Fixed rnodeconf config summary print
@@ -1707,8 +1729,9 @@ performs outbound IFAC and accounting. The inbound category is now corrected
 to the interface IFAC counter; the focused rejection regression covers it.
 **Final disposition:** Integrated.
 
-All 81 commits through the observed canonical tip have a final disposition.
-The accepted baseline remains commit 73 until the full promotion gates pass.
+All 81 commits through `fc69f323` have a final disposition. Entries 82–92 are
+newly inventoried and await per-commit review. The accepted baseline remains
+commit 73 until the full promotion gates pass.
 
 ## Integration Plan
 
@@ -1732,6 +1755,14 @@ The accepted baseline remains commit 73 until the full promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-23`: Daily refresh succeeded for both remotes. Canonical rGit and
+  GitHub now agree at `b123a756`, nineteen commits beyond accepted `b3ef214e`:
+  the eight previously mapped commits plus eleven newly inventoried entries
+  82–92. Both VPS snapshots were healthy with every public interface up and no
+  failed 24-hour traffic query. The impaired daily Backbone smoke passed
+  announce/identity propagation, packets, all Resource boundaries, concurrent
+  links, and forced reconnect recovery. Both VPS binary installations remain
+  behind current `origin/master` and `origin/dev`.
 - `2026-08-22`: Commits `7b8923b6..fc69f323` were reviewed in ancestry
   order. Packet classification and violation accounting, cumulative
   announce/PR counts, sustained burst timing, timeout RPC and adaptive utility
