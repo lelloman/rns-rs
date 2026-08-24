@@ -133,8 +133,9 @@ pub struct ManagementConfig {
 
 /// Handle a `/status` request.
 ///
-/// Request data: msgpack([include_lstats]) where include_lstats is bool.
-/// Response: msgpack([interface_stats_dict, link_count?]) matching Python format.
+/// Request data: msgpack([include_lstats, include_profiling]) where both are bool.
+/// Response: msgpack([interface_stats_dict, link_count?, profiling_results?])
+/// matching Python format.
 pub fn handle_status_request(
     data: &[u8],
     engine: &TransportEngine,
@@ -143,9 +144,12 @@ pub fn handle_status_request(
     probe_responder_hash: Option<[u8; 16]>,
 ) -> Option<Vec<u8>> {
     // Decode request data
-    let include_lstats = match msgpack::unpack_exact(data) {
-        Ok(Value::Array(arr)) if !arr.is_empty() => arr[0].as_bool().unwrap_or(false),
-        _ => false,
+    let (include_lstats, include_profiling) = match msgpack::unpack_exact(data) {
+        Ok(Value::Array(arr)) if !arr.is_empty() => (
+            arr[0].as_bool().unwrap_or(false),
+            arr.get(1).and_then(Value::as_bool).unwrap_or(false),
+        ),
+        _ => (false, false),
     };
 
     // Build interface stats
@@ -323,6 +327,9 @@ pub fn handle_status_request(
     if include_lstats {
         let link_count = engine.link_table_count();
         response.push(Value::UInt(link_count as u64));
+    }
+    if include_profiling {
+        response.push(crate::profiling::results_msgpack());
     }
 
     Some(msgpack::pack(&Value::Array(response)))

@@ -82,6 +82,7 @@ impl std::error::Error for RemoteManagementError {}
 pub struct RemoteStatus {
     pub stats: PickleValue,
     pub link_count: Option<i64>,
+    pub profiling_results: Option<PickleValue>,
 }
 
 struct RemoteCallbacks {
@@ -194,7 +195,19 @@ impl RemoteManagementClient {
         transport_identity_hash: [u8; 16],
         include_link_count: bool,
     ) -> Result<RemoteStatus, RemoteManagementError> {
-        let data = msgpack::pack(&Value::Array(vec![Value::Bool(include_link_count)]));
+        self.status_with_profiling(transport_identity_hash, include_link_count, false)
+    }
+
+    pub fn status_with_profiling(
+        &mut self,
+        transport_identity_hash: [u8; 16],
+        include_link_count: bool,
+        include_profiling: bool,
+    ) -> Result<RemoteStatus, RemoteManagementError> {
+        let data = msgpack::pack(&Value::Array(vec![
+            Value::Bool(include_link_count),
+            Value::Bool(include_profiling),
+        ]));
         let response = self.request_management(transport_identity_hash, "/status", &data)?;
         decode_status_response(&response)
     }
@@ -456,7 +469,15 @@ fn decode_status_response(data: &[u8]) -> Result<RemoteStatus, RemoteManagementE
     let mut stats = msgpack_to_pickle(stats);
     normalize_remote_status(&mut stats);
     let link_count = arr.get(1).and_then(|v| v.as_integer());
-    Ok(RemoteStatus { stats, link_count })
+    let profiling_results = arr
+        .get(2)
+        .filter(|value| !matches!(value, Value::Nil))
+        .map(msgpack_to_pickle);
+    Ok(RemoteStatus {
+        stats,
+        link_count,
+        profiling_results,
+    })
 }
 
 fn normalize_remote_status(value: &mut PickleValue) {
@@ -601,6 +622,27 @@ mod tests {
             .and_then(|v| v.as_list())
             .unwrap()[0];
         assert_eq!(iface.get("ia_freq").and_then(|v| v.as_float()), Some(1.5));
+    }
+
+    #[test]
+    fn status_response_decodes_profiling_results() {
+        let status = Value::Map(vec![]);
+        let profiling = Value::Map(vec![(
+            Value::Str("entry110.remote".into()),
+            Value::Map(vec![(Value::Str("count".into()), Value::UInt(2))]),
+        )]);
+        let data = msgpack::pack(&Value::Array(vec![status, Value::UInt(7), profiling]));
+        let decoded = decode_status_response(&data).unwrap();
+        assert_eq!(decoded.link_count, Some(7));
+        assert_eq!(
+            decoded
+                .profiling_results
+                .as_ref()
+                .and_then(|results| results.get("entry110.remote"))
+                .and_then(|sample| sample.get("count"))
+                .and_then(PickleValue::as_int),
+            Some(2)
+        );
     }
 
     #[test]

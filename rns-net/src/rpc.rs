@@ -381,6 +381,9 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "profiling_results" => {
+                    Ok(crate::profiling::results_pickle().unwrap_or(PickleValue::None))
+                }
                 "path_table" => {
                     let max_hops = request
                         .get("max_hops")
@@ -3816,6 +3819,25 @@ mod tests {
                 .unwrap(),
             0.25
         );
+    }
+
+    #[test]
+    fn profiling_results_rpc_exposes_completed_samples() {
+        {
+            let _sample = crate::profiling::profile("entry110.rpc");
+        }
+        let (event_tx, _event_rx) = crate::event::channel();
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("profiling_results".into()),
+        )]);
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let sample = response.get("entry110.rpc").unwrap();
+        assert_eq!(
+            sample.get("name").and_then(PickleValue::as_str),
+            Some("entry110.rpc")
+        );
+        assert_eq!(sample.get("count").and_then(PickleValue::as_int), Some(1));
     }
 
     #[test]
