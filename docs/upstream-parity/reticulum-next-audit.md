@@ -179,7 +179,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
-| 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Needs port | Outgoing Resource cancellation state and duplicate/late cancellation behavior |
+| 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `0aa04f1`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
 | 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Needs coordinated port | Interface MTU state/defaults across generic, local, and Backbone interfaces plus diagnostics |
 | 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Needs port | Interface-status MTU field, RPC transport, sorting/rendering, and compatibility with older peers |
 | 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Needs decision | Inbound IFAC boundary refactor and whether native driver separation already supplies the invariant |
@@ -2012,13 +2012,36 @@ receivers continue accepting the augmented payload.
 
 **Final disposition:** Integrated.
 
-All 92 commits through `b123a756` have a final disposition. Entries 93–117
+### 93. `2058596d` — Guard repeated outgoing resource cancellation
+
+**Upstream change:** Checks that a resource is still present in the link's
+`outgoing_resources` collection before asking the link to remove it from
+`cancel()` and `reject()`. This prevents duplicate or callback-reentrant
+cancellation from attempting to remove an already-removed Python object.
+
+**Rust applicability:** A native `ResourceSender` never removes itself from its
+owning link. `LinkManager` owns collection mutation, marks cancellation as a
+terminal sender state, then retains only active entries after processing all
+actions. A later cancellation sees no collection entry, and cancelling a
+terminal sender directly emits no second action, so the Python membership race
+has no native equivalent.
+
+**Local handling and evidence:** Local `0aa04f1` extends the manager-level
+cancellation regression to call `cancel_all_resources()` again after the first
+call removed the outgoing sender. The second call produces no actions and the
+transfer count remains zero. The focused test, all 888 `rns-net` unit tests, 54
+network E2E tests, Python/IFAC interoperability and fixture suites, formatting,
+diff checks, and warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 93 commits through `2058596d` have a final disposition. Entries 94–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 93–117 in upstream ancestry order.
+1. Process outstanding entries 94–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2039,6 +2062,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `2058596d` guards Python outgoing-resource removal
+  against duplicate/reentrant cancellation. Rust centralizes removal in the
+  link manager and terminal cancellation is already idempotent; local mapping
+  `0aa04f1` pins a repeated all-resource cancel as a no-op. Complete `rns-net`,
+  E2E/interoperability, formatting, diff and host-lint checks passed. Entry 94
+  is next.
 - `2026-08-24`: Commit `b123a756` requires discovery announcements to identify
   their transport implementation and version. Local mapping `01e6ce0` emits
   `rns-rs` and the compiled native version under the exact `0xFD`/`0xFC` keys,
