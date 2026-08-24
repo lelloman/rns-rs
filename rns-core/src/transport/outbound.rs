@@ -57,6 +57,9 @@ pub(crate) fn route_outbound_with_options(
         && dest_type != constants::DESTINATION_GROUP;
 
     if use_path_table {
+        // Resolve the primary route with one map lookup. This keeps the
+        // missing-path fallback tied to the map's current state and avoids a
+        // separate contains/get sequence.
         if let Some(path_entry) = path_table
             .get(&packet.destination_hash)
             .and_then(|ps| ps.primary())
@@ -684,9 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn test_outbound_no_path_broadcast() {
+    fn test_outbound_path_removed_before_lookup_broadcasts() {
         let dest = [0x33; 16];
-        let paths = BTreeMap::new();
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(2, 1));
+        assert!(paths.remove(&dest).is_some());
         let interfaces = BTreeMap::new();
         let local_dests = BTreeMap::new();
         let packet = make_data_packet(&dest);
