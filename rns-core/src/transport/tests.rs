@@ -3245,6 +3245,46 @@ fn test_existing_path_destination_update_does_not_trigger_cap_eviction() {
 }
 
 #[test]
+fn outbound_rejects_packets_at_pathfinder_hop_limit() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_PLAIN,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let allowed = RawPacket::pack(
+        flags,
+        constants::PATHFINDER_M - 1,
+        &[0xC3; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"allowed",
+    )
+    .unwrap();
+    let excessive = RawPacket::pack(
+        flags,
+        constants::PATHFINDER_M,
+        &[0xC4; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"excessive",
+    )
+    .unwrap();
+
+    assert!(!engine
+        .handle_outbound(&allowed, constants::DESTINATION_PLAIN, None, 1000.0)
+        .is_empty());
+    assert_eq!(engine.packet_hashlist_len(), 1);
+
+    assert!(engine
+        .handle_outbound(&excessive, constants::DESTINATION_PLAIN, None, 1001.0)
+        .is_empty());
+    assert_eq!(engine.packet_hashlist_len(), 1);
+}
+
+#[test]
 fn test_redirect_path_replaces_stale_transport_next_hop() {
     let mut engine = TransportEngine::new(make_config(true));
     let original_interface = InterfaceId(1);
