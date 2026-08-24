@@ -22,6 +22,10 @@ use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{ListenerControl, Writer};
 
+/// Hardware MTU used by both sides of the local shared-instance interface.
+pub(crate) const HW_MTU: u32 = 262_144;
+pub(crate) const BITRATE: u64 = 1_000_000_000;
+
 #[cfg(target_os = "android")]
 const CLIENT_SLEEP_PAUSE_TIMEOUT: Duration = Duration::from_secs(12);
 #[cfg(target_os = "android")]
@@ -537,7 +541,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         announces_to_internal: None,
         out_capable: true,
         in_capable: true,
-        bitrate: Some(1_000_000_000), // 1 Gbps
+        bitrate: Some(BITRATE),
         airtime_profile: None,
         announce_rate_target: None,
         announce_rate_grace: 0,
@@ -546,7 +550,7 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
         is_local_client: true,
         wants_tunnel: false,
         tunnel_id: None,
-        mtu: 65535,
+        mtu: HW_MTU,
         ia_freq: 0.0,
         ip_freq: 0.0,
         op_freq: 0.0,
@@ -853,7 +857,7 @@ impl InterfaceFactory for LocalClientFactory {
             announces_to_internal: ctx.announces_to_internal,
             out_capable: true,
             in_capable: true,
-            bitrate: Some(1_000_000_000),
+            bitrate: Some(BITRATE),
             airtime_profile: None,
             announce_rate_target: None,
             announce_rate_grace: 0,
@@ -862,7 +866,7 @@ impl InterfaceFactory for LocalClientFactory {
             is_local_client: false,
             wants_tunnel: false,
             tunnel_id: None,
-            mtu: 65535,
+            mtu: HW_MTU,
             ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
             ia_freq: 0.0,
             ip_freq: 0.0,
@@ -908,6 +912,13 @@ mod tests {
 
     fn find_free_port() -> u16 {
         crate::test_support::port()
+    }
+
+    #[test]
+    fn local_interface_metadata_uses_explicit_hardware_mtu() {
+        let info = make_local_interface_info(InterfaceId(42));
+        assert_eq!(info.bitrate, Some(1_000_000_000));
+        assert_eq!(info.mtu, 262_144);
     }
 
     #[test]

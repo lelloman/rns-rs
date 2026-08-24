@@ -32,8 +32,14 @@ use crate::interface::{
 };
 use crate::BackbonePeerStateEntry;
 
-/// HW_MTU: 1 MB (matches Python BackboneInterface.HW_MTU)
-const HW_MTU: usize = 1_048_576;
+/// Maximum frame size inherited by standalone Backbone clients.
+pub(crate) const HW_MTU: usize = 1_048_576;
+/// Upstream listener bitrate estimate used for accepted peers.
+pub(crate) const SERVER_BITRATE_GUESS: u64 = 500_000_000;
+/// MTU selected by upstream autoconfiguration at 500 Mbps.
+pub(crate) const SERVER_PEER_MTU: u32 = 131_072;
+/// Standalone Backbone client bitrate estimate.
+pub(crate) const CLIENT_BITRATE_GUESS: u64 = 100_000_000;
 
 /// Configuration for a backbone interface.
 #[derive(Debug, Clone)]
@@ -827,7 +833,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 announces_to_internal: accepted_peer_announces_to_internal,
                                 out_capable: true,
                                 in_capable: true,
-                                bitrate: Some(1_000_000_000), // 1 Gbps guess
+                                bitrate: Some(SERVER_BITRATE_GUESS),
                                 airtime_profile: None,
                                 announce_rate_target: None,
                                 announce_rate_grace: 0,
@@ -836,7 +842,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 is_local_client: false,
                                 wants_tunnel: false,
                                 tunnel_id: None,
-                                mtu: 65535,
+                                mtu: SERVER_PEER_MTU,
                                 ia_freq: 0.0,
                                 ip_freq: 0.0,
                                 op_freq: 0.0,
@@ -1679,7 +1685,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     announces_to_internal: ctx.announces_to_internal,
                     out_capable: true,
                     in_capable: true,
-                    bitrate: Some(1_000_000_000),
+                    bitrate: Some(CLIENT_BITRATE_GUESS),
                     airtime_profile: None,
                     announce_rate_target: None,
                     announce_rate_grace: 0,
@@ -1688,7 +1694,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     is_local_client: false,
                     wants_tunnel: false,
                     tunnel_id: None,
-                    mtu: 65535,
+                    mtu: HW_MTU as u32,
                     ingress_control: ctx.ingress_control,
                     ia_freq: 0.0,
                     ip_freq: 0.0,
@@ -2081,9 +2087,19 @@ mod tests {
                 let info = info.unwrap();
                 assert!(info.out_capable);
                 assert!(info.in_capable);
+                assert_eq!(info.bitrate, Some(SERVER_BITRATE_GUESS));
+                assert_eq!(info.mtu, SERVER_PEER_MTU);
             }
             other => panic!("expected InterfaceUp, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn backbone_class_defaults_preserve_server_and_client_distinction() {
+        assert_eq!(SERVER_BITRATE_GUESS, 500_000_000);
+        assert_eq!(SERVER_PEER_MTU, 131_072);
+        assert_eq!(CLIENT_BITRATE_GUESS, 100_000_000);
+        assert_eq!(HW_MTU, 1_048_576);
     }
 
     #[test]

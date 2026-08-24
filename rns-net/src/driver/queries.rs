@@ -175,7 +175,7 @@ impl Driver {
                 endpoint_id: None,
                 via_switch_id: None,
                 peers: None,
-                bitrate: Some(1_000_000_000),
+                bitrate: Some(crate::interface::backbone::SERVER_BITRATE_GUESS),
                 ifac_size: None,
                 started: self.started,
                 ia_freq: 0.0,
