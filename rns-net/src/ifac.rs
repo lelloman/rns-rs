@@ -263,6 +263,19 @@ mod tests {
     }
 
     #[test]
+    fn outbound_ifac_handler_is_deterministic_and_preserves_input() {
+        let state = derive_ifac(Some("testnet"), Some("password"), 16).unwrap();
+        let raw = vec![0x00, 0x01, 0x42, 0x43, 0x44, 0x45];
+        let original = raw.clone();
+
+        let first = mask_outbound(&raw, &state);
+        let second = mask_outbound(&raw, &state);
+
+        assert_eq!(raw, original);
+        assert_eq!(first, second);
+    }
+
+    #[test]
     fn unmask_rejects_bad_ifac() {
         let state = derive_ifac(Some("testnet"), Some("password"), 8).unwrap();
 
