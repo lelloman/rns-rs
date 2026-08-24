@@ -165,7 +165,9 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
         }
     };
 
-    // Unmask: header bytes and payload are unmasked, IFAC is left as-is
+    // Unmask in one linear pass: header bytes and payload are XORed while the
+    // clear IFAC tag is copied unchanged. This is the native equivalent of
+    // Reticulum's optimized integer-XOR handler without a legacy slow path.
     let mut unmasked = Vec::with_capacity(raw.len());
     for (i, &byte) in raw.iter().enumerate() {
         if i <= 1 || i > state.size + 1 {
