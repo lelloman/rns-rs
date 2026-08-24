@@ -2519,6 +2519,9 @@ fn receiver_cancel_sends_rcl_while_active_and_closed_cleanup_is_local_only() {
             .unwrap_or(false),
         _ => false,
     }));
+    let duplicate_cancel = resp_mgr.cancel_all_resources(&mut rng);
+    assert!(duplicate_cancel.is_empty());
+    assert_eq!(resp_mgr.resource_transfer_count(), 0);
 
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
