@@ -1706,6 +1706,14 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
         None => dict.push((PickleValue::String("bitrate".into()), PickleValue::None)),
     }
 
+    match s.mtu {
+        Some(mtu) => dict.push((
+            PickleValue::String("mtu".into()),
+            PickleValue::Int(mtu as i64),
+        )),
+        None => dict.push((PickleValue::String("mtu".into()), PickleValue::None)),
+    }
+
     match s.ifac_size {
         Some(sz) => dict.push((
             PickleValue::String("ifac_size".into()),
@@ -3173,6 +3181,7 @@ mod tests {
                             via_switch_id: None,
                             peers: None,
                             bitrate: Some(10_000_000),
+                            mtu: Some(262_144),
                             ifac_size: None,
                             started: 1000.0,
                             ia_freq: 0.0,
@@ -3274,6 +3283,7 @@ mod tests {
             "TestInterface"
         );
         assert_eq!(iface.get("rxb").unwrap().as_int().unwrap(), 1000);
+        assert_eq!(iface.get("mtu").unwrap().as_int(), Some(262_144));
         drop(client2);
 
         // Shutdown
@@ -3575,6 +3585,7 @@ mod tests {
                 via_switch_id: Some([6; 4]),
                 peers: Some(2),
                 bitrate: Some(1000000),
+                mtu: Some(131_072),
                 ifac_size: Some(16),
                 started: 1000.0,
                 ia_freq: 1.0,
@@ -3621,6 +3632,7 @@ mod tests {
         assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
+        assert_eq!(ifaces[0].get("mtu").unwrap().as_int(), Some(131_072));
         assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);
         assert!(ifaces[0]
             .get("announces_to_internal")

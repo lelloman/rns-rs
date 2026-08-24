@@ -405,6 +405,10 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 .get("bitrate")
                 .and_then(|v| v.as_int())
                 .map(|n| n as u64);
+            let mtu = iface
+                .get("mtu")
+                .and_then(|v| v.as_int())
+                .and_then(|n| u32::try_from(n).ok());
             let mode = iface.get("mode").and_then(|v| v.as_int()).unwrap_or(0) as u8;
             let gravity = iface
                 .get("gravity")
@@ -427,8 +431,8 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 interface_status_label(status, gravity)
             );
             println!("    Mode      : {}", mode_str);
-            if let Some(br) = bitrate {
-                println!("    Rate      : {}", speed_str(br));
+            if let Some(line) = interface_rate_line(bitrate, mtu) {
+                println!("{line}");
             }
             println!(
                 "    Traffic   : {} \u{2191}  {} \u{2193}",
@@ -734,6 +738,13 @@ fn interface_has_active_burst(iface: &PickleValue) -> bool {
             .get("pr_burst_active")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
+}
+
+fn interface_rate_line(bitrate: Option<u64>, mtu: Option<u32>) -> Option<String> {
+    bitrate.map(|bitrate| match mtu {
+        Some(mtu) => format!("    Rate      : {}, MTU {}", speed_str(bitrate), mtu),
+        None => format!("    Rate      : {}", speed_str(bitrate)),
+    })
 }
 
 fn client_status_lines(iface: &PickleValue, show_blocked_ips: bool) -> Vec<String> {
@@ -1535,6 +1546,19 @@ mod tests {
             client_status_lines(&client_stats(4, Some(2), &[]), false),
             vec!["    Clients   : 4", "    Blocked   : 2 IPs"]
         );
+    }
+
+    #[test]
+    fn interface_rate_includes_mtu_but_accepts_older_status_payloads() {
+        assert_eq!(
+            interface_rate_line(Some(500_000_000), Some(131_072)),
+            Some("    Rate      : 500.00 Mb/s, MTU 131072".into())
+        );
+        assert_eq!(
+            interface_rate_line(Some(500_000_000), None),
+            Some("    Rate      : 500.00 Mb/s".into())
+        );
+        assert_eq!(interface_rate_line(None, Some(131_072)), None);
     }
 
     #[test]

@@ -805,6 +805,8 @@ pub struct SingleInterfaceStat {
     pub via_switch_id: Option<[u8; 4]>,
     pub peers: Option<usize>,
     pub bitrate: Option<u64>,
+    /// Hardware MTU advertised for this interface, when known.
+    pub mtu: Option<u32>,
     pub ifac_size: Option<usize>,
     pub started: f64,
     /// Incoming announce frequency (per second).
