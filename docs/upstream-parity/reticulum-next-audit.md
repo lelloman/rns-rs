@@ -191,7 +191,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `f10205b` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
 | 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `6a97cd0` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
 | 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `11e1f91` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
-| 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Needs port | Incoming Resource cancellation state and duplicate/late cancellation behavior |
+| 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `7fa5f73` pins repeated manager-owned incoming cancellation as an action-free no-op |
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Needs decision | Changed interface diagnostic severity and native operational visibility |
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Needs port | Attached-interface ingress forwarding and loop prevention |
 | 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Needs coordinated port | Logging configuration, rotation limits/count, retention, and CLI/runtime behavior |
@@ -2260,13 +2260,32 @@ diff checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 104 commits through `1c83e732` have a final disposition. Entries 105–117
+### 105. `956d688e` — Guard repeated incoming resource cancellation
+
+**Upstream change:** Checks that a receiver still belongs to its link's
+`incoming_resources` collection before removing it on corruption or explicit
+cancellation, avoiding duplicate/callback-reentrant Python list removal.
+
+**Rust applicability:** A native `ResourceReceiver` does not remove itself from
+the owning link. `LinkManager` marks it cancelled, removes terminal receivers
+after collecting their actions, and later cancellation traverses no receiver,
+so the Python membership race is absent by ownership design.
+
+**Local handling and evidence:** Local `7fa5f73` extends the active receiver
+cancellation regression with a second `cancel_all_resources()` call, verifying
+that it emits no action and leaves the transfer count at zero. The focused test,
+all 895 `rns-net` unit tests, 54 network E2E tests, formatting, diff checks, and
+warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 105 commits through `956d688e` have a final disposition. Entries 106–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 105–117 in upstream ancestry order.
+1. Process outstanding entries 106–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2287,6 +2306,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `956d688e` guards Python incoming-resource removal
+  against duplicate/reentrant cancellation. Rust centralizes collection removal
+  in `LinkManager`; local mapping `7fa5f73` pins repeated receiver cancellation
+  as an action-free no-op. Focused and complete `rns-net`, E2E, formatting,
+  diff and host-lint checks passed. Entry 106 is next.
 - `2026-08-24`: Commit `1c83e732` activates Python's optimized IFAC helpers.
   Rust has only the linear helpers already audited in entries 97 and 99; local
   mapping `11e1f91` exercises them through live driver outbound and inbound
