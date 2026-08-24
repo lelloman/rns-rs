@@ -263,6 +263,23 @@ mod tests {
     }
 
     #[test]
+    fn test_status_request_with_profiling() {
+        {
+            let _sample = crate::profiling::profile("entry110.remote");
+        }
+        let engine = make_engine();
+        let (interfaces, _) = make_interface_views();
+        let views = as_views(&interfaces);
+        let request = msgpack::pack(&Value::Array(vec![Value::Bool(true), Value::Bool(true)]));
+        let response = handle_status_request(&request, &engine, &views, time::now(), None).unwrap();
+        let Value::Array(items) = msgpack::unpack_exact(&response).unwrap() else {
+            panic!("expected status response array");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[2], Value::Map(_)));
+    }
+
+    #[test]
     fn test_status_request_empty_data() {
         let engine = make_engine();
         let (interfaces, _) = make_interface_views();

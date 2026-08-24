@@ -22,6 +22,7 @@ pub mod announce_cache;
 pub mod ifac;
 pub mod md5;
 pub mod pickle;
+pub mod profiling;
 #[cfg(feature = "iface-local")]
 pub mod remote_management;
 pub mod resource;

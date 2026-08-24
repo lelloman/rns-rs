@@ -56,6 +56,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let show_pr_stats = args.has("P") || args.has("pr-stats");
     let show_bursts = args.has("B") || args.has("burst");
     let show_blocked_ips = args.has("b") || args.has("blocked-ips");
+    let show_profiling = args.has("z") || args.has("profiling");
     // `q` is the shared parser's quiet counter, but rnstatus follows upstream
     // in assigning it to queue statistics.
     let show_queues = args.has("queues") || args.quiet > 0;
@@ -93,6 +94,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_bursts,
             show_blocked_ips,
             show_queues,
+            show_profiling,
         );
         return;
     }
@@ -262,6 +264,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         } else {
             None
         };
+        let profiling_results = if show_profiling {
+            client
+                .call(&PickleValue::Dict(vec![(
+                    PickleValue::String("get".into()),
+                    PickleValue::String("profiling_results".into()),
+                )]))
+                .ok()
+                .filter(|value| !matches!(value, PickleValue::None))
+        } else {
+            None
+        };
 
         if monitor_mode {
             // Clear screen
@@ -287,6 +300,9 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     show_queues,
                 },
             );
+            if let Some(results) = profiling_results.as_ref() {
+                print_profiling_results(results);
+            }
         }
 
         if let Some(count) = link_count {
@@ -547,6 +563,110 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
             println!("{line}");
         }
         println!();
+    }
+}
+
+fn print_profiling_results(results: &PickleValue) {
+    let rendered = format_profiling_results(results);
+    if !rendered.is_empty() {
+        println!("\n Profiling    :\n{rendered}");
+    }
+}
+
+fn format_profiling_results(results: &PickleValue) -> String {
+    let Some(entries) = (match results {
+        PickleValue::Dict(entries) => Some(entries),
+        _ => None,
+    }) else {
+        return String::new();
+    };
+
+    fn append_tag(
+        output: &mut String,
+        tag: &PickleValue,
+        entries: &[(PickleValue, PickleValue)],
+        level: usize,
+    ) {
+        let Some(name) = tag.get("name").and_then(PickleValue::as_str) else {
+            return;
+        };
+        let count = tag.get("count").and_then(PickleValue::as_int).unwrap_or(0);
+        let mean = tag
+            .get("mean")
+            .and_then(PickleValue::as_float)
+            .unwrap_or(0.0);
+        let median = tag
+            .get("median")
+            .and_then(PickleValue::as_float)
+            .unwrap_or(0.0);
+        let stdev = tag.get("stdev").and_then(PickleValue::as_float);
+        let indent = "  ".repeat(level + 1);
+        output.push_str(&format!(" {indent}{name}\n"));
+        output.push_str(&format!(" {indent}  Samples  : {count}\n"));
+        if let Some(stdev) = stdev {
+            output.push_str(&format!(
+                " {indent}  Mean     : {}\n",
+                pretty_short_time(mean)
+            ));
+            output.push_str(&format!(
+                " {indent}  Median   : {}\n",
+                pretty_short_time(median)
+            ));
+            output.push_str(&format!(
+                " {indent}  St.dev.  : {}\n",
+                pretty_short_time(stdev)
+            ));
+        }
+        output.push_str(&format!(
+            " {indent}  Total    : {}\n\n",
+            pretty_short_time(mean * count as f64)
+        ));
+
+        for (_, child) in entries {
+            if child.get("super").and_then(PickleValue::as_str) == Some(name) {
+                append_tag(output, child, entries, level + 1);
+            }
+        }
+    }
+
+    let mut output = String::new();
+    for (_, tag) in entries {
+        if matches!(tag.get("super"), None | Some(PickleValue::None)) {
+            append_tag(&mut output, tag, entries, 0);
+        }
+    }
+    output
+}
+
+fn pretty_short_time(seconds: f64) -> String {
+    let mut micros = (seconds.abs() * 1_000_000.0).round();
+    let whole_seconds = (micros / 1_000_000.0).floor() as u64;
+    micros %= 1_000_000.0;
+    let millis = (micros / 1_000.0).floor() as u64;
+    micros %= 1_000.0;
+    let micros = micros as u64;
+    let mut parts = Vec::new();
+    if whole_seconds > 0 {
+        parts.push(format!("{whole_seconds}s"));
+    }
+    if millis > 0 {
+        parts.push(format!("{millis}ms"));
+    }
+    if micros > 0 {
+        parts.push(format!("{micros}µs"));
+    }
+    let rendered = if parts.is_empty() {
+        "0us".into()
+    } else if parts.len() == 1 {
+        parts.remove(0)
+    } else {
+        let last = parts.pop().unwrap();
+        format!("{} and {last}", parts.join(", "))
+    };
+    if seconds.is_sign_negative() {
+        format!("-{rendered}")
+    } else {
+        rendered
     }
 }
 
@@ -1145,6 +1265,7 @@ fn remote_status(
     show_bursts: bool,
     show_blocked_ips: bool,
     show_queues: bool,
+    show_profiling: bool,
 ) {
     let transport_hash = match rns_net::remote_management::parse_transport_identity_hash(hash_str) {
         Ok(h) => h,
@@ -1175,7 +1296,7 @@ fn remote_status(
 
     loop {
         let monitor_started = Instant::now();
-        match client.status(transport_hash, show_links) {
+        match client.status_with_profiling(transport_hash, show_links, show_profiling) {
             Ok(remote) => {
                 if monitor_mode {
                     print!("\x1b[2J\x1b[H");
@@ -1199,6 +1320,9 @@ fn remote_status(
                             show_queues,
                         },
                     );
+                    if let Some(results) = remote.profiling_results.as_ref() {
+                        print_profiling_results(results);
+                    }
                 }
                 if let Some(count) = remote.link_count {
                     println!("{}", link_status_line(count, None));
@@ -1491,6 +1615,7 @@ fn print_usage(usage_name: &str) {
     println!("  -B, --burst             Only show interfaces with active burst limiting");
     println!("  -b, --blocked-ips       Show blocked IPs per interface");
     println!("  -q, --queues            Show inbound queue pressure statistics");
+    println!("  -z, --profiling         Show live profiling results");
     println!("  -d                      Show discovered interfaces");
     println!("  -D                      Show discovered interfaces with config entries");
     println!("  -m                      Monitor mode (loop)");
@@ -1506,6 +1631,47 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_nested_live_profiling_results() {
+        fn tag(name: &str, parent: Option<&str>, count: i64, mean: f64) -> PickleValue {
+            PickleValue::Dict(vec![
+                (
+                    PickleValue::String("name".into()),
+                    PickleValue::String(name.into()),
+                ),
+                (
+                    PickleValue::String("super".into()),
+                    parent.map_or(PickleValue::None, |value| PickleValue::String(value.into())),
+                ),
+                (PickleValue::String("count".into()), PickleValue::Int(count)),
+                (PickleValue::String("mean".into()), PickleValue::Float(mean)),
+                (
+                    PickleValue::String("median".into()),
+                    PickleValue::Float(mean),
+                ),
+                (
+                    PickleValue::String("stdev".into()),
+                    PickleValue::Float(mean / 2.0),
+                ),
+            ])
+        }
+        let results = PickleValue::Dict(vec![
+            (
+                PickleValue::String("parent".into()),
+                tag("parent", None, 2, 0.001),
+            ),
+            (
+                PickleValue::String("child".into()),
+                tag("child", Some("parent"), 1, 0.000_005),
+            ),
+        ]);
+        let rendered = format_profiling_results(&results);
+        assert!(rendered.contains("parent"));
+        assert!(rendered.contains("Samples  : 2"));
+        assert!(rendered.contains("child"));
+        assert!(rendered.contains("Total    : 2ms"));
+    }
 
     fn client_stats(
         clients: i64,
