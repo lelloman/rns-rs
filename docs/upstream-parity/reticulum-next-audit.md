@@ -161,7 +161,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Local `9506a72`; upstream RNS 1.5.0 release-note text only; runbook now records changelog handling policy |
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Integrated | Local `7a8b704`; native Rust API documentation now states bitrate and medium-timeout return/fallback semantics |
 | 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `67af8c1`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
-| 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Needs coordinated port | Discovery metadata, interface state, serialization, and status presentation for shared-medium hints |
+| 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `afe06eb`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
 | 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Needs port | Packet hash-list ownership and removal during the affected transport edge case |
 | 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
 | 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
@@ -1919,13 +1919,35 @@ all `rns-cli` tests, formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 88 commits through `d25ea38c` have a final disposition. Entries 89–117
+### 89. `26e3ca4f` — Classify shared-medium interface types
+
+**Upstream change:** Adds a default-false `shared_medium` hint to the base
+interface and marks AX.25/KISS, Pipe, RNode, RNode Multi/subinterface, Serial,
+and UDP interface classes true. The commit does not serialize or consume the
+hint; it establishes interface-class metadata for later behavior.
+
+**Rust applicability:** Rust interfaces are selected through a named factory
+registry instead of inheriting a mutable Python base class. The stable native
+equivalent is therefore classification by registry type name, which can be
+reused by discovery/capability consumers without adding duplicated flags to
+every interface constructor.
+
+**Local handling and evidence:** Local `afe06eb` adds the documented
+`shared_medium_hint()` classifier. Its focused matrix proves all seven upstream
+shared-medium families true and Auto, Backbone, I2P, Local and TCP families
+false. All 886 `rns-net` unit tests, 54 network E2E tests,
+interoperability/fixture suites, formatting, diff checks, and warning-free host
+lint passed.
+
+**Final disposition:** Integrated.
+
+All 89 commits through `26e3ca4f` have a final disposition. Entries 90–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 89–117 in upstream ancestry order.
+1. Process outstanding entries 90–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1946,6 +1968,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `26e3ca4f` adds shared-medium interface-class hints.
+  Local mapping `afe06eb` supplies the native registry classifier with a full
+  positive/negative type matrix. Complete `rns-net`, E2E/interoperability,
+  formatting, diff and host-lint checks passed. Entry 90 is next.
 - `2026-08-24`: Commit `d25ea38c` adds PPS sampling/status output and excludes
   local shared-server traffic from aggregate totals. Local mapping `67af8c1`
   covers sampling, aggregation, RPC, remote management and `rnstatus -p` with
