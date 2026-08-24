@@ -277,6 +277,20 @@ mod tests {
     }
 
     #[test]
+    fn inbound_ifac_validation_is_stateless_after_rejection() {
+        let state = derive_ifac(Some("testnet"), Some("password"), 8).unwrap();
+        let mut raw = vec![0x00, 0x01];
+        raw.extend_from_slice(&[0x42u8; 32]);
+
+        let valid = mask_outbound(&raw, &state);
+        let mut invalid = valid.clone();
+        invalid[3] ^= 0xff;
+
+        assert!(unmask_inbound(&invalid, &state).is_none());
+        assert_eq!(unmask_inbound(&valid, &state), Some(raw));
+    }
+
+    #[test]
     fn unmask_rejects_missing_flag() {
         let state = derive_ifac(Some("testnet"), None, 8).unwrap();
 
