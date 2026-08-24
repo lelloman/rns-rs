@@ -183,7 +183,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `0386059`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
 | 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Integrated | Local `9520db6` exports per-interface MTU through status RPC and renders it beside bitrate while accepting older payloads without the field |
 | 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Structurally covered | Local `15126e2` pins the dedicated native inbound IFAC handler's stateless reject-then-accept behavior |
-| 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Needs coordinated port | Byte-compatible inbound IFAC authentication/unmasking and violation classification |
+| 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Structurally covered | Local `11bb952` records that native inbound unmasking already performs one allocation and one linear XOR/copy pass |
 | 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Needs decision | Outbound IFAC boundary refactor and interaction with normal/queued transmissions |
 | 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Needs coordinated port | Byte-compatible outbound IFAC masking/tagging and accounting |
 | 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Needs decision | New upstream IFAC vectors and edge cases against native interoperability coverage |
@@ -2100,13 +2100,33 @@ diff checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 96 commits through `602085a1` have a final disposition. Entries 97–117
+### 97. `e806ae58` — Optimize inbound IFAC handling
+
+**Upstream change:** Adds a second, not-yet-selected inbound IFAC helper that
+replaces Python's byte-at-a-time immutable-byte concatenation with one
+big-integer XOR while preserving the clear tag, cleared flag, signature check,
+and violation behavior.
+
+**Rust applicability:** Native `ifac::unmask_inbound()` already allocates its
+output buffers once and traverses the received frame once, XORing header and
+payload bytes while copying the IFAC tag unchanged. Rust does not have the
+quadratic immutable-concatenation behavior or a legacy handler to replace.
+
+**Local handling and evidence:** Local `11bb952` documents the native one-pass
+equivalence at the implementation boundary. The focused mask/unmask round trip,
+all 891 `rns-net` unit tests, 54 network E2E tests, formatting, diff checks, and
+warning-free host lint passed. Activation remains a separate upstream change
+at entry 104 and is not claimed here.
+
+**Final disposition:** Structurally covered.
+
+All 97 commits through `e806ae58` have a final disposition. Entries 98–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 97–117 in upstream ancestry order.
+1. Process outstanding entries 98–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2127,6 +2147,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `e806ae58` adds an inactive optimized Python inbound
+  IFAC helper. Rust's sole inbound helper already allocates once and performs a
+  single linear XOR/copy pass; local mapping `11bb952` records that invariant.
+  Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
+  passed. Entry 98 is next.
 - `2026-08-24`: Commit `602085a1` extracts Python's legacy inbound IFAC
   algorithm into a helper without changing behavior. Rust already has the
   dedicated stateless `ifac::unmask_inbound()` boundary; local mapping
