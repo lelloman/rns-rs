@@ -34,6 +34,9 @@ working audit can have only a parity record.
    disposition. Record local commits and focused test evidence as work lands.
 4. Rename the active file to `reticulum-X.Y.Z-audit.md` when the upstream
    version and promotion target are known.
+   Use upstream version metadata and changelog text to identify that target,
+   but do not vendor the upstream changelog or treat its compatibility claims
+   as acceptance evidence; verify every listed behavior from its source commit.
 5. Complete the promotion gates without rewriting failures or deferred manual
    checks as passes.
 6. Copy [PARITY-TEMPLATE.md](PARITY-TEMPLATE.md) to the versioned parity
