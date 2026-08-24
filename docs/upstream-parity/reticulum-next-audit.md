@@ -156,7 +156,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 |---:|---|---|---|---|
 | 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `6df6413`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
 | 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `df07f45`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
-| 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Needs coordinated port | Preemptive and late path-request egress limiting under concurrent inbound load |
+| 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Integrated | Local `5d733ca`; two-sample prospective-rate gate plus live pre-dispatch recursive-request check |
 | 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Needs decision | Changed upstream diagnostic levels and corresponding native operational visibility |
 | 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Changelog-only content unless the diff identifies an undocumented compatibility requirement |
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Documentation follow-up | Upstream user-facing behavior and any equivalent native documentation changes |
@@ -1811,13 +1811,39 @@ host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 83 commits through `2aed542e` have a final disposition. Entries 84–117
+### 84. `6f6751d6` — Apply prospective and late recursive path-request egress limits
+
+**Upstream change:** Renames the egress minimum-sample constant and lowers it
+from six samples to two, calculates outgoing path-request frequency as though
+the candidate request had already been sent, and repeats the limit check at
+the final recursive-request send boundary. The late check closes a race where
+queued incoming requests can all pass an earlier decision made against stale
+outgoing state.
+
+**Rust applicability:** The transport engine already filtered each recursive
+egress candidate, but used the sampled `n/span` rate and required six samples.
+The network driver updated live outgoing samples only while dispatching and did
+not re-check the gate immediately before writing a previously created action.
+Both upstream defects therefore applied across the engine/driver boundary.
+
+**Local handling and evidence:** Local `5d733ca` introduces the two-sample
+egress constant, evaluates `(n+1)/span` from the sampled rate and count, and
+exposes the same engine gate for the driver's live pre-dispatch check. Focused
+regressions first reproduced both the missed prospective threshold and a state
+change between action creation and writer dispatch. All 649 `rns-core` and 885
+`rns-net` unit tests, 54 network E2E tests, the affected integration and
+Python/IFAC interoperability suites, formatting, diff checks, and warning-free
+host lint passed.
+
+**Final disposition:** Integrated.
+
+All 84 commits through `6f6751d6` have a final disposition. Entries 85–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 84–117 in upstream ancestry order.
+1. Process outstanding entries 85–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1838,6 +1864,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `6f6751d6` now applies the egress limiter after two
+  samples, preemptively includes the candidate request in its rate, and checks
+  live state again at recursive-request dispatch. Local mapping `5d733ca`
+  carries the exact upstream trailer. Focused pre-port failures, all
+  `rns-core`/`rns-net` tests and interoperability suites, formatting, diff
+  checks, and warning-free host lint passed. Entry 85 is next.
 - `2026-08-24`: Commit `2aed542e` is structurally covered by Rust's existing
   single borrowed path lookup. Local mapping `df07f45` documents the invariant
   and strengthens the removed-path fallback regression. The focused test, all
