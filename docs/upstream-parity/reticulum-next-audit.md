@@ -157,7 +157,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `6df6413`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
 | 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `df07f45`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
 | 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Integrated | Local `5d733ca`; two-sample prospective-rate gate plus live pre-dispatch recursive-request check |
-| 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Needs decision | Changed upstream diagnostic levels and corresponding native operational visibility |
+| 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Structurally covered | Local `fc9e989`; absent usable interface bitrates are a normal silent `None` fallback with focused empty/zero-bitrate assertions |
 | 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Changelog-only content unless the diff identifies an undocumented compatibility requirement |
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Documentation follow-up | Upstream user-facing behavior and any equivalent native documentation changes |
 | 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Needs coordinated port | Per-interface PPS fields, aggregation/RPC/CLI rendering, and exclusion of the local shared instance |
@@ -1837,13 +1837,34 @@ host lint passed.
 
 **Final disposition:** Integrated.
 
-All 84 commits through `6f6751d6` have a final disposition. Entries 85–117
+### 85. `b397870c` — Silence unavailable interface-bitrate diagnostics
+
+**Upstream change:** Demotes failures while calculating the lowest and highest
+online interface bitrates from debug to extreme logging. An empty set of
+online interfaces with configured bitrates is expected and should not create
+routine diagnostic noise.
+
+**Rust applicability:** Rust calculates the lowest usable bitrate with an
+iterator returning `Option<u64>`. Empty and zero-only sets produce `None`
+without exceptions or logging, and path timeout calculation silently uses its
+fixed fallback. There is no cached highest-bitrate calculation in the native
+transport path and therefore no equivalent noisy diagnostic.
+
+**Local handling and evidence:** Local `fc9e989` documents that missing usable
+bitrates are intentionally silent and strengthens the timeout regression with
+direct assertions for empty and zero-bitrate inputs. The focused test, all 649
+core unit tests, core interoperability/integration suites, formatting, diff
+checks, and warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 85 commits through `b397870c` have a final disposition. Entries 86–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 85–117 in upstream ancestry order.
+1. Process outstanding entries 86–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1864,6 +1885,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `b397870c` is structurally covered by Rust's silent
+  optional bitrate calculation and fixed timeout fallback. Local mapping
+  `fc9e989` documents the invariant and strengthens empty/zero-bitrate
+  assertions. The focused test, all core tests, formatting, diff checks, and
+  warning-free host lint passed. Entry 86 is next.
 - `2026-08-24`: Commit `6f6751d6` now applies the egress limiter after two
   samples, preemptively includes the candidate request in its rate, and checks
   live state again at recursive-request dispatch. Local mapping `5d733ca`
