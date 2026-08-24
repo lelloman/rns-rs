@@ -2831,6 +2831,10 @@ fn discovery_path_request_timeout_covers_slowest_interface_round_trip() {
 fn discovery_path_request_timeout_defaults_and_clamps_safely() {
     let mut interfaces = BTreeMap::new();
     assert_eq!(
+        super::path_requests::lowest_interface_bitrate(&interfaces),
+        None
+    );
+    assert_eq!(
         super::path_requests::discovery_path_request_timeout(&interfaces),
         constants::PATH_REQUEST_TIMEOUT
     );
@@ -2846,6 +2850,10 @@ fn discovery_path_request_timeout_defaults_and_clamps_safely() {
     let mut zero = make_interface(2, constants::MODE_FULL);
     zero.bitrate = Some(0);
     interfaces.insert(zero.id, zero);
+    assert_eq!(
+        super::path_requests::lowest_interface_bitrate(&interfaces),
+        Some(1_000)
+    );
     assert_eq!(
         super::path_requests::discovery_path_request_timeout(&interfaces),
         constants::PATH_REQUEST_TIMEOUT
