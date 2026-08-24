@@ -192,7 +192,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `6a97cd0` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
 | 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `11e1f91` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `7fa5f73` pins repeated manager-owned incoming cancellation as an action-free no-op |
-| 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Needs decision | Changed interface diagnostic severity and native operational visibility |
+| 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `8ab860a` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Needs port | Attached-interface ingress forwarding and loop prevention |
 | 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Needs coordinated port | Logging configuration, rotation limits/count, retention, and CLI/runtime behavior |
 | 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Needs decision | Logging concurrency, ordering, shutdown, backpressure, and native logger equivalence |
@@ -2279,13 +2279,30 @@ warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 105 commits through `956d688e` have a final disposition. Entries 106–117
+### 106. `a9538e9f` — Lower the MTU selection log level
+
+**Upstream change:** Demotes the Python diagnostic emitted after automatic
+hardware-MTU selection from debug to extreme verbosity.
+
+**Rust applicability:** Native interfaces select an explicit MTU while building
+their immutable registration metadata. The transport core neither recalculates
+that value nor emits an MTU-selection diagnostic, so there is no noisy message
+whose level must change.
+
+**Local handling and evidence:** Local `8ab860a` documents the registration-time
+MTU ownership and no-log invariant on `InterfaceInfo`. All 650 `rns-core` unit
+tests and its integration suites, formatting, diff checks, and warning-free
+host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 106 commits through `a9538e9f` have a final disposition. Entries 107–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 106–117 in upstream ancestry order.
+1. Process outstanding entries 107–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2306,6 +2323,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `a9538e9f` demotes Python's automatic MTU-selection
+  diagnostic. Native interfaces register an already-selected MTU and emit no
+  equivalent runtime message; local mapping `8ab860a` records that invariant.
+  Complete `rns-core`, formatting, diff and host-lint checks passed. Entry 107
+  is next.
 - `2026-08-24`: Commit `956d688e` guards Python incoming-resource removal
   against duplicate/reentrant cancellation. Rust centralizes collection removal
   in `LinkManager`; local mapping `7fa5f73` pins repeated receiver cancellation
