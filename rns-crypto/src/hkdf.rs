@@ -69,6 +69,55 @@ pub fn hkdf(
 mod tests {
     use super::*;
 
+    fn decode_hex(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let digit = |byte: u8| match byte {
+                    b'0'..=b'9' => byte - b'0',
+                    b'a'..=b'f' => byte - b'a' + 10,
+                    _ => panic!("invalid test vector"),
+                };
+                (digit(pair[0]) << 4) | digit(pair[1])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rfc5869_sha256_vectors() {
+        let cases = [
+            (
+                vec![0x0b; 22],
+                (0x00..0x0d).collect::<Vec<_>>(),
+                (0xf0..0xfa).collect::<Vec<_>>(),
+                42,
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+            ),
+            (
+                (0x00..0x50).collect::<Vec<_>>(),
+                (0x60..0xb0).collect::<Vec<_>>(),
+                (0xb0..=0xff).collect::<Vec<_>>(),
+                82,
+                "b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87",
+            ),
+            (
+                vec![0x0b; 22],
+                Vec::new(),
+                Vec::new(),
+                42,
+                "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8",
+            ),
+        ];
+
+        for (ikm, salt, context, length, expected) in cases {
+            assert_eq!(
+                hkdf(length, &ikm, Some(&salt), Some(&context)).unwrap(),
+                decode_hex(expected)
+            );
+        }
+    }
+
     #[test]
     fn test_hkdf_32bytes() {
         let ikm = b"input key material";
