@@ -164,7 +164,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `afe06eb`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
 | 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Integrated | Local `804537d`; stale-interface active-link arrivals are dropped and removed from the native bounded FIFO so the current-route copy remains admissible |
 | 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Structurally covered | Local `66c41fd`; native count and list both require `flap_count > grace`, with mixed blocked/grace-period regression |
-| 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
+| 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Integrated | Local `01e6ce0`; discovery announces carry `0xFD = "rns-rs"` and `0xFC = rns-net package version`, while older payloads remain accepted |
 
 ### Additional canonical drift observed 2026-08-24
 
@@ -1990,13 +1990,35 @@ create sockets; the identical permitted rerun passed completely.
 
 **Final disposition:** Structurally covered.
 
-All 91 commits through `bfab2964` have a final disposition. Entries 92–117
+### 92. `b123a756` — Identify the transport implementation in discovery metadata
+
+**Upstream change:** Reserves discovery metadata keys `0xFD` and `0xFC` and
+includes the short transport implementation identifier `RNS` plus the upstream
+RNS version in every discoverable-interface announcement.
+
+**Rust applicability:** Native discovery announcements used the same numeric
+MessagePack map but omitted both newly required fields. The receiving parser
+already ignores unknown fields, as upstream does, so accepting pre-1.5.0
+announces remains necessary for backward compatibility; no persistence, RPC,
+or CLI expansion is introduced by this upstream commit.
+
+**Local handling and evidence:** Local `01e6ce0` defines the exact `0xFD` and
+`0xFC` wire keys and emits `rns-rs` plus the compiled `rns-net` package version
+from every discovery announcement. The focused decoded-map regression verifies
+both exact keys and values. All 888 `rns-net` unit tests, 54 network E2E tests,
+Python/IFAC interoperability and fixture suites, formatting, diff checks, and
+warning-free host lint passed; the discovery E2E suite also confirms native
+receivers continue accepting the augmented payload.
+
+**Final disposition:** Integrated.
+
+All 92 commits through `b123a756` have a final disposition. Entries 93–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 92–117 in upstream ancestry order.
+1. Process outstanding entries 93–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2017,6 +2039,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `b123a756` requires discovery announcements to identify
+  their transport implementation and version. Local mapping `01e6ce0` emits
+  `rns-rs` and the compiled native version under the exact `0xFD`/`0xFC` keys,
+  with decoded-map coverage and backward-compatible receiving behavior.
+  Complete `rns-net`, E2E/interoperability, formatting, diff and host-lint
+  checks passed. Entry 93 is next.
 - `2026-08-24`: Commit `bfab2964` excludes tracked peers still within the
   fast-flap grace allowance from blocked-IP status output. Rust already shares
   the strict blocked predicate across count and list; local mapping `66c41fd`
