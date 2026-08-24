@@ -17,6 +17,66 @@ struct RotatingLogWriter {
     max_archives: usize,
 }
 
+enum LogCommand {
+    Write(Vec<u8>),
+    Flush(mpsc::SyncSender<io::Result<()>>),
+}
+
+struct AsyncLogWriter {
+    sender: mpsc::Sender<LogCommand>,
+}
+
+impl AsyncLogWriter {
+    fn new<W>(mut writer: W) -> io::Result<Self>
+    where
+        W: Write + Send + 'static,
+    {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("rns-log-writer".into())
+            .spawn(move || {
+                let mut pending_error: Option<(io::ErrorKind, String)> = None;
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        LogCommand::Write(buffer) => {
+                            if let Err(err) = writer.write_all(&buffer) {
+                                pending_error = Some((err.kind(), err.to_string()));
+                            }
+                        }
+                        LogCommand::Flush(reply) => {
+                            let result = match pending_error.take() {
+                                Some((kind, message)) => Err(io::Error::new(kind, message)),
+                                None => writer.flush(),
+                            };
+                            let _ = reply.send(result);
+                        }
+                    }
+                }
+                let _ = writer.flush();
+            })?;
+        Ok(Self { sender })
+    }
+}
+
+impl Write for AsyncLogWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.sender
+            .send(LogCommand::Write(buffer.to_vec()))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.sender
+            .send(LogCommand::Flush(reply))
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?;
+        response
+            .recv()
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?
+    }
+}
+
 impl RotatingLogWriter {
     fn new(path: PathBuf, max_file_bytes: u64, max_archives: usize) -> io::Result<Self> {
         fs::OpenOptions::new()
@@ -171,7 +231,10 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let logfile_path = config_dir.join("logfile");
-        match RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES, LOG_MAX_ARCHIVES) {
+        let writer =
+            RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES, LOG_MAX_ARCHIVES)
+                .and_then(AsyncLogWriter::new);
+        match writer {
             Ok(writer) => {
                 let mut builder = env_logger::Builder::new();
                 builder
@@ -521,5 +584,30 @@ mod tests {
     fn service_log_rotation_defaults_match_upstream() {
         assert_eq!(LOG_MAX_FILE_BYTES, 30 * 1024 * 1024);
         assert_eq!(LOG_MAX_ARCHIVES, 9);
+    }
+
+    #[test]
+    fn service_log_writes_run_on_dedicated_thread() {
+        #[derive(Clone)]
+        struct ThreadRecorder(std::sync::Arc<std::sync::Mutex<Option<std::thread::ThreadId>>>);
+
+        impl Write for ThreadRecorder {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().replace(std::thread::current().id());
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let recorded = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut writer = AsyncLogWriter::new(ThreadRecorder(recorded.clone())).unwrap();
+        let caller = std::thread::current().id();
+        writer.write_all(b"queued log line").unwrap();
+        writer.flush().unwrap();
+
+        assert_ne!(*recorded.lock().unwrap(), Some(caller));
     }
 }
