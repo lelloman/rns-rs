@@ -1,10 +1,19 @@
 use super::*;
 
 impl TransportEngine {
+    /// Return the slowest positive bitrate among registered interfaces.
+    ///
+    /// Returns `None` when no registered interface advertises a usable
+    /// bitrate.
     pub fn lowest_interface_bitrate(&self) -> Option<u64> {
         super::path_requests::lowest_interface_bitrate(&self.interfaces)
     }
 
+    /// Estimate a path-request round-trip timeout for the slowest medium.
+    ///
+    /// The estimate covers two MTU transmissions at the slowest registered
+    /// positive bitrate plus the per-hop link-establishment allowance. It is
+    /// zero when no usable interface bitrate is known.
     pub fn medium_path_timeout(&self) -> f64 {
         super::path_requests::medium_path_timeout(&self.interfaces)
     }

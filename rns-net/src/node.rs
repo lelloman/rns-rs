@@ -2066,6 +2066,9 @@ impl RnsNode {
     }
 
     /// Return the slowest positive bitrate among currently registered interfaces.
+    ///
+    /// Returns `Ok(None)` when no registered interface advertises a usable
+    /// bitrate.
     pub fn lowest_interface_bitrate(&self) -> Result<Option<u64>, SendError> {
         match self.query(QueryRequest::LowestInterfaceBitrate)? {
             QueryResponse::LowestInterfaceBitrate(bitrate) => Ok(bitrate),
@@ -2074,6 +2077,10 @@ impl RnsNode {
     }
 
     /// Return the adaptive medium path timeout advertised by the transport engine.
+    ///
+    /// The estimate covers a full MTU round trip on the slowest registered
+    /// positive-bitrate interface plus the per-hop allowance, or is zero when
+    /// no usable bitrate is known.
     pub fn medium_path_timeout(&self) -> Result<f64, SendError> {
         match self.query(QueryRequest::MediumPathTimeout)? {
             QueryResponse::MediumPathTimeout(timeout) => Ok(timeout),
