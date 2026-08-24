@@ -194,7 +194,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `7fa5f73` pins repeated manager-owned incoming cancellation as an action-free no-op |
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `8ab860a` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `ea786c8` proves an offline attached target neither transmits nor falls back to another online interface |
-| 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Needs coordinated port | Logging configuration, rotation limits/count, retention, and CLI/runtime behavior |
+| 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Integrated | Local `b33a885` rotates standalone service logs at 30 MiB with nine retained archives through a configurable native policy |
 | 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Needs decision | Logging concurrency, ordering, shutdown, backpressure, and native logger equivalence |
 | 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Needs coordinated port | Runtime profiling collection, RPC status shape, and `rnstatus` output |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Needs decision | Profiler lifecycle, bounded retention, and applicability to native instrumentation |
@@ -2316,13 +2316,34 @@ lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 107 commits through `3fdfe93e` have a final disposition. Entries 108–117
+### 108. `1694a17a` — Add full and configurable logfile rotation
+
+**Upstream change:** Raises the default logfile limit from 5 MiB to 30 MiB,
+retains nine numbered archives instead of only one, and rotates existing
+archives from newest to oldest while pruning the retention boundary.
+
+**Rust applicability:** Supervised `rns-server` child logs already have a
+separately configurable rotating store, but standalone `rnsd -s` handed one
+permanently open append-only file to `env_logger` and therefore grew without a
+bound. That service-mode path requires the upstream retention behavior.
+
+**Local handling and evidence:** Local `b33a885` adds a configurable rotating
+writer to standalone `rnsd`, using the upstream 30 MiB and nine-archive defaults.
+It reopens for each write so renaming the active file cannot strand later output
+in an archive, prunes the oldest generation, shifts numbered archives, and
+starts a new active log. Focused default and retention tests, all 118 `rns-cli`
+unit tests and its integration suites, formatting, diff checks, and warning-free
+host lint passed.
+
+**Final disposition:** Integrated.
+
+All 108 commits through `1694a17a` have a final disposition. Entries 109–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 108–117 in upstream ancestry order.
+1. Process outstanding entries 109–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2343,6 +2364,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `1694a17a` expands Python logfile rotation to 30 MiB
+  and nine archives. Local mapping `b33a885` replaces standalone `rnsd -s`'s
+  unbounded append file with a configurable rotating writer using those
+  defaults; archive retention and rollover tests plus the complete `rns-cli`,
+  formatting, diff and host-lint checks passed. Entry 109 is next.
 - `2026-08-24`: Commit `3fdfe93e` restricts attached-interface packets to one
   online target. Native routing already emits one exact-interface action and
   driver dispatch drops unavailable targets without broadcast fallback; local
