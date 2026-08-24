@@ -20,6 +20,8 @@ use super::time;
 /// Discovery field IDs for msgpack encoding
 pub const NAME: u8 = 0xFF;
 pub const TRANSPORT_ID: u8 = 0xFE;
+pub const TRANSPORT_IMPL: u8 = 0xFD;
+pub const TRANSPORT_VERS: u8 = 0xFC;
 pub const INTERFACE_TYPE: u8 = 0x00;
 pub const TRANSPORT: u8 = 0x01;
 pub const REACHABLE_ON: u8 = 0x02;
@@ -36,6 +38,12 @@ pub const CODINGRATE: u8 = 0x0C;
 pub const MODULATION: u8 = 0x0D;
 pub const CHANNEL: u8 = 0x0E;
 pub const OP_ADDR: u8 = 0xF0;
+
+/// Short, implementation-specific identity advertised by this transport.
+pub const TRANSPORT_IMPLEMENTATION_NAME: &str = "rns-rs";
+
+/// Version of the native transport implementation in this build.
+pub const TRANSPORT_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// App name for discovery destination
 pub const APP_NAME: &str = "rnstransport";

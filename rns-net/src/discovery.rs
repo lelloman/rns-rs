@@ -886,6 +886,14 @@ impl InterfaceAnnouncer {
                 msgpack::Value::UInt(TRANSPORT_ID as u64),
                 msgpack::Value::Bin(transport_id.to_vec()),
             ),
+            (
+                msgpack::Value::UInt(TRANSPORT_IMPL as u64),
+                msgpack::Value::Str(TRANSPORT_IMPLEMENTATION_NAME.into()),
+            ),
+            (
+                msgpack::Value::UInt(TRANSPORT_VERS as u64),
+                msgpack::Value::Str(TRANSPORT_IMPLEMENTATION_VERSION.into()),
+            ),
         ];
         if let Some(ref reachable) = iface.config.reachable_on {
             entries.push((
@@ -1250,6 +1258,25 @@ mod tests {
 
         assert_eq!(consumed, packed.len());
         assert!(entries.contains(&(Value::UInt(OP_ADDR as u64), Value::Bin(vec![0xa5; 16]),)));
+    }
+
+    #[test]
+    fn announcer_identifies_native_transport_implementation_and_version() {
+        let iface = test_announce_interface("implementation", 1);
+        let packed = InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface).unwrap();
+        let (Value::Map(entries), consumed) = msgpack::unpack(&packed).unwrap() else {
+            panic!("discovery metadata was not a map")
+        };
+
+        assert_eq!(consumed, packed.len());
+        assert!(entries.contains(&(
+            Value::UInt(TRANSPORT_IMPL as u64),
+            Value::Str("rns-rs".into()),
+        )));
+        assert!(entries.contains(&(
+            Value::UInt(TRANSPORT_VERS as u64),
+            Value::Str(env!("CARGO_PKG_VERSION").into()),
+        )));
     }
 
     #[test]
