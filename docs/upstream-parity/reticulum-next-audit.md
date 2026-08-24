@@ -195,7 +195,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `8ab860a` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `ea786c8` proves an offline attached target neither transmits nor falls back to another online interface |
 | 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Integrated | Local `b33a885` rotates standalone service logs at 30 MiB with nine retained archives through a configurable native policy |
-| 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Needs decision | Logging concurrency, ordering, shutdown, backpressure, and native logger equivalence |
+| 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Integrated | Local `15d3f86` queues service log buffers to one named writer thread and supplies an ordering/flush barrier |
 | 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Needs coordinated port | Runtime profiling collection, RPC status shape, and `rnstatus` output |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Needs decision | Profiler lifecycle, bounded retention, and applicability to native instrumentation |
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Needs decision | Python-only instrumentation mechanism versus any observable profiling contract |
@@ -2337,13 +2337,34 @@ host lint passed.
 
 **Final disposition:** Integrated.
 
-All 108 commits through `1694a17a` have a final disposition. Entries 109–117
+### 109. `9da66649` — Move log writing to a dedicated thread
+
+**Upstream change:** Queues formatted log records and drains them on one daemon
+thread, moving stdout, callback, file I/O, and rotation away from logging caller
+threads while preserving FIFO ordering.
+
+**Rust applicability:** `env_logger` serializes access to its target but calls
+the target writer from the producer thread. After entry 108, standalone service
+logging still performed file open/write/flush/rotation synchronously and thus
+needed a dedicated consumer boundary.
+
+**Local handling and evidence:** Local `15d3f86` wraps the rotating service
+writer in an unbounded FIFO channel drained by one named `rns-log-writer`
+thread. Writes enqueue owned buffers; `flush()` is an ordering barrier that
+waits until prior records have been handled and propagates worker I/O failures.
+A focused recorder test proves the actual write runs on a thread other than the
+caller. All 119 `rns-cli` unit tests and its integration suites, formatting,
+diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 109 commits through `9da66649` have a final disposition. Entries 110–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 109–117 in upstream ancestry order.
+1. Process outstanding entries 110–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2364,6 +2385,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `9da66649` moves Python logging I/O to a dedicated
+  thread. Local mapping `15d3f86` queues standalone service log buffers to one
+  named FIFO writer thread and provides a synchronous flush/error barrier. The
+  focused thread-identity regression, complete `rns-cli`, formatting, diff and
+  host-lint checks passed. Entry 110 is next.
 - `2026-08-24`: Commit `1694a17a` expands Python logfile rotation to 30 MiB
   and nine archives. Local mapping `b33a885` replaces standalone `rnsd -s`'s
   unbounded append file with a configurable rotating writer using those
