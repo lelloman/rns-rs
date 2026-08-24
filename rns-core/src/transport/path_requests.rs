@@ -1,6 +1,8 @@
 use super::*;
 
 pub fn lowest_interface_bitrate(interfaces: &BTreeMap<InterfaceId, InterfaceInfo>) -> Option<u64> {
+    // Having no usable bitrate is a normal state, not a diagnostic condition.
+    // Callers fall back to the fixed path-request timeout without logging.
     interfaces
         .values()
         .filter_map(|interface| interface.bitrate)
