@@ -155,7 +155,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | # | Upstream commit | Subject | Disposition | Evidence or review scope |
 |---:|---|---|---|---|
 | 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `6df6413`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
-| 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Needs decision | Outbound path lookup consistency and any observable race or stale-entry behavior |
+| 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `df07f45`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
 | 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Needs coordinated port | Preemptive and late path-request egress limiting under concurrent inbound load |
 | 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Needs decision | Changed upstream diagnostic levels and corresponding native operational visibility |
 | 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Changelog-only content unless the diff identifies an undocumented compatibility requirement |
@@ -1790,13 +1790,34 @@ and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 82 commits through `091e021d` have a final disposition. Entries 83–117
+### 83. `2aed542e` — Resolve the outbound path entry directly
+
+**Upstream change:** Replaces a path-table membership check followed by a
+locked second membership check and index operation with one `.get()` lookup.
+If the entry disappeared between the earlier outbound condition and the
+lookup, the packet is dropped instead of indexing missing state.
+
+**Rust applicability:** Rust's outbound router already performs one
+`BTreeMap::get()` and derives the primary path from the returned borrow. It has
+no separate membership preflight, global mutable table, or second index
+operation. A missing path falls through to the normal broadcast behavior.
+
+**Local handling and evidence:** Local `df07f45` documents the single-lookup
+invariant and strengthens the focused unit test by inserting and removing a
+path before routing, then proving the current missing state broadcasts without
+a stale access. The focused test, all 649 core unit tests, core
+interoperability/integration suites, formatting, diff checks, and warning-free
+host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 83 commits through `2aed542e` have a final disposition. Entries 84–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 83–117 in upstream ancestry order.
+1. Process outstanding entries 84–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1817,6 +1838,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `2aed542e` is structurally covered by Rust's existing
+  single borrowed path lookup. Local mapping `df07f45` documents the invariant
+  and strengthens the removed-path fallback regression. The focused test, all
+  649 core unit tests, core interoperability/integration suites, formatting,
+  diff checks, and warning-free host lint passed. Entry 84 is next.
 - `2026-08-24`: Commit `091e021d` rejects outbound packets at the Pathfinder
   hop limit before routing or packet-hash retention. Local mapping `6df6413`
   carries the exact upstream trailer. The focused pre-port failure, all 649
