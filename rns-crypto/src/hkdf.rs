@@ -65,6 +65,8 @@ pub fn hkdf(
     Ok(derived)
 }
 
+// Cargo discovers this module through the crate test harness, so the HKDF
+// vectors run under `cargo test --workspace` without a manual runner registry.
 #[cfg(test)]
 mod tests {
     use super::*;
