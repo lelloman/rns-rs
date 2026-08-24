@@ -207,6 +207,8 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     }
 }
 
+// Cargo discovers this module through the crate test harness, so the IFAC
+// matrix runs under `cargo test --workspace` without a manual runner registry.
 #[cfg(test)]
 mod tests {
     use super::*;
