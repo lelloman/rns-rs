@@ -190,7 +190,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Integrated | Local `f049244` adds all three RFC 5869 SHA-256 vectors alongside existing error and Python-fixture coverage |
 | 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `f10205b` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
 | 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `6a97cd0` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
-| 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Needs coordinated port | Adoption of entries 97, 99, and 103 at all Transport IFAC call sites |
+| 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `11e1f91` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Needs port | Incoming Resource cancellation state and duplicate/late cancellation behavior |
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Needs decision | Changed interface diagnostic severity and native operational visibility |
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Needs port | Attached-interface ingress forwarding and loop prevention |
@@ -2240,13 +2240,33 @@ tests, formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 103 commits through `5da0870e` have a final disposition. Entries 104–117
+### 104. `1c83e732` — Use optimized IFAC handlers
+
+**Upstream change:** Switches Python's live transmit and inbound-preprocessing
+call sites from the legacy IFAC helpers to the optimized alternatives added in
+entries 97 and 99.
+
+**Rust applicability:** Rust never retained parallel legacy and optimized
+implementations. All outbound driver dispatch paths already call the sole
+linear `mask_outbound()` helper, and the inbound driver boundary calls the sole
+linear `unmask_inbound()` helper before packet parsing.
+
+**Local handling and evidence:** Local `11e1f91` adds a driver-level regression
+that sends a real packet through an IFAC-enabled interface, verifies the emitted
+frame recovers exactly through the native inbound helper, then feeds that frame
+back through driver preprocessing with no IFAC or protocol violation. The
+focused test, all 895 `rns-net` unit tests, 54 network E2E tests, formatting,
+diff checks, and warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 104 commits through `1c83e732` have a final disposition. Entries 105–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 104–117 in upstream ancestry order.
+1. Process outstanding entries 105–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2267,6 +2287,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `1c83e732` activates Python's optimized IFAC helpers.
+  Rust has only the linear helpers already audited in entries 97 and 99; local
+  mapping `11e1f91` exercises them through live driver outbound and inbound
+  boundaries. Focused and complete `rns-net`, E2E, formatting, diff and
+  host-lint checks passed. Entry 105 is next.
 - `2026-08-24`: Commit `5da0870e` optimizes Python HKDF by cloning pre-keyed
   hash states. Local mapping `6a97cd0` similarly clones one pre-keyed HMAC per
   expansion block and avoids concatenated input allocation, with reference
