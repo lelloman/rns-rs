@@ -180,7 +180,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
 | 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `0aa04f1`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
-| 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Needs coordinated port | Interface MTU state/defaults across generic, local, and Backbone interfaces plus diagnostics |
+| 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `0386059`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
 | 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Needs port | Interface-status MTU field, RPC transport, sorting/rendering, and compatibility with older peers |
 | 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Needs decision | Inbound IFAC boundary refactor and whether native driver separation already supplies the invariant |
 | 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Needs coordinated port | Byte-compatible inbound IFAC authentication/unmasking and violation classification |
@@ -2035,13 +2035,39 @@ diff checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 93 commits through `2058596d` have a final disposition. Entries 94–117
+### 94. `88c629e3` — Align Local and Backbone bitrate/MTU metadata
+
+**Upstream change:** Lowers a Backbone listener's bitrate estimate from 1 Gbps
+to 500 Mbps, which makes accepted peers select a 131072-byte hardware MTU;
+assigns the Local server an explicit 262144-byte hardware MTU; demotes MTU
+selection diagnostics from pathing to debug; makes keepalive logging extreme;
+and avoids formatting a disabled Local sleep-pause debug message.
+
+**Rust applicability:** Native interface metadata still reported 1 Gbps and a
+65535-byte placeholder for accepted Backbone peers and Local connections. It
+also incorrectly applied the listener estimate to standalone Backbone clients,
+whose upstream class retains a separate 100 Mbps estimate and 1 MiB maximum.
+Rust has no MTU-selection diagnostic, no per-keepalive diagnostic, and its
+`log::debug!` macro performs level filtering before message formatting, so the
+logging adjustments require no additional runtime path.
+
+**Local handling and evidence:** Local `0386059` centralizes the class defaults:
+500 Mbps and 131072 bytes for listener-accepted Backbone peers, 100 Mbps and 1
+MiB for standalone/pool Backbone clients, and 1 Gbps plus 262144 bytes for both
+sides of Local/shared-instance connections. Focused constant, metadata, and
+live accepted-connection regressions passed. All 890 `rns-net` unit tests, 54
+network E2E tests, Python/IFAC interoperability and fixture suites, formatting,
+diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 94 commits through `88c629e3` have a final disposition. Entries 95–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 94–117 in upstream ancestry order.
+1. Process outstanding entries 95–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2062,6 +2088,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `88c629e3` adjusts Backbone bitrate/auto-MTU defaults,
+  gives Local servers an explicit hardware MTU, and lowers noisy diagnostics.
+  Local mapping `0386059` aligns server peers, standalone clients, Local and
+  shared-client metadata; native logging already supplies the intended level
+  behavior. Focused and complete `rns-net`, E2E/interoperability, formatting,
+  diff and host-lint checks passed. Entry 95 is next.
 - `2026-08-24`: Commit `2058596d` guards Python outgoing-resource removal
   against duplicate/reentrant cancellation. Rust centralizes removal in the
   link manager and terminal cancellation is already idempotent; local mapping
