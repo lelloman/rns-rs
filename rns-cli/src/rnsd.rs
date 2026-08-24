@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use crate::args::Args;
@@ -7,6 +8,78 @@ use rns_net::storage;
 use rns_net::{Callbacks, InterfaceId, RnsNode};
 
 const VERSION: &str = env!("FULL_VERSION");
+const LOG_MAX_FILE_BYTES: u64 = 30 * 1024 * 1024;
+const LOG_MAX_ARCHIVES: usize = 9;
+
+struct RotatingLogWriter {
+    path: PathBuf,
+    max_file_bytes: u64,
+    max_archives: usize,
+}
+
+impl RotatingLogWriter {
+    fn new(path: PathBuf, max_file_bytes: u64, max_archives: usize) -> io::Result<Self> {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            max_file_bytes,
+            max_archives,
+        })
+    }
+
+    fn rotate(&self) -> io::Result<()> {
+        if self.max_archives == 0 {
+            return remove_log_if_present(&self.path);
+        }
+
+        remove_log_if_present(&archive_path(&self.path, self.max_archives))?;
+        for index in (1..self.max_archives).rev() {
+            let source = archive_path(&self.path, index);
+            if source.exists() {
+                fs::rename(source, archive_path(&self.path, index + 1))?;
+            }
+        }
+        fs::rename(&self.path, archive_path(&self.path, 1))
+    }
+}
+
+impl Write for RotatingLogWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        file.write_all(buffer)?;
+        file.flush()?;
+        drop(file);
+
+        if self.path.metadata()?.len() > self.max_file_bytes {
+            self.rotate()?;
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn archive_path(path: &Path, index: usize) -> PathBuf {
+    let mut archive = path.as_os_str().to_os_string();
+    archive.push(format!(".{index}"));
+    PathBuf::from(archive)
+}
+
+fn remove_log_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
 
 struct DaemonCallbacks {
     announce_level: log::Level,
@@ -98,17 +171,13 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let logfile_path = config_dir.join("logfile");
-        match fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&logfile_path)
-        {
-            Ok(file) => {
+        match RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES, LOG_MAX_ARCHIVES) {
+            Ok(writer) => {
                 let mut builder = env_logger::Builder::new();
                 builder
                     .filter_level(log_filter.default)
                     .filter_module(rns_net::logging::PATHING_LOG_TARGET, log_filter.pathing)
-                    .target(env_logger::Target::Pipe(Box::new(file)));
+                    .target(env_logger::Target::Pipe(Box::new(writer)));
                 apply_log_timestamp_format(&mut builder, logging.logtimestamps);
                 builder.init();
             }
@@ -430,5 +499,27 @@ mod tests {
         assert!(EXAMPLE_CONFIG.contains("Valid log levels are 0 through 8"));
         assert!(EXAMPLE_CONFIG.contains("7: Path logging"));
         assert!(EXAMPLE_CONFIG.contains("8: Extreme logging"));
+    }
+
+    #[test]
+    fn service_log_rotation_retains_configured_archive_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logfile");
+        let mut writer = RotatingLogWriter::new(path.clone(), 12, 2).unwrap();
+
+        for _ in 0..5 {
+            writer.write_all(b"123456\n").unwrap();
+        }
+
+        assert!(path.exists());
+        assert!(archive_path(&path, 1).exists());
+        assert!(archive_path(&path, 2).exists());
+        assert!(!archive_path(&path, 3).exists());
+    }
+
+    #[test]
+    fn service_log_rotation_defaults_match_upstream() {
+        assert_eq!(LOG_MAX_FILE_BYTES, 30 * 1024 * 1024);
+        assert_eq!(LOG_MAX_ARCHIVES, 9);
     }
 }
