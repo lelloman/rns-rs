@@ -152,9 +152,9 @@ mirror now agree at that tip. These entries are an inventory only: their
 dispositions remain provisional until each complete diff is reviewed and
 mapped to exactly one rns-rs commit under the per-commit integration procedure.
 
-| # | Upstream commit | Subject | Provisional disposition | Review scope |
+| # | Upstream commit | Subject | Disposition | Evidence or review scope |
 |---:|---|---|---|---|
-| 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Needs port | Packet-filter control flow and violation accounting for packets exceeding the allowed hop count |
+| 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `6df6413`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
 | 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Needs decision | Outbound path lookup consistency and any observable race or stale-entry behavior |
 | 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Needs coordinated port | Preemptive and late path-request egress limiting under concurrent inbound load |
 | 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Needs decision | Changed upstream diagnostic levels and corresponding native operational visibility |
@@ -1768,17 +1768,40 @@ performs outbound IFAC and accounting. The inbound category is now corrected
 to the interface IFAC counter; the focused rejection regression covers it.
 **Final disposition:** Integrated.
 
-All 81 commits through `fc69f323` have a final disposition. Entries 82–92 are
-newly inventoried and await per-commit review. The accepted baseline remains
-commit 73 until the full promotion gates pass.
+### 82. `091e021d` — Reject excessive outbound hop counts
+
+**Upstream change:** `Packet.send()` now returns before packing or Transport
+outbound processing when the packet's hop count is at or above
+`PATHFINDER_M`. The same commit enriches the no-interface debug message.
+
+**Rust applicability:** Native internal and shared-client send paths normally
+originate packets at hop zero, but raw and relayed packets enter the common
+`TransportEngine::handle_outbound` boundary with their existing hop count.
+Before this port, a packet at hop 128 was routed and inserted into the packet
+hash list.
+
+**Local handling and evidence:** Local `6df6413` rejects the packet at the
+common outbound boundary before route selection, announce queuing, or hash-list
+mutation. The focused regression reproduced the pre-port transmission at hop
+128, then proves hop 127 is routed and recorded while hop 128 produces no
+action and no hash-list entry. `cargo test -p rns-core` passed 649 unit tests
+plus all core interoperability/integration suites; formatting, diff checks,
+and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 82 commits through `091e021d` have a final disposition. Entries 83–117
+await per-commit review. The accepted baseline remains commit 73 until the full
+promotion gates pass.
 
 ## Integration Plan
 
-1. Inventory the eight post-baseline commits in ancestry order.
+1. Process outstanding entries 83–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
-4. Record working-tree evidence and run the affected suites and host lint.
+4. Create exactly one mapping commit per upstream commit, record its hash and
+   evidence, and run the affected suites and host lint.
 5. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -1794,6 +1817,12 @@ commit 73 until the full promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `091e021d` rejects outbound packets at the Pathfinder
+  hop limit before routing or packet-hash retention. Local mapping `6df6413`
+  carries the exact upstream trailer. The focused pre-port failure, all 649
+  core unit tests, core interoperability/integration suites, formatting, diff
+  checks, and warning-free host lint passed. Entry 82 is final; entry 83 is the
+  next outstanding commit.
 - `2026-08-24`: Daily VPS snapshots were healthy: `vps-eu` had 40/40
   public interfaces up and 209,849 announces in the rolling 24-hour summary;
   `vps-us` had 26/26 up and 225,175 announces. Both primary peers were up,
