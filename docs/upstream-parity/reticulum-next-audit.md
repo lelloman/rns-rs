@@ -188,7 +188,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Structurally covered | Local `84ce6de` records that native outbound masking already uses one allocation and one linear XOR/copy pass |
 | 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Integrated | Local `51a768b` ports the deterministic size/tag/pattern matrix, invariants, round trips, and corruption rejection |
 | 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Integrated | Local `f049244` adds all three RFC 5869 SHA-256 vectors alongside existing error and Python-fixture coverage |
-| 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Upstream test-runner registration; runtime applicability belongs to entries 100 and 101 |
+| 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `f10205b` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
 | 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Needs decision | HKDF output equivalence, input limits, and whether the native implementation is structurally equivalent |
 | 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Needs coordinated port | Adoption of entries 97, 99, and 103 at all Transport IFAC call sites |
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Needs port | Incoming Resource cancellation state and duplicate/late cancellation behavior |
@@ -2200,13 +2200,32 @@ host lint passed.
 
 **Final disposition:** Integrated.
 
-All 101 commits through `cfddb9ab` have a final disposition. Entries 102–117
+### 102. `171868c6` — Add IFAC and HKDF tests to the test runner
+
+**Upstream change:** Imports the new IFAC and HKDF `unittest` classes into
+Python's manually maintained aggregate `tests/all.py` runner.
+
+**Rust applicability:** Rust's module-local `#[cfg(test)]` suites are discovered
+automatically by each crate harness, and `cargo test --workspace` invokes both
+crates. There is no aggregate source registry to update; protocol coverage
+belongs to entries 100 and 101.
+
+**Local handling and evidence:** Local `f10205b` documents automatic Cargo
+discovery at both test-module boundaries. A complete `cargo test --workspace`
+run executed and passed the 72-test `rns-crypto` unit suite, its exercise and
+interop suites, the 894-test `rns-net` unit suite, its 54 E2E tests, and all
+other workspace suites. Formatting, diff checks, and warning-free host lint
+also passed.
+
+**Final disposition:** Non-runtime.
+
+All 102 commits through `171868c6` have a final disposition. Entries 103–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 102–117 in upstream ancestry order.
+1. Process outstanding entries 103–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2227,6 +2246,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `171868c6` registers Python's IFAC and HKDF suites in a
+  manual aggregate runner. Cargo already discovers both native test modules;
+  local mapping `f10205b` records that invariant. The full workspace suite,
+  formatting, diff and host-lint checks passed. Entry 103 is next.
 - `2026-08-24`: Commit `cfddb9ab` adds HKDF reference, parity, error, and
   benchmark tests. Local mapping `f049244` adds all three RFC 5869 SHA-256
   vectors to the existing native error, fixture-interoperability, and benchmark
