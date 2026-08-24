@@ -121,7 +121,8 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
     new_raw.extend_from_slice(ifac);
     new_raw.extend_from_slice(&raw[2..]);
 
-    // Apply mask
+    // Apply the mask in one linear pass while copying the clear IFAC tag and
+    // forcing the flag bit. Native code therefore needs no legacy slow path.
     let mut masked = Vec::with_capacity(new_raw.len());
     for (i, &byte) in new_raw.iter().enumerate() {
         if i == 0 {
