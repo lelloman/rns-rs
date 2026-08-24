@@ -160,7 +160,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Structurally covered | Local `fc9e989`; absent usable interface bitrates are a normal silent `None` fallback with focused empty/zero-bitrate assertions |
 | 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Local `9506a72`; upstream RNS 1.5.0 release-note text only; runbook now records changelog handling policy |
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Integrated | Local `7a8b704`; native Rust API documentation now states bitrate and medium-timeout return/fallback semantics |
-| 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Needs coordinated port | Per-interface PPS fields, aggregation/RPC/CLI rendering, and exclusion of the local shared instance |
+| 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `67af8c1`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
 | 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Needs coordinated port | Discovery metadata, interface state, serialization, and status presentation for shared-medium hints |
 | 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Needs port | Packet hash-list ownership and removal during the affected transport edge case |
 | 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
@@ -1895,13 +1895,37 @@ and diff checks passed, and warning-free host lint passed.
 
 **Final disposition:** Integrated documentation.
 
-All 87 commits through `e32d4df7` have a final disposition. Entries 88–117
+### 88. `d25ea38c` — Add packet-rate totals and exclude shared-instance traffic
+
+**Upstream change:** Counts accepted RX and dispatched TX packets, samples
+aggregate receive/transmit packets per second, exposes `rxpps` and `txpps` in
+status data, adds `rnstatus -p/--pps`, and excludes the local shared-instance
+interface from traffic totals to prevent internal forwarding from inflating
+network traffic.
+
+**Rust applicability:** Rust already retained per-interface packet counts and
+sampled byte/class rates, but did not sample PPS, expose aggregate PPS, render
+it in `rnstatus`, or exclude local shared-server connections from aggregate
+byte/rate/class totals.
+
+**Local handling and evidence:** Local `67af8c1` samples per-interface packet
+deltas in the same current window as byte rates, aggregates them while
+excluding `is_local_client` server-side shared connections, carries `rxpps` and
+`txpps` through local RPC and remote management, and renders rounded PPS with
+`rnstatus -p/--pps`. Per-interface rows remain visible. Focused sampler,
+aggregation/exclusion, RPC, management, and CLI regressions passed. All 885
+`rns-net` unit tests, 54 network E2E tests, interoperability/fixture suites,
+all `rns-cli` tests, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 88 commits through `d25ea38c` have a final disposition. Entries 89–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 88–117 in upstream ancestry order.
+1. Process outstanding entries 89–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1922,6 +1946,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `d25ea38c` adds PPS sampling/status output and excludes
+  local shared-server traffic from aggregate totals. Local mapping `67af8c1`
+  covers sampling, aggregation, RPC, remote management and `rnstatus -p` with
+  focused regressions. Complete `rns-net`/`rns-cli`, E2E/interoperability,
+  formatting, diff and host-lint checks passed. Entry 89 is next.
 - `2026-08-24`: Commit `e32d4df7` documents the bitrate and adaptive path
   timeout query APIs. Local mapping `7a8b704` adds equivalent native Rustdoc;
   documentation generation, formatting, diff checks, and warning-free host
