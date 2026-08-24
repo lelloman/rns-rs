@@ -186,7 +186,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Structurally covered | Local `11bb952` records that native inbound unmasking already performs one allocation and one linear XOR/copy pass |
 | 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Structurally covered | Local `be571b3` pins the dedicated native outbound helper's deterministic, input-preserving behavior |
 | 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Structurally covered | Local `84ce6de` records that native outbound masking already uses one allocation and one linear XOR/copy pass |
-| 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Needs decision | New upstream IFAC vectors and edge cases against native interoperability coverage |
+| 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Integrated | Local `51a768b` ports the deterministic size/tag/pattern matrix, invariants, round trips, and corruption rejection |
 | 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Needs decision | New HKDF vectors and boundary cases against `rns-crypto` coverage |
 | 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Upstream test-runner registration; runtime applicability belongs to entries 100 and 101 |
 | 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Needs decision | HKDF output equivalence, input limits, and whether the native implementation is structurally equivalent |
@@ -2157,13 +2157,34 @@ select the new helper until entry 104.
 
 **Final disposition:** Structurally covered.
 
-All 99 commits through `7347034f` have a final disposition. Entries 100–117
+### 100. `929aba02` — Add IFAC tests
+
+**Upstream change:** Adds deterministic parity, round-trip, invariant,
+corruption, and benchmark coverage for the legacy and optimized inbound and
+outbound IFAC handlers across multiple frame and tag sizes.
+
+**Rust applicability:** Rust has one already-linear implementation rather than
+parallel legacy/optimized handlers, so implementation-to-implementation parity
+and Python-specific benchmarks do not translate directly. The protocol matrix,
+clear-tag/flag invariants, exact recovery, and corruption rejection do.
+
+**Local handling and evidence:** Local `51a768b` adds 96 deterministic
+size/tag/pattern round trips covering 8 through 16384-byte frames and 1-, 8-,
+and 16-byte IFACs. It verifies encoded length, forced and cleared flags, the
+clear signature suffix, exact recovery, and rejection after second-header,
+tag, or payload corruption. Both focused tests, all 894 `rns-net` unit tests,
+54 network E2E tests, Python IFAC interoperability, formatting, diff checks,
+and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 100 commits through `929aba02` have a final disposition. Entries 101–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 100–117 in upstream ancestry order.
+1. Process outstanding entries 101–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2184,6 +2205,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `929aba02` adds deterministic IFAC parity, invariant,
+  corruption, and benchmark tests. Local mapping `51a768b` ports the applicable
+  protocol matrix and corruption coverage to Rust's single linear handler.
+  Both focused tests, all 894 `rns-net` unit tests, 54 E2E tests, Python IFAC
+  interop, formatting, diff and host-lint checks passed. Entry 101 is next.
 - `2026-08-24`: Commit `7347034f` adds an inactive optimized Python outbound
   IFAC helper. Rust's sole outbound helper already preallocates and performs a
   single linear XOR/copy pass; local mapping `84ce6de` records that invariant.
