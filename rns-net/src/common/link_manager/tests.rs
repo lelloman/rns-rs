@@ -2374,6 +2374,10 @@ fn test_cancel_all_resources_clears_active_transfers() {
             .unwrap_or(false),
         _ => false,
     }));
+
+    let duplicate_cancel_actions = init_mgr.cancel_all_resources(&mut rng);
+    assert!(duplicate_cancel_actions.is_empty());
+    assert_eq!(init_mgr.resource_transfer_count(), 0);
 }
 
 #[test]
