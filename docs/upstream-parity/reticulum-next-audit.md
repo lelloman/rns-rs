@@ -185,7 +185,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Structurally covered | Local `15126e2` pins the dedicated native inbound IFAC handler's stateless reject-then-accept behavior |
 | 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Structurally covered | Local `11bb952` records that native inbound unmasking already performs one allocation and one linear XOR/copy pass |
 | 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Structurally covered | Local `be571b3` pins the dedicated native outbound helper's deterministic, input-preserving behavior |
-| 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Needs coordinated port | Byte-compatible outbound IFAC masking/tagging and accounting |
+| 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Structurally covered | Local `84ce6de` records that native outbound masking already uses one allocation and one linear XOR/copy pass |
 | 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Needs decision | New upstream IFAC vectors and edge cases against native interoperability coverage |
 | 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Needs decision | New HKDF vectors and boundary cases against `rns-crypto` coverage |
 | 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Upstream test-runner registration; runtime applicability belongs to entries 100 and 101 |
@@ -2139,13 +2139,31 @@ passed.
 
 **Final disposition:** Structurally covered.
 
-All 98 commits through `aef9e5b4` have a final disposition. Entries 99–117
+### 99. `7347034f` — Optimize outbound IFAC handling
+
+**Upstream change:** Adds a second, not-yet-selected outbound IFAC helper that
+replaces Python's immutable byte concatenation and byte-wise output building
+with a big-integer XOR while preserving the clear tag and forced IFAC flag.
+
+**Rust applicability:** Native `ifac::mask_outbound()` already preallocates the
+tagged frame and masked output and performs one linear XOR/copy pass. It has no
+quadratic concatenation behavior and no separate legacy implementation.
+
+**Local handling and evidence:** Local `84ce6de` documents the native one-pass
+equivalence at the outbound implementation boundary. The focused deterministic
+outbound-helper regression, all 892 `rns-net` unit tests, 54 network E2E tests,
+formatting, diff checks, and warning-free host lint passed. Upstream does not
+select the new helper until entry 104.
+
+**Final disposition:** Structurally covered.
+
+All 99 commits through `7347034f` have a final disposition. Entries 100–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 99–117 in upstream ancestry order.
+1. Process outstanding entries 100–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2166,6 +2184,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `7347034f` adds an inactive optimized Python outbound
+  IFAC helper. Rust's sole outbound helper already preallocates and performs a
+  single linear XOR/copy pass; local mapping `84ce6de` records that invariant.
+  Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
+  passed. Entry 100 is next.
 - `2026-08-24`: Commit `aef9e5b4` extracts Python's outbound IFAC transform
   into a helper without changing behavior. Rust already uses the dedicated
   `ifac::mask_outbound()` boundary; local mapping `be571b3` pins deterministic
