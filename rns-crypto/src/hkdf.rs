@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::hmac::hmac_sha256;
+use crate::hmac::{hmac_sha256, HmacSha256};
 
 #[derive(Debug, PartialEq)]
 pub enum HkdfError {
@@ -47,17 +47,21 @@ pub fn hkdf(
     let prk = hmac_sha256(&salt, derive_from);
 
     // Expand
-    let mut block: Vec<u8> = Vec::new();
+    let expansion_hmac = HmacSha256::new(&prk);
+    let mut block = [0u8; 32];
+    let mut has_block = false;
     let mut derived = Vec::with_capacity(length);
 
     let iterations = length.div_ceil(hash_len);
     for i in 0..iterations {
-        let mut input = Vec::new();
-        input.extend_from_slice(&block);
-        input.extend_from_slice(context);
-        input.push(((i + 1) % 256) as u8);
-
-        block = hmac_sha256(&prk, &input).to_vec();
+        let mut hmac = expansion_hmac.clone();
+        if has_block {
+            hmac.update(&block);
+        }
+        hmac.update(context);
+        hmac.update(&[((i + 1) % 256) as u8]);
+        block = hmac.finalize();
+        has_block = true;
         derived.extend_from_slice(&block);
     }
 
@@ -84,6 +88,34 @@ mod tests {
                 (digit(pair[0]) << 4) | digit(pair[1])
             })
             .collect()
+    }
+
+    fn reference_hkdf(length: usize, ikm: &[u8], salt: &[u8], context: &[u8]) -> Vec<u8> {
+        let prk = hmac_sha256(salt, ikm);
+        let mut block = Vec::new();
+        let mut derived = Vec::with_capacity(length);
+        for index in 0..length.div_ceil(32) {
+            let mut input = block;
+            input.extend_from_slice(context);
+            input.push(((index + 1) % 256) as u8);
+            block = hmac_sha256(&prk, &input).to_vec();
+            derived.extend_from_slice(&block);
+        }
+        derived.truncate(length);
+        derived
+    }
+
+    #[test]
+    fn optimized_expansion_matches_reference_across_counter_wrap() {
+        let ikm = b"deterministic input material";
+        let salt = b"deterministic salt";
+        let context = b"counter-wrap";
+        for length in [8191, 8192, 8193] {
+            assert_eq!(
+                hkdf(length, ikm, Some(salt), Some(context)).unwrap(),
+                reference_hkdf(length, ikm, salt, context)
+            );
+        }
     }
 
     #[test]
