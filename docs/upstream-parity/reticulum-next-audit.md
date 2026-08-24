@@ -181,7 +181,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 |---:|---|---|---|---|
 | 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `0aa04f1`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
 | 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `0386059`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
-| 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Needs port | Interface-status MTU field, RPC transport, sorting/rendering, and compatibility with older peers |
+| 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Integrated | Local `9520db6` exports per-interface MTU through status RPC and renders it beside bitrate while accepting older payloads without the field |
 | 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Needs decision | Inbound IFAC boundary refactor and whether native driver separation already supplies the invariant |
 | 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Needs coordinated port | Byte-compatible inbound IFAC authentication/unmasking and violation classification |
 | 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Needs decision | Outbound IFAC boundary refactor and interaction with normal/queued transmissions |
@@ -2061,13 +2061,33 @@ diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 94 commits through `88c629e3` have a final disposition. Entries 95–117
+### 95. `84597f31` — Add MTU to interface status output
+
+**Upstream change:** Adds each interface's hardware MTU to Reticulum's status
+dictionary and displays it beside the bitrate in `rnstatus`.
+
+**Rust applicability:** Native interface statistics and their Python-compatible
+RPC encoding exposed bitrate but omitted MTU, so `rnstatus` could not report the
+effective interface limit. Remote status responses can come from older peers,
+which still requires the CLI parser to tolerate an absent field.
+
+**Local handling and evidence:** Local `9520db6` carries the registered
+interface MTU into `SingleInterfaceStat`, exports it under the compatible `mtu`
+RPC key, supplies the Backbone aggregate MTU, and renders `MTU <bytes>` beside
+the rate. Focused RPC and formatter regressions verify the exact values and the
+legacy field-absent case. All 890 `rns-net` unit tests, 54 network E2E tests,
+the complete `rns-cli` suites, formatting, diff checks, and warning-free host
+lint passed.
+
+**Final disposition:** Integrated.
+
+All 95 commits through `84597f31` have a final disposition. Entries 96–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 95–117 in upstream ancestry order.
+1. Process outstanding entries 96–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2088,6 +2108,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `84597f31` adds interface hardware MTU to status RPC and
+  `rnstatus`. Local mapping `9520db6` carries normal and Backbone aggregate MTU
+  metadata through the Python-compatible response and renders it beside rate,
+  while retaining compatibility with older field-absent payloads. Focused RPC
+  and CLI regressions, complete `rns-net` and `rns-cli` suites, E2E tests,
+  formatting, diff and host-lint checks passed. Entry 96 is next.
 - `2026-08-24`: Commit `88c629e3` adjusts Backbone bitrate/auto-MTU defaults,
   gives Local servers an explicit hardware MTU, and lowers noisy diagnostics.
   Local mapping `0386059` aligns server peers, standalone clients, Local and
