@@ -189,7 +189,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Integrated | Local `51a768b` ports the deterministic size/tag/pattern matrix, invariants, round trips, and corruption rejection |
 | 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Integrated | Local `f049244` adds all three RFC 5869 SHA-256 vectors alongside existing error and Python-fixture coverage |
 | 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `f10205b` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
-| 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Needs decision | HKDF output equivalence, input limits, and whether the native implementation is structurally equivalent |
+| 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `6a97cd0` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
 | 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Needs coordinated port | Adoption of entries 97, 99, and 103 at all Transport IFAC call sites |
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Needs port | Incoming Resource cancellation state and duplicate/late cancellation behavior |
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Needs decision | Changed interface diagnostic severity and native operational visibility |
@@ -2219,13 +2219,34 @@ also passed.
 
 **Final disposition:** Non-runtime.
 
-All 102 commits through `171868c6` have a final disposition. Entries 103–117
+### 103. `5da0870e` — Optimize HKDF
+
+**Upstream change:** Replaces per-expansion-block Python HMAC construction with
+cloned pre-keyed SHA-256 inner/outer states and precomputed counter bytes. It
+retains the legacy validation, salt/context normalization, output, and
+Reticulum's modulo-256 counter extension.
+
+**Rust applicability:** Native HKDF reconstructed an HMAC key schedule and an
+owned concatenated input vector for every 32-byte expansion block. The HMAC
+wrapper is cloneable after key initialization, allowing the same optimization
+without exposing hash internals or changing the public API.
+
+**Local handling and evidence:** Local `6a97cd0` initializes one expansion HMAC
+from the PRK, clones it per block, and streams the previous block, context, and
+counter directly. A focused slow-reference regression verifies 8191-, 8192-,
+and 8193-byte outputs across counter wrap. All three RFC vectors, all 73
+`rns-crypto` unit tests, 11 exercise tests, 11 Python-fixture interoperability
+tests, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 103 commits through `5da0870e` have a final disposition. Entries 104–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 103–117 in upstream ancestry order.
+1. Process outstanding entries 104–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2246,6 +2267,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `5da0870e` optimizes Python HKDF by cloning pre-keyed
+  hash states. Local mapping `6a97cd0` similarly clones one pre-keyed HMAC per
+  expansion block and avoids concatenated input allocation, with reference
+  parity across the modulo-256 counter wrap. Complete `rns-crypto`, RFC,
+  Python-fixture interop, formatting, diff and host-lint checks passed. Entry
+  104 is next.
 - `2026-08-24`: Commit `171868c6` registers Python's IFAC and HKDF suites in a
   manual aggregate runner. Cargo already discovers both native test modules;
   local mapping `f10205b` records that invariant. The full workspace suite,
