@@ -59,8 +59,8 @@ impl Args {
                         | "blackholed" | "base256" | "base32" | "base64" | "raw" | "request"
                         | "no-cache" | "print-identity" | "print-private" | "export-pub"
                         | "export-prv" | "pr-stats" | "burst" | "blocked-ips" | "queues"
-                        | "hex" | "meta" | "daemon" | "disable-auth" | "json" | "value-only"
-                        | "keys-only" => {
+                        | "pps" | "hex" | "meta" | "daemon" | "disable-auth" | "json"
+                        | "value-only" | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {

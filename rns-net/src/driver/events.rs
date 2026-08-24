@@ -490,9 +490,12 @@ impl Driver {
             }
             let bps =
                 |current: u64, prior: u64| current.saturating_sub(prior) as f64 * 8.0 / elapsed;
+            let pps = |current: u64, prior: u64| current.saturating_sub(prior) as f64 / elapsed;
             entry.stats.traffic_rates = crate::interface::TrafficRates {
                 rxs: bps(entry.stats.rxb, previous.rxb),
                 txs: bps(entry.stats.txb, previous.txb),
+                rxpps: pps(entry.stats.rx_packets, previous.rx_packets),
+                txpps: pps(entry.stats.tx_packets, previous.tx_packets),
                 arxs: bps(entry.stats.arxb, previous.arxb),
                 atxs: bps(entry.stats.atxb, previous.atxb),
                 prxs: bps(entry.stats.prxb, previous.prxb),

@@ -1108,6 +1108,14 @@ fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> PickleValue {
             PickleValue::Int(stats.total_txb as i64),
         ),
         (
+            PickleValue::String("rxpps".into()),
+            PickleValue::Float(stats.rx_pps),
+        ),
+        (
+            PickleValue::String("txpps".into()),
+            PickleValue::Float(stats.tx_pps),
+        ),
+        (
             PickleValue::String("rxs".into()),
             PickleValue::Float(stats.traffic.rxs),
         ),
@@ -3189,6 +3197,8 @@ mod tests {
                         transport_uptime: 3600.0,
                         total_rxb: 1000,
                         total_txb: 2000,
+                        rx_pps: 3.0,
+                        tx_pps: 4.0,
                         traffic: TrafficDetail::default(),
                         probe_responder: None,
                         backbone_peer_pool: None,
@@ -3589,6 +3599,8 @@ mod tests {
             transport_uptime: 3600.0,
             total_rxb: 100,
             total_txb: 200,
+            rx_pps: 3.0,
+            tx_pps: 4.0,
             traffic,
             probe_responder: None,
             backbone_peer_pool: None,
@@ -3605,6 +3617,8 @@ mod tests {
         assert_eq!(decoded.get("atxf").unwrap().as_float(), Some(2.0));
         assert_eq!(decoded.get("prxf").unwrap().as_float(), Some(3.0));
         assert_eq!(decoded.get("ptxf").unwrap().as_float(), Some(4.0));
+        assert_eq!(decoded.get("rxpps").unwrap().as_float(), Some(3.0));
+        assert_eq!(decoded.get("txpps").unwrap().as_float(), Some(4.0));
         assert_eq!(ifaces[0].get("id").unwrap().as_int().unwrap(), 1);
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
         assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);
@@ -3801,6 +3815,8 @@ mod tests {
             transport_uptime: 1.0,
             total_rxb: 0,
             total_txb: 0,
+            rx_pps: 0.0,
+            tx_pps: 0.0,
             traffic: TrafficDetail::default(),
             probe_responder: None,
             backbone_peer_pool: Some(crate::event::BackbonePeerPoolStatus {
@@ -4151,6 +4167,8 @@ mod tests {
             transport_uptime: 100.0,
             total_rxb: 0,
             total_txb: 0,
+            rx_pps: 0.0,
+            tx_pps: 0.0,
             traffic: TrafficDetail::default(),
             probe_responder: Some(probe_hash),
             backbone_peer_pool: None,

@@ -210,7 +210,7 @@ mod tests {
                             .map(|(_, v)| v.as_uint().unwrap());
                         assert_eq!(txb, Some(5678));
 
-                        for key in ["arxf", "atxf", "prxf", "ptxf"] {
+                        for key in ["arxf", "atxf", "prxf", "ptxf", "rxpps", "txpps"] {
                             let frequency = map
                                 .iter()
                                 .find(|(candidate, _)| *candidate == Value::Str(key.into()))

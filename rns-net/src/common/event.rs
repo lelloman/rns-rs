@@ -719,6 +719,10 @@ pub struct InterfaceStatsResponse {
     pub total_rxb: u64,
     /// Total transmitted bytes across all interfaces.
     pub total_txb: u64,
+    /// Aggregate received packets per second, excluding local shared-instance traffic.
+    pub rx_pps: f64,
+    /// Aggregate transmitted packets per second, excluding local shared-instance traffic.
+    pub tx_pps: f64,
     /// Aggregate byte counters and rates for total, announce and path-request traffic.
     pub traffic: TrafficDetail,
     /// Probe responder destination hash (if enabled).

@@ -152,6 +152,8 @@ pub fn handle_status_request(
     let mut iface_list = Vec::new();
     let mut total_rxb: u64 = 0;
     let mut total_txb: u64 = 0;
+    let mut total_rxpps = 0.0;
+    let mut total_txpps = 0.0;
     let mut total_arxb: u64 = 0;
     let mut total_atxb: u64 = 0;
     let mut total_arxc: u64 = 0;
@@ -176,26 +178,30 @@ pub fn handle_status_request(
         let info = entry.info();
         let stats = entry.stats();
 
-        total_rxb += stats.rxb;
-        total_txb += stats.txb;
-        total_arxb += stats.arxb;
-        total_atxb += stats.atxb;
-        total_arxc += stats.arxc;
-        total_atxc += stats.atxc;
-        total_prxb += stats.prxb;
-        total_ptxb += stats.ptxb;
-        total_prxc += stats.prxc;
-        total_ptxc += stats.ptxc;
-        total_rxs += stats.traffic_rates.rxs;
-        total_txs += stats.traffic_rates.txs;
-        total_arxs += stats.traffic_rates.arxs;
-        total_atxs += stats.traffic_rates.atxs;
-        total_prxs += stats.traffic_rates.prxs;
-        total_ptxs += stats.traffic_rates.ptxs;
-        total_arxf += stats.incoming_announce_freq();
-        total_atxf += stats.outgoing_announce_freq();
-        total_prxf += stats.incoming_path_request_freq();
-        total_ptxf += stats.outgoing_path_request_freq();
+        if !info.is_local_client {
+            total_rxb += stats.rxb;
+            total_txb += stats.txb;
+            total_rxpps += stats.traffic_rates.rxpps;
+            total_txpps += stats.traffic_rates.txpps;
+            total_arxb += stats.arxb;
+            total_atxb += stats.atxb;
+            total_arxc += stats.arxc;
+            total_atxc += stats.atxc;
+            total_prxb += stats.prxb;
+            total_ptxb += stats.ptxb;
+            total_prxc += stats.prxc;
+            total_ptxc += stats.ptxc;
+            total_rxs += stats.traffic_rates.rxs;
+            total_txs += stats.traffic_rates.txs;
+            total_arxs += stats.traffic_rates.arxs;
+            total_atxs += stats.traffic_rates.atxs;
+            total_prxs += stats.traffic_rates.prxs;
+            total_ptxs += stats.traffic_rates.ptxs;
+            total_arxf += stats.incoming_announce_freq();
+            total_atxf += stats.outgoing_announce_freq();
+            total_prxf += stats.incoming_path_request_freq();
+            total_ptxf += stats.outgoing_path_request_freq();
+        }
 
         let mut ifstats: Vec<(&str, Value)> = vec![
             ("name", Value::Str(info.name.clone())),
@@ -272,6 +278,8 @@ pub fn handle_status_request(
         ("interfaces", Value::Array(iface_list)),
         ("rxb", Value::UInt(total_rxb)),
         ("txb", Value::UInt(total_txb)),
+        ("rxpps", Value::Float(total_rxpps)),
+        ("txpps", Value::Float(total_txpps)),
         ("rxs", Value::Float(total_rxs)),
         ("txs", Value::Float(total_txs)),
         ("arxb", Value::UInt(total_arxb)),
