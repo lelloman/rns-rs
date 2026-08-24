@@ -196,7 +196,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `ea786c8` proves an offline attached target neither transmits nor falls back to another online interface |
 | 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Integrated | Local `b33a885` rotates standalone service logs at 30 MiB with nine retained archives through a configurable native policy |
 | 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Integrated | Local `15d3f86` queues service log buffers to one named writer thread and supplies an ordering/flush barrier |
-| 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Needs coordinated port | Runtime profiling collection, RPC status shape, and `rnstatus` output |
+| 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Integrated | Local `6dc1ec3` adds process-global guard-based timing, local RPC and remote-status results, plus nested `rnstatus -z` rendering |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Needs decision | Profiler lifecycle, bounded retention, and applicability to native instrumentation |
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Needs decision | Python-only instrumentation mechanism versus any observable profiling contract |
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Needs coordinated port | Profiling aggregation limits, reentrancy, and time-window semantics |
@@ -2358,13 +2358,43 @@ diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 109 commits through `9da66649` have a final disposition. Entries 110–117
+### 110. `9302415f` — Add live profiling results output to rnstatus
+
+**Upstream change:** Makes the existing process profiler return a stable results
+dictionary, exposes it through the shared-instance `profiling_results` RPC and
+the optional second `/status` request flag, and adds `rnstatus -z` recursive
+profiling output. The remote response remains the upstream positional array of
+status, optional link count, and optional profiling results.
+
+**Rust applicability:** Rust had neither a public timing collector nor either
+status surface. The status request and local RPC codecs are compatibility
+boundaries used by Python and Rust peers, and the user-visible CLI flag is
+directly applicable. Upstream has no production profiling call sites in this
+commit, so the native collector likewise remains opt-in rather than adding
+unrelated instrumentation.
+
+**Local handling and evidence:** Local `6dc1ec3` adds process-global RAII timing
+guards with tag/parent aggregation and stable mean, median, sample-deviation
+results. It serializes the exact upstream dictionary field names through local
+pickle RPC and remote MessagePack status, preserves the existing native
+two-argument status API while adding an opt-in profiling method, and renders
+nested results through `rnstatus -z`. Focused collector, RPC, management,
+decoder, and CLI formatting regressions passed, as did all 901 `rns-net` unit
+tests, 54 network integration tests, all 120 `rns-cli` unit tests and its
+integration suites, formatting, diff checks, and warning-free host lint. A
+disposable worktree at exact upstream `9302415f` also verified the request
+bytes, result dictionary, MessagePack response position, statistics, and
+formatted output with upstream Python.
+
+**Final disposition:** Integrated.
+
+All 110 commits through `9302415f` have a final disposition. Entries 111–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 110–117 in upstream ancestry order.
+1. Process outstanding entries 111–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2385,6 +2415,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `9302415f` exposes live profiler snapshots through
+  local and remote status and adds `rnstatus -z`. Local mapping `6dc1ec3` adds
+  the native guard collector, both wire surfaces, and recursive renderer.
+  Focused tests, complete affected-crate suites, formatting, diff and host-lint
+  checks, plus exact-target Python MessagePack/profile interoperability passed.
+  Entry 111 is next.
 - `2026-08-24`: Commit `9da66649` moves Python logging I/O to a dedicated
   thread. Local mapping `15d3f86` queues standalone service log buffers to one
   named FIFO writer thread and provides a synchronous flush/error barrier. The
