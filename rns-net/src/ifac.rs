@@ -211,6 +211,26 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    fn patterned_packet(size: usize, pattern: usize) -> Vec<u8> {
+        let mut state = 0x01fa_cad3_u64;
+        let mut raw = (0..size)
+            .map(|index| match pattern {
+                0 => {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                }
+                1 => 0,
+                2 => 0xff,
+                3 => index as u8,
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        raw[0] &= 0x7f;
+        raw
+    }
+
     #[test]
     fn derive_ifac_netname_only() {
         let state = derive_ifac(Some("testnet"), None, 8).unwrap();
@@ -250,6 +270,45 @@ mod tests {
 
         let recovered = unmask_inbound(&masked, &state).expect("unmask should succeed");
         assert_eq!(recovered, raw);
+    }
+
+    #[test]
+    fn ifac_size_and_payload_pattern_matrix_preserves_invariants() {
+        for size in [8, 16, 32, 100, 500, 1064, 4096, 16_384] {
+            for ifac_size in [1, 8, 16] {
+                let state = derive_ifac(Some("rns-ifac-test-net"), None, ifac_size).unwrap();
+                for pattern in 0..4 {
+                    let raw = patterned_packet(size, pattern);
+                    let frame = mask_outbound(&raw, &state);
+
+                    assert_eq!(frame.len(), raw.len() + ifac_size);
+                    assert_ne!(frame[0] & 0x80, 0);
+                    assert_eq!(
+                        &frame[2..2 + ifac_size],
+                        &state.identity.sign(&raw).unwrap()[64 - ifac_size..]
+                    );
+
+                    let recovered = unmask_inbound(&frame, &state).unwrap();
+                    assert_eq!(recovered, raw);
+                    assert_eq!(recovered[0] & 0x80, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ifac_rejects_header_payload_and_tag_corruption() {
+        for ifac_size in [8, 16] {
+            let state = derive_ifac(Some("rns-ifac-test-net"), None, ifac_size).unwrap();
+            let raw = patterned_packet(1064, 0);
+            let frame = mask_outbound(&raw, &state);
+
+            for index in [1, 2 + ifac_size / 2, frame.len() - 1] {
+                let mut corrupted = frame.clone();
+                corrupted[index] ^= 1;
+                assert!(unmask_inbound(&corrupted, &state).is_none());
+            }
+        }
     }
 
     #[test]
