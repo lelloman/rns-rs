@@ -3798,6 +3798,8 @@ fn query_interface_stats() {
     entry.stats.traffic_rates = crate::interface::TrafficRates {
         rxs: 800.0,
         txs: 1_600.0,
+        rxpps: 8.0,
+        txpps: 16.0,
         arxs: 80.0,
         atxs: 160.0,
         prxs: 240.0,
@@ -3809,6 +3811,17 @@ fn query_interface_stats() {
     entry.stats.op_timestamps = vec![1.0, 5.0];
     driver.interfaces.insert(InterfaceId(1), entry);
 
+    let (local_writer, _) = MockWriter::new();
+    let mut local = make_entry(2, Box::new(local_writer), true);
+    local.info.is_local_client = true;
+    local.stats.rxb = 10_000;
+    local.stats.txb = 20_000;
+    local.stats.traffic_rates.rxs = 8_000.0;
+    local.stats.traffic_rates.txs = 16_000.0;
+    local.stats.traffic_rates.rxpps = 80.0;
+    local.stats.traffic_rates.txpps = 160.0;
+    driver.interfaces.insert(InterfaceId(2), local);
+
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
         .unwrap();
@@ -3818,14 +3831,15 @@ fn query_interface_stats() {
     let resp = resp_rx.recv().unwrap();
     match resp {
         QueryResponse::InterfaceStats(stats) => {
-            assert_eq!(stats.interfaces.len(), 1);
-            assert_eq!(stats.interfaces[0].name, "test-1");
-            assert!(stats.interfaces[0].status);
+            assert_eq!(stats.interfaces.len(), 2);
+            assert!(stats.interfaces.iter().all(|interface| interface.status));
             assert_eq!(stats.transport_id, Some([0x42; 16]));
             assert!(stats.transport_enabled);
             assert_eq!((stats.traffic.arxb, stats.traffic.atxb), (100, 200));
             assert_eq!((stats.traffic.prxb, stats.traffic.ptxb), (300, 400));
             assert_eq!((stats.traffic.rxs, stats.traffic.txs), (800.0, 1_600.0));
+            assert_eq!((stats.rx_pps, stats.tx_pps), (8.0, 16.0));
+            assert_eq!((stats.total_rxb, stats.total_txb), (1_000, 2_000));
             assert_eq!((stats.traffic.arxs, stats.traffic.atxs), (80.0, 160.0));
             assert_eq!((stats.traffic.prxs, stats.traffic.ptxs), (240.0, 320.0));
             assert_eq!((stats.traffic.arxf, stats.traffic.atxf), (1.5, 1.0));
@@ -3847,6 +3861,8 @@ fn traffic_sampler_reports_current_window_and_resets_idle_rates() {
         stats.atxb = 20;
         stats.prxb = 30;
         stats.ptxb = 40;
+        stats.rx_packets = 5;
+        stats.tx_packets = 10;
     }
 
     driver.sample_interface_traffic(1_000.0);
@@ -3863,19 +3879,22 @@ fn traffic_sampler_reports_current_window_and_resets_idle_rates() {
         stats.atxb += 20;
         stats.prxb += 30;
         stats.ptxb += 40;
+        stats.rx_packets += 6;
+        stats.tx_packets += 8;
     }
     driver.sample_interface_traffic(1_002.0);
 
     let rates = driver.interfaces[&InterfaceId(1)].stats.traffic_rates;
     assert_eq!((rates.rxs, rates.txs), (400.0, 800.0));
+    assert_eq!((rates.rxpps, rates.txpps), (3.0, 4.0));
     assert_eq!((rates.arxs, rates.atxs), (40.0, 80.0));
     assert_eq!((rates.prxs, rates.ptxs), (120.0, 160.0));
 
     driver.sample_interface_traffic(1_003.0);
     let idle = driver.interfaces[&InterfaceId(1)].stats.traffic_rates;
     assert_eq!(
-        (idle.rxs, idle.txs, idle.arxs, idle.atxs, idle.prxs, idle.ptxs),
-        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        (idle.rxs, idle.txs, idle.rxpps, idle.txpps, idle.arxs, idle.atxs, idle.prxs, idle.ptxs),
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     );
 }
 

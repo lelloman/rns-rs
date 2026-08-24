@@ -71,12 +71,18 @@ impl Driver {
         let mut interfaces = Vec::new();
         let mut total_rxb: u64 = 0;
         let mut total_txb: u64 = 0;
+        let mut rx_pps = 0.0;
+        let mut tx_pps = 0.0;
         let mut total_traffic = TrafficDetail::default();
         for entry in self.interfaces.values() {
-            total_rxb += entry.stats.rxb;
-            total_txb += entry.stats.txb;
             let traffic = traffic_detail(&entry.stats);
-            add_traffic(&mut total_traffic, traffic);
+            if !entry.info.is_local_client {
+                total_rxb += entry.stats.rxb;
+                total_txb += entry.stats.txb;
+                rx_pps += entry.stats.traffic_rates.rxpps;
+                tx_pps += entry.stats.traffic_rates.txpps;
+                add_traffic(&mut total_traffic, traffic);
+            }
             let interface_id = entry.info.id;
             interfaces.push(SingleInterfaceStat {
                 id: interface_id.0,
@@ -198,6 +204,8 @@ impl Driver {
             transport_uptime: now - self.started,
             total_rxb,
             total_txb,
+            rx_pps,
+            tx_pps,
             traffic: total_traffic,
             probe_responder: self.probe_responder_hash,
             #[cfg(feature = "iface-backbone")]

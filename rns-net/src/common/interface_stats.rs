@@ -15,6 +15,10 @@ pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 pub struct TrafficRates {
     pub rxs: f64,
     pub txs: f64,
+    /// Received packets per second in the current sampling window.
+    pub rxpps: f64,
+    /// Transmitted packets per second in the current sampling window.
+    pub txpps: f64,
     pub arxs: f64,
     pub atxs: f64,
     pub prxs: f64,

@@ -50,6 +50,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let sort_by = args.get("s").map(|s| s.to_string());
     let reverse = args.has("r");
     let show_totals = args.has("t");
+    let show_pps = args.has("p") || args.has("pps");
     let show_links = args.has("l");
     let show_announces = args.has("A");
     let show_pr_stats = args.has("P") || args.has("pr-stats");
@@ -86,6 +87,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             reverse,
             filter.as_deref(),
             show_totals,
+            show_pps,
             show_announces,
             show_pr_stats,
             show_bursts,
@@ -277,6 +279,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     reverse,
                     filter: filter.as_deref(),
                     show_totals,
+                    show_pps,
                     show_announces,
                     show_pr_stats,
                     show_bursts,
@@ -316,6 +319,7 @@ struct StatusDisplayOptions<'a> {
     reverse: bool,
     filter: Option<&'a str>,
     show_totals: bool,
+    show_pps: bool,
     show_announces: bool,
     show_pr_stats: bool,
     show_bursts: bool,
@@ -330,6 +334,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
         reverse,
         filter,
         show_totals,
+        show_pps,
         show_announces,
         show_pr_stats,
         show_bursts,
@@ -521,7 +526,7 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
 
     // Show traffic totals
     if show_totals {
-        for line in traffic_total_lines(response, show_pr_stats || show_announces) {
+        for line in traffic_total_lines(response, show_pr_stats || show_announces, show_pps) {
             println!("{line}");
         }
         println!();
@@ -947,7 +952,11 @@ fn detailed_traffic_total_lines(
     lines
 }
 
-fn traffic_total_lines(response: &PickleValue, show_data_flow: bool) -> Vec<String> {
+fn traffic_total_lines(
+    response: &PickleValue,
+    show_data_flow: bool,
+    show_pps: bool,
+) -> Vec<String> {
     let rx_bytes = response
         .get("rxb")
         .and_then(|value| value.as_int())
@@ -958,6 +967,16 @@ fn traffic_total_lines(response: &PickleValue, show_data_flow: bool) -> Vec<Stri
         .unwrap_or(0);
     let rx_rate = numeric(response.get("rxs")).unwrap_or(0.0).max(0.0);
     let tx_rate = numeric(response.get("txs")).unwrap_or(0.0).max(0.0);
+    let pps_suffix = |key: &str| {
+        if show_pps {
+            format!(
+                ", {:.0} pps",
+                numeric(response.get(key)).unwrap_or(0.0).max(0.0)
+            )
+        } else {
+            String::new()
+        }
+    };
     let flow_suffix = |total: f64, class: f64| {
         if !show_data_flow || total <= 0.0 {
             String::new()
@@ -977,16 +996,18 @@ fn traffic_total_lines(response: &PickleValue, show_data_flow: bool) -> Vec<Stri
         numeric(response.get("ptxs")).unwrap_or(0.0) + numeric(response.get("atxs")).unwrap_or(0.0);
     vec![
         format!(
-            " Traffic totals: {} \u{2191}  {}{}",
+            " Traffic totals: {} \u{2191}  {}{}{}",
             size_str(tx_bytes.max(0) as u64),
             speed_str(tx_rate as u64),
             flow_suffix(tx_rate, class_tx),
+            pps_suffix("txpps"),
         ),
         format!(
-            "                 {} \u{2193}  {}{}",
+            "                 {} \u{2193}  {}{}{}",
             size_str(rx_bytes.max(0) as u64),
             speed_str(rx_rate as u64),
             flow_suffix(rx_rate, class_rx),
+            pps_suffix("rxpps"),
         ),
     ]
 }
@@ -1107,6 +1128,7 @@ fn remote_status(
     reverse: bool,
     filter: Option<&str>,
     show_totals: bool,
+    show_pps: bool,
     show_announces: bool,
     show_pr_stats: bool,
     show_bursts: bool,
@@ -1158,6 +1180,7 @@ fn remote_status(
                             reverse,
                             filter,
                             show_totals,
+                            show_pps,
                             show_announces,
                             show_pr_stats,
                             show_bursts,
@@ -1450,6 +1473,7 @@ fn print_usage(usage_name: &str) {
     println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
+    println!("  -p, --pps               Show packets per second in traffic totals");
     println!("  -l                      Show link count");
     println!("  -A                      Show announce statistics");
     println!("  -P, --pr-stats          Show path request statistics");
@@ -1773,11 +1797,26 @@ mod tests {
             ),
         ]);
 
-        let lines = traffic_total_lines(&response, true);
+        let lines = traffic_total_lines(&response, true, false);
         assert!(lines[0].contains("55% data (880 b/s)"));
         assert!(lines[1].contains("65% data (520 b/s)"));
-        let without_detail = traffic_total_lines(&response, false);
+        let without_detail = traffic_total_lines(&response, false, false);
         assert!(!without_detail.iter().any(|line| line.contains("% data")));
+
+        let with_pps = PickleValue::Dict(vec![
+            (
+                PickleValue::String("rxpps".into()),
+                PickleValue::Float(12.4),
+            ),
+            (PickleValue::String("txpps".into()), PickleValue::Float(7.6)),
+        ]);
+        assert_eq!(
+            traffic_total_lines(&with_pps, false, true),
+            vec![
+                " Traffic totals: 0 B \u{2191}  0 b/s, 8 pps",
+                "                 0 B \u{2193}  0 b/s, 12 pps",
+            ]
+        );
     }
 
     #[test]
