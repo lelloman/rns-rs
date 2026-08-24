@@ -163,7 +163,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `67af8c1`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
 | 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `afe06eb`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
 | 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Integrated | Local `804537d`; stale-interface active-link arrivals are dropped and removed from the native bounded FIFO so the current-route copy remains admissible |
-| 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
+| 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Structurally covered | Local `66c41fd`; native count and list both require `flap_count > grace`, with mixed blocked/grace-period regression |
 | 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
 
 ### Additional canonical drift observed 2026-08-24
@@ -1967,13 +1967,36 @@ checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 90 commits through `1bad7f58` have a final disposition. Entries 91–117
+### 91. `bfab2964` — Exclude grace-period peers from blocked-IP status
+
+**Upstream change:** Changes the Backbone blocked-IP list from every tracked
+fast-flapping address to only addresses whose flap count exceeds the configured
+grace allowance. This keeps `rnstatus --blocked-ips` consistent with the
+blocked-IP count and actual connection rejection.
+
+**Rust applicability:** Rust's `blocked_ip_count()` and `blocked_ip_list()`
+already share the exact strict `flap_count > grace` predicate after expiring
+old state. The driver derives the RPC count from that filtered list, and native
+`rnstatus` renders the returned list without broadening it, so the upstream bug
+is structurally absent.
+
+**Local handling and evidence:** Local `66c41fd` strengthens the existing
+mixed-peer boundary regression: one peer exceeds grace, another remains
+tracked within grace, the count is one, and the list contains only the actually
+blocked peer. The focused test, all 887 `rns-net` unit tests, 54 network E2E
+tests, Python/IFAC interoperability and fixture suites, formatting, diff checks,
+and warning-free host lint passed. A sandbox-only full-suite attempt failed to
+create sockets; the identical permitted rerun passed completely.
+
+**Final disposition:** Structurally covered.
+
+All 91 commits through `bfab2964` have a final disposition. Entries 92–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 91–117 in upstream ancestry order.
+1. Process outstanding entries 92–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1994,6 +2017,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `bfab2964` excludes tracked peers still within the
+  fast-flap grace allowance from blocked-IP status output. Rust already shares
+  the strict blocked predicate across count and list; local mapping `66c41fd`
+  pins the mixed blocked/grace-period boundary. Complete `rns-net`,
+  E2E/interoperability, formatting, diff and host-lint checks passed. Entry 92
+  is next.
 - `2026-08-24`: Commit `1bad7f58` removes a stale-interface active-link packet
   from both Python dedup generations during a failover race. Local mapping
   `804537d` implements native bounded-FIFO removal and releases the hash at the
