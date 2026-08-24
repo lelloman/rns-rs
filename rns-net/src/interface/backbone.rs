@@ -1950,6 +1950,11 @@ mod tests {
             monitor.blocked_ip_count(&config, now + Duration::from_secs(2)),
             1
         );
+        assert_eq!(
+            monitor.blocked_ip_list(&config, now + Duration::from_secs(2)),
+            vec![first],
+            "tracked peers within the grace allowance must not appear as blocked"
+        );
     }
 
     #[test]
