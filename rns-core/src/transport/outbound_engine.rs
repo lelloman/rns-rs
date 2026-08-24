@@ -9,6 +9,10 @@ impl TransportEngine {
         attached_interface: Option<InterfaceId>,
         now: f64,
     ) -> Vec<TransportAction> {
+        if packet.hops >= constants::PATHFINDER_M {
+            return Vec::new();
+        }
+
         let actions = route_outbound_with_options(
             &self.path_table,
             &self.interfaces,
