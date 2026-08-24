@@ -161,6 +161,9 @@ pub struct InterfaceInfo {
     /// Tunnel ID associated with this interface, if any.
     pub tunnel_id: Option<[u8; 32]>,
     /// Maximum transmission unit for this interface in bytes.
+    ///
+    /// The interface selects this before registration; the transport core does
+    /// not recalculate or log MTU choices while processing packets.
     pub mtu: u32,
     /// Ingress control behavior for this interface.
     pub ingress_control: IngressControlConfig,
