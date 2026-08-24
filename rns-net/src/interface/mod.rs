@@ -79,6 +79,24 @@ pub trait Writer: Send {
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
 
+/// Return whether an interface type normally operates on a shared medium.
+///
+/// This is a type-level hint: runtime configuration can still describe links
+/// with different physical properties. It mirrors Reticulum's interface-class
+/// defaults and is suitable for discovery/capability metadata.
+pub fn shared_medium_hint(interface_type: &str) -> bool {
+    matches!(
+        interface_type,
+        "AX25KISSInterface"
+            | "KISSInterface"
+            | "PipeInterface"
+            | "RNodeInterface"
+            | "RNodeMultiInterface"
+            | "SerialInterface"
+            | "UDPInterface"
+    )
+}
+
 pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -409,6 +427,31 @@ impl InterfaceStatusView for InterfaceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_medium_hint_matches_interface_class_defaults() {
+        for interface_type in [
+            "AX25KISSInterface",
+            "KISSInterface",
+            "PipeInterface",
+            "RNodeInterface",
+            "RNodeMultiInterface",
+            "SerialInterface",
+            "UDPInterface",
+        ] {
+            assert!(shared_medium_hint(interface_type), "{interface_type}");
+        }
+        for interface_type in [
+            "AutoInterface",
+            "BackboneInterface",
+            "I2PInterface",
+            "LocalInterface",
+            "TCPClientInterface",
+            "TCPServerInterface",
+        ] {
+            assert!(!shared_medium_hint(interface_type), "{interface_type}");
+        }
+    }
     use crate::event::Event;
     use rns_core::constants;
     use std::sync::mpsc;
