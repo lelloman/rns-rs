@@ -158,7 +158,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `df07f45`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
 | 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Integrated | Local `5d733ca`; two-sample prospective-rate gate plus live pre-dispatch recursive-request check |
 | 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Structurally covered | Local `fc9e989`; absent usable interface bitrates are a normal silent `None` fallback with focused empty/zero-bitrate assertions |
-| 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Changelog-only content unless the diff identifies an undocumented compatibility requirement |
+| 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Local `9506a72`; upstream RNS 1.5.0 release-note text only; runbook now records changelog handling policy |
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Documentation follow-up | Upstream user-facing behavior and any equivalent native documentation changes |
 | 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Needs coordinated port | Per-interface PPS fields, aggregation/RPC/CLI rendering, and exclusion of the local shared instance |
 | 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Needs coordinated port | Discovery metadata, interface state, serialization, and status presentation for shared-medium hints |
@@ -1858,13 +1858,31 @@ checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 85 commits through `b397870c` have a final disposition. Entries 86–117
+### 86. `561e2f23` — Record the upstream 1.5.0 changelog boundary
+
+**Upstream change:** Adds the RNS 1.5.0 release notes to upstream
+`Changelog.md` and restores headings in older release entries. It changes no
+Python runtime, protocol, configuration, RPC, utility, or generated artifact.
+
+**Rust applicability:** rns-rs does not vendor the Python project's changelog.
+The listed behaviors remain subject to their individual source commits and
+cannot serve as parity evidence by themselves. The 1.5.0 label informs the
+eventual audit name only once the canonical promotion target is also known.
+
+**Local handling and evidence:** Local `9506a72` strengthens the integration
+runbook to state that version/changelog metadata identifies a target but is not
+vendored or accepted in place of source-level review. The complete diff was
+reviewed and `git diff --check` passed.
+
+**Final disposition:** Non-runtime.
+
+All 86 commits through `561e2f23` have a final disposition. Entries 87–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 86–117 in upstream ancestry order.
+1. Process outstanding entries 87–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1885,6 +1903,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `561e2f23` changes only upstream RNS 1.5.0 changelog
+  text. Local mapping `9506a72` records the reusable non-vendoring and
+  source-verification policy in the integration runbook. The full diff and
+  diff checks passed. Entry 87 is next.
 - `2026-08-24`: Commit `b397870c` is structurally covered by Rust's silent
   optional bitrate calculation and fixed timeout fallback. Local mapping
   `fc9e989` documents the invariant and strengthens empty/zero-bitrate
