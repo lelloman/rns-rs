@@ -193,7 +193,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `11e1f91` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
 | 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `7fa5f73` pins repeated manager-owned incoming cancellation as an action-free no-op |
 | 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `8ab860a` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
-| 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Needs port | Attached-interface ingress forwarding and loop prevention |
+| 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `ea786c8` proves an offline attached target neither transmits nor falls back to another online interface |
 | 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Needs coordinated port | Logging configuration, rotation limits/count, retention, and CLI/runtime behavior |
 | 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Needs decision | Logging concurrency, ordering, shutdown, backpressure, and native logger equivalence |
 | 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Needs coordinated port | Runtime profiling collection, RPC status shape, and `rnstatus` output |
@@ -2296,13 +2296,33 @@ host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 106 commits through `a9538e9f` have a final disposition. Entries 107–117
+### 107. `3fdfe93e` — Do not loop attached-interface packets
+
+**Upstream change:** Restricts packets with `attached_interface` to that single
+candidate instead of iterating every interface, and requires the selected
+interface to be online before transmission. This prevents attached traffic from
+looping or falling back elsewhere.
+
+**Rust applicability:** Native outbound routing already emits exactly one
+`SendOnInterface` action when an attachment is present. Driver dispatch checks
+that exact interface's enabled/online state and drops it when unavailable; it
+does not reinterpret the action as a broadcast.
+
+**Local handling and evidence:** Local `ea786c8` adds a driver-level regression
+with an offline attached interface and a second online interface, verifying
+that neither writer receives the packet. The focused test, all 896 `rns-net`
+unit tests, 54 network E2E tests, formatting, diff checks, and warning-free host
+lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 107 commits through `3fdfe93e` have a final disposition. Entries 108–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 107–117 in upstream ancestry order.
+1. Process outstanding entries 108–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2323,6 +2343,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `3fdfe93e` restricts attached-interface packets to one
+  online target. Native routing already emits one exact-interface action and
+  driver dispatch drops unavailable targets without broadcast fallback; local
+  mapping `ea786c8` pins the offline/other-online case. Focused and complete
+  `rns-net`, E2E, formatting, diff and host-lint checks passed. Entry 108 is
+  next.
 - `2026-08-24`: Commit `a9538e9f` demotes Python's automatic MTU-selection
   diagnostic. Native interfaces register an already-selected MTU and emit no
   equivalent runtime message; local mapping `8ab860a` records that invariant.
