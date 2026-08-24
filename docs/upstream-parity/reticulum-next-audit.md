@@ -162,7 +162,7 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Integrated | Local `7a8b704`; native Rust API documentation now states bitrate and medium-timeout return/fallback semantics |
 | 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `67af8c1`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
 | 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `afe06eb`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
-| 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Needs port | Packet hash-list ownership and removal during the affected transport edge case |
+| 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Integrated | Local `804537d`; stale-interface active-link arrivals are dropped and removed from the native bounded FIFO so the current-route copy remains admissible |
 | 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
 | 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
 
@@ -1941,13 +1941,39 @@ lint passed.
 
 **Final disposition:** Integrated.
 
-All 89 commits through `26e3ca4f` have a final disposition. Entries 90–117
+### 90. `1bad7f58` — Release stale-route active-link packet hashes
+
+**Upstream change:** When an active-link packet arrives on an interface other
+than the link's attached interface during a transport failover edge case,
+upstream drops that arrival and removes its hash from both the current and
+previous deduplication lists. The same packet can then be accepted when it
+finally arrives over the link's current path.
+
+**Rust applicability:** Rust keeps one bounded FIFO/set deduplication structure
+instead of rotating current and previous Python lists. Inbound packets are
+remembered before local driver delivery, and the link manager owns the active
+link's route hint, so a stale-interface arrival could suppress the later
+current-route copy. The failure mode therefore applied across the core/driver
+boundary.
+
+**Local handling and evidence:** Local `804537d` adds arbitrary native FIFO/set
+removal while preserving order, detects DATA/LINK packets whose receiving
+interface differs from the active link route, drops that stale arrival, and
+forgets its packet hash. Focused regressions cover wrapped-FIFO removal and
+prove that the same raw packet is admissible on the current interface after
+the stale arrival. All 650 `rns-core` and 887 `rns-net` unit tests, 54 network
+E2E tests, Python/IFAC interoperability and fixture suites, formatting, diff
+checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 90 commits through `1bad7f58` have a final disposition. Entries 91–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 90–117 in upstream ancestry order.
+1. Process outstanding entries 91–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -1968,6 +1994,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `1bad7f58` removes a stale-interface active-link packet
+  from both Python dedup generations during a failover race. Local mapping
+  `804537d` implements native bounded-FIFO removal and releases the hash at the
+  driver/link-route boundary. Focused regressions and complete core/net,
+  E2E/interoperability, formatting, diff and host-lint checks passed. Entry 91
+  is next.
 - `2026-08-24`: Commit `26e3ca4f` adds shared-medium interface-class hints.
   Local mapping `afe06eb` supplies the native registry classifier with a full
   positive/negative type matrix. Complete `rns-net`, E2E/interoperability,
