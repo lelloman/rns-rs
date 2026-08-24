@@ -52,6 +52,17 @@ impl PacketHashlist {
         self.queue.push_back(hash);
     }
 
+    /// Stop retaining a hash, preserving the FIFO order of all other entries.
+    pub fn remove(&mut self, hash: &[u8; 32]) -> bool {
+        if !self.set.remove(hash) {
+            return false;
+        }
+
+        let removed = self.queue.remove(hash);
+        debug_assert!(removed, "dedup set entry must exist in FIFO queue");
+        true
+    }
+
     /// Total number of retained packet hashes.
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.queue.len(), self.set.len());
@@ -232,6 +243,27 @@ impl PacketHashQueue {
             self.head = 0;
         }
         Some(hash)
+    }
+
+    fn remove(&mut self, hash: &[u8; 32]) -> bool {
+        let Some(offset) = (0..self.len).find(|offset| {
+            let index = (self.head + offset) % self.capacity();
+            self.entries.get(index) == hash
+        }) else {
+            return false;
+        };
+
+        for current in offset..self.len - 1 {
+            let next_index = (self.head + current + 1) % self.capacity();
+            let current_index = (self.head + current) % self.capacity();
+            let next = self.entries.read(next_index);
+            self.entries.write(current_index, next);
+        }
+        self.len -= 1;
+        if self.len == 0 {
+            self.head = 0;
+        }
+        true
     }
 }
 
@@ -424,6 +456,29 @@ mod tests {
             assert!(!hl.is_duplicate(&h1));
             assert!(hl.is_duplicate(&h2));
             assert!(hl.is_duplicate(&h3));
+        }
+    }
+
+    #[test]
+    fn removal_preserves_fifo_order_after_queue_wraps() {
+        for policy in policies() {
+            let mut hl = PacketHashlist::with_allocation(3, policy);
+            for seed in 1..=4 {
+                hl.add(make_hash(seed));
+            }
+
+            assert!(hl.remove(&make_hash(3)));
+            assert!(!hl.remove(&make_hash(1)));
+            assert_eq!(
+                hl.iter().copied().collect::<Vec<_>>(),
+                vec![make_hash(2), make_hash(4)]
+            );
+
+            hl.add(make_hash(5));
+            assert_eq!(
+                hl.iter().copied().collect::<Vec<_>>(),
+                vec![make_hash(2), make_hash(4), make_hash(5)]
+            );
         }
     }
 

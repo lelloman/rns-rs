@@ -4805,6 +4805,56 @@ fn deliver_local_routes_to_link_manager() {
 }
 
 #[test]
+fn stale_link_interface_arrival_releases_packet_hash_for_current_route() {
+    let mut driver = new_test_driver();
+    let current_interface = InterfaceId(1);
+    let stale_interface = InterfaceId(2);
+    let (link_manager, link_id) = active_link_manager_with_route(current_interface);
+    driver.link_manager = link_manager;
+
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &link_id,
+        None,
+        constants::CONTEXT_NONE,
+        b"in flight",
+    )
+    .unwrap();
+
+    driver.engine.handle_outbound(
+        &packet,
+        constants::DESTINATION_LINK,
+        Some(current_interface),
+        10.0,
+    );
+    assert_eq!(driver.engine.packet_hashlist_len(), 1);
+
+    driver.dispatch_all(vec![TransportAction::DeliverLocal {
+        destination_hash: link_id,
+        raw: packet.raw.clone().into(),
+        packet_hash: packet.packet_hash,
+        receiving_interface: stale_interface,
+    }]);
+
+    assert_eq!(driver.engine.packet_hashlist_len(), 0);
+    assert!(driver
+        .engine
+        .accepts_inbound_frame(rns_core::transport::InboundFrame {
+            raw: &packet.raw,
+            iface: current_interface,
+            now: 11.0,
+            rx: rns_core::transport::RxMetadata::default(),
+        }));
+}
+
+#[test]
 fn shutdown_tears_down_pending_link() {
     let (tx, rx) = event::channel();
     let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();

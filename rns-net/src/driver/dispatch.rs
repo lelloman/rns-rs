@@ -580,6 +580,22 @@ impl Driver {
                 self.dispatch_all(actions);
             }
         } else if self.link_manager.is_link_destination(&destination_hash) {
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                let arrived_on_stale_link_route = packet.flags.packet_type
+                    == rns_core::constants::PACKET_TYPE_DATA
+                    && packet.flags.destination_type == rns_core::constants::DESTINATION_LINK
+                    && self
+                        .link_manager
+                        .get_link_route_hint(&destination_hash)
+                        .is_some_and(|route| route.interface != receiving_interface);
+                if arrived_on_stale_link_route {
+                    // The active link has failed over, but an in-flight packet
+                    // arrived on its former interface. Do not let this arrival
+                    // suppress the copy still travelling on the current route.
+                    self.engine.forget_packet_hash(&packet_hash);
+                    return;
+                }
+            }
             let link_actions = self.link_manager.handle_local_delivery(
                 destination_hash,
                 &raw,

@@ -91,6 +91,16 @@ impl TransportEngine {
         self.packet_hashlist.len()
     }
 
+    /// Remove a packet hash from deduplication after an interface failover race.
+    ///
+    /// Network drivers should call this when an active-link packet arrives on
+    /// the link's former interface, allowing the same packet to be accepted
+    /// later on its current route.
+    #[doc(hidden)]
+    pub fn forget_packet_hash(&mut self, packet_hash: &[u8; 32]) -> bool {
+        self.packet_hashlist.remove(packet_hash)
+    }
+
     pub fn announce_sig_cache_len(&self) -> usize {
         self.announce_sig_cache.len()
     }
