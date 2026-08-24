@@ -2,7 +2,7 @@
 
 ## Scope and Baseline
 
-- audit date: `2026-08-22`
+- audit date: `2026-08-24`
 - previous accepted version: `1.4.2`
 - previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
 - target version: `1.5.0`
@@ -165,6 +165,45 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 | 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Needs port | Packet hash-list ownership and removal during the affected transport edge case |
 | 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Needs port | Blocked-IP filtering in status data and `rnstatus --blocked-ips` output |
 | 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Needs coordinated port | Discovery requirements, wire metadata, persistence/RPC, and native implementation/version identity |
+
+### Additional canonical drift observed 2026-08-24
+
+A fresh two-remote refresh found 25 additional canonical rGit commits after
+`b123a756`, through `0e070aacf655e1866ec1e469881dc91a2a3db89e`.
+The GitHub mirror remains at `b123a756b0e203070f7ff6325aaa2168504e0d82`,
+so the remotes no longer agree. The accepted baseline remains `b3ef214e`; the
+drift checker therefore reports 44 commits ahead in total, comprising the eight
+already mapped commits 74–81, the eleven 2026-08-23 inventory entries, and the
+25 new entries below. These dispositions are provisional until each complete
+diff is reviewed and mapped to exactly one rns-rs commit.
+
+| # | Upstream commit | Subject | Provisional disposition | Review scope |
+|---:|---|---|---|---|
+| 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Needs port | Outgoing Resource cancellation state and duplicate/late cancellation behavior |
+| 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Needs coordinated port | Interface MTU state/defaults across generic, local, and Backbone interfaces plus diagnostics |
+| 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Needs port | Interface-status MTU field, RPC transport, sorting/rendering, and compatibility with older peers |
+| 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Needs decision | Inbound IFAC boundary refactor and whether native driver separation already supplies the invariant |
+| 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Needs coordinated port | Byte-compatible inbound IFAC authentication/unmasking and violation classification |
+| 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Needs decision | Outbound IFAC boundary refactor and interaction with normal/queued transmissions |
+| 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Needs coordinated port | Byte-compatible outbound IFAC masking/tagging and accounting |
+| 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Needs decision | New upstream IFAC vectors and edge cases against native interoperability coverage |
+| 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Needs decision | New HKDF vectors and boundary cases against `rns-crypto` coverage |
+| 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Upstream test-runner registration; runtime applicability belongs to entries 100 and 101 |
+| 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Needs decision | HKDF output equivalence, input limits, and whether the native implementation is structurally equivalent |
+| 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Needs coordinated port | Adoption of entries 97, 99, and 103 at all Transport IFAC call sites |
+| 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Needs port | Incoming Resource cancellation state and duplicate/late cancellation behavior |
+| 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Needs decision | Changed interface diagnostic severity and native operational visibility |
+| 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Needs port | Attached-interface ingress forwarding and loop prevention |
+| 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Needs coordinated port | Logging configuration, rotation limits/count, retention, and CLI/runtime behavior |
+| 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Needs decision | Logging concurrency, ordering, shutdown, backpressure, and native logger equivalence |
+| 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Needs coordinated port | Runtime profiling collection, RPC status shape, and `rnstatus` output |
+| 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Needs decision | Profiler lifecycle, bounded retention, and applicability to native instrumentation |
+| 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Needs decision | Python-only instrumentation mechanism versus any observable profiling contract |
+| 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Needs coordinated port | Profiling aggregation limits, reentrancy, and time-window semantics |
+| 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Non-runtime | Merge commit with no independent diff beyond inventoried profiling parents |
+| 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Needs decision | Post-merge Reticulum/profiling adjustments and observable status behavior |
+| 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Needs decision | Follow-up logging/profiling adjustments after the merge |
+| 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Needs decision | Final profiling/logging correction; full diff review required before disposition |
 
 ## Per-Commit Analysis
 
@@ -1744,8 +1783,8 @@ commit 73 until the full promotion gates pass.
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
-- [x] Focused regressions pass for every applicable behavior change.
+- [ ] Every upstream commit has a final disposition.
+- [ ] Focused regressions pass for every applicable behavior change.
 - [ ] Fixture provenance and byte stability are checked where applicable.
 - [ ] Exact-target live Python/Rust interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
@@ -1755,6 +1794,18 @@ commit 73 until the full promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Daily VPS snapshots were healthy: `vps-eu` had 40/40
+  public interfaces up and 209,849 announces in the rolling 24-hour summary;
+  `vps-us` had 26/26 up and 225,175 announces. Both primary peers were up,
+  every packet-traffic query succeeded, and neither host recorded an idle
+  timeout event. The impaired daily Backbone smoke passed bidirectional
+  packets/channels, four concurrent Resource boundaries, concurrent link
+  batches, and forced reconnect recovery. Both deployed binary pairs remain
+  behind current `origin/master` and `origin/dev`. Fresh upstream fetches found
+  canonical rGit at `0e070aac`, 25 commits beyond the GitHub tip `b123a756`;
+  entries 93–117 are inventoried without an integration claim. The reviewed
+  report database was published to `vps-eu` with matching local/remote SHA-256
+  `623f0932e4947f14698aeb1dcb3416f31f0602abead30229c116ff8156c5be52`.
 - `2026-08-23`: Daily refresh succeeded for both remotes. Canonical rGit and
   GitHub now agree at `b123a756`, nineteen commits beyond accepted `b3ef214e`:
   the eight previously mapped commits plus eleven newly inventoried entries
