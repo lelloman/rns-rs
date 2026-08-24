@@ -1983,6 +1983,48 @@ fn dispatch_send() {
 }
 
 #[test]
+fn driver_selects_ifac_handlers_for_outbound_and_inbound_frames() {
+    let mut driver = new_test_driver();
+    let info = make_interface_info(1);
+    driver.engine.register_interface(info);
+    let (writer, sent) = MockWriter::new();
+    let state = crate::ifac::derive_ifac(Some("network"), Some("key"), 16).unwrap();
+    let mut entry = make_entry(1, Box::new(writer), true);
+    entry.ifac = Some(state.clone());
+    driver.interfaces.insert(InterfaceId(1), entry);
+
+    let raw = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_PLAIN,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0xaa; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"ifac handler selection",
+    )
+    .unwrap()
+    .raw;
+
+    driver.dispatch_all(vec![TransportAction::SendOnInterface {
+        interface: InterfaceId(1),
+        raw: raw.clone().into(),
+    }]);
+
+    let frame = sent.lock().unwrap()[0].clone();
+    assert_eq!(crate::ifac::unmask_inbound(&frame, &state), Some(raw));
+    driver.handle_frame_event(InterfaceId(1), frame, None, None);
+    let stats = &driver.interfaces[&InterfaceId(1)].stats;
+    assert_eq!(stats.ifac_violations, 0);
+    assert_eq!(stats.protocol_violations, 0);
+    assert_eq!(stats.rx_packets, 1);
+}
+
+#[test]
 fn dispatch_broadcast() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
