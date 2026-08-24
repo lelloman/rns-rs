@@ -7690,6 +7690,51 @@ fn recursive_path_request_does_not_reach_offline_interface_writer() {
 }
 
 #[test]
+fn recursive_path_request_is_late_limited_before_interface_send() {
+    let (tx, rx) = event::channel();
+    let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+    let mut config = make_transport_config(true);
+    config.identity_hash = Some([0x42; 16]);
+    let mut driver = Driver::new(config, rx, tx, Box::new(callbacks));
+
+    let mut ingress = make_interface_info(1);
+    ingress.recursive_prs = true;
+    let mut egress = make_interface_info(2);
+    egress.ingress_control.egress_enabled = true;
+    driver.engine.register_interface(ingress);
+    driver.engine.register_interface(egress);
+
+    let (writer, sent) = MockWriter::new();
+    let mut entry = make_entry(2, Box::new(writer), true);
+    entry.info.ingress_control.egress_enabled = true;
+    driver.interfaces.insert(InterfaceId(2), entry);
+
+    let mut request_data = Vec::new();
+    request_data.extend_from_slice(&[0xD8; 16]);
+    request_data.extend_from_slice(&[0x08; 16]);
+    let actions = driver
+        .engine
+        .handle_path_request(&request_data, InterfaceId(1), 1000.0);
+    assert_eq!(
+        actions.len(),
+        1,
+        "early gate should initially allow the request"
+    );
+
+    let entry = driver.interfaces.get_mut(&InterfaceId(2)).unwrap();
+    entry.stats.record_outgoing_path_request(1000.0);
+    entry.stats.record_outgoing_path_request(1000.5);
+
+    driver.dispatch_all(actions);
+
+    assert!(
+        sent.lock().unwrap().is_empty(),
+        "live egress state must be checked again immediately before dispatch"
+    );
+    assert_eq!(driver.interfaces[&InterfaceId(2)].stats.ptxc, 0);
+}
+
+#[test]
 fn queued_ingress_limited_path_request_remains_suppressed_during_dispatch() {
     let (tx, rx) = event::channel();
     let (callbacks, _, _, _, _, _) = MockCallbacks::new();

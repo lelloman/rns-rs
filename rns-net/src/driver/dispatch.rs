@@ -310,6 +310,24 @@ impl Driver {
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
+        if is_path_request {
+            let live_rate = self.interfaces.get(&interface).map(|entry| {
+                (
+                    entry.stats.outgoing_path_request_freq(),
+                    entry.stats.outgoing_path_request_samples(),
+                )
+            });
+            if live_rate.is_some_and(|(freq, samples)| {
+                self.engine
+                    .should_egress_limit_path_request(interface, freq, samples)
+            }) {
+                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                    "Blocking recursive path request on interface {} due to active egress limiting",
+                    interface.0,
+                );
+                return;
+            }
+        }
         if is_announce {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Announce:dispatching to iface {} (len={}, online={})",

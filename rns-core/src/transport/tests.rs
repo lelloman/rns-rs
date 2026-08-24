@@ -2987,13 +2987,13 @@ fn test_path_request_egress_limit_skips_only_limited_interface() {
     let mut limited = make_interface(2, constants::MODE_FULL);
     limited.ingress_control.egress_enabled = true;
     limited.op_freq = constants::EC_PR_FREQ + 1.0;
-    limited.op_samples = constants::IC_BURST_MIN_SAMPLES;
+    limited.op_samples = constants::EC_BURST_MIN_SAMPLES;
     engine.register_interface(limited);
 
     let mut allowed = make_interface(3, constants::MODE_FULL);
     allowed.ingress_control.egress_enabled = true;
-    allowed.op_freq = constants::EC_PR_FREQ - 1.0;
-    allowed.op_samples = constants::IC_BURST_MIN_SAMPLES;
+    allowed.op_freq = 3.0;
+    allowed.op_samples = constants::EC_BURST_MIN_SAMPLES;
     engine.register_interface(allowed);
 
     let dest = [0xE2; 16];

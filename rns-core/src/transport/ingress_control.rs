@@ -180,9 +180,14 @@ impl IngressControl {
         pr_freq: f64,
         sample_count: usize,
     ) -> bool {
-        config.egress_enabled
-            && pr_freq > config.egress_pr_freq
-            && sample_count >= crate::constants::IC_BURST_MIN_SAMPLES
+        if !config.egress_enabled || sample_count < crate::constants::EC_BURST_MIN_SAMPLES {
+            return false;
+        }
+
+        // Include the request being considered in the frequency estimate. The
+        // sampled frequency is n/span, so the prospective rate is (n+1)/span.
+        let prospective_freq = pr_freq * (sample_count + 1) as f64 / sample_count as f64;
+        prospective_freq > config.egress_pr_freq
     }
 
     /// Store a held announce for later release.
@@ -1061,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn test_egress_pr_limit_requires_enabled_config_threshold_and_samples() {
+    fn test_egress_pr_limit_preemptively_counts_pending_send_after_two_samples() {
         let mut ic = IngressControl::new();
         let mut config = IngressControlConfig::enabled();
         let interface = iface(1);
@@ -1072,20 +1077,20 @@ mod tests {
         assert!(!ic.should_egress_limit_pr(
             interface,
             &config,
-            constants::EC_PR_FREQ,
-            constants::IC_BURST_MIN_SAMPLES
+            constants::EC_PR_FREQ + 1.0,
+            constants::EC_BURST_MIN_SAMPLES - 1
         ));
-        assert!(!ic.should_egress_limit_pr(
+        assert!(ic.should_egress_limit_pr(
             interface,
             &config,
-            constants::EC_PR_FREQ + 1.0,
-            constants::IC_BURST_MIN_SAMPLES - 1
+            4.0,
+            constants::EC_BURST_MIN_SAMPLES
         ));
         assert!(ic.should_egress_limit_pr(
             interface,
             &config,
             constants::EC_PR_FREQ + 1.0,
-            constants::IC_BURST_MIN_SAMPLES
+            constants::EC_BURST_MIN_SAMPLES
         ));
     }
 }

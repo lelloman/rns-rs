@@ -24,6 +24,25 @@ pub(super) fn discovery_path_request_timeout(
 }
 
 impl TransportEngine {
+    /// Re-check live path-request egress state immediately before dispatch.
+    #[doc(hidden)]
+    pub fn should_egress_limit_path_request(
+        &mut self,
+        interface_id: InterfaceId,
+        pr_freq: f64,
+        sample_count: usize,
+    ) -> bool {
+        let Some(config) = self
+            .interfaces
+            .get(&interface_id)
+            .map(|info| info.ingress_control)
+        else {
+            return false;
+        };
+        self.ingress_control
+            .should_egress_limit_pr(interface_id, &config, pr_freq, sample_count)
+    }
+
     pub fn handle_path_request(
         &mut self,
         data: &[u8],
