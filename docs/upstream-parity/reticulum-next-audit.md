@@ -182,7 +182,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `0aa04f1`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
 | 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `0386059`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
 | 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Integrated | Local `9520db6` exports per-interface MTU through status RPC and renders it beside bitrate while accepting older payloads without the field |
-| 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Needs decision | Inbound IFAC boundary refactor and whether native driver separation already supplies the invariant |
+| 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Structurally covered | Local `15126e2` pins the dedicated native inbound IFAC handler's stateless reject-then-accept behavior |
 | 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Needs coordinated port | Byte-compatible inbound IFAC authentication/unmasking and violation classification |
 | 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Needs decision | Outbound IFAC boundary refactor and interaction with normal/queued transmissions |
 | 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Needs coordinated port | Byte-compatible outbound IFAC masking/tagging and accounting |
@@ -2081,13 +2081,32 @@ lint passed.
 
 **Final disposition:** Integrated.
 
-All 95 commits through `84597f31` have a final disposition. Entries 96–117
+### 96. `602085a1` — Extract inbound IFAC handling
+
+**Upstream change:** Moves the existing inbound IFAC extraction, HKDF unmasking,
+flag removal, and signature verification from `preprocess_inbound()` into a
+dedicated `handle_ifac_legacy()` helper without changing the algorithm.
+
+**Rust applicability:** Native code already isolates this operation in
+`ifac::unmask_inbound()`, called by the driver before packet parsing. The helper
+uses only the supplied packet and immutable IFAC state, returning the recovered
+packet or rejection without retaining per-packet state.
+
+**Local handling and evidence:** Local `15126e2` adds a focused regression that
+feeds an invalid IFAC packet followed by its valid counterpart through the
+dedicated native helper, proving rejection cannot affect subsequent handling.
+The focused test, all 891 `rns-net` unit tests, 54 network E2E tests, formatting,
+diff checks, and warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 96 commits through `602085a1` have a final disposition. Entries 97–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 96–117 in upstream ancestry order.
+1. Process outstanding entries 97–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2108,6 +2127,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-24`: Commit `602085a1` extracts Python's legacy inbound IFAC
+  algorithm into a helper without changing behavior. Rust already has the
+  dedicated stateless `ifac::unmask_inbound()` boundary; local mapping
+  `15126e2` proves an invalid packet cannot affect a following valid packet.
+  Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
+  passed. Entry 97 is next.
 - `2026-08-24`: Commit `84597f31` adds interface hardware MTU to status RPC and
   `rnstatus`. Local mapping `9520db6` carries normal and Backbone aggregate MTU
   metadata through the Python-compatible response and renders it beside rate,
