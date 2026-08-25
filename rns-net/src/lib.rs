@@ -22,6 +22,12 @@ pub mod announce_cache;
 pub mod ifac;
 pub mod md5;
 pub mod pickle;
+/// Process-global live profiling.
+///
+/// Unlike Python's package imports, Rust module declarations are resolved
+/// statically and do not execute in source order. The profiler can therefore
+/// stay in the normal crate module graph without a late-import workaround for
+/// circular initialization.
 pub mod profiling;
 #[cfg(feature = "iface-local")]
 pub mod remote_management;
@@ -128,3 +134,18 @@ pub use rns_core::types::{
 
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+mod module_initialization_tests {
+    #[test]
+    fn profiler_is_available_from_the_crate_root_without_late_imports() {
+        let sample = crate::profiling::profile("entry117.crate-root");
+        drop(sample);
+        assert_eq!(
+            crate::profiling::results()["entry117.crate-root"]
+                .stats_all
+                .count,
+            1
+        );
+    }
+}
