@@ -3837,7 +3837,13 @@ mod tests {
             sample.get("name").and_then(PickleValue::as_str),
             Some("entry110.rpc")
         );
-        assert_eq!(sample.get("count").and_then(PickleValue::as_int), Some(1));
+        assert_eq!(
+            sample
+                .get("stats_all")
+                .and_then(|stats| stats.get("count"))
+                .and_then(PickleValue::as_int),
+            Some(1)
+        );
     }
 
     #[test]
