@@ -202,7 +202,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Integrated | Local `45fd406` applies one shared tag limit, tracks in-flight/reentrant guards independently, and publishes disjoint live-window counts, sums, threads, and statistics |
 | 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Structurally covered | Local `4aa1b0d` pins the merged function-to-MessagePack final profiling schema; the other-parent MTU/routing deltas remain covered by entries 106–107 |
 | 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Integrated | Local `c6e4966` mirrors the deliberate final reversal to synchronous 5 MiB/single-archive logging while retaining the merged profiling status path |
-| 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Needs decision | Follow-up logging/profiling adjustments after the merge |
+| 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Non-runtime | Local `647f99d` mirrors the unused synchronization-import cleanup by narrowing the remaining daemon channel imports to the symbols actually used |
 | 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Needs decision | Final profiling/logging correction; full diff review required before disposition |
 
 ## Per-Commit Analysis
@@ -2519,13 +2519,33 @@ entries 108–109 without rewriting or squashing their required mapping commits.
 
 **Final disposition:** Integrated.
 
-All 115 commits through `1034d788` have a final disposition. Entries 116–117
-await per-commit review. The accepted baseline remains commit 73 until the full
+### 116. `39899651` — Merge adjustments
+
+**Upstream change:** Removes the now-unused `Lock` and `Condition` imports left
+after entry 115 deleted the asynchronous logging implementation. There is no
+runtime, protocol, configuration, or output change.
+
+**Rust applicability:** Removing the native async writer likewise left only the
+daemon shutdown channel using `std::sync::mpsc`; no lock/condition imports were
+present. The corresponding cleanup is to stop importing the module namespace
+and name only the three channel symbols that remain in use.
+
+**Local handling and evidence:** Local `647f99d` replaces the broad `mpsc`
+module import and qualified uses with `channel`, `RecvTimeoutError`, and
+`Sender`. The generated behavior is unchanged, while the source now documents
+the exact post-merge synchronization surface. All 121 `rns-cli` unit tests and
+its integration suites, formatting, diff checks, and warning-free host lint
+passed.
+
+**Final disposition:** Non-runtime.
+
+All 116 commits through `39899651` have a final disposition. Entry 117 awaits
+per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 116–117 in upstream ancestry order.
+1. Process outstanding entry 117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2546,6 +2566,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Commit `39899651` removes synchronization imports made unused
+  by the logging reversal. Local mapping `647f99d` narrows the native daemon's
+  remaining channel imports without runtime change. Complete `rns-cli`,
+  formatting, diff and host-lint checks passed. Entry 117 is next.
 - `2026-08-25`: Commit `1034d788` applies the post-merge logging reversal.
   Local mapping `c6e4966` removes the dedicated writer, restores synchronous
   writes, and adopts the final 5 MiB/one-archive policy without altering prior
