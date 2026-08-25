@@ -537,4 +537,33 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(results()["entry113.unwind"].stats_all.count, 1);
     }
+
+    #[test]
+    fn merged_live_profiling_pipeline_retains_final_schema() {
+        profile_function("entry114.merge", || ());
+        let Value::Map(tags) = results_msgpack() else {
+            panic!("merged profiler results must be a MessagePack map");
+        };
+        let Value::Map(entry) = tags
+            .iter()
+            .find(|(key, _)| *key == Value::Str("entry114.merge".into()))
+            .map(|(_, value)| value)
+            .unwrap()
+        else {
+            panic!("merged profiler entry must be a map");
+        };
+        for key in [
+            "name",
+            "super",
+            "stats_all",
+            "stats_1m",
+            "stats_5m",
+            "stats_30m",
+            "stats_60m",
+        ] {
+            assert!(entry
+                .iter()
+                .any(|(candidate, _)| *candidate == Value::Str(key.into())));
+        }
+    }
 }
