@@ -201,7 +201,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Integrated | Local `03a12ec` adds explicit-tag function/closure profiling adapters with default or custom retention and unwind-safe recording |
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Integrated | Local `45fd406` applies one shared tag limit, tracks in-flight/reentrant guards independently, and publishes disjoint live-window counts, sums, threads, and statistics |
 | 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Structurally covered | Local `4aa1b0d` pins the merged function-to-MessagePack final profiling schema; the other-parent MTU/routing deltas remain covered by entries 106–107 |
-| 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Needs decision | Post-merge Reticulum/profiling adjustments and observable status behavior |
+| 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Integrated | Local `c6e4966` mirrors the deliberate final reversal to synchronous 5 MiB/single-archive logging while retaining the merged profiling status path |
 | 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Needs decision | Follow-up logging/profiling adjustments after the merge |
 | 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Needs decision | Final profiling/logging correction; full diff review required before disposition |
 
@@ -2494,13 +2494,38 @@ host lint passed.
 
 **Final disposition:** Structurally covered.
 
-All 114 commits through `9c2f424a` have a final disposition. Entries 115–117
+### 115. `1034d788` — Merge adjustments
+
+**Upstream change:** Cleans up the merge, removes the temporary RPC traceback,
+and deliberately reverses entries 108–109's 30 MiB/nine-generation dedicated
+logging thread. Final logging is serialized synchronously, reopens the file for
+each record, rotates at 5 MiB, and retains only `logfile.1`. Import placement is
+temporarily moved to the module top and the profiling RPC alignment is cosmetic.
+
+**Rust applicability:** The native entry-108/109 writer was intentionally
+modeled on those upstream commits, so preserving it would diverge from the
+reviewed target. `env_logger` already serializes target writes, and the native
+RPC worker reports escaping errors once at its connection boundary; the final
+observable logging policy therefore requires the same explicit reversal.
+
+**Local handling and evidence:** Local `c6e4966` removes `AsyncLogWriter` and
+its worker/barrier protocol, restores direct `RotatingLogWriter` use, changes
+the threshold to 5 MiB, and simplifies rotation to replacement of one `.1`
+archive. Focused tests prove the final defaults, single-archive retention, and
+immediate visibility without an asynchronous flush barrier. All 121 `rns-cli`
+unit tests and its integration suites, formatting, diff checks, and
+warning-free host lint passed. This entry supersedes the runtime policies from
+entries 108–109 without rewriting or squashing their required mapping commits.
+
+**Final disposition:** Integrated.
+
+All 115 commits through `1034d788` have a final disposition. Entries 116–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 115–117 in upstream ancestry order.
+1. Process outstanding entries 116–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2521,6 +2546,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Commit `1034d788` applies the post-merge logging reversal.
+  Local mapping `c6e4966` removes the dedicated writer, restores synchronous
+  writes, and adopts the final 5 MiB/one-archive policy without altering prior
+  history. Focused and complete `rns-cli`, formatting, diff and host-lint checks
+  passed. Entry 116 is next.
 - `2026-08-25`: Merge `9c2f424a` combines the completed profiler lineage with
   the already-reviewed MTU and attached-interface branch. Local mapping
   `4aa1b0d` pins the composed function-to-MessagePack schema; existing
