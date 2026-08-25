@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 
 use crate::args::Args;
 use rns_net::storage;
@@ -203,7 +203,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         }
     };
 
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let (stop_tx, stop_rx) = channel::<()>();
 
     unsafe {
         libc::signal(
@@ -222,7 +222,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     loop {
         match stop_rx.recv_timeout(std::time::Duration::from_secs(1)) {
             Ok(()) => break,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Timeout) => continue,
             Err(_) => break,
         }
     }
@@ -286,9 +286,9 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-static STOP_TX: std::sync::Mutex<Option<mpsc::Sender<()>>> = std::sync::Mutex::new(None);
+static STOP_TX: std::sync::Mutex<Option<Sender<()>>> = std::sync::Mutex::new(None);
 
-fn lock_stop_tx() -> std::sync::MutexGuard<'static, Option<mpsc::Sender<()>>> {
+fn lock_stop_tx() -> std::sync::MutexGuard<'static, Option<Sender<()>>> {
     match STOP_TX.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
