@@ -52,6 +52,7 @@ pub struct I2pConfig {
     /// Directory for key persistence (typically `{config_dir}/storage`).
     pub storage_dir: PathBuf,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    pub underlay_mark: Option<u32>,
     pub runtime: Arc<Mutex<I2pRuntime>>,
 }
 
@@ -86,6 +87,7 @@ impl Default for I2pConfig {
             connectable: false,
             storage_dir: PathBuf::from("."),
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            underlay_mark: None,
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
@@ -131,6 +133,7 @@ fn load_or_generate_keypair(
     sam_addr: &SocketAddr,
     storage_dir: &Path,
     name: &str,
+    underlay_mark: Option<u32>,
 ) -> Result<sam::KeyPair, SamError> {
     let key_path = key_file_path(storage_dir, name);
 
@@ -163,7 +166,7 @@ fn load_or_generate_keypair(
     } else {
         // Generate new keypair
         log::info!("[{}] generating new I2P destination keypair", name);
-        let keypair = sam::dest_generate(sam_addr)?;
+        let keypair = sam::dest_generate_with_mark(sam_addr, underlay_mark)?;
 
         // Save private key to disk
         if let Some(parent) = key_path.parent() {
@@ -214,7 +217,12 @@ fn coordinator(
         .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
 
     // Load or generate keypair
-    let keypair = load_or_generate_keypair(&sam_addr, &config.storage_dir, &config.name)?;
+    let keypair = load_or_generate_keypair(
+        &sam_addr,
+        &config.storage_dir,
+        &config.name,
+        config.underlay_mark,
+    )?;
     let priv_b64 = sam::i2p_base64_encode(&keypair.private_key);
 
     // We use a single session for all streams (outbound + inbound).
@@ -222,7 +230,8 @@ fn coordinator(
     let session_id = sanitize_name(&config.name);
 
     log::info!("[{}] creating SAM session (id={})", config.name, session_id);
-    let mut control_socket = sam::session_create(&sam_addr, &session_id, &priv_b64)?;
+    let mut control_socket =
+        sam::session_create_with_mark(&sam_addr, &session_id, &priv_b64, config.underlay_mark)?;
 
     // Look up our own destination via NAMING LOOKUP "ME" on the session control socket.
     // "ME" requires a session context on the same connection.
@@ -264,6 +273,7 @@ fn coordinator(
                     runtime,
                     ingress_control,
                     dynamic_template,
+                    underlay_mark: config.underlay_mark,
                 });
             })
             .ok();
@@ -289,6 +299,7 @@ fn coordinator(
                     next_id2,
                     ingress_control,
                     dynamic_template,
+                    config.underlay_mark,
                 );
             })
             .ok();
@@ -314,6 +325,7 @@ struct OutboundPeerContext {
     runtime: Arc<Mutex<I2pRuntime>>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 }
 
 fn outbound_peer_loop(context: OutboundPeerContext) {
@@ -327,13 +339,14 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
         runtime,
         ingress_control,
         dynamic_template,
+        underlay_mark,
     } = context;
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
 
         // Resolve .b32.i2p address if needed
         let destination = if peer_addr.ends_with(".i2p") {
-            match sam::naming_lookup(&sam_addr, &peer_addr) {
+            match sam::naming_lookup_with_mark(&sam_addr, &peer_addr, underlay_mark) {
                 Ok(dest) => dest.to_i2p_base64(),
                 Err(e) => {
                     log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
@@ -347,7 +360,7 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
         };
 
         // Connect via SAM
-        match sam::stream_connect(&sam_addr, &session_id, &destination) {
+        match sam::stream_connect_with_mark(&sam_addr, &session_id, &destination, underlay_mark) {
             Ok(stream) => {
                 let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
 
@@ -451,9 +464,10 @@ fn acceptor_loop(
     next_id: Arc<AtomicU64>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 ) {
     loop {
-        match sam::stream_accept(&sam_addr, session_id) {
+        match sam::stream_accept_with_mark(&sam_addr, session_id, underlay_mark) {
             Ok((stream, remote_dest)) => {
                 let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
                 let remote_b32 = remote_dest.base32_address();
@@ -637,6 +651,7 @@ impl InterfaceFactory for I2pFactory {
             peers,
             storage_dir,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            underlay_mark: None,
             runtime: Arc::new(Mutex::new(I2pRuntime {
                 reconnect_wait: RECONNECT_WAIT,
             })),
@@ -653,6 +668,7 @@ impl InterfaceFactory for I2pFactory {
             .downcast::<I2pConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         cfg.ingress_control = ctx.ingress_control;
+        cfg.underlay_mark = ctx.underlay_mark;
         let parent_id = cfg.interface_id;
         start_with_template(
             cfg,

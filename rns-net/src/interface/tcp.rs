@@ -186,7 +186,7 @@ fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
 }
 
 /// Try to connect to the target host:port with timeout.
-fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
+fn try_connect(config: &TcpClientConfig, underlay_mark: Option<u32>) -> io::Result<TcpStream> {
     let runtime = lock_or_recover(&config.runtime, "tcp client runtime").clone();
     let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
@@ -195,8 +195,13 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses resolved"))?;
 
     #[cfg(target_os = "linux")]
-    let stream = if let Some(ref device) = config.device {
-        connect_with_device(&addr, device, runtime.connect_timeout)?
+    let stream = if config.device.is_some() || underlay_mark.is_some() {
+        super::connect_tcp_with_options(
+            &addr,
+            config.device.as_deref(),
+            underlay_mark,
+            runtime.connect_timeout,
+        )?
     } else {
         TcpStream::connect_timeout(&addr, runtime.connect_timeout)?
     };
@@ -206,139 +211,18 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
     Ok(stream)
 }
 
-/// Create a TCP socket, bind it to a network device, then connect with timeout.
-#[cfg(target_os = "linux")]
-fn connect_with_device(
-    addr: &std::net::SocketAddr,
-    device: &str,
-    timeout: Duration,
-) -> io::Result<TcpStream> {
-    use std::os::unix::io::{FromRawFd, RawFd};
-
-    let domain = if addr.is_ipv4() {
-        libc::AF_INET
-    } else {
-        libc::AF_INET6
-    };
-    let fd: RawFd = unsafe { libc::socket(domain, libc::SOCK_STREAM, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // Ensure the fd is closed on error paths
-    let stream = unsafe { TcpStream::from_raw_fd(fd) };
-
-    super::bind_to_device(stream.as_raw_fd(), device)?;
-
-    // Set non-blocking for connect-with-timeout
-    stream.set_nonblocking(true)?;
-
-    let (sockaddr, socklen) = socket_addr_to_raw(addr);
-    let ret = unsafe {
-        libc::connect(
-            stream.as_raw_fd(),
-            &sockaddr as *const libc::sockaddr_storage as *const libc::sockaddr,
-            socklen,
-        )
-    };
-
-    if ret != 0 {
-        let err = io::Error::last_os_error();
-        if err.raw_os_error() != Some(libc::EINPROGRESS) {
-            return Err(err);
-        }
-    }
-
-    // Poll for connect completion
-    let mut pollfd = libc::pollfd {
-        fd: stream.as_raw_fd(),
-        events: libc::POLLOUT,
-        revents: 0,
-    };
-    let timeout_ms = timeout.as_millis() as libc::c_int;
-    let poll_ret = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-
-    if poll_ret == 0 {
-        return Err(io::Error::new(io::ErrorKind::TimedOut, "connect timed out"));
-    }
-    if poll_ret < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // Check SO_ERROR
-    let mut err_val: libc::c_int = 0;
-    let mut err_len: libc::socklen_t = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-    let ret = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_ERROR,
-            &mut err_val as *mut _ as *mut libc::c_void,
-            &mut err_len,
-        )
-    };
-    if ret != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if err_val != 0 {
-        return Err(io::Error::from_raw_os_error(err_val));
-    }
-
-    // Set back to blocking
-    stream.set_nonblocking(false)?;
-
-    Ok(stream)
-}
-
-/// Convert a `SocketAddr` to a raw `sockaddr_storage` for `libc::connect`.
-#[cfg(target_os = "linux")]
-fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    match addr {
-        std::net::SocketAddr::V4(v4) => {
-            let sin: &mut libc::sockaddr_in = unsafe {
-                &mut *(&mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in)
-            };
-            sin.sin_family = libc::AF_INET as libc::sa_family_t;
-            sin.sin_port = v4.port().to_be();
-            sin.sin_addr = libc::in_addr {
-                s_addr: u32::from_ne_bytes(v4.ip().octets()),
-            };
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-            )
-        }
-        std::net::SocketAddr::V6(v6) => {
-            let sin6: &mut libc::sockaddr_in6 = unsafe {
-                &mut *(&mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in6)
-            };
-            sin6.sin6_family = libc::AF_INET6 as libc::sa_family_t;
-            sin6.sin6_port = v6.port().to_be();
-            sin6.sin6_addr = libc::in6_addr {
-                s6_addr: v6.ip().octets(),
-            };
-            sin6.sin6_flowinfo = v6.flowinfo();
-            sin6.sin6_scope_id = v6.scope_id();
-            (
-                storage,
-                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-            )
-        }
-    }
-}
-
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_with_ifac(config, tx, 0)
+    start_with_ifac(config, tx, 0, None)
 }
 
 fn start_with_ifac(
     config: TcpClientConfig,
     tx: EventSender,
     ifac_size: usize,
+    underlay_mark: Option<u32>,
 ) -> io::Result<Box<dyn Writer>> {
-    let stream = try_connect(&config)?;
+    let stream = try_connect(&config, underlay_mark)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 
@@ -352,7 +236,13 @@ fn start_with_ifac(
     thread::Builder::new()
         .name(format!("tcp-reader-{}", id.0))
         .spawn(move || {
-            reader_loop(reader_stream, reader_config, reader_tx, ifac_size);
+            reader_loop(
+                reader_stream,
+                reader_config,
+                reader_tx,
+                ifac_size,
+                underlay_mark,
+            );
         })?;
 
     Ok(Box::new(TcpWriter {
@@ -362,7 +252,13 @@ fn start_with_ifac(
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
 /// On disconnect, attempts reconnection.
-fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender, ifac_size: usize) {
+fn reader_loop(
+    mut stream: TcpStream,
+    config: TcpClientConfig,
+    tx: EventSender,
+    ifac_size: usize,
+    underlay_mark: Option<u32>,
+) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
     let mut buf = [0u8; 4096];
@@ -373,7 +269,7 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender, 
                 // Connection closed by peer
                 log::warn!("[{}] connection closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx) {
+                match reconnect(&config, &tx, underlay_mark) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -412,7 +308,7 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender, 
             Err(e) => {
                 log::warn!("[{}] read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match reconnect(&config, &tx) {
+                match reconnect(&config, &tx, underlay_mark) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -430,7 +326,11 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender, 
 
 /// Attempt to reconnect with retry logic. Returns the new reader stream on success.
 /// Sends the new writer to the driver via InterfaceUp event.
-fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
+fn reconnect(
+    config: &TcpClientConfig,
+    tx: &EventSender,
+    underlay_mark: Option<u32>,
+) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
         let runtime = lock_or_recover(&config.runtime, "tcp client runtime").clone();
@@ -446,7 +346,7 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
 
         log::info!("[{}] reconnect attempt {} ...", config.name, attempts);
 
-        match try_connect(config) {
+        match try_connect(config, underlay_mark) {
             Ok(new_stream) => {
                 // Clone the stream: one for the reader, one for the writer
                 let writer_stream = match new_stream.try_clone() {
@@ -555,7 +455,7 @@ impl InterfaceFactory for TcpClientFactory {
         };
 
         let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
-        let writer = start_with_ifac(tcp_config, ctx.tx, ifac_size)?;
+        let writer = start_with_ifac(tcp_config, ctx.tx, ifac_size, ctx.underlay_mark)?;
 
         Ok(StartResult::Simple {
             id,
@@ -666,7 +566,7 @@ mod tests {
         let ifac_size = 8;
 
         let config = make_config(port);
-        let _writer = start_with_ifac(config, tx, ifac_size).unwrap();
+        let _writer = start_with_ifac(config, tx, ifac_size, None).unwrap();
         let (mut server_stream, _) = listener.accept().unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -833,7 +733,7 @@ mod tests {
         let port = find_free_port();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
 
-        let stream = try_connect(&make_config(port)).unwrap();
+        let stream = try_connect(&make_config(port), None).unwrap();
         let _server = listener.accept().unwrap();
 
         // Verify TCP_NODELAY is set
@@ -874,7 +774,7 @@ mod tests {
         };
 
         let start_time = std::time::Instant::now();
-        let result = try_connect(&config);
+        let result = try_connect(&config, None);
         let elapsed = start_time.elapsed();
 
         assert!(result.is_err());

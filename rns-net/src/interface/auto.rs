@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddrV6, UdpSocket};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -587,6 +588,7 @@ struct AutoWorkerContext {
     shared: Arc<Mutex<SharedState>>,
     tx: EventSender,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 }
 
 /// Start an AutoInterface. Discovers local IPv6 link-local interfaces,
@@ -599,7 +601,7 @@ pub fn start(
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
 ) -> io::Result<()> {
-    start_with_template(config, tx, next_dynamic_id, None)
+    start_with_template(config, tx, next_dynamic_id, None, None)
 }
 
 fn start_with_template(
@@ -607,6 +609,7 @@ fn start_with_template(
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 ) -> io::Result<()> {
     let group_id = config.group_id.clone();
     let mcast_addr_str = derive_multicast_address(
@@ -646,6 +649,7 @@ fn start_with_template(
         shared: shared.clone(),
         tx: tx.clone(),
         dynamic_template,
+        underlay_mark,
     };
 
     {
@@ -747,15 +751,25 @@ fn start_auto_worker(
     key: &AutoWorkerKey,
     context: &AutoWorkerContext,
 ) -> io::Result<RunningAutoWorker> {
-    let mcast_socket =
-        create_multicast_recv_socket(&context.mcast_ip, context.discovery_port, key.if_index)?;
+    let underlay_mark = context.underlay_mark;
+    let mcast_socket = create_multicast_recv_socket(
+        &context.mcast_ip,
+        context.discovery_port,
+        key.if_index,
+        context.underlay_mark,
+    )?;
     let unicast_socket = create_unicast_recv_socket(
         &key.link_local_addr,
         context.unicast_discovery_port,
         key.if_index,
+        context.underlay_mark,
     )?;
-    let data_socket =
-        create_data_recv_socket(&key.link_local_addr, context.data_port, key.if_index)?;
+    let data_socket = create_data_recv_socket(
+        &key.link_local_addr,
+        context.data_port,
+        key.if_index,
+        context.underlay_mark,
+    )?;
 
     let worker_running = Arc::new(AtomicBool::new(true));
 
@@ -780,6 +794,7 @@ fn start_auto_worker(
                     runtime,
                     running,
                     name,
+                    underlay_mark,
                 });
             })?;
     }
@@ -814,6 +829,7 @@ fn start_auto_worker(
                     ingress_control,
                     runtime,
                     dynamic_template,
+                    underlay_mark,
                 });
             })?;
     }
@@ -848,6 +864,7 @@ fn start_auto_worker(
                     ingress_control,
                     runtime,
                     dynamic_template,
+                    underlay_mark,
                 });
             })?;
     }
@@ -884,12 +901,14 @@ fn create_multicast_recv_socket(
     mcast_ip: &Ipv6Addr,
     port: u16,
     if_index: u32,
+    underlay_mark: Option<u32>,
 ) -> io::Result<UdpSocket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV6,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
+    super::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -908,7 +927,12 @@ fn create_multicast_recv_socket(
     Ok(std_socket)
 }
 
-fn create_unicast_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Result<UdpSocket> {
+fn create_unicast_recv_socket(
+    link_local: &str,
+    port: u16,
+    if_index: u32,
+    underlay_mark: Option<u32>,
+) -> io::Result<UdpSocket> {
     let ip: Ipv6Addr = link_local
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e)))?;
@@ -918,6 +942,7 @@ fn create_unicast_recv_socket(link_local: &str, port: u16, if_index: u32) -> io:
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
+    super::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -932,7 +957,12 @@ fn create_unicast_recv_socket(link_local: &str, port: u16, if_index: u32) -> io:
     Ok(std_socket)
 }
 
-fn create_data_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Result<UdpSocket> {
+fn create_data_recv_socket(
+    link_local: &str,
+    port: u16,
+    if_index: u32,
+    underlay_mark: Option<u32>,
+) -> io::Result<UdpSocket> {
     let ip: Ipv6Addr = link_local
         .parse()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e)))?;
@@ -942,6 +972,7 @@ fn create_data_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Re
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
+    super::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -968,6 +999,7 @@ struct DiscoverySenderContext {
     runtime: Arc<Mutex<AutoRuntime>>,
     running: Arc<AtomicBool>,
     name: String,
+    underlay_mark: Option<u32>,
 }
 
 fn discovery_sender_loop(context: DiscoverySenderContext) {
@@ -980,12 +1012,17 @@ fn discovery_sender_loop(context: DiscoverySenderContext) {
         runtime,
         running,
         name,
+        underlay_mark,
     } = context;
     let token = compute_discovery_token(&group_id, &link_local_addr);
 
     while running.load(Ordering::Relaxed) {
         // Create a fresh socket for each send (matches Python)
         if let Ok(socket) = UdpSocket::bind("[::]:0") {
+            if let Err(error) = super::apply_underlay_mark(socket.as_raw_fd(), underlay_mark) {
+                log::error!("[{}] failed to mark discovery socket: {}", name, error);
+                return;
+            }
             // Set multicast interface
             let if_bytes = if_index.to_ne_bytes();
             unsafe {
@@ -1028,6 +1065,7 @@ struct DiscoveryReceiverContext {
     ingress_control: rns_core::transport::types::IngressControlConfig,
     runtime: Arc<Mutex<AutoRuntime>>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 }
 
 fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
@@ -1045,6 +1083,7 @@ fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
         ingress_control,
         runtime,
         dynamic_template,
+        underlay_mark,
     } = context;
     let mut buf = [0u8; 1024];
 
@@ -1107,6 +1146,7 @@ fn discovery_receiver_loop(context: DiscoveryReceiverContext) {
                     ingress_control,
                     runtime: &runtime,
                     dynamic_template: dynamic_template.as_ref(),
+                    underlay_mark,
                 });
             }
             Err(ref e)
@@ -1138,6 +1178,7 @@ struct AddPeerContext<'a> {
     ingress_control: rns_core::transport::types::IngressControlConfig,
     runtime: &'a Arc<Mutex<AutoRuntime>>,
     dynamic_template: Option<&'a super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 }
 
 fn add_peer(context: AddPeerContext<'_>) {
@@ -1152,6 +1193,7 @@ fn add_peer(context: AddPeerContext<'_>) {
         ingress_control,
         runtime: _runtime,
         dynamic_template,
+        underlay_mark,
     } = context;
     // Create UDP writer to send data to this peer
     let send_socket = match UdpSocket::bind("[::]:0") {
@@ -1166,6 +1208,10 @@ fn add_peer(context: AddPeerContext<'_>) {
             return;
         }
     };
+    if let Err(error) = super::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark) {
+        log::error!("[{}] failed to mark peer socket: {}", name, error);
+        return;
+    }
 
     let target = match peer_target_addr(peer_key, data_port) {
         Ok(target) => target,
@@ -1526,6 +1572,7 @@ impl InterfaceFactory for AutoFactory {
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
             }),
+            ctx.underlay_mark,
         )?;
         Ok(StartResult::Listener { control: None })
     }

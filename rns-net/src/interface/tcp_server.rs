@@ -6,6 +6,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -92,7 +93,7 @@ pub fn start(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
 ) -> io::Result<ListenerControl> {
-    start_with_template(config, tx, next_id, None)
+    start_with_template(config, tx, next_id, None, None)
 }
 
 fn start_with_template(
@@ -100,9 +101,11 @@ fn start_with_template(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 ) -> io::Result<ListenerControl> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
+    super::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
     log::info!("[{}] TCP server listening on {}", config.name, addr);
@@ -132,6 +135,7 @@ fn start_with_template(
                 control: listener_control,
                 dynamic_template,
                 ifac_size,
+                underlay_mark,
             });
         })?;
 
@@ -150,6 +154,7 @@ struct ListenerLoopContext {
     control: ListenerControl,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     ifac_size: usize,
+    underlay_mark: Option<u32>,
 }
 
 fn listener_loop(context: ListenerLoopContext) {
@@ -164,6 +169,7 @@ fn listener_loop(context: ListenerLoopContext) {
         control,
         dynamic_template,
         ifac_size,
+        underlay_mark,
     } = context;
     loop {
         if control.should_stop() {
@@ -183,6 +189,16 @@ fn listener_loop(context: ListenerLoopContext) {
                 continue;
             }
         };
+
+        if let Err(error) = super::apply_underlay_mark(stream.as_raw_fd(), underlay_mark) {
+            log::error!(
+                "[{}] failed to mark accepted underlay socket: {}",
+                name,
+                error
+            );
+            drop(stream);
+            continue;
+        }
 
         let max_connections = lock_or_recover(&runtime, "tcp server runtime").max_connections;
         if let Some(max) = max_connections {
@@ -417,6 +433,7 @@ impl InterfaceFactory for TcpServerFactory {
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
             }),
+            ctx.underlay_mark,
         )?;
         Ok(StartResult::Listener {
             control: Some(control),
@@ -537,6 +554,7 @@ mod tests {
             tx,
             Arc::new(AtomicU64::new(1200)),
             Some(template),
+            None,
         )
         .unwrap();
         thread::sleep(Duration::from_millis(50));

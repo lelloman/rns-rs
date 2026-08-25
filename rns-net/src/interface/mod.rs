@@ -69,6 +69,80 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
     Ok(())
 }
 
+/// Apply a Linux firewall mark to an IP underlay socket.
+///
+/// The mark must be set before `connect()` so policy routing can keep Reticulum
+/// underlay traffic outside application-level full tunnels. Configuring a mark
+/// is fail-closed: callers must not silently create an unmarked socket when the
+/// operation is not permitted.
+#[cfg(target_os = "linux")]
+pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
+    let Some(mark) = mark else {
+        return Ok(());
+    };
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            &mark as *const _ as *const libc::c_void,
+            std::mem::size_of::<u32>() as libc::socklen_t,
+        )
+    };
+    if ret != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn apply_underlay_mark(_fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
+    if mark.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "underlay socket marks are only supported on Linux",
+        ));
+    }
+    Ok(())
+}
+
+/// Connect a TCP socket after applying underlay routing options.
+#[cfg(target_os = "linux")]
+pub fn connect_tcp_with_options(
+    addr: &std::net::SocketAddr,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+    timeout: Duration,
+) -> io::Result<std::net::TcpStream> {
+    use std::os::unix::io::AsRawFd;
+
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(*addr),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    if let Some(device) = device {
+        bind_to_device(socket.as_raw_fd(), device)?;
+    }
+    socket.connect_timeout(&(*addr).into(), timeout)?;
+    Ok(socket.into())
+}
+
+/// Validate at node startup that the configured mark can actually be applied.
+pub fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
+    let Some(_) = mark else {
+        return Ok(());
+    };
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    use std::os::unix::io::AsRawFd;
+    apply_underlay_mark(socket.as_raw_fd(), mark)
+}
+
 /// Writable end of an interface. Held by the driver.
 ///
 /// Each implementation wraps a socket + framing.
@@ -478,6 +552,8 @@ pub struct StartContext {
     pub announces_to_internal: Option<bool>,
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     pub ifac: Option<IfacState>,
+    /// Linux `SO_MARK` value applied to IP underlay sockets before connect.
+    pub underlay_mark: Option<u32>,
 }
 
 /// Opaque interface config data. Each factory downcasts to its concrete type.

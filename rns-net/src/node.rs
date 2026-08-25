@@ -534,6 +534,8 @@ pub struct NodeConfig {
     pub direct_connect_policy: crate::event::HolePunchPolicy,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
+    /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
+    pub underlay_mark: Option<u32>,
     /// Hook configurations loaded from the config file.
     pub hooks: Vec<config::ParsedHook>,
     /// Enable interface discovery.
@@ -645,6 +647,7 @@ impl Default for NodeConfig {
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
             direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
             device: None,
+            underlay_mark: None,
             hooks: Vec::new(),
             discover_interfaces: false,
             autoconnect_interface_mode: None,
@@ -1018,6 +1021,7 @@ impl RnsNode {
             probe_protocol,
             direct_connect_policy: rns_config.reticulum.direct_connect_policy,
             device: rns_config.reticulum.device.clone(),
+            underlay_mark: rns_config.reticulum.underlay_mark,
             hooks: rns_config.hooks.clone(),
             discover_interfaces: rns_config.reticulum.discover_interfaces,
             autoconnect_interface_mode: rns_config
@@ -1156,6 +1160,7 @@ impl RnsNode {
 
     /// Start the node. Connects all interfaces, starts driver and timer threads.
     pub fn start(config: NodeConfig, callbacks: Box<dyn Callbacks>) -> io::Result<Self> {
+        crate::interface::validate_underlay_mark(config.underlay_mark)?;
         let inbound_queue_capacities = crate::event::InboundQueueCapacities::from_shared_capacity(
             config.driver_event_queue_capacity,
         );
@@ -1230,6 +1235,7 @@ impl RnsNode {
         );
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver.underlay_mark = config.underlay_mark;
         driver
             .link_manager
             .set_link_mtu_discovery(queue_config.link_mtu_discovery);
@@ -1276,7 +1282,10 @@ impl RnsNode {
         }
 
         // Configure probe addresses and device for hole punching
-        if !config.probe_addrs.is_empty() || config.device.is_some() {
+        if !config.probe_addrs.is_empty()
+            || config.device.is_some()
+            || config.underlay_mark.is_some()
+        {
             driver.set_probe_config(
                 config.probe_addrs.clone(),
                 config.probe_protocol,
@@ -1287,7 +1296,10 @@ impl RnsNode {
         // Start probe server if configured
         let probe_server = if let Some(port) = config.probe_port {
             let listen_addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
-            match crate::holepunch::probe::start_probe_server(listen_addr) {
+            match crate::holepunch::probe::start_probe_server_with_mark(
+                listen_addr,
+                config.underlay_mark,
+            ) {
                 Ok(handle) => {
                     log::info!("Probe server started on 0.0.0.0:{}", port);
                     Some(handle)
@@ -1590,6 +1602,7 @@ impl RnsNode {
                 announces_to_internal: iface_config.announces_to_internal,
                 ingress_control: iface_config.ingress_control,
                 ifac: ifac_state.clone(),
+                underlay_mark: config.underlay_mark,
             };
 
             let result = match factory.start(iface_config.config_data, ctx) {
@@ -3585,6 +3598,7 @@ mod tests {
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -3906,6 +3920,7 @@ share_instance = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -3975,6 +3990,7 @@ share_instance = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -4752,6 +4768,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -4830,6 +4847,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -4904,6 +4922,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -4975,6 +4994,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -5086,6 +5106,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -5165,6 +5186,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -5242,6 +5264,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -5332,6 +5355,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,
@@ -5412,6 +5436,7 @@ enable_transport = False
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 direct_connect_policy: Default::default(),
                 device: None,
+                underlay_mark: None,
                 hooks: Vec::new(),
                 discover_interfaces: false,
                 autoconnect_interface_mode: None,

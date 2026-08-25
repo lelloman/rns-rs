@@ -78,6 +78,7 @@ fn main() {
         id_interval: None,
         id_callsign: None,
         pre_opened_fd: None,
+        underlay_mark: None,
         runtime: std::sync::Arc::new(std::sync::Mutex::new(
             rns_net::interface::rnode::RNodeRuntime {
                 sub: RNodeSubConfig {
@@ -134,6 +135,7 @@ fn main() {
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
             direct_connect_policy: Default::default(),
             device: None,
+            underlay_mark: None,
             hooks: Vec::new(),
             discover_interfaces: false,
             autoconnect_interface_mode: None,

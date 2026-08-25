@@ -87,6 +87,7 @@ fn main() {
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
             direct_connect_policy: Default::default(),
             device: None,
+            underlay_mark: None,
             hooks: Vec::new(),
             discover_interfaces: false,
             autoconnect_interface_mode: None,
