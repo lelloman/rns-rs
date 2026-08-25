@@ -1,11 +1,13 @@
 //! Lightweight live profiling compatible with Reticulum's profiler results.
 //!
-//! Create a guard with [`profile`] or [`profile_with_parent`]. Dropping the
-//! guard records the elapsed wall-clock duration under its tag. Results are
-//! process-global so the daemon can expose bounded, live statistics over local
-//! and remote status APIs while it runs indefinitely.
+//! Create a guard with [`profile`] or [`profile_with_parent`]. A capture is
+//! registered immediately and completed when the guard is dropped, which makes
+//! nested and reentrant calls independently visible without reporting partial
+//! durations. Results are process-global and bounded per tag so the daemon can
+//! expose them indefinitely over local and remote status APIs.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
 use std::time::Instant;
@@ -14,36 +16,46 @@ use rns_core::msgpack::Value;
 
 use crate::pickle::PickleValue;
 
-/// Default maximum retained samples for each tag and thread.
+/// Default maximum retained samples for each tag across all threads.
 pub const MAX_CAPTURES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy)]
 struct Capture {
+    id: u64,
     started: f64,
-    duration: f64,
+    ended: Option<f64>,
+    thread_id: ThreadId,
 }
 
-#[derive(Debug, Default)]
+impl Capture {
+    fn duration(self) -> Option<f64> {
+        self.ended.map(|ended| ended - self.started)
+    }
+}
+
+#[derive(Debug)]
 struct TagCaptures {
     parent: Option<String>,
-    threads: HashMap<ThreadId, VecDeque<Capture>>,
+    max_captures: usize,
+    captures: VecDeque<Capture>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfilingStats {
+    pub count: usize,
     pub mean: f64,
     pub median: f64,
     pub min: f64,
     pub max: f64,
     pub stdev: Option<f64>,
+    pub sum: f64,
+    pub threads: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfilingResult {
     pub name: String,
     pub parent: Option<String>,
-    pub count: usize,
-    pub threads: usize,
     pub stats_all: ProfilingStats,
     pub stats_1m: Option<ProfilingStats>,
     pub stats_5m: Option<ProfilingStats>,
@@ -52,6 +64,7 @@ pub struct ProfilingResult {
 }
 
 static EPOCH: OnceLock<Instant> = OnceLock::new();
+static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 static CAPTURES: OnceLock<Mutex<BTreeMap<String, TagCaptures>>> = OnceLock::new();
 
 fn elapsed_now() -> f64 {
@@ -62,37 +75,82 @@ fn captures() -> &'static Mutex<BTreeMap<String, TagCaptures>> {
     CAPTURES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-/// A timing sample that is recorded when the guard is dropped.
+/// A timing sample that is completed when the guard is dropped.
 #[must_use = "the guard must be retained for the duration being profiled"]
 pub struct ProfileGuard {
     tag: String,
-    parent: Option<String>,
-    started_at: f64,
-    started: Instant,
-    max_captures: usize,
+    capture_id: Option<u64>,
 }
 
 impl Drop for ProfileGuard {
     fn drop(&mut self) {
-        record_duration(
-            &self.tag,
-            self.parent.as_deref(),
-            self.started_at,
-            self.started.elapsed().as_secs_f64(),
-            self.max_captures,
-            std::thread::current().id(),
-        );
+        if let Some(capture_id) = self.capture_id {
+            complete_capture(&self.tag, capture_id, elapsed_now());
+        }
+    }
+}
+
+fn begin_capture(
+    tag: &str,
+    parent: Option<&str>,
+    max_captures: usize,
+    started: f64,
+    thread_id: ThreadId,
+) -> Option<u64> {
+    if max_captures == 0 {
+        return None;
+    }
+    let capture_id = NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut registry = captures()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = registry
+        .entry(tag.to_owned())
+        .or_insert_with(|| TagCaptures {
+            parent: parent.map(str::to_owned),
+            max_captures,
+            captures: VecDeque::with_capacity(max_captures.min(1024)),
+        });
+    if entry.parent.is_none() {
+        entry.parent = parent.map(str::to_owned);
+    }
+    while entry.captures.len() >= entry.max_captures {
+        entry.captures.pop_front();
+    }
+    entry.captures.push_back(Capture {
+        id: capture_id,
+        started,
+        ended: None,
+        thread_id,
+    });
+    Some(capture_id)
+}
+
+fn complete_capture(tag: &str, capture_id: u64, ended: f64) {
+    let mut registry = captures()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(entry) = registry.get_mut(tag) else {
+        return;
+    };
+    if let Some(capture) = entry
+        .captures
+        .iter_mut()
+        .find(|capture| capture.id == capture_id)
+    {
+        capture.ended = Some(ended);
     }
 }
 
 fn start_profile(tag: String, parent: Option<String>, max_captures: usize) -> ProfileGuard {
-    ProfileGuard {
-        tag,
-        parent,
-        started_at: elapsed_now(),
-        started: Instant::now(),
+    let capture_id = begin_capture(
+        &tag,
+        parent.as_deref(),
         max_captures,
-    }
+        elapsed_now(),
+        std::thread::current().id(),
+    );
+    ProfileGuard { tag, capture_id }
 }
 
 /// Start profiling a top-level tag with the default retention limit.
@@ -100,7 +158,7 @@ pub fn profile(tag: impl Into<String>) -> ProfileGuard {
     start_profile(tag.into(), None, MAX_CAPTURES)
 }
 
-/// Start profiling a top-level tag with a custom per-thread retention limit.
+/// Start profiling a top-level tag with a custom per-tag retention limit.
 pub fn profile_with_limit(tag: impl Into<String>, max_captures: usize) -> ProfileGuard {
     start_profile(tag.into(), None, max_captures)
 }
@@ -110,7 +168,7 @@ pub fn profile_with_parent(tag: impl Into<String>, parent: impl Into<String>) ->
     start_profile(tag.into(), Some(parent.into()), MAX_CAPTURES)
 }
 
-/// Start nested profiling with a custom per-thread retention limit.
+/// Start nested profiling with a custom per-tag retention limit.
 pub fn profile_with_parent_and_limit(
     tag: impl Into<String>,
     parent: impl Into<String>,
@@ -141,49 +199,32 @@ pub fn profile_function_with_limit<T>(
     function()
 }
 
-fn record_duration(
-    tag: &str,
-    parent: Option<&str>,
-    started: f64,
-    duration: f64,
-    max_captures: usize,
-    thread_id: ThreadId,
-) {
-    let mut registry = captures()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let entry = registry.entry(tag.to_owned()).or_default();
-    if entry.parent.is_none() {
-        entry.parent = parent.map(str::to_owned);
-    }
-    let thread = entry.threads.entry(thread_id).or_default();
-    if max_captures == 0 {
-        thread.clear();
-        return;
-    }
-    while thread.len() >= max_captures {
-        thread.pop_front();
-    }
-    thread.push_back(Capture { started, duration });
-}
-
 /// Return whether at least one timing sample has completed.
 pub fn ran() -> bool {
     captures()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .values()
-        .any(|entry| entry.threads.values().any(|thread| !thread.is_empty()))
+        .any(|entry| entry.captures.iter().any(|capture| capture.ended.is_some()))
 }
 
-fn calculate_stats(captures: &[Capture]) -> Option<ProfilingStats> {
-    if captures.is_empty() {
+fn calculate_stats(captures: &[Capture], include_threads: bool) -> Option<ProfilingStats> {
+    let completed: Vec<(f64, ThreadId)> = captures
+        .iter()
+        .filter_map(|capture| {
+            capture
+                .duration()
+                .map(|duration| (duration, capture.thread_id))
+        })
+        .collect();
+    if completed.is_empty() {
         return None;
     }
-    let mut durations: Vec<f64> = captures.iter().map(|capture| capture.duration).collect();
+    let mut durations: Vec<f64> = completed.iter().map(|(duration, _)| *duration).collect();
     durations.sort_by(f64::total_cmp);
     let count = durations.len();
-    let mean = durations.iter().sum::<f64>() / count as f64;
+    let sum = durations.iter().sum::<f64>();
+    let mean = sum / count as f64;
     let median = if count.is_multiple_of(2) {
         (durations[count / 2 - 1] + durations[count / 2]) / 2.0
     } else {
@@ -197,27 +238,43 @@ fn calculate_stats(captures: &[Capture]) -> Option<ProfilingStats> {
             / (count - 1) as f64;
         variance.sqrt()
     });
+    let threads = include_threads.then(|| {
+        completed
+            .iter()
+            .map(|(_, thread_id)| *thread_id)
+            .collect::<HashSet<_>>()
+            .len()
+    });
     Some(ProfilingStats {
+        count,
         mean,
         median,
         min: durations[0],
         max: durations[count - 1],
         stdev,
+        sum,
+        threads,
     })
 }
 
-fn recent_stats(captures: &[Capture], now: f64, age: f64) -> Option<ProfilingStats> {
-    let recent: Vec<Capture> = captures
+fn window_stats(
+    captures: &[Capture],
+    now: f64,
+    youngest_age: f64,
+    oldest_age: f64,
+) -> Option<ProfilingStats> {
+    let window: Vec<Capture> = captures
         .iter()
         .copied()
-        .filter(|capture| capture.started >= now - age)
+        .filter(|capture| {
+            let age = now - capture.started;
+            age >= youngest_age && age < oldest_age
+        })
         .collect();
-    (recent.len() > 1)
-        .then(|| calculate_stats(&recent))
-        .flatten()
+    calculate_stats(&window, false)
 }
 
-/// Return a stable, tag-sorted snapshot of all retained samples.
+/// Return a stable, tag-sorted snapshot of all retained completed samples.
 pub fn results() -> BTreeMap<String, ProfilingResult> {
     let now = elapsed_now();
     captures()
@@ -225,29 +282,19 @@ pub fn results() -> BTreeMap<String, ProfilingResult> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .iter()
         .filter_map(|(tag, entry)| {
-            let mut tag_captures: Vec<Capture> = entry
-                .threads
-                .values()
-                .flat_map(|thread| thread.iter().copied())
-                .collect();
+            let mut tag_captures: Vec<Capture> = entry.captures.iter().copied().collect();
             tag_captures.sort_by(|left, right| left.started.total_cmp(&right.started));
-            let stats_all = calculate_stats(&tag_captures)?;
+            let stats_all = calculate_stats(&tag_captures, true)?;
             Some((
                 tag.clone(),
                 ProfilingResult {
                     name: tag.clone(),
                     parent: entry.parent.clone(),
-                    count: tag_captures.len(),
-                    threads: entry
-                        .threads
-                        .values()
-                        .filter(|thread| !thread.is_empty())
-                        .count(),
                     stats_all,
-                    stats_1m: recent_stats(&tag_captures, now, 60.0),
-                    stats_5m: recent_stats(&tag_captures, now, 5.0 * 60.0),
-                    stats_30m: recent_stats(&tag_captures, now, 30.0 * 60.0),
-                    stats_60m: recent_stats(&tag_captures, now, 60.0 * 60.0),
+                    stats_1m: window_stats(&tag_captures, now, 0.0, 60.0),
+                    stats_5m: window_stats(&tag_captures, now, 60.0, 5.0 * 60.0),
+                    stats_30m: window_stats(&tag_captures, now, 5.0 * 60.0, 30.0 * 60.0),
+                    stats_60m: window_stats(&tag_captures, now, 30.0 * 60.0, 60.0 * 60.0),
                 },
             ))
         })
@@ -263,6 +310,7 @@ fn stats_to_pickle(stats: Option<&ProfilingStats>) -> PickleValue {
         return PickleValue::None;
     };
     PickleValue::Dict(vec![
+        (pickle_key("count"), PickleValue::Int(stats.count as i64)),
         (pickle_key("mean"), PickleValue::Float(stats.mean)),
         (pickle_key("median"), PickleValue::Float(stats.median)),
         (pickle_key("min"), PickleValue::Float(stats.min)),
@@ -270,6 +318,13 @@ fn stats_to_pickle(stats: Option<&ProfilingStats>) -> PickleValue {
         (
             pickle_key("stdev"),
             stats.stdev.map_or(PickleValue::None, PickleValue::Float),
+        ),
+        (pickle_key("sum"), PickleValue::Float(stats.sum)),
+        (
+            pickle_key("threads"),
+            stats.threads.map_or(PickleValue::None, |threads| {
+                PickleValue::Int(threads as i64)
+            }),
         ),
     ])
 }
@@ -282,11 +337,6 @@ fn result_to_pickle(result: &ProfilingResult) -> PickleValue {
             result.parent.as_ref().map_or(PickleValue::None, |parent| {
                 PickleValue::String(parent.clone())
             }),
-        ),
-        (pickle_key("count"), PickleValue::Int(result.count as i64)),
-        (
-            pickle_key("threads"),
-            PickleValue::Int(result.threads as i64),
         ),
         (
             pickle_key("stats_all"),
@@ -329,6 +379,7 @@ fn stats_to_msgpack(stats: Option<&ProfilingStats>) -> Value {
         return Value::Nil;
     };
     Value::Map(vec![
+        (Value::Str("count".into()), Value::UInt(stats.count as u64)),
         (Value::Str("mean".into()), Value::Float(stats.mean)),
         (Value::Str("median".into()), Value::Float(stats.median)),
         (Value::Str("min".into()), Value::Float(stats.min)),
@@ -336,6 +387,13 @@ fn stats_to_msgpack(stats: Option<&ProfilingStats>) -> Value {
         (
             Value::Str("stdev".into()),
             stats.stdev.map_or(Value::Nil, Value::Float),
+        ),
+        (Value::Str("sum".into()), Value::Float(stats.sum)),
+        (
+            Value::Str("threads".into()),
+            stats
+                .threads
+                .map_or(Value::Nil, |threads| Value::UInt(threads as u64)),
         ),
     ])
 }
@@ -349,11 +407,6 @@ fn result_to_msgpack(result: &ProfilingResult) -> Value {
                 .parent
                 .as_ref()
                 .map_or(Value::Nil, |parent| Value::Str(parent.clone())),
-        ),
-        (Value::Str("count".into()), Value::UInt(result.count as u64)),
-        (
-            Value::Str("threads".into()),
-            Value::UInt(result.threads as u64),
         ),
         (
             Value::Str("stats_all".into()),
@@ -398,60 +451,27 @@ mod tests {
     use super::*;
 
     fn record(tag: &str, started: f64, duration: f64, limit: usize) {
-        record_duration(
-            tag,
-            None,
-            started,
-            duration,
-            limit,
-            std::thread::current().id(),
-        );
+        let id = begin_capture(tag, None, limit, started, std::thread::current().id()).unwrap();
+        complete_capture(tag, id, started + duration);
     }
 
     #[test]
-    fn bounded_timestamped_captures_support_live_windows() {
-        let now = elapsed_now();
-        record("entry111.bounded", now - 70.0, 0.001, 3);
-        record("entry111.bounded", now - 50.0, 0.003, 3);
-        record("entry111.bounded", now - 10.0, 0.005, 3);
-        record("entry111.bounded", now, 0.007, 3);
-
-        let result = &results()["entry111.bounded"];
-        assert_eq!(result.count, 3);
-        assert_eq!(result.threads, 1);
-        assert_eq!(result.stats_all.min, 0.003);
-        assert_eq!(result.stats_all.max, 0.007);
-        assert_eq!(result.stats_1m.as_ref().unwrap().mean, 0.005);
-        assert_eq!(result.stats_5m.as_ref().unwrap().mean, 0.005);
-        assert!(result.stats_30m.is_some());
-        assert!(result.stats_60m.is_some());
-
-        let pickle = results_pickle().unwrap();
-        let entry = pickle.get("entry111.bounded").unwrap();
-        assert_eq!(entry.get("threads").and_then(PickleValue::as_int), Some(1));
-        assert_eq!(
-            entry
-                .get("stats_all")
-                .and_then(|stats| stats.get("max"))
-                .and_then(PickleValue::as_float),
-            Some(0.007)
-        );
-    }
-
-    #[test]
-    fn retention_limit_applies_independently_per_thread() {
+    fn retention_limit_is_shared_across_threads() {
+        let tag = "entry113.shared-limit";
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
         let handles: Vec<_> = (0..2)
             .map(|thread_index| {
+                let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     for sample in 0..3 {
-                        record_duration(
-                            "entry111.threads",
-                            None,
+                        barrier.wait();
+                        record(
+                            tag,
                             elapsed_now(),
-                            (thread_index * 10 + sample) as f64,
-                            2,
-                            std::thread::current().id(),
+                            (thread_index * 10 + sample + 1) as f64,
+                            3,
                         );
+                        barrier.wait();
                     }
                 })
             })
@@ -460,43 +480,61 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let result = &results()["entry111.threads"];
-        assert_eq!(result.count, 4);
-        assert_eq!(result.threads, 2);
-        assert_eq!(result.stats_all.min, 1.0);
-        assert_eq!(result.stats_all.max, 12.0);
+        let result = &results()[tag];
+        assert_eq!(result.stats_all.count, 3);
+        assert_eq!(result.stats_all.threads, Some(2));
     }
 
     #[test]
-    fn guard_records_elapsed_time() {
-        {
-            let _sample = profile("entry111.guard");
-        }
-        assert!(results()["entry111.guard"].stats_all.mean >= 0.0);
+    fn reentrant_guards_complete_independent_captures() {
+        let outer = profile("entry113.reentrant");
+        let inner = profile("entry113.reentrant");
+        drop(inner);
+        assert_eq!(results()["entry113.reentrant"].stats_all.count, 1);
+        drop(outer);
+        assert_eq!(results()["entry113.reentrant"].stats_all.count, 2);
     }
 
     #[test]
-    fn function_adapter_preserves_return_value_and_retention_policy() {
-        let value = profile_function("entry112.function", || 21 * 2);
-        assert_eq!(value, 42);
+    fn live_windows_are_non_overlapping() {
+        let tag = "entry113.windows";
+        let now = elapsed_now();
+        record(tag, now - 30.0, 0.001, 10);
+        record(tag, now - 120.0, 0.002, 10);
+        record(tag, now - 600.0, 0.003, 10);
+        record(tag, now - 2_400.0, 0.004, 10);
 
-        for value in 0..3 {
-            assert_eq!(
-                profile_function_with_limit("entry112.limited", 2, || value),
-                value
-            );
-        }
-        let results = results();
-        assert_eq!(results["entry112.function"].count, 1);
-        assert_eq!(results["entry112.limited"].count, 2);
+        let result = &results()[tag];
+        assert_eq!(result.stats_all.count, 4);
+        assert!((result.stats_all.sum - 0.010).abs() < 1e-9);
+        assert_eq!(result.stats_1m.as_ref().unwrap().count, 1);
+        assert!((result.stats_1m.as_ref().unwrap().sum - 0.001).abs() < 1e-9);
+        assert!((result.stats_5m.as_ref().unwrap().sum - 0.002).abs() < 1e-9);
+        assert!((result.stats_30m.as_ref().unwrap().sum - 0.003).abs() < 1e-9);
+        assert!((result.stats_60m.as_ref().unwrap().sum - 0.004).abs() < 1e-9);
     }
 
     #[test]
-    fn function_adapter_records_unwinding_calls() {
-        let result = std::panic::catch_unwind(|| {
-            profile_function("entry112.unwind", || panic!("profiled failure"));
+    fn rpc_shape_moves_counts_into_statistics() {
+        record("entry113.shape", elapsed_now(), 0.005, 10);
+        let pickle = results_pickle().unwrap();
+        let entry = pickle.get("entry113.shape").unwrap();
+        assert!(entry.get("count").is_none());
+        assert!(entry.get("threads").is_none());
+        let all = entry.get("stats_all").unwrap();
+        assert_eq!(all.get("count").and_then(PickleValue::as_int), Some(1));
+        assert_eq!(all.get("threads").and_then(PickleValue::as_int), Some(1));
+        let sum = all.get("sum").and_then(PickleValue::as_float).unwrap();
+        assert!((sum - 0.005).abs() < 1e-9);
+    }
+
+    #[test]
+    fn function_adapter_preserves_result_and_records_unwind() {
+        assert_eq!(profile_function("entry113.function", || 42), 42);
+        let unwind = std::panic::catch_unwind(|| {
+            profile_function("entry113.unwind", || panic!("profiled failure"));
         });
-        assert!(result.is_err());
-        assert_eq!(results()["entry112.unwind"].count, 1);
+        assert!(unwind.is_err());
+        assert_eq!(results()["entry113.unwind"].stats_all.count, 1);
     }
 }

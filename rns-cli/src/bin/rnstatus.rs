@@ -590,8 +590,14 @@ fn format_profiling_results(results: &PickleValue) -> String {
         let Some(name) = tag.get("name").and_then(PickleValue::as_str) else {
             return;
         };
-        let count = tag.get("count").and_then(PickleValue::as_int).unwrap_or(0);
-        let threads = tag
+        let Some(stats_all) = tag.get("stats_all") else {
+            return;
+        };
+        let count = stats_all
+            .get("count")
+            .and_then(PickleValue::as_int)
+            .unwrap_or(0);
+        let threads = stats_all
             .get("threads")
             .and_then(PickleValue::as_int)
             .unwrap_or(0);
@@ -601,26 +607,16 @@ fn format_profiling_results(results: &PickleValue) -> String {
             " {indent}  Samples  : {count} from {threads} thread{}\n",
             if threads == 1 { "" } else { "s" }
         ));
-        if let Some(stats) = tag.get("stats_all") {
-            let mean = profiling_stat(stats, "mean");
-            output.push_str(&format!(
-                " {indent}  Total    : {}\n",
-                mean.map_or_else(
-                    || "-----".into(),
-                    |value| { pretty_short_time_tight(value * count as f64) }
-                )
-            ));
-            output.push_str(&format!(
-                " {indent}              {:^15} | {:^15} | {:^15} | {:^15} | {:^15}\n",
-                "Mean", "Median", "Min", "Max", "St. dev"
-            ));
-            append_profiling_stats_row(output, &indent, "Stats", stats);
-        }
+        output.push_str(&format!(
+            " {indent}              {:^15} | {:^15} | {:^15} | {:^15} | {:^15} | {:^15}\n",
+            "Mean", "Median", "Min", "Max", "St. dev", "Total"
+        ));
+        append_profiling_stats_row(output, &indent, "Stats", stats_all);
         for (key, label) in [
-            ("stats_1m", "1m"),
-            ("stats_5m", "5m"),
-            ("stats_30m", "30m"),
-            ("stats_60m", "60m"),
+            ("stats_1m", "0-1m"),
+            ("stats_5m", "1-5m"),
+            ("stats_30m", "5-30m"),
+            ("stats_60m", "30-60m"),
         ] {
             if let Some(stats) = tag
                 .get(key)
@@ -658,12 +654,13 @@ fn append_profiling_stats_row(output: &mut String, indent: &str, label: &str, st
             .unwrap_or_else(|| "-----".into())
     };
     output.push_str(&format!(
-        " {indent}  {label:>5}    : ({:^15} | {:^15} | {:^15} | {:^15} | {:^15})\n",
+        " {indent}  {label:>5}    : ({:^15} | {:^15} | {:^15} | {:^15} | {:^15} | {:^15})\n",
         formatted("mean"),
         formatted("median"),
         formatted("min"),
         formatted("max"),
         formatted("stdev"),
+        formatted("sum"),
     ));
 }
 
@@ -1669,8 +1666,9 @@ mod tests {
 
     #[test]
     fn formats_nested_live_profiling_results() {
-        fn stats(mean: f64) -> PickleValue {
+        fn stats(mean: f64, count: i64, threads: Option<i64>) -> PickleValue {
             PickleValue::Dict(vec![
+                (PickleValue::String("count".into()), PickleValue::Int(count)),
                 (PickleValue::String("mean".into()), PickleValue::Float(mean)),
                 (
                     PickleValue::String("median".into()),
@@ -1688,6 +1686,14 @@ mod tests {
                     PickleValue::String("stdev".into()),
                     PickleValue::Float(mean / 4.0),
                 ),
+                (
+                    PickleValue::String("sum".into()),
+                    PickleValue::Float(mean * count as f64),
+                ),
+                (
+                    PickleValue::String("threads".into()),
+                    threads.map_or(PickleValue::None, PickleValue::Int),
+                ),
             ])
         }
         fn tag(name: &str, parent: Option<&str>, count: i64, mean: f64) -> PickleValue {
@@ -1700,10 +1706,14 @@ mod tests {
                     PickleValue::String("super".into()),
                     parent.map_or(PickleValue::None, |value| PickleValue::String(value.into())),
                 ),
-                (PickleValue::String("count".into()), PickleValue::Int(count)),
-                (PickleValue::String("threads".into()), PickleValue::Int(1)),
-                (PickleValue::String("stats_all".into()), stats(mean)),
-                (PickleValue::String("stats_1m".into()), stats(mean)),
+                (
+                    PickleValue::String("stats_all".into()),
+                    stats(mean, count, Some(1)),
+                ),
+                (
+                    PickleValue::String("stats_1m".into()),
+                    stats(mean, count, None),
+                ),
                 (PickleValue::String("stats_5m".into()), PickleValue::None),
                 (PickleValue::String("stats_30m".into()), PickleValue::None),
                 (PickleValue::String("stats_60m".into()), PickleValue::None),
@@ -1723,9 +1733,9 @@ mod tests {
         assert!(rendered.contains("parent"));
         assert!(rendered.contains("Samples  : 2 from 1 thread"));
         assert!(rendered.contains("child"));
-        assert!(rendered.contains("Total    : 2ms"));
+        assert!(rendered.contains("2ms"));
         assert!(rendered.contains("Mean"));
-        assert!(rendered.contains("1m"));
+        assert!(rendered.contains("0-1m"));
     }
 
     #[test]
