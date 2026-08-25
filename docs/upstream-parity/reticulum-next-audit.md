@@ -2615,6 +2615,33 @@ contains the separately inventoried entries 118–142.
 The new entries 118–142 are a subsequent tranche and are not part of this
 44-commit completion claim.
 
+### Verification result (2026-08-25)
+
+- The pinned upstream range
+  `b3ef214e7257a1e5b674f8b1f002f05e78b090b8..0e070aacf655e1866ec1e469881dc91a2a3db89e`
+  contains exactly 44 commits. On `dev`, all 44 hashes occur exactly once as
+  full `Upstream-Commit` trailers, in upstream ancestry order; every mapping
+  commit is non-empty and carries exactly one such trailer.
+- `cargo test --workspace --features rns-hooks` passed, including all 54
+  `rns-net` E2E tests. The initial unfeatured workspace run had one
+  timing-sensitive keepalive E2E miss under full-suite load; that test passed
+  immediately in isolation and again in the complete hook-enabled workspace
+  run. No code change was required.
+- Live `rns-net` and `rns-cli` Python/Rust interoperability passed against a
+  detached exact-target worktree at `0e070aac` (`RNS.__version__ == 1.5.0`).
+  `cargo fmt --all -- --check`, `scripts/lint-host.sh`, and `git diff --check`
+  passed.
+- A fresh drift check succeeded for both upstream remotes. Canonical rgit is
+  now 69 commits ahead of the accepted baseline: the completed 44-commit
+  tranche plus 25 newer commits inventoried separately as entries 118–142.
+- Docker, cross-build, hardware, and manual promotion gates were not rerun for
+  this tranche-only completion. No parity record or `UPSTREAM.md` promotion is
+  claimed while the newer 25-commit tranche remains outstanding.
+- Mapping uniqueness above is scoped to the active `dev` integration history.
+  The pre-existing auxiliary worktree branch `codex/session-20260824` retains
+  superseded copies of mappings 82–91 and has unrelated untracked work, so it
+  was deliberately left untouched rather than destructively cleaned up.
+
 The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
