@@ -198,7 +198,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Integrated | Local `15d3f86` queues service log buffers to one named writer thread and supplies an ordering/flush barrier |
 | 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Integrated | Local `6dc1ec3` adds process-global guard-based timing, local RPC and remote-status results, plus nested `rnstatus -z` rendering |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Integrated | Local `2f388ce` bounds timestamped captures per tag/thread and publishes all-time plus 1/5/30/60-minute statistics and table output |
-| 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Needs decision | Python-only instrumentation mechanism versus any observable profiling contract |
+| 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Integrated | Local `03a12ec` adds explicit-tag function/closure profiling adapters with default or custom retention and unwind-safe recording |
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Needs coordinated port | Profiling aggregation limits, reentrancy, and time-window semantics |
 | 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Non-runtime | Merge commit with no independent diff beyond inventoried profiling parents |
 | 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Needs decision | Post-merge Reticulum/profiling adjustments and observable status behavior |
@@ -2418,13 +2418,36 @@ MessagePack round trip, and formatted output.
 
 **Final disposition:** Integrated.
 
-All 111 commits through `cf5d6a79` have a final disposition. Entries 112–117
+### 112. `40281f91` — Decorator for profiling functions
+
+**Upstream change:** Adds a decorator that wraps a Python function in a
+profiler context, selects its qualified name by default or accepts an explicit
+tag/profiler, forwards arguments and return values, and supports a custom
+capture limit.
+
+**Rust applicability:** Rust has no runtime-equivalent decorator or stable
+automatic qualified function-name reflection, but the observable ergonomic
+contract is a wrapper that times an entire call without changing its result.
+An explicit tag is the idiomatic native equivalent and avoids a procedural
+macro dependency for a two-line operation.
+
+**Local handling and evidence:** Local `03a12ec` adds `profile_function()` and
+`profile_function_with_limit()` public adapters. Both retain the RAII guard
+across the closure call, return its value unchanged, and record the elapsed
+sample during unwinding just as Python's context-manager exit runs on an
+exception. Focused tests prove result forwarding, default/custom retention,
+and caught-panic recording. All 904 `rns-net` unit tests, 54 network integration
+tests, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
+All 112 commits through `40281f91` have a final disposition. Entries 113–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 112–117 in upstream ancestry order.
+1. Process outstanding entries 113–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2445,6 +2468,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Commit `40281f91` adds decorator-based function profiling.
+  Local mapping `03a12ec` provides the native explicit-tag closure/function
+  adapters, including custom retention, return forwarding, and unwind
+  recording. Focused and complete `rns-net`, formatting, diff and host-lint
+  checks passed. Entry 113 is next.
 - `2026-08-25`: Commit `cf5d6a79` makes live profiling safe for indefinite
   operation. Local mapping `2f388ce` adds bounded timestamped per-thread
   retention, cumulative live windows, the evolved wire dictionary, and compact
