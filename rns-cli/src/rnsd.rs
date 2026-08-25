@@ -8,77 +8,15 @@ use rns_net::storage;
 use rns_net::{Callbacks, InterfaceId, RnsNode};
 
 const VERSION: &str = env!("FULL_VERSION");
-const LOG_MAX_FILE_BYTES: u64 = 30 * 1024 * 1024;
-const LOG_MAX_ARCHIVES: usize = 9;
+const LOG_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
 struct RotatingLogWriter {
     path: PathBuf,
     max_file_bytes: u64,
-    max_archives: usize,
-}
-
-enum LogCommand {
-    Write(Vec<u8>),
-    Flush(mpsc::SyncSender<io::Result<()>>),
-}
-
-struct AsyncLogWriter {
-    sender: mpsc::Sender<LogCommand>,
-}
-
-impl AsyncLogWriter {
-    fn new<W>(mut writer: W) -> io::Result<Self>
-    where
-        W: Write + Send + 'static,
-    {
-        let (sender, receiver) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("rns-log-writer".into())
-            .spawn(move || {
-                let mut pending_error: Option<(io::ErrorKind, String)> = None;
-                while let Ok(command) = receiver.recv() {
-                    match command {
-                        LogCommand::Write(buffer) => {
-                            if let Err(err) = writer.write_all(&buffer) {
-                                pending_error = Some((err.kind(), err.to_string()));
-                            }
-                        }
-                        LogCommand::Flush(reply) => {
-                            let result = match pending_error.take() {
-                                Some((kind, message)) => Err(io::Error::new(kind, message)),
-                                None => writer.flush(),
-                            };
-                            let _ = reply.send(result);
-                        }
-                    }
-                }
-                let _ = writer.flush();
-            })?;
-        Ok(Self { sender })
-    }
-}
-
-impl Write for AsyncLogWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.sender
-            .send(LogCommand::Write(buffer.to_vec()))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?;
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        let (reply, response) = mpsc::sync_channel(1);
-        self.sender
-            .send(LogCommand::Flush(reply))
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?;
-        response
-            .recv()
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "log writer stopped"))?
-    }
 }
 
 impl RotatingLogWriter {
-    fn new(path: PathBuf, max_file_bytes: u64, max_archives: usize) -> io::Result<Self> {
+    fn new(path: PathBuf, max_file_bytes: u64) -> io::Result<Self> {
         fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -86,23 +24,13 @@ impl RotatingLogWriter {
         Ok(Self {
             path,
             max_file_bytes,
-            max_archives,
         })
     }
 
     fn rotate(&self) -> io::Result<()> {
-        if self.max_archives == 0 {
-            return remove_log_if_present(&self.path);
-        }
-
-        remove_log_if_present(&archive_path(&self.path, self.max_archives))?;
-        for index in (1..self.max_archives).rev() {
-            let source = archive_path(&self.path, index);
-            if source.exists() {
-                fs::rename(source, archive_path(&self.path, index + 1))?;
-            }
-        }
-        fs::rename(&self.path, archive_path(&self.path, 1))
+        let previous = archive_path(&self.path);
+        remove_log_if_present(&previous)?;
+        fs::rename(&self.path, previous)
     }
 }
 
@@ -127,9 +55,9 @@ impl Write for RotatingLogWriter {
     }
 }
 
-fn archive_path(path: &Path, index: usize) -> PathBuf {
+fn archive_path(path: &Path) -> PathBuf {
     let mut archive = path.as_os_str().to_os_string();
-    archive.push(format!(".{index}"));
+    archive.push(".1");
     PathBuf::from(archive)
 }
 
@@ -231,9 +159,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let logfile_path = config_dir.join("logfile");
-        let writer =
-            RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES, LOG_MAX_ARCHIVES)
-                .and_then(AsyncLogWriter::new);
+        let writer = RotatingLogWriter::new(logfile_path.clone(), LOG_MAX_FILE_BYTES);
         match writer {
             Ok(writer) => {
                 let mut builder = env_logger::Builder::new();
@@ -565,49 +491,32 @@ mod tests {
     }
 
     #[test]
-    fn service_log_rotation_retains_configured_archive_count() {
+    fn service_log_rotation_retains_only_previous_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("logfile");
-        let mut writer = RotatingLogWriter::new(path.clone(), 12, 2).unwrap();
+        let mut writer = RotatingLogWriter::new(path.clone(), 12).unwrap();
 
         for _ in 0..5 {
             writer.write_all(b"123456\n").unwrap();
         }
 
         assert!(path.exists());
-        assert!(archive_path(&path, 1).exists());
-        assert!(archive_path(&path, 2).exists());
-        assert!(!archive_path(&path, 3).exists());
+        assert!(archive_path(&path).exists());
+        assert!(!path.with_extension("2").exists());
     }
 
     #[test]
     fn service_log_rotation_defaults_match_upstream() {
-        assert_eq!(LOG_MAX_FILE_BYTES, 30 * 1024 * 1024);
-        assert_eq!(LOG_MAX_ARCHIVES, 9);
+        assert_eq!(LOG_MAX_FILE_BYTES, 5 * 1024 * 1024);
     }
 
     #[test]
-    fn service_log_writes_run_on_dedicated_thread() {
-        #[derive(Clone)]
-        struct ThreadRecorder(std::sync::Arc<std::sync::Mutex<Option<std::thread::ThreadId>>>);
+    fn service_log_write_is_visible_without_async_flush_barrier() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logfile");
+        let mut writer = RotatingLogWriter::new(path.clone(), LOG_MAX_FILE_BYTES).unwrap();
+        writer.write_all(b"synchronous log line\n").unwrap();
 
-        impl Write for ThreadRecorder {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().replace(std::thread::current().id());
-                Ok(buffer.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let recorded = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let mut writer = AsyncLogWriter::new(ThreadRecorder(recorded.clone())).unwrap();
-        let caller = std::thread::current().id();
-        writer.write_all(b"queued log line").unwrap();
-        writer.flush().unwrap();
-
-        assert_ne!(*recorded.lock().unwrap(), Some(caller));
+        assert_eq!(fs::read(path).unwrap(), b"synchronous log line\n");
     }
 }
