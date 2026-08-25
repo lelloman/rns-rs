@@ -53,3 +53,9 @@ opt-level = 2
 
 [profile.dev.package.sha2]
 opt-level = 2
+
+# SSD1306 0.10 pins maybe-async-cfg 0.2.4, whose published artifact depends on
+# the unmaintained proc-macro-error crate. Keep the compatible package version
+# while using the reviewed local backport described in the vendor directory.
+[patch.crates-io]
+maybe-async-cfg = { path = "../vendor/maybe-async-cfg" }

@@ -223,10 +223,14 @@ series.
   MSRV. Production changes correct the asynchronous I2C trait bounds, fix two
   terminal-mode expressions, and re-export the new 64x32 display size. The
   release also pins `maybe-async-cfg` 0.2.4; the associated lockfile changes
-  are build-time macro dependencies only. RustSec finds no vulnerability, but
-  reports its `proc-macro-error` 1.0.4 dependency as unmaintained
-  (RUSTSEC-2024-0370); SSD1306's exact pin prevents selecting the maintained
-  0.2.5 macro stack, and no advisory ignore has been added.
+  are build-time macro dependencies only. SSD1306's exact pin prevents
+  selecting 0.2.5, whose transformer does not compile SSD1306's combined
+  sync/async API. The ESP32 manifest therefore patches the exact 0.2.4 package
+  to a reviewed local copy that preserves its transformer and replaces only
+  the `proc-macro-error` diagnostic dependency. RUSTSEC-2024-0370 and both
+  `proc-macro-error` packages are absent from the resulting lockfile; no
+  advisory ignore is used. The vendored macro doctests, SSD1306 sync and async
+  expansion checks, ESP32 host/display tests, and release firmware build pass.
 - The firmware uses synchronous embedded-hal 1.0 I2C, a 128x64 buffered
   graphics display, rotation zero, and the unchanged initialization,
   brightness, power, clear, flush, and embedded-graphics drawing APIs. It uses
