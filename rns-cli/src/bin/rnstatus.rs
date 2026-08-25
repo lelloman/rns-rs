@@ -591,36 +591,45 @@ fn format_profiling_results(results: &PickleValue) -> String {
             return;
         };
         let count = tag.get("count").and_then(PickleValue::as_int).unwrap_or(0);
-        let mean = tag
-            .get("mean")
-            .and_then(PickleValue::as_float)
-            .unwrap_or(0.0);
-        let median = tag
-            .get("median")
-            .and_then(PickleValue::as_float)
-            .unwrap_or(0.0);
-        let stdev = tag.get("stdev").and_then(PickleValue::as_float);
+        let threads = tag
+            .get("threads")
+            .and_then(PickleValue::as_int)
+            .unwrap_or(0);
         let indent = "  ".repeat(level + 1);
         output.push_str(&format!(" {indent}{name}\n"));
-        output.push_str(&format!(" {indent}  Samples  : {count}\n"));
-        if let Some(stdev) = stdev {
-            output.push_str(&format!(
-                " {indent}  Mean     : {}\n",
-                pretty_short_time(mean)
-            ));
-            output.push_str(&format!(
-                " {indent}  Median   : {}\n",
-                pretty_short_time(median)
-            ));
-            output.push_str(&format!(
-                " {indent}  St.dev.  : {}\n",
-                pretty_short_time(stdev)
-            ));
-        }
         output.push_str(&format!(
-            " {indent}  Total    : {}\n\n",
-            pretty_short_time(mean * count as f64)
+            " {indent}  Samples  : {count} from {threads} thread{}\n",
+            if threads == 1 { "" } else { "s" }
         ));
+        if let Some(stats) = tag.get("stats_all") {
+            let mean = profiling_stat(stats, "mean");
+            output.push_str(&format!(
+                " {indent}  Total    : {}\n",
+                mean.map_or_else(
+                    || "-----".into(),
+                    |value| { pretty_short_time_tight(value * count as f64) }
+                )
+            ));
+            output.push_str(&format!(
+                " {indent}              {:^15} | {:^15} | {:^15} | {:^15} | {:^15}\n",
+                "Mean", "Median", "Min", "Max", "St. dev"
+            ));
+            append_profiling_stats_row(output, &indent, "Stats", stats);
+        }
+        for (key, label) in [
+            ("stats_1m", "1m"),
+            ("stats_5m", "5m"),
+            ("stats_30m", "30m"),
+            ("stats_60m", "60m"),
+        ] {
+            if let Some(stats) = tag
+                .get(key)
+                .filter(|value| !matches!(value, PickleValue::None))
+            {
+                append_profiling_stats_row(output, &indent, label, stats);
+            }
+        }
+        output.push('\n');
 
         for (_, child) in entries {
             if child.get("super").and_then(PickleValue::as_str) == Some(name) {
@@ -638,13 +647,33 @@ fn format_profiling_results(results: &PickleValue) -> String {
     output
 }
 
-fn pretty_short_time(seconds: f64) -> String {
-    let mut micros = (seconds.abs() * 1_000_000.0).round();
+fn profiling_stat(stats: &PickleValue, key: &str) -> Option<f64> {
+    stats.get(key).and_then(PickleValue::as_float)
+}
+
+fn append_profiling_stats_row(output: &mut String, indent: &str, label: &str, stats: &PickleValue) {
+    let formatted = |key| {
+        profiling_stat(stats, key)
+            .map(pretty_short_time_tight)
+            .unwrap_or_else(|| "-----".into())
+    };
+    output.push_str(&format!(
+        " {indent}  {label:>5}    : ({:^15} | {:^15} | {:^15} | {:^15} | {:^15})\n",
+        formatted("mean"),
+        formatted("median"),
+        formatted("min"),
+        formatted("max"),
+        formatted("stdev"),
+    ));
+}
+
+fn pretty_short_time_tight(seconds: f64) -> String {
+    let mut micros = seconds.abs() * 1_000_000.0;
     let whole_seconds = (micros / 1_000_000.0).floor() as u64;
     micros %= 1_000_000.0;
     let millis = (micros / 1_000.0).floor() as u64;
     micros %= 1_000.0;
-    let micros = micros as u64;
+    let micros = (micros * 100.0).round() / 100.0;
     let mut parts = Vec::new();
     if whole_seconds > 0 {
         parts.push(format!("{whole_seconds}s"));
@@ -652,7 +681,14 @@ fn pretty_short_time(seconds: f64) -> String {
     if millis > 0 {
         parts.push(format!("{millis}ms"));
     }
-    if micros > 0 {
+    if micros > 0.0 {
+        let mut micros = format!("{micros:.2}");
+        while micros.ends_with('0') {
+            micros.pop();
+        }
+        if micros.ends_with('.') {
+            micros.pop();
+        }
         parts.push(format!("{micros}µs"));
     }
     let rendered = if parts.is_empty() {
@@ -660,8 +696,7 @@ fn pretty_short_time(seconds: f64) -> String {
     } else if parts.len() == 1 {
         parts.remove(0)
     } else {
-        let last = parts.pop().unwrap();
-        format!("{} and {last}", parts.join(", "))
+        parts.join(" ")
     };
     if seconds.is_sign_negative() {
         format!("-{rendered}")
@@ -1634,6 +1669,27 @@ mod tests {
 
     #[test]
     fn formats_nested_live_profiling_results() {
+        fn stats(mean: f64) -> PickleValue {
+            PickleValue::Dict(vec![
+                (PickleValue::String("mean".into()), PickleValue::Float(mean)),
+                (
+                    PickleValue::String("median".into()),
+                    PickleValue::Float(mean),
+                ),
+                (
+                    PickleValue::String("min".into()),
+                    PickleValue::Float(mean / 2.0),
+                ),
+                (
+                    PickleValue::String("max".into()),
+                    PickleValue::Float(mean * 1.5),
+                ),
+                (
+                    PickleValue::String("stdev".into()),
+                    PickleValue::Float(mean / 4.0),
+                ),
+            ])
+        }
         fn tag(name: &str, parent: Option<&str>, count: i64, mean: f64) -> PickleValue {
             PickleValue::Dict(vec![
                 (
@@ -1645,15 +1701,12 @@ mod tests {
                     parent.map_or(PickleValue::None, |value| PickleValue::String(value.into())),
                 ),
                 (PickleValue::String("count".into()), PickleValue::Int(count)),
-                (PickleValue::String("mean".into()), PickleValue::Float(mean)),
-                (
-                    PickleValue::String("median".into()),
-                    PickleValue::Float(mean),
-                ),
-                (
-                    PickleValue::String("stdev".into()),
-                    PickleValue::Float(mean / 2.0),
-                ),
+                (PickleValue::String("threads".into()), PickleValue::Int(1)),
+                (PickleValue::String("stats_all".into()), stats(mean)),
+                (PickleValue::String("stats_1m".into()), stats(mean)),
+                (PickleValue::String("stats_5m".into()), PickleValue::None),
+                (PickleValue::String("stats_30m".into()), PickleValue::None),
+                (PickleValue::String("stats_60m".into()), PickleValue::None),
             ])
         }
         let results = PickleValue::Dict(vec![
@@ -1668,9 +1721,17 @@ mod tests {
         ]);
         let rendered = format_profiling_results(&results);
         assert!(rendered.contains("parent"));
-        assert!(rendered.contains("Samples  : 2"));
+        assert!(rendered.contains("Samples  : 2 from 1 thread"));
         assert!(rendered.contains("child"));
         assert!(rendered.contains("Total    : 2ms"));
+        assert!(rendered.contains("Mean"));
+        assert!(rendered.contains("1m"));
+    }
+
+    #[test]
+    fn tight_profile_times_preserve_fractional_microseconds() {
+        assert_eq!(pretty_short_time_tight(0.000_005_25), "5.25µs");
+        assert_eq!(pretty_short_time_tight(1.002_003_25), "1s 2ms 3.25µs");
     }
 
     fn client_stats(
