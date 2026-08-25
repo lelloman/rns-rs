@@ -203,7 +203,44 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Structurally covered | Local `4aa1b0d` pins the merged function-to-MessagePack final profiling schema; the other-parent MTU/routing deltas remain covered by entries 106–107 |
 | 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Integrated | Local `c6e4966` mirrors the deliberate final reversal to synchronous 5 MiB/single-archive logging while retaining the merged profiling status path |
 | 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Non-runtime | Local `647f99d` mirrors the unused synchronization-import cleanup by narrowing the remaining daemon channel imports to the symbols actually used |
-| 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Needs decision | Final profiling/logging correction; full diff review required before disposition |
+| 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Non-runtime | Local `18f1656` documents Rust's static module-resolution invariant and proves the profiler is available from the crate root without late imports |
+
+### Subsequent canonical drift observed 2026-08-25
+
+A fresh two-remote refresh after completing the requested 44-commit tranche
+found 25 additional canonical rGit commits after the pinned target `0e070aac`,
+through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
+`b123a756`, so the remotes still disagree. These entries are explicitly outside
+the completed 44-commit target and form the next ordered tranche; none is
+silently folded into entries 74–117 or treated as reviewed.
+
+| # | Upstream commit | Subject | Provisional disposition | Review scope |
+|---:|---|---|---|---|
+| 118 | `7311dc85445fa13863fca288e3706d5c72abd738` | Reduced path table lock acquisitions in inbound processing | Needs review | New post-target commit; complete diff review required |
+| 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Needs review | New post-target commit; complete diff review required |
+| 120 | `d81421dad3badb7672ac2171e253af6643c5ecdd` | Avoid additional packet hashing under lock in inbound | Needs review | New post-target commit; complete diff review required |
+| 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 123 | `77f763258441fb9ce71db084703b64608559211d` | Avoid extra epoll modifies when EPOLLOUT already set | Needs review | New post-target commit; complete diff review required |
+| 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Needs review | New post-target commit; complete diff review required |
+| 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Needs review | New post-target commit; complete diff review required |
+| 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Needs review | New post-target commit; complete diff review required |
+| 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Needs review | New post-target commit; complete diff review required |
+| 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Needs review | New post-target commit; complete diff review required |
+| 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Needs review | New post-target merge; complete parent/diff review required |
+| 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Needs review | New post-target commit; complete diff review required |
+| 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Needs review | New post-target commit; complete diff review required |
+| 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Needs review | New post-target commit; complete diff review required |
+| 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Needs review | New post-target commit; complete diff review required |
+| 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Needs review | New post-target commit; complete diff review required |
+| 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Needs review | New post-target commit; complete diff review required |
+| 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Needs review | New post-target commit; complete diff review required |
 
 ## Per-Commit Analysis
 
@@ -2539,19 +2576,53 @@ passed.
 
 **Final disposition:** Non-runtime.
 
-All 116 commits through `39899651` have a final disposition. Entry 117 awaits
-per-commit review. The accepted baseline remains commit 73 until the full
+### 117. `0e070aac` — Ah well, of course
+
+**Upstream change:** Moves Reticulum's public class/module imports from the top
+of `RNS/__init__.py` back to the bottom. This restores the late-import ordering
+needed for Python package initialization after entry 115 temporarily moved them
+above profiler and utility definitions. There is no protocol or runtime feature
+change after successful import.
+
+**Rust applicability:** Rust resolves module declarations and crate paths
+statically instead of executing package imports in source order. The native
+`profiling` module can refer to `crate::pickle` and be re-exported from the crate
+root without a late-import block or circular initialization risk.
+
+**Local handling and evidence:** Local `18f1656` documents that invariant on
+the public profiling module and adds a crate-root regression that constructs a
+guard, completes it, and retrieves its result through the exported module. The
+focused regression, all 906 `rns-net` unit tests, 54 network integration tests,
+formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Non-runtime.
+
+All 117 inventoried commits through the original target `0e070aac` have a final
+disposition. This completes all 44 commits after accepted baseline `b3ef214e`
+that were in the requested tranche. The accepted baseline remains commit 73:
+the final promotion gates are still being evaluated, and fresh drift now
+contains the separately inventoried entries 118–142.
+
+## Original 44-Commit Tranche Finalization
+
+1. Verify all 44 target hashes have exactly one ordered, non-empty mapping
+   commit and that every mapping carries exactly one full trailer.
+2. Run workspace tests, formatting, host lint, feature/interoperability checks,
+   and record any unavailable hardware/manual gates honestly.
+3. Reconcile the audit and decide whether a target-specific parity record is
+   appropriate while 25 newer commits remain outstanding.
+
+The new entries 118–142 are a subsequent tranche and are not part of this
+44-commit completion claim.
+
+The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entry 117 in upstream ancestry order.
-2. Review each upstream diff against the corresponding Rust implementation.
-3. Add focused regressions and port applicable behavior across protocol, RPC,
-   utilities, status output, and documentation.
-4. Create exactly one mapping commit per upstream commit, record its hash and
-   evidence, and run the affected suites and host lint.
-5. Leave baseline promotion for the complete parity-gate workflow.
+1. Complete the original 44-commit tranche verification above.
+2. Keep entries 118–142 isolated as the next ordered review tranche.
+3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
 
@@ -2566,6 +2637,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Commit `0e070aac` restores late Python imports to avoid package
+  initialization cycles. Rust resolves modules statically; local mapping
+  `18f1656` documents that difference and proves crate-root profiler access.
+  Focused and complete `rns-net`, formatting, diff and host-lint checks passed.
+  All 44 commits in the pinned tranche now have mapping commits; final tranche
+  verification is next, while entries 118–142 remain a separate new drift.
 - `2026-08-25`: Commit `39899651` removes synchronization imports made unused
   by the logging reversal. Local mapping `647f99d` narrows the native daemon's
   remaining channel imports without runtime change. Complete `rns-cli`,
