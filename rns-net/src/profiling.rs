@@ -119,6 +119,28 @@ pub fn profile_with_parent_and_limit(
     start_profile(tag.into(), Some(parent.into()), max_captures)
 }
 
+/// Run a function or closure under a profiling tag and return its result.
+///
+/// This is the Rust counterpart to Reticulum's profiling decorator. Rust does
+/// not expose a stable runtime qualified function name, so the tag is explicit.
+/// The guard is also dropped during unwinding, preserving completed timing for
+/// functions that panic when the panic is caught by their caller.
+pub fn profile_function<T>(tag: impl Into<String>, function: impl FnOnce() -> T) -> T {
+    let _profile = profile(tag);
+    function()
+}
+
+/// Run a function or closure under a profiling tag with a custom retention
+/// limit and return its result.
+pub fn profile_function_with_limit<T>(
+    tag: impl Into<String>,
+    max_captures: usize,
+    function: impl FnOnce() -> T,
+) -> T {
+    let _profile = profile_with_limit(tag, max_captures);
+    function()
+}
+
 fn record_duration(
     tag: &str,
     parent: Option<&str>,
@@ -451,5 +473,30 @@ mod tests {
             let _sample = profile("entry111.guard");
         }
         assert!(results()["entry111.guard"].stats_all.mean >= 0.0);
+    }
+
+    #[test]
+    fn function_adapter_preserves_return_value_and_retention_policy() {
+        let value = profile_function("entry112.function", || 21 * 2);
+        assert_eq!(value, 42);
+
+        for value in 0..3 {
+            assert_eq!(
+                profile_function_with_limit("entry112.limited", 2, || value),
+                value
+            );
+        }
+        let results = results();
+        assert_eq!(results["entry112.function"].count, 1);
+        assert_eq!(results["entry112.limited"].count, 2);
+    }
+
+    #[test]
+    fn function_adapter_records_unwinding_calls() {
+        let result = std::panic::catch_unwind(|| {
+            profile_function("entry112.unwind", || panic!("profiled failure"));
+        });
+        assert!(result.is_err());
+        assert_eq!(results()["entry112.unwind"].count, 1);
     }
 }
