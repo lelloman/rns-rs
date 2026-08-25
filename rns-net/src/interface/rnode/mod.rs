@@ -67,6 +67,7 @@ pub struct RNodeConfig {
     /// Pre-opened file descriptor (e.g. from a USB bridge socketpair on Android).
     /// When set, `start()` uses this fd directly instead of opening `port`.
     pub pre_opened_fd: Option<i32>,
+    pub underlay_mark: Option<u32>,
     pub runtime: Arc<Mutex<RNodeRuntime>>,
 }
 
@@ -120,6 +121,7 @@ impl Default for RNodeConfig {
             id_callsign: None,
             base_interface_id: InterfaceId(0),
             pre_opened_fd: None,
+            underlay_mark: None,
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: String::new(),
@@ -292,7 +294,7 @@ pub fn start(
             parity: Parity::None,
             stop_bits: 1,
         };
-        let (r, w) = Transport::open(&serial_config)?;
+        let (r, w) = Transport::open(&serial_config, config.underlay_mark)?;
         (r, Arc::new(Mutex::new(w)))
     };
 
@@ -650,7 +652,7 @@ fn reopen_connection(
         stop_bits: 1,
     };
 
-    let (reader, new_writer) = Transport::open(&serial_config)?;
+    let (reader, new_writer) = Transport::open(&serial_config, config.underlay_mark)?;
     *lock_or_recover(writer, "rnode shared writer") = new_writer;
     Ok(reader)
 }
@@ -905,6 +907,7 @@ impl InterfaceFactory for RNodeFactory {
             id_callsign,
             base_interface_id: id,
             pre_opened_fd,
+            underlay_mark: None,
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: name.to_string(),
@@ -929,9 +932,10 @@ impl InterfaceFactory for RNodeFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let rnode_config = *config.into_any().downcast::<RNodeConfig>().map_err(|_| {
+        let mut rnode_config = *config.into_any().downcast::<RNodeConfig>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
         })?;
+        rnode_config.underlay_mark = ctx.underlay_mark;
 
         let sub_bitrates: Vec<u64> = rnode_config
             .subinterfaces
@@ -1706,6 +1710,7 @@ mod tests {
             id_callsign: None,
             base_interface_id: InterfaceId(41),
             pre_opened_fd: None,
+            underlay_mark: None,
             runtime: Arc::new(Mutex::new(RNodeRuntime {
                 sub: RNodeSubConfig {
                     name: String::new(),

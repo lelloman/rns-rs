@@ -15,6 +15,7 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::Write;
 use std::io::{self, Read};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -501,7 +502,7 @@ impl BackboneWriter {
 
 /// Start a backbone interface. Binds TCP listener, spawns poll thread.
 pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
-    start_with_template(config, tx, next_id, None)
+    start_with_template(config, tx, next_id, None, None)
 }
 
 fn start_with_template(
@@ -509,9 +510,11 @@ fn start_with_template(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<DynamicInterfaceTemplate>,
+    underlay_mark: Option<u32>,
 ) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
+    super::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
     log::info!(
@@ -560,6 +563,7 @@ fn start_with_template(
                 accepted_peer_announces_to_internal,
                 dynamic_template,
                 ifac_size,
+                underlay_mark,
             }) {
                 log::error!("backbone poll loop error: {}", e);
             }
@@ -817,6 +821,7 @@ struct PollLoopContext {
     accepted_peer_announces_to_internal: Option<bool>,
     dynamic_template: Option<DynamicInterfaceTemplate>,
     ifac_size: usize,
+    underlay_mark: Option<u32>,
 }
 
 fn poll_loop(context: PollLoopContext) -> io::Result<()> {
@@ -838,6 +843,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
         accepted_peer_announces_to_internal,
         dynamic_template,
         ifac_size,
+        underlay_mark,
     } = context;
     // Queue capacities are finalized before interfaces start. Derive the
     // ingress controller's watermarks once, before any listener can read.
@@ -875,6 +881,17 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                 loop {
                     match listener.accept() {
                         Ok((stream, peer_addr)) => {
+                            if let Err(error) =
+                                super::apply_underlay_mark(stream.as_raw_fd(), underlay_mark)
+                            {
+                                log::error!(
+                                    "[{}] failed to mark accepted underlay socket: {}",
+                                    name,
+                                    error
+                                );
+                                drop(stream);
+                                continue;
+                            }
                             let peer_ip = peer_addr.ip();
                             let peer_port = peer_addr.port();
 
@@ -1477,7 +1494,10 @@ impl Writer for BackboneClientWriter {
 }
 
 /// Try to connect to the target host:port with timeout.
-fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
+fn try_connect_client(
+    config: &BackboneClientConfig,
+    underlay_mark: Option<u32>,
+) -> io::Result<TcpStream> {
     let runtime = config.runtime.lock().unwrap().clone();
     let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
@@ -1485,6 +1505,13 @@ fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses resolved"))?;
 
+    #[cfg(target_os = "linux")]
+    let stream = if underlay_mark.is_some() {
+        super::connect_tcp_with_options(&addr, None, underlay_mark, runtime.connect_timeout)?
+    } else {
+        TcpStream::connect_timeout(&addr, runtime.connect_timeout)?
+    };
+    #[cfg(not(target_os = "linux"))]
     let stream = TcpStream::connect_timeout(&addr, runtime.connect_timeout)?;
     stream.set_nodelay(true)?;
     set_tcp_keepalive(&stream).ok();
@@ -1501,15 +1528,16 @@ fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_client_with_ifac(config, tx, 0)
+    start_client_with_ifac(config, tx, 0, None)
 }
 
 pub(crate) fn start_client_with_ifac(
     config: BackboneClientConfig,
     tx: EventSender,
     ifac_size: usize,
+    underlay_mark: Option<u32>,
 ) -> io::Result<Box<dyn Writer>> {
-    let stream = try_connect_client(&config)?;
+    let stream = try_connect_client(&config, underlay_mark)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 
@@ -1527,7 +1555,7 @@ pub(crate) fn start_client_with_ifac(
     thread::Builder::new()
         .name(format!("backbone-client-{}", id.0))
         .spawn(move || {
-            client_reader_loop(reader_stream, config, tx, ifac_size);
+            client_reader_loop(reader_stream, config, tx, ifac_size, underlay_mark);
         })?;
 
     Ok(Box::new(BackboneClientWriter {
@@ -1546,6 +1574,7 @@ fn client_reader_loop(
     config: BackboneClientConfig,
     tx: EventSender,
     ifac_size: usize,
+    underlay_mark: Option<u32>,
 ) {
     let id = config.interface_id;
     let mut decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -1556,7 +1585,7 @@ fn client_reader_loop(
             Ok(0) => {
                 log::warn!("[{}] connection closed", config.name);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx) {
+                match client_reconnect(&config, &tx, underlay_mark) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -1594,7 +1623,7 @@ fn client_reader_loop(
             Err(e) => {
                 log::warn!("[{}] read error: {}", config.name, e);
                 let _ = tx.send(Event::InterfaceDown(id));
-                match client_reconnect(&config, &tx) {
+                match client_reconnect(&config, &tx, underlay_mark) {
                     Some(new_stream) => {
                         stream = new_stream;
                         decoder = hdlc::Decoder::reticulum(HW_MTU, ifac_size);
@@ -1617,7 +1646,11 @@ const MAX_BACKOFF_SHIFT: u32 = 6;
 /// Attempt to reconnect with exponential backoff and jitter.
 /// Returns the new reader stream on success.
 /// Sends the new writer to the driver via InterfaceUp event.
-fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<TcpStream> {
+fn client_reconnect(
+    config: &BackboneClientConfig,
+    tx: &EventSender,
+    underlay_mark: Option<u32>,
+) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
         let runtime = config.runtime.lock().unwrap().clone();
@@ -1658,7 +1691,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
             jitter.as_secs_f64(),
         );
 
-        match try_connect_client(config) {
+        match try_connect_client(config, underlay_mark) {
             Ok(new_stream) => {
                 let writer_stream = match new_stream.try_clone() {
                     Ok(s) => s,
@@ -1949,7 +1982,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     started: crate::time::now(),
                 };
                 let ifac_size = ctx.ifac.as_ref().map(|ifac| ifac.size).unwrap_or(0);
-                let writer = start_client_with_ifac(cfg, ctx.tx, ifac_size)?;
+                let writer = start_client_with_ifac(cfg, ctx.tx, ifac_size, ctx.underlay_mark)?;
                 Ok(StartResult::Simple {
                     id,
                     info,
@@ -1979,6 +2012,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                         announces_from_internal: ctx.announces_from_internal,
                         announces_to_internal: ctx.announces_to_internal,
                     }),
+                    ctx.underlay_mark,
                 )?;
                 Ok(StartResult::Listener { control: None })
             }

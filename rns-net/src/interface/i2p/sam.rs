@@ -235,7 +235,14 @@ fn read_line(stream: &mut TcpStream) -> Result<String, SamError> {
 }
 
 /// Open a fresh TCP connection to the SAM bridge and perform HELLO handshake.
-fn hello_connect(sam_addr: &SocketAddr) -> Result<TcpStream, SamError> {
+fn hello_connect(sam_addr: &SocketAddr, underlay_mark: Option<u32>) -> Result<TcpStream, SamError> {
+    #[cfg(target_os = "linux")]
+    let mut stream = if underlay_mark.is_some() {
+        super::super::connect_tcp_with_options(sam_addr, None, underlay_mark, CONNECT_TIMEOUT)?
+    } else {
+        TcpStream::connect_timeout(sam_addr, CONNECT_TIMEOUT)?
+    };
+    #[cfg(not(target_os = "linux"))]
     let mut stream = TcpStream::connect_timeout(sam_addr, CONNECT_TIMEOUT)?;
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
@@ -328,7 +335,14 @@ fn check_result(resp: &SamResponse) -> Result<(), SamError> {
 /// Generate a new I2P destination keypair via SAM.
 /// Uses Ed25519 (SIGNATURE_TYPE=7).
 pub fn dest_generate(sam_addr: &SocketAddr) -> Result<KeyPair, SamError> {
-    let mut stream = hello_connect(sam_addr)?;
+    dest_generate_with_mark(sam_addr, None)
+}
+
+pub(crate) fn dest_generate_with_mark(
+    sam_addr: &SocketAddr,
+    underlay_mark: Option<u32>,
+) -> Result<KeyPair, SamError> {
+    let mut stream = hello_connect(sam_addr, underlay_mark)?;
 
     writeln!(stream, "DEST GENERATE SIGNATURE_TYPE=7")?;
     stream.flush()?;
@@ -366,7 +380,16 @@ pub fn session_create(
     session_id: &str,
     private_key_b64: &str,
 ) -> Result<TcpStream, SamError> {
-    let mut stream = hello_connect(sam_addr)?;
+    session_create_with_mark(sam_addr, session_id, private_key_b64, None)
+}
+
+pub(crate) fn session_create_with_mark(
+    sam_addr: &SocketAddr,
+    session_id: &str,
+    private_key_b64: &str,
+    underlay_mark: Option<u32>,
+) -> Result<TcpStream, SamError> {
+    let mut stream = hello_connect(sam_addr, underlay_mark)?;
 
     writeln!(
         stream,
@@ -397,7 +420,16 @@ pub fn stream_connect(
     session_id: &str,
     destination: &str,
 ) -> Result<TcpStream, SamError> {
-    let mut stream = hello_connect(sam_addr)?;
+    stream_connect_with_mark(sam_addr, session_id, destination, None)
+}
+
+pub(crate) fn stream_connect_with_mark(
+    sam_addr: &SocketAddr,
+    session_id: &str,
+    destination: &str,
+    underlay_mark: Option<u32>,
+) -> Result<TcpStream, SamError> {
+    let mut stream = hello_connect(sam_addr, underlay_mark)?;
 
     writeln!(
         stream,
@@ -431,7 +463,15 @@ pub fn stream_accept(
     sam_addr: &SocketAddr,
     session_id: &str,
 ) -> Result<(TcpStream, Destination), SamError> {
-    let mut stream = hello_connect(sam_addr)?;
+    stream_accept_with_mark(sam_addr, session_id, None)
+}
+
+pub(crate) fn stream_accept_with_mark(
+    sam_addr: &SocketAddr,
+    session_id: &str,
+    underlay_mark: Option<u32>,
+) -> Result<(TcpStream, Destination), SamError> {
+    let mut stream = hello_connect(sam_addr, underlay_mark)?;
 
     writeln!(stream, "STREAM ACCEPT ID={} SILENT=false", session_id,)?;
     stream.flush()?;
@@ -462,7 +502,15 @@ pub fn stream_accept(
 /// Look up a .b32.i2p name (or other I2P name) to a full destination.
 /// Opens a fresh SAM connection for the lookup.
 pub fn naming_lookup(sam_addr: &SocketAddr, name: &str) -> Result<Destination, SamError> {
-    let mut stream = hello_connect(sam_addr)?;
+    naming_lookup_with_mark(sam_addr, name, None)
+}
+
+pub(crate) fn naming_lookup_with_mark(
+    sam_addr: &SocketAddr,
+    name: &str,
+    underlay_mark: Option<u32>,
+) -> Result<Destination, SamError> {
+    let mut stream = hello_connect(sam_addr, underlay_mark)?;
     naming_lookup_on(&mut stream, name)
 }
 

@@ -193,6 +193,27 @@ link requests and use the protocol-default Link MTU, set this in `[reticulum]`:
 link_mtu_discovery = No
 ```
 
+### Linux Underlay Socket Marking
+
+On Linux, a node can apply one nonzero `SO_MARK` value to the IP sockets it owns:
+
+```ini
+[reticulum]
+underlay_mark = 51820
+```
+
+The mark is applied before outbound TCP connects and before UDP sends, and is
+retained across interface reconnects. It covers TCP client/server, UDP, Auto,
+Backbone, I2P SAM, TCP-backed RNode, probe/STUN, and direct-UDP sockets created
+by `rns-net`. Node startup fails if the configured mark cannot be applied; the
+service therefore needs the Linux capability required for `SO_MARK` or must run
+with equivalent privilege.
+
+This setting only labels sockets owned by `rns-net`. It does not label DNS
+resolver traffic, subprocesses behind `PipeInterface`, or an external carrier
+daemon such as the I2P router. A full-tunnel application must provide separate
+bypass rules for those dependencies or reject an incompatible configuration.
+
 ## Low-Level Tools
 
 These are lower-level building blocks for development, debugging, custom setups,

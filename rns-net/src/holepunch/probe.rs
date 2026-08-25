@@ -8,6 +8,7 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -23,7 +24,15 @@ const ADDR_TYPE_IPV6: u8 = 6;
 ///
 /// Returns a handle to stop the server.
 pub fn start_probe_server(listen_addr: SocketAddr) -> io::Result<ProbeServerHandle> {
+    start_probe_server_with_mark(listen_addr, None)
+}
+
+pub fn start_probe_server_with_mark(
+    listen_addr: SocketAddr,
+    underlay_mark: Option<u32>,
+) -> io::Result<ProbeServerHandle> {
     let socket = UdpSocket::bind(listen_addr)?;
+    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(Duration::from_secs(1)))?;
 
     let running = Arc::new(AtomicBool::new(true));
@@ -130,6 +139,16 @@ pub fn probe_endpoint(
     timeout: Duration,
     device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket)> {
+    probe_endpoint_with_mark(probe_server, existing_socket, timeout, device, None)
+}
+
+pub fn probe_endpoint_with_mark(
+    probe_server: SocketAddr,
+    existing_socket: Option<UdpSocket>,
+    timeout: Duration,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+) -> io::Result<(SocketAddr, UdpSocket)> {
     let socket = match existing_socket {
         Some(s) => s,
         None => {
@@ -147,6 +166,7 @@ pub fn probe_endpoint(
             sock
         }
     };
+    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
     // Build request with a nonce for response matching
@@ -214,6 +234,16 @@ pub fn stun_probe_endpoint(
     timeout: Duration,
     device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket)> {
+    stun_probe_endpoint_with_mark(stun_server, existing_socket, timeout, device, None)
+}
+
+pub fn stun_probe_endpoint_with_mark(
+    stun_server: SocketAddr,
+    existing_socket: Option<UdpSocket>,
+    timeout: Duration,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+) -> io::Result<(SocketAddr, UdpSocket)> {
     let socket = match existing_socket {
         Some(s) => s,
         None => {
@@ -231,6 +261,7 @@ pub fn stun_probe_endpoint(
             sock
         }
     };
+    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
     // Build transaction ID (12 bytes) from timestamp + port + thread bits
@@ -412,12 +443,23 @@ pub fn probe_endpoint_with_protocol(
     timeout: Duration,
     device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket)> {
+    probe_endpoint_with_protocol_and_mark(server, protocol, existing_socket, timeout, device, None)
+}
+
+pub fn probe_endpoint_with_protocol_and_mark(
+    server: SocketAddr,
+    protocol: rns_core::holepunch::ProbeProtocol,
+    existing_socket: Option<UdpSocket>,
+    timeout: Duration,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+) -> io::Result<(SocketAddr, UdpSocket)> {
     match protocol {
         rns_core::holepunch::ProbeProtocol::Rnsp => {
-            probe_endpoint(server, existing_socket, timeout, device)
+            probe_endpoint_with_mark(server, existing_socket, timeout, device, underlay_mark)
         }
         rns_core::holepunch::ProbeProtocol::Stun => {
-            stun_probe_endpoint(server, existing_socket, timeout, device)
+            stun_probe_endpoint_with_mark(server, existing_socket, timeout, device, underlay_mark)
         }
     }
 }
@@ -432,9 +474,26 @@ pub fn probe_endpoint_failover(
     timeout_per_server: Duration,
     device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket, SocketAddr)> {
+    probe_endpoint_failover_with_mark(servers, protocol, timeout_per_server, device, None)
+}
+
+pub fn probe_endpoint_failover_with_mark(
+    servers: &[SocketAddr],
+    protocol: rns_core::holepunch::ProbeProtocol,
+    timeout_per_server: Duration,
+    device: Option<&str>,
+    underlay_mark: Option<u32>,
+) -> io::Result<(SocketAddr, UdpSocket, SocketAddr)> {
     let mut last_err = io::Error::new(io::ErrorKind::InvalidInput, "no probe servers configured");
     for &server in servers {
-        match probe_endpoint_with_protocol(server, protocol, None, timeout_per_server, device) {
+        match probe_endpoint_with_protocol_and_mark(
+            server,
+            protocol,
+            None,
+            timeout_per_server,
+            device,
+            underlay_mark,
+        ) {
             Ok((observed, socket)) => return Ok((observed, socket, server)),
             Err(e) => {
                 log::debug!("Probe server {} failed: {}", server, e);

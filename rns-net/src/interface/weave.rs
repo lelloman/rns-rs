@@ -842,6 +842,7 @@ mod tests {
             announces_to_internal: None,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             ifac: None,
+            underlay_mark: None,
         };
         let session = WeaveSession::new(config, &context);
         *super::super::lock_or_recover(&session.writer, "test writer") =

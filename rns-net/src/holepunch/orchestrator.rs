@@ -49,6 +49,8 @@ pub struct HolePunchManager {
     probe_protocol: ProbeProtocol,
     /// Linux network interface to bind probe/punch sockets to.
     device: Option<String>,
+    /// Linux mark applied to probe and direct-UDP underlay sockets.
+    underlay_mark: Option<u32>,
     /// Next available interface ID counter for direct interfaces.
     next_interface_id: u64,
 }
@@ -92,6 +94,7 @@ impl HolePunchManager {
             probe_addrs,
             probe_protocol,
             device,
+            underlay_mark: None,
             next_interface_id: 50000, // start high to avoid collision with regular interfaces
         }
     }
@@ -102,6 +105,10 @@ impl HolePunchManager {
 
     pub fn policy(&self) -> HolePunchPolicy {
         self.policy
+    }
+
+    pub fn set_underlay_mark(&mut self, underlay_mark: Option<u32>) {
+        self.underlay_mark = underlay_mark;
     }
 
     /// Propose a direct connection on a link.
@@ -551,6 +558,7 @@ impl HolePunchManager {
                 let tx_clone = tx.clone();
                 let session_id_copy = session_id;
                 let device_clone = self.device.clone();
+                let underlay_mark = self.underlay_mark;
                 let protocol_copy = *protocol;
 
                 if let Err(e) =
@@ -564,6 +572,7 @@ impl HolePunchManager {
                                 link_id,
                                 tx_clone,
                                 device_clone,
+                                underlay_mark,
                             );
                         })
                 {
@@ -751,12 +760,14 @@ fn run_probe_worker(
     link_id: [u8; 16],
     tx: EventSender,
     device: Option<String>,
+    underlay_mark: Option<u32>,
 ) {
-    match probe::probe_endpoint_failover(
+    match probe::probe_endpoint_failover_with_mark(
         &servers,
         protocol,
         std::time::Duration::from_secs(3),
         device.as_deref(),
+        underlay_mark,
     ) {
         Ok((observed, socket, probe_server)) => {
             log::info!(

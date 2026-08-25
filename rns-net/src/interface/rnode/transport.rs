@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;
 
 use crate::serial::SerialConfig;
@@ -14,7 +14,10 @@ pub enum Transport {
 }
 
 impl Transport {
-    pub fn open(config: &SerialConfig) -> io::Result<(Transport, Transport)> {
+    pub fn open(
+        config: &SerialConfig,
+        underlay_mark: Option<u32>,
+    ) -> io::Result<(Transport, Transport)> {
         if let Some(addr) = config.path.strip_prefix("tcp:") {
             let addr = if addr.contains(':') {
                 addr.to_string()
@@ -22,7 +25,18 @@ impl Transport {
                 format!("{}:{}", addr, DEFAULT_PORT)
             };
 
-            let stream = TcpStream::connect(addr)?;
+            let address = addr
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| io::Error::other("RNode TCP address did not resolve"))?;
+            let socket = socket2::Socket::new(
+                socket2::Domain::for_address(address),
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )?;
+            crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+            socket.connect(&address.into())?;
+            let stream: TcpStream = socket.into();
             let reader = stream.try_clone()?;
             Ok((Transport::Tcp(reader), Transport::Tcp(stream)))
         } else {

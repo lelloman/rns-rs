@@ -5,6 +5,7 @@
 
 use std::io::{self};
 use std::net::{SocketAddr, UdpSocket};
+use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -94,12 +95,21 @@ impl Writer for UdpWriter {
 /// Start a UDP interface. Spawns a reader thread if listen_ip/port are set.
 /// Returns a writer if forward_ip/port are set.
 pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
+    start_with_mark(config, tx, None)
+}
+
+fn start_with_mark(
+    config: UdpConfig,
+    tx: EventSender,
+    underlay_mark: Option<u32>,
+) -> io::Result<Option<Box<dyn Writer>>> {
     let id = config.interface_id;
     {
         let startup = UdpRuntime::from_config(&config);
         *lock_or_recover(&config.runtime, "udp runtime") = startup;
     }
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
+    super::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark)?;
     send_socket.set_broadcast(true)?;
     let writer: Option<Box<dyn Writer>> = Some(Box::new(UdpWriter {
         socket: send_socket,
@@ -110,6 +120,7 @@ pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Wr
     if let (Some(ref bind_ip), Some(bind_port)) = (&config.listen_ip, config.listen_port) {
         let bind_addr = format!("{}:{}", bind_ip, bind_port);
         let recv_socket = UdpSocket::bind(&bind_addr)?;
+        super::apply_underlay_mark(recv_socket.as_raw_fd(), underlay_mark)?;
 
         log::info!("[{}] UDP listening on {}", config.name, bind_addr);
 
@@ -256,7 +267,7 @@ impl InterfaceFactory for UdpFactory {
             started: crate::time::now(),
         };
 
-        let maybe_writer = start(udp_config, ctx.tx)?;
+        let maybe_writer = start_with_mark(udp_config, ctx.tx, ctx.underlay_mark)?;
 
         let writer: Box<dyn Writer> = maybe_writer
             .ok_or_else(|| io::Error::other("UDPInterface did not provide a writer"))?;

@@ -55,6 +55,8 @@ pub struct ReticulumSection {
     pub direct_connect_policy: crate::event::HolePunchPolicy,
     /// Network interface to bind outbound sockets to (e.g. "usb0").
     pub device: Option<String>,
+    /// Linux `SO_MARK` value applied to Reticulum IP underlay sockets.
+    pub underlay_mark: Option<u32>,
     /// Enable interface discovery (advertise discoverable interfaces and
     /// listen for discovery announces from the network).
     pub discover_interfaces: bool,
@@ -186,6 +188,7 @@ impl Default for ReticulumSection {
             probe_protocol: None,
             direct_connect_policy: crate::event::HolePunchPolicy::AcceptAll,
             device: None,
+            underlay_mark: None,
             discover_interfaces: false,
             default_gravity: 0,
             autoconnect_interface_mode: None,
@@ -795,6 +798,19 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
     }
     if let Some(v) = kvs.get("device") {
         section.device = Some(v.clone());
+    }
+    if let Some(v) = kvs.get("underlay_mark") {
+        let mark = v.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
+            key: "underlay_mark".into(),
+            value: v.clone(),
+        })?;
+        if mark == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "underlay_mark".into(),
+                value: v.clone(),
+            });
+        }
+        section.underlay_mark = Some(mark);
     }
     if let Some(v) = kvs.get("discover_interfaces") {
         section.discover_interfaces = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -1454,6 +1470,7 @@ announce_queue_ttl = 89
 announce_queue_overflow_policy = drop_oldest
 driver_event_queue_capacity = 6543
 interface_writer_queue_capacity = 210
+underlay_mark = 51820
 backbone_peer_pool_max_connected = 6
 backbone_peer_pool_failure_threshold = 4
 backbone_peer_pool_failure_window = 120
@@ -1468,6 +1485,7 @@ backbone_peer_pool_cooldown = 300
         assert!(config.reticulum.panic_on_interface_error);
         assert!(!config.reticulum.use_implicit_proof);
         assert!(config.reticulum.respond_to_probes);
+        assert_eq!(config.reticulum.underlay_mark, Some(51820));
         assert_eq!(
             config.reticulum.network_identity.as_deref(),
             Some("/home/user/.reticulum/identity")
@@ -1498,6 +1516,24 @@ backbone_peer_pool_cooldown = 300
         assert_eq!(config.reticulum.backbone_peer_pool_failure_threshold, 4);
         assert_eq!(config.reticulum.backbone_peer_pool_failure_window, 120);
         assert_eq!(config.reticulum.backbone_peer_pool_cooldown, 300);
+    }
+
+    #[test]
+    fn underlay_mark_defaults_to_disabled() {
+        let config = parse("[reticulum]\n").unwrap();
+        assert_eq!(config.reticulum.underlay_mark, None);
+    }
+
+    #[test]
+    fn underlay_mark_rejects_zero_and_non_numeric_values() {
+        for value in ["0", "-1", "not-a-mark", "4294967296"] {
+            let error = parse(&format!("[reticulum]\nunderlay_mark = {value}\n"))
+                .expect_err("invalid underlay mark must be rejected");
+            assert!(matches!(
+                error,
+                ConfigError::InvalidValue { ref key, .. } if key == "underlay_mark"
+            ));
+        }
     }
 
     #[test]

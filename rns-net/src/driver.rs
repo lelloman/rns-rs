@@ -702,6 +702,8 @@ pub struct Driver {
     pub(crate) event_tx: crate::event::EventSender,
     /// Maximum queued outbound frames per interface writer worker.
     pub(crate) interface_writer_queue_capacity: usize,
+    /// Linux mark inherited by dynamically created IP underlay sockets.
+    pub(crate) underlay_mark: Option<u32>,
     /// Default announce-rate controls for interfaces on transport nodes.
     pub(crate) announce_rate_defaults: AnnounceRateDefaults,
     /// Default ingress/egress controls for interfaces on transport nodes.
@@ -907,6 +909,7 @@ impl Driver {
             ),
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            underlay_mark: None,
             announce_rate_defaults: AnnounceRateDefaults::default(),
             ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
@@ -1307,5 +1310,6 @@ impl Driver {
         device: Option<String>,
     ) {
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
+        self.holepunch_manager.set_underlay_mark(self.underlay_mark);
     }
 }

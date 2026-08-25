@@ -783,7 +783,12 @@ impl Driver {
         let interface_type_name = candidate.config.interface_type_name.clone();
         let is_discovered = candidate.config.source == BackbonePeerPoolCandidateSource::Discovered;
         let wire_ifac_size = if ifac_enabled { ifac_runtime.size } else { 0 };
-        let writer = start_client_with_ifac(client.clone(), self.event_tx.clone(), wire_ifac_size)?;
+        let writer = start_client_with_ifac(
+            client.clone(),
+            self.event_tx.clone(),
+            wire_ifac_size,
+            self.underlay_mark,
+        )?;
         let info = rns_core::transport::types::InterfaceInfo {
             id,
             name: name.clone(),
