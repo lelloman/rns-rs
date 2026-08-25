@@ -200,7 +200,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Integrated | Local `2f388ce` bounds timestamped captures per tag/thread and publishes all-time plus 1/5/30/60-minute statistics and table output |
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Integrated | Local `03a12ec` adds explicit-tag function/closure profiling adapters with default or custom retention and unwind-safe recording |
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Integrated | Local `45fd406` applies one shared tag limit, tracks in-flight/reentrant guards independently, and publishes disjoint live-window counts, sums, threads, and statistics |
-| 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Non-runtime | Merge commit with no independent diff beyond inventoried profiling parents |
+| 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Structurally covered | Local `4aa1b0d` pins the merged function-to-MessagePack final profiling schema; the other-parent MTU/routing deltas remain covered by entries 106–107 |
 | 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Needs decision | Post-merge Reticulum/profiling adjustments and observable status behavior |
 | 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Needs decision | Follow-up logging/profiling adjustments after the merge |
 | 117 | `0e070aacf655e1866ec1e469881dc91a2a3db89e` | Ah well, of course. | Needs decision | Final profiling/logging correction; full diff review required before disposition |
@@ -2471,13 +2471,36 @@ MessagePack round trip, and renderer labels.
 
 **Final disposition:** Integrated.
 
-All 113 commits through `dca5b963` have a final disposition. Entries 114–117
+### 114. `9c2f424a` — Merge branch `live_profiling` into `live_profiler_merge`
+
+**Upstream change:** Merges the live-profiling lineage through entry 113 with
+the other branch carrying the already-inventoried MTU log-level and
+attached-interface routing changes. Relative to the profiling parent, the merge
+adds only the entry-106/107 deltas; it introduces no third profiling behavior.
+
+**Rust applicability:** Rust integrated both sides in upstream ancestry order:
+entries 106–107 pin fixed-MTU/noisy-log and offline attached-interface
+invariants, while entries 108–113 supply logging and the complete profiling
+pipeline. The merge still requires a non-empty mapping commit and evidence that
+the composed profiling API reaches its final wire schema.
+
+**Local handling and evidence:** Local `4aa1b0d` adds a merge-boundary
+regression that profiles a function through the public adapter, serializes the
+snapshot to MessagePack, locates the tag, and requires all seven final top-level
+fields. Existing entry-106 and entry-107 regressions continue to cover the
+other-parent changes. The focused merge regression, all 905 `rns-net` unit
+tests, 54 network integration tests, formatting, diff checks, and warning-free
+host lint passed.
+
+**Final disposition:** Structurally covered.
+
+All 114 commits through `9c2f424a` have a final disposition. Entries 115–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 114–117 in upstream ancestry order.
+1. Process outstanding entries 115–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2498,6 +2521,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Merge `9c2f424a` combines the completed profiler lineage with
+  the already-reviewed MTU and attached-interface branch. Local mapping
+  `4aa1b0d` pins the composed function-to-MessagePack schema; existing
+  entry-106/107 regressions cover the other parent. Focused and complete
+  `rns-net`, formatting, diff and host-lint checks passed. Entry 115 is next.
 - `2026-08-25`: Commit `dca5b963` moves retention to a shared per-tag bound,
   handles reentrant/in-flight captures, and makes live windows disjoint. Local
   mapping `45fd406` ports the lifecycle, evolved wire schema, and six-column
