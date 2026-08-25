@@ -14,7 +14,7 @@
 - audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
 - commits in range: `73`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
-- local integration range: `db809ef..ddfc829` on `dev`
+- local integration range: `88b7098..2e67683` on `dev`
 
 All 73 canonical commits are integrated, structurally covered, deferred,
 or non-runtime as recorded below, and the accepted baseline is
@@ -31,7 +31,7 @@ the accepted baseline, through
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`, behind the baseline. All eight
 have now been reviewed in ancestry order and have final dispositions below.
 Each maps to exactly one ancestry-ordered rns-rs commit in
-`db809ef..ddfc829`. This does not promote the accepted baseline or claim that
+`88b7098..2e67683`. This does not promote the accepted baseline or claim that
 the complete promotion gates have passed.
 
 ## Audit Vocabulary
@@ -135,14 +135,14 @@ conservative until the corresponding diffs and Rust code paths are reviewed.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 74 | `7b8923b61f2d075ac6819cfd2cccf3f7d93df1a4` | Added protocol violations | Integrated | Local `db809ef`; packet-filter rejections distinguish protocol-invalid announce/transport combinations from duplicate-filter hits |
-| 75 | `378840a6bf827063d7558417301d00a33ea9eeb5` | Added total announce/pr count stats per interface | Integrated | Local `6308ec6`; saturating interface counts, aggregation, RPC/remote status, `rnstatus`, and sustained burst timing |
-| 76 | `2b1b9589f1341dc8adca42b210bab48c6e19789b` | Added medium bitrate based timeout calculation helpers and RPC functions and added dynamic timeout calculation to rngit, by Zenith | Integrated | Local `1c4d062`; slowest-interface and timeout core/query/RPC APIs plus dynamic `rns-git` deadlines |
-| 77 | `4c69b376b2a7ef8cf5771ab62034428a7cf77a2a` | Added adaptive timeouts to utilities, by Zenith | Integrated | Local `d960f3e`; adaptive `rncp`, `rnx`, `rnprobe`, and remote-management deadlines |
-| 78 | `b1aa527861137e92942ab85753b99c14795cdb48` | Track in-flight path requests separately | Structurally covered | Local `e3d8428`; dedicated request gate and strengthened learned-path regression |
-| 79 | `3885d2329350451e822705ea13b8625aedf8938a` | Added protocol violations | Integrated | Local `5c0ef93`; excess PR data, malformed link requests, and invalid tunnel synthesis count violations |
-| 80 | `6b2c5bcf0bc8308f94c9387de54eba4d1122d009` | Don't reprocess IFAC for held announces | Structurally covered | Local `268edb7`; driver-only IFAC boundary documented on held announce bytes |
-| 81 | `fc69f323a82a0f3d76b2b3b90d16850ff25b4cf1` | Cleanup | Integrated | Local `ddfc829`; corrected no-IFAC classification with focused regression; queued sends already use normal dispatch |
+| 74 | `7b8923b61f2d075ac6819cfd2cccf3f7d93df1a4` | Added protocol violations | Integrated | Local `88b7098`; packet-filter rejections distinguish protocol-invalid announce/transport combinations from duplicate-filter hits |
+| 75 | `378840a6bf827063d7558417301d00a33ea9eeb5` | Added total announce/pr count stats per interface | Integrated | Local `8176dfb`; saturating interface counts, aggregation, RPC/remote status, `rnstatus`, and sustained burst timing |
+| 76 | `2b1b9589f1341dc8adca42b210bab48c6e19789b` | Added medium bitrate based timeout calculation helpers and RPC functions and added dynamic timeout calculation to rngit, by Zenith | Integrated | Local `131b4d8`; slowest-interface and timeout core/query/RPC APIs plus dynamic `rns-git` deadlines |
+| 77 | `4c69b376b2a7ef8cf5771ab62034428a7cf77a2a` | Added adaptive timeouts to utilities, by Zenith | Integrated | Local `b331091`; adaptive `rncp`, `rnx`, `rnprobe`, and remote-management deadlines |
+| 78 | `b1aa527861137e92942ab85753b99c14795cdb48` | Track in-flight path requests separately | Structurally covered | Local `447e386`; dedicated request gate and strengthened learned-path regression |
+| 79 | `3885d2329350451e822705ea13b8625aedf8938a` | Added protocol violations | Integrated | Local `5bce6cd`; excess PR data, malformed link requests, and invalid tunnel synthesis count violations |
+| 80 | `6b2c5bcf0bc8308f94c9387de54eba4d1122d009` | Don't reprocess IFAC for held announces | Structurally covered | Local `ddd6723`; driver-only IFAC boundary documented on held announce bytes |
+| 81 | `fc69f323a82a0f3d76b2b3b90d16850ff25b4cf1` | Cleanup | Integrated | Local `2e67683`; corrected no-IFAC classification with focused regression; queued sends already use normal dispatch |
 
 ### Additional drift observed 2026-08-23
 
@@ -154,17 +154,17 @@ mapped to exactly one rns-rs commit under the per-commit integration procedure.
 
 | # | Upstream commit | Subject | Disposition | Evidence or review scope |
 |---:|---|---|---|---|
-| 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `6df6413`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
-| 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `df07f45`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
-| 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Integrated | Local `5d733ca`; two-sample prospective-rate gate plus live pre-dispatch recursive-request check |
-| 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Structurally covered | Local `fc9e989`; absent usable interface bitrates are a normal silent `None` fallback with focused empty/zero-bitrate assertions |
-| 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Local `9506a72`; upstream RNS 1.5.0 release-note text only; runbook now records changelog handling policy |
-| 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Integrated | Local `7a8b704`; native Rust API documentation now states bitrate and medium-timeout return/fallback semantics |
-| 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `67af8c1`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
-| 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `afe06eb`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
-| 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Integrated | Local `804537d`; stale-interface active-link arrivals are dropped and removed from the native bounded FIFO so the current-route copy remains admissible |
-| 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Structurally covered | Local `66c41fd`; native count and list both require `flap_count > grace`, with mixed blocked/grace-period regression |
-| 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Integrated | Local `01e6ce0`; discovery announces carry `0xFD = "rns-rs"` and `0xFC = rns-net package version`, while older payloads remain accepted |
+| 82 | `091e021d0ecd121b71b288e1fd946597dac44963` | Early return on excessive hop count packets | Integrated | Local `c549c0c`; transport rejects hop counts at `PATHFINDER_M` before routing or hash-list insertion; exact boundary regression |
+| 83 | `2aed542e61020ed3ad2d719e90266038f3d30f35` | Get path_entry directly in _outbound | Structurally covered | Local `02f228c`; Rust already resolves the primary path through one immutable map lookup; removed-path fallback regression |
+| 84 | `6f6751d6b6b59b67698b318ae0611a7f528be441` | Fixed PR egress limiter not preemptively considering potential outbound, and added late egress check to avoid state race under high incoming PR load | Integrated | Local `576864f`; two-sample prospective-rate gate plus live pre-dispatch recursive-request check |
+| 85 | `b397870c975c8d36d09153e5444c97dd9502f3c5` | Log levels | Structurally covered | Local `1985606`; absent usable interface bitrates are a normal silent `None` fallback with focused empty/zero-bitrate assertions |
+| 86 | `561e2f23e11350cf0a5ad7aa5fccb566d2925242` | Updated changelog | Non-runtime | Local `6dd92d7`; upstream RNS 1.5.0 release-note text only; runbook now records changelog handling policy |
+| 87 | `e32d4df754a7b87b1bf1bb0d08675d12ff505ae6` | Updated docs | Integrated | Local `26323ea`; native Rust API documentation now states bitrate and medium-timeout return/fallback semantics |
+| 88 | `d25ea38c8402e67e4f458d33646d26cad2f6f6cb` | Added PPS stats to rnstatus. Don't count local shared instance in traffic totals. | Integrated | Local `ef51d1d`; sampled/aggregated PPS, RPC and remote-management fields, `rnstatus -p`, and local shared-instance exclusion |
+| 89 | `26e3ca4f2beca7366a812b25f57e1033e6c23b96` | Added shared medium hints to interfaces | Integrated | Local `211e677`; native registry type classifier covers all upstream shared-medium interface classes for later metadata consumers |
+| 90 | `1bad7f5807f3945b77664eb6f78de8183b21c816` | Remove from previous hashlist under transport edge case handling | Integrated | Local `fcab026`; stale-interface active-link arrivals are dropped and removed from the native bounded FIFO so the current-route copy remains admissible |
+| 91 | `bfab2964b686fbed07277eab3004b4b97cdee4df` | Fixed rnstatus including not-yet-blocked IPs in blocked IP list output | Structurally covered | Local `b12b919`; native count and list both require `flap_count > grace`, with mixed blocked/grace-period regression |
+| 92 | `b123a756b0e203070f7ff6325aaa2168504e0d82` | Added transport implementation name and version to discovery information requirements | Integrated | Local `14714db`; discovery announces carry `0xFD = "rns-rs"` and `0xFC = rns-net package version`, while older payloads remain accepted |
 
 ### Additional canonical drift observed 2026-08-24
 
@@ -179,24 +179,24 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
-| 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `0aa04f1`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
-| 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `0386059`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
-| 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Integrated | Local `9520db6` exports per-interface MTU through status RPC and renders it beside bitrate while accepting older payloads without the field |
-| 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Structurally covered | Local `15126e2` pins the dedicated native inbound IFAC handler's stateless reject-then-accept behavior |
-| 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Structurally covered | Local `11bb952` records that native inbound unmasking already performs one allocation and one linear XOR/copy pass |
-| 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Structurally covered | Local `be571b3` pins the dedicated native outbound helper's deterministic, input-preserving behavior |
-| 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Structurally covered | Local `84ce6de` records that native outbound masking already uses one allocation and one linear XOR/copy pass |
-| 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Integrated | Local `51a768b` ports the deterministic size/tag/pattern matrix, invariants, round trips, and corruption rejection |
-| 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Integrated | Local `f049244` adds all three RFC 5869 SHA-256 vectors alongside existing error and Python-fixture coverage |
-| 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `f10205b` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
-| 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `6a97cd0` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
-| 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `11e1f91` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
-| 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `7fa5f73` pins repeated manager-owned incoming cancellation as an action-free no-op |
-| 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `8ab860a` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
-| 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `ea786c8` proves an offline attached target neither transmits nor falls back to another online interface |
-| 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Integrated | Local `b33a885` rotates standalone service logs at 30 MiB with nine retained archives through a configurable native policy |
-| 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Integrated | Local `15d3f86` queues service log buffers to one named writer thread and supplies an ordering/flush barrier |
-| 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Integrated | Local `6dc1ec3` adds process-global guard-based timing, local RPC and remote-status results, plus nested `rnstatus -z` rendering |
+| 93 | `2058596dd19461753d45a221de445edf0d56ca99` | Check before cancel outgoing | Structurally covered | Local `4f816a0`; manager-owned removal plus state-guarded cancellation makes a repeated all-resource cancel an explicit no-op |
+| 94 | `88c629e3ad148bda4fd9b645a4075c72218fbd8f` | Logging and MTU adjustments | Integrated | Local `e12d936`; 500 Mbps/131072-byte accepted Backbone peers, 100 Mbps/1 MiB standalone clients, and 262144-byte Local metadata with focused defaults/connection tests |
+| 95 | `84597f31861ee1bc85a3db4dda7acc52228c2716` | Added MTU output to rnstatus | Integrated | Local `e6a3350` exports per-interface MTU through status RPC and renders it beside bitrate while accepting older payloads without the field |
+| 96 | `602085a1cd3560d3ddbdd0cce61d61942059af1c` | Extract inbound IFAC handler | Structurally covered | Local `8d1cb5f` pins the dedicated native inbound IFAC handler's stateless reject-then-accept behavior |
+| 97 | `e806ae5837c768bbaa100daa88b3b66cc9881be9` | Optimized inbound IFAC handling | Structurally covered | Local `6e2ec6c` records that native inbound unmasking already performs one allocation and one linear XOR/copy pass |
+| 98 | `aef9e5b41615ceb113ec8cf33cae938480855b0c` | Extract outbound IFAC handling | Structurally covered | Local `495743e` pins the dedicated native outbound helper's deterministic, input-preserving behavior |
+| 99 | `7347034f9a531ea08e683b0b2d0e9e76bd3e71e1` | Optimized outbound IFAC handling | Structurally covered | Local `33fe321` records that native outbound masking already uses one allocation and one linear XOR/copy pass |
+| 100 | `929aba02821a537a260f53ed59de2e9066bd0743` | Added IFAC tests | Integrated | Local `28f5c22` ports the deterministic size/tag/pattern matrix, invariants, round trips, and corruption rejection |
+| 101 | `cfddb9abe6aff62ed36c80e25c8a49d43d552f6d` | Added HKDF tests | Integrated | Local `c22173b` adds all three RFC 5869 SHA-256 vectors alongside existing error and Python-fixture coverage |
+| 102 | `171868c6cb0cc926f2286711d92b700002a586b6` | Added IFAC and HKDF tests to test runner | Non-runtime | Local `89d2628` records Cargo's automatic module discovery; the full workspace command executes both suites without a registry |
+| 103 | `5da0870e2aa5539ee744af2ba8db242414f957f2` | Optimized HKDF | Integrated | Local `7e2224f` reuses a pre-keyed HMAC state, streams expansion inputs, and pins parity across the 256-block counter wrap |
+| 104 | `1c83e732ad8ce792b33936c1d8c996c3f2468cea` | Use optimized IFAC handlers | Structurally covered | Local `9347131` exercises the driver's sole optimized IFAC helpers on actual outbound and inbound frame paths |
+| 105 | `956d688e1009ee617c06c64f5f99ca41ee0b9991` | Check before cancel incoming | Structurally covered | Local `f5246d2` pins repeated manager-owned incoming cancellation as an action-free no-op |
+| 106 | `a9538e9fd1291fc0bd252e409d5776b87db7e04f` | Loglevel | Structurally covered | Local `62b1937` records that native MTU is fixed before registration and no runtime selection diagnostic exists |
+| 107 | `3fdfe93ec744d0cd5026c4096bca3c1092777608` | Don't loop on attached interface packets | Structurally covered | Local `99178b0` proves an offline attached target neither transmits nor falls back to another online interface |
+| 108 | `1694a17a75d239e41d9a5ac5c655213d43df4fef` | Full and configurable logfile rotation. | Integrated | Local `96adade` rotates standalone service logs at 30 MiB with nine retained archives through a configurable native policy |
+| 109 | `9da66649761e375ab3ad07ce651a0064005c29c0` | Move log writing to a dedicated thread. | Integrated | Local `585b046` queues service log buffers to one named writer thread and supplies an ordering/flush barrier |
+| 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Integrated | Local `89dad4b` adds process-global guard-based timing, local RPC and remote-status results, plus nested `rnstatus -z` rendering |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Integrated | Local `2f388ce` bounds timestamped captures per tag/thread and publishes all-time plus 1/5/30/60-minute statistics and table output |
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Integrated | Local `03a12ec` adds explicit-tag function/closure profiling adapters with default or custom retention and unwind-safe recording |
 | 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Integrated | Local `45fd406` applies one shared tag limit, tracks in-flight/reentrant guards independently, and publishes disjoint live-window counts, sums, threads, and statistics |
@@ -1817,7 +1817,7 @@ originate packets at hop zero, but raw and relayed packets enter the common
 Before this port, a packet at hop 128 was routed and inserted into the packet
 hash list.
 
-**Local handling and evidence:** Local `6df6413` rejects the packet at the
+**Local handling and evidence:** Local `c549c0c` rejects the packet at the
 common outbound boundary before route selection, announce queuing, or hash-list
 mutation. The focused regression reproduced the pre-port transmission at hop
 128, then proves hop 127 is routed and recorded while hop 128 produces no
@@ -1839,7 +1839,7 @@ lookup, the packet is dropped instead of indexing missing state.
 no separate membership preflight, global mutable table, or second index
 operation. A missing path falls through to the normal broadcast behavior.
 
-**Local handling and evidence:** Local `df07f45` documents the single-lookup
+**Local handling and evidence:** Local `02f228c` documents the single-lookup
 invariant and strengthens the focused unit test by inserting and removing a
 path before routing, then proving the current missing state broadcasts without
 a stale access. The focused test, all 649 core unit tests, core
@@ -1863,7 +1863,7 @@ The network driver updated live outgoing samples only while dispatching and did
 not re-check the gate immediately before writing a previously created action.
 Both upstream defects therefore applied across the engine/driver boundary.
 
-**Local handling and evidence:** Local `5d733ca` introduces the two-sample
+**Local handling and evidence:** Local `576864f` introduces the two-sample
 egress constant, evaluates `(n+1)/span` from the sampled rate and count, and
 exposes the same engine gate for the driver's live pre-dispatch check. Focused
 regressions first reproduced both the missed prospective threshold and a state
@@ -1887,7 +1887,7 @@ without exceptions or logging, and path timeout calculation silently uses its
 fixed fallback. There is no cached highest-bitrate calculation in the native
 transport path and therefore no equivalent noisy diagnostic.
 
-**Local handling and evidence:** Local `fc9e989` documents that missing usable
+**Local handling and evidence:** Local `1985606` documents that missing usable
 bitrates are intentionally silent and strengthens the timeout regression with
 direct assertions for empty and zero-bitrate inputs. The focused test, all 649
 core unit tests, core interoperability/integration suites, formatting, diff
@@ -1906,7 +1906,7 @@ The listed behaviors remain subject to their individual source commits and
 cannot serve as parity evidence by themselves. The 1.5.0 label informs the
 eventual audit name only once the canonical promotion target is also known.
 
-**Local handling and evidence:** Local `9506a72` strengthens the integration
+**Local handling and evidence:** Local `6dd92d7` strengthens the integration
 runbook to state that version/changelog metadata identifies a target but is not
 vendored or accepted in place of source-level review. The complete diff was
 reviewed and `git diff --check` passed.
@@ -1924,7 +1924,7 @@ their return units and unavailable-bitrate fallbacks.
 runtime commit. The engine methods lacked Rustdoc; the node documentation did
 not spell out the `None`/zero fallback or calculation scope.
 
-**Local handling and evidence:** Local `7a8b704` documents the public engine
+**Local handling and evidence:** Local `26323ea` documents the public engine
 and node APIs, positive-bitrate selection, MTU round-trip estimate, per-hop
 allowance, and unavailable-data behavior. `cargo doc -p rns-core -p rns-net
 --no-deps` completed (with existing unrelated broken-link warnings), formatting
@@ -1945,7 +1945,7 @@ sampled byte/class rates, but did not sample PPS, expose aggregate PPS, render
 it in `rnstatus`, or exclude local shared-server connections from aggregate
 byte/rate/class totals.
 
-**Local handling and evidence:** Local `67af8c1` samples per-interface packet
+**Local handling and evidence:** Local `ef51d1d` samples per-interface packet
 deltas in the same current window as byte rates, aggregates them while
 excluding `is_local_client` server-side shared connections, carries `rxpps` and
 `txpps` through local RPC and remote management, and renders rounded PPS with
@@ -1969,7 +1969,7 @@ equivalent is therefore classification by registry type name, which can be
 reused by discovery/capability consumers without adding duplicated flags to
 every interface constructor.
 
-**Local handling and evidence:** Local `afe06eb` adds the documented
+**Local handling and evidence:** Local `211e677` adds the documented
 `shared_medium_hint()` classifier. Its focused matrix proves all seven upstream
 shared-medium families true and Auto, Backbone, I2P, Local and TCP families
 false. All 886 `rns-net` unit tests, 54 network E2E tests,
@@ -1993,7 +1993,7 @@ link's route hint, so a stale-interface arrival could suppress the later
 current-route copy. The failure mode therefore applied across the core/driver
 boundary.
 
-**Local handling and evidence:** Local `804537d` adds arbitrary native FIFO/set
+**Local handling and evidence:** Local `fcab026` adds arbitrary native FIFO/set
 removal while preserving order, detects DATA/LINK packets whose receiving
 interface differs from the active link route, drops that stale arrival, and
 forgets its packet hash. Focused regressions cover wrapped-FIFO removal and
@@ -2017,7 +2017,7 @@ old state. The driver derives the RPC count from that filtered list, and native
 `rnstatus` renders the returned list without broadening it, so the upstream bug
 is structurally absent.
 
-**Local handling and evidence:** Local `66c41fd` strengthens the existing
+**Local handling and evidence:** Local `b12b919` strengthens the existing
 mixed-peer boundary regression: one peer exceeds grace, another remains
 tracked within grace, the count is one, and the list contains only the actually
 blocked peer. The focused test, all 887 `rns-net` unit tests, 54 network E2E
@@ -2039,7 +2039,7 @@ already ignores unknown fields, as upstream does, so accepting pre-1.5.0
 announces remains necessary for backward compatibility; no persistence, RPC,
 or CLI expansion is introduced by this upstream commit.
 
-**Local handling and evidence:** Local `01e6ce0` defines the exact `0xFD` and
+**Local handling and evidence:** Local `14714db` defines the exact `0xFD` and
 `0xFC` wire keys and emits `rns-rs` plus the compiled `rns-net` package version
 from every discovery announcement. The focused decoded-map regression verifies
 both exact keys and values. All 888 `rns-net` unit tests, 54 network E2E tests,
@@ -2063,7 +2063,7 @@ actions. A later cancellation sees no collection entry, and cancelling a
 terminal sender directly emits no second action, so the Python membership race
 has no native equivalent.
 
-**Local handling and evidence:** Local `0aa04f1` extends the manager-level
+**Local handling and evidence:** Local `4f816a0` extends the manager-level
 cancellation regression to call `cancel_all_resources()` again after the first
 call removed the outgoing sender. The second call produces no actions and the
 transfer count remains zero. The focused test, all 888 `rns-net` unit tests, 54
@@ -2088,7 +2088,7 @@ Rust has no MTU-selection diagnostic, no per-keepalive diagnostic, and its
 `log::debug!` macro performs level filtering before message formatting, so the
 logging adjustments require no additional runtime path.
 
-**Local handling and evidence:** Local `0386059` centralizes the class defaults:
+**Local handling and evidence:** Local `e12d936` centralizes the class defaults:
 500 Mbps and 131072 bytes for listener-accepted Backbone peers, 100 Mbps and 1
 MiB for standalone/pool Backbone clients, and 1 Gbps plus 262144 bytes for both
 sides of Local/shared-instance connections. Focused constant, metadata, and
@@ -2108,7 +2108,7 @@ RPC encoding exposed bitrate but omitted MTU, so `rnstatus` could not report the
 effective interface limit. Remote status responses can come from older peers,
 which still requires the CLI parser to tolerate an absent field.
 
-**Local handling and evidence:** Local `9520db6` carries the registered
+**Local handling and evidence:** Local `e6a3350` carries the registered
 interface MTU into `SingleInterfaceStat`, exports it under the compatible `mtu`
 RPC key, supplies the Backbone aggregate MTU, and renders `MTU <bytes>` beside
 the rate. Focused RPC and formatter regressions verify the exact values and the
@@ -2129,7 +2129,7 @@ dedicated `handle_ifac_legacy()` helper without changing the algorithm.
 uses only the supplied packet and immutable IFAC state, returning the recovered
 packet or rejection without retaining per-packet state.
 
-**Local handling and evidence:** Local `15126e2` adds a focused regression that
+**Local handling and evidence:** Local `8d1cb5f` adds a focused regression that
 feeds an invalid IFAC packet followed by its valid counterpart through the
 dedicated native helper, proving rejection cannot affect subsequent handling.
 The focused test, all 891 `rns-net` unit tests, 54 network E2E tests, formatting,
@@ -2149,7 +2149,7 @@ output buffers once and traverses the received frame once, XORing header and
 payload bytes while copying the IFAC tag unchanged. Rust does not have the
 quadratic immutable-concatenation behavior or a legacy handler to replace.
 
-**Local handling and evidence:** Local `11bb952` documents the native one-pass
+**Local handling and evidence:** Local `6e2ec6c` documents the native one-pass
 equivalence at the implementation boundary. The focused mask/unmask round trip,
 all 891 `rns-net` unit tests, 54 network E2E tests, formatting, diff checks, and
 warning-free host lint passed. Activation remains a separate upstream change
@@ -2168,7 +2168,7 @@ masking, and flag handling from `transmit()` into
 owned frame to each interface, and the helper accepts an immutable plaintext
 slice, so extraction cannot mutate queued or reusable packet data.
 
-**Local handling and evidence:** Local `be571b3` adds a focused regression that
+**Local handling and evidence:** Local `495743e` adds a focused regression that
 calls the dedicated helper twice, verifies byte-identical output, and confirms
 the plaintext input remains unchanged. The focused test, all 892 `rns-net` unit
 tests, 54 network E2E tests, formatting, diff checks, and warning-free host lint
@@ -2186,7 +2186,7 @@ with a big-integer XOR while preserving the clear tag and forced IFAC flag.
 tagged frame and masked output and performs one linear XOR/copy pass. It has no
 quadratic concatenation behavior and no separate legacy implementation.
 
-**Local handling and evidence:** Local `84ce6de` documents the native one-pass
+**Local handling and evidence:** Local `33fe321` documents the native one-pass
 equivalence at the outbound implementation boundary. The focused deterministic
 outbound-helper regression, all 892 `rns-net` unit tests, 54 network E2E tests,
 formatting, diff checks, and warning-free host lint passed. Upstream does not
@@ -2205,7 +2205,7 @@ parallel legacy/optimized handlers, so implementation-to-implementation parity
 and Python-specific benchmarks do not translate directly. The protocol matrix,
 clear-tag/flag invariants, exact recovery, and corruption rejection do.
 
-**Local handling and evidence:** Local `51a768b` adds 96 deterministic
+**Local handling and evidence:** Local `28f5c22` adds 96 deterministic
 size/tag/pattern round trips covering 8 through 16384-byte frames and 1-, 8-,
 and 16-byte IFACs. It verifies encoded length, forced and cleared flags, the
 clear signature suffix, exact recovery, and rejection after second-header,
@@ -2229,7 +2229,7 @@ published RFC vectors that directly pin the standard-length output bytes.
 Legacy-vs-optimized comparison is Python-specific because Rust has one
 implementation.
 
-**Local handling and evidence:** Local `f049244` adds all three RFC 5869
+**Local handling and evidence:** Local `c22173b` adds all three RFC 5869
 SHA-256 vectors, including long input/output and empty salt/context cases. The
 focused test, all 72 `rns-crypto` unit tests, 11 crypto exercise tests, 11
 Python-fixture interoperability tests, formatting, diff checks, and warning-free
@@ -2247,7 +2247,7 @@ automatically by each crate harness, and `cargo test --workspace` invokes both
 crates. There is no aggregate source registry to update; protocol coverage
 belongs to entries 100 and 101.
 
-**Local handling and evidence:** Local `f10205b` documents automatic Cargo
+**Local handling and evidence:** Local `89d2628` documents automatic Cargo
 discovery at both test-module boundaries. A complete `cargo test --workspace`
 run executed and passed the 72-test `rns-crypto` unit suite, its exercise and
 interop suites, the 894-test `rns-net` unit suite, its 54 E2E tests, and all
@@ -2268,7 +2268,7 @@ owned concatenated input vector for every 32-byte expansion block. The HMAC
 wrapper is cloneable after key initialization, allowing the same optimization
 without exposing hash internals or changing the public API.
 
-**Local handling and evidence:** Local `6a97cd0` initializes one expansion HMAC
+**Local handling and evidence:** Local `7e2224f` initializes one expansion HMAC
 from the PRK, clones it per block, and streams the previous block, context, and
 counter directly. A focused slow-reference regression verifies 8191-, 8192-,
 and 8193-byte outputs across counter wrap. All three RFC vectors, all 73
@@ -2288,7 +2288,7 @@ implementations. All outbound driver dispatch paths already call the sole
 linear `mask_outbound()` helper, and the inbound driver boundary calls the sole
 linear `unmask_inbound()` helper before packet parsing.
 
-**Local handling and evidence:** Local `11e1f91` adds a driver-level regression
+**Local handling and evidence:** Local `9347131` adds a driver-level regression
 that sends a real packet through an IFAC-enabled interface, verifies the emitted
 frame recovers exactly through the native inbound helper, then feeds that frame
 back through driver preprocessing with no IFAC or protocol violation. The
@@ -2308,7 +2308,7 @@ the owning link. `LinkManager` marks it cancelled, removes terminal receivers
 after collecting their actions, and later cancellation traverses no receiver,
 so the Python membership race is absent by ownership design.
 
-**Local handling and evidence:** Local `7fa5f73` extends the active receiver
+**Local handling and evidence:** Local `f5246d2` extends the active receiver
 cancellation regression with a second `cancel_all_resources()` call, verifying
 that it emits no action and leaves the transfer count at zero. The focused test,
 all 895 `rns-net` unit tests, 54 network E2E tests, formatting, diff checks, and
@@ -2326,7 +2326,7 @@ their immutable registration metadata. The transport core neither recalculates
 that value nor emits an MTU-selection diagnostic, so there is no noisy message
 whose level must change.
 
-**Local handling and evidence:** Local `8ab860a` documents the registration-time
+**Local handling and evidence:** Local `62b1937` documents the registration-time
 MTU ownership and no-log invariant on `InterfaceInfo`. All 650 `rns-core` unit
 tests and its integration suites, formatting, diff checks, and warning-free
 host lint passed.
@@ -2345,7 +2345,7 @@ looping or falling back elsewhere.
 that exact interface's enabled/online state and drops it when unavailable; it
 does not reinterpret the action as a broadcast.
 
-**Local handling and evidence:** Local `ea786c8` adds a driver-level regression
+**Local handling and evidence:** Local `99178b0` adds a driver-level regression
 with an offline attached interface and a second online interface, verifying
 that neither writer receives the packet. The focused test, all 896 `rns-net`
 unit tests, 54 network E2E tests, formatting, diff checks, and warning-free host
@@ -2364,7 +2364,7 @@ separately configurable rotating store, but standalone `rnsd -s` handed one
 permanently open append-only file to `env_logger` and therefore grew without a
 bound. That service-mode path requires the upstream retention behavior.
 
-**Local handling and evidence:** Local `b33a885` adds a configurable rotating
+**Local handling and evidence:** Local `96adade` adds a configurable rotating
 writer to standalone `rnsd`, using the upstream 30 MiB and nine-archive defaults.
 It reopens for each write so renaming the active file cannot strand later output
 in an archive, prunes the oldest generation, shifts numbered archives, and
@@ -2385,7 +2385,7 @@ the target writer from the producer thread. After entry 108, standalone service
 logging still performed file open/write/flush/rotation synchronously and thus
 needed a dedicated consumer boundary.
 
-**Local handling and evidence:** Local `15d3f86` wraps the rotating service
+**Local handling and evidence:** Local `585b046` wraps the rotating service
 writer in an unbounded FIFO channel drained by one named `rns-log-writer`
 thread. Writes enqueue owned buffers; `flush()` is an ordering barrier that
 waits until prior records have been handled and propagates worker I/O failures.
@@ -2410,7 +2410,7 @@ directly applicable. Upstream has no production profiling call sites in this
 commit, so the native collector likewise remains opt-in rather than adding
 unrelated instrumentation.
 
-**Local handling and evidence:** Local `6dc1ec3` adds process-global RAII timing
+**Local handling and evidence:** Local `89dad4b` adds process-global RAII timing
 guards with tag/parent aggregation and stable mean, median, sample-deviation
 results. It serializes the exact upstream dictionary field names through local
 pickle RPC and remote MessagePack status, preserves the existing native
@@ -2675,154 +2675,154 @@ promotion gates pass.
   diff and host-lint checks, plus exact-target Python interoperability passed.
   Entry 112 is next.
 - `2026-08-24`: Commit `9302415f` exposes live profiler snapshots through
-  local and remote status and adds `rnstatus -z`. Local mapping `6dc1ec3` adds
+  local and remote status and adds `rnstatus -z`. Local mapping `89dad4b` adds
   the native guard collector, both wire surfaces, and recursive renderer.
   Focused tests, complete affected-crate suites, formatting, diff and host-lint
   checks, plus exact-target Python MessagePack/profile interoperability passed.
   Entry 111 is next.
 - `2026-08-24`: Commit `9da66649` moves Python logging I/O to a dedicated
-  thread. Local mapping `15d3f86` queues standalone service log buffers to one
+  thread. Local mapping `585b046` queues standalone service log buffers to one
   named FIFO writer thread and provides a synchronous flush/error barrier. The
   focused thread-identity regression, complete `rns-cli`, formatting, diff and
   host-lint checks passed. Entry 110 is next.
 - `2026-08-24`: Commit `1694a17a` expands Python logfile rotation to 30 MiB
-  and nine archives. Local mapping `b33a885` replaces standalone `rnsd -s`'s
+  and nine archives. Local mapping `96adade` replaces standalone `rnsd -s`'s
   unbounded append file with a configurable rotating writer using those
   defaults; archive retention and rollover tests plus the complete `rns-cli`,
   formatting, diff and host-lint checks passed. Entry 109 is next.
 - `2026-08-24`: Commit `3fdfe93e` restricts attached-interface packets to one
   online target. Native routing already emits one exact-interface action and
   driver dispatch drops unavailable targets without broadcast fallback; local
-  mapping `ea786c8` pins the offline/other-online case. Focused and complete
+  mapping `99178b0` pins the offline/other-online case. Focused and complete
   `rns-net`, E2E, formatting, diff and host-lint checks passed. Entry 108 is
   next.
 - `2026-08-24`: Commit `a9538e9f` demotes Python's automatic MTU-selection
   diagnostic. Native interfaces register an already-selected MTU and emit no
-  equivalent runtime message; local mapping `8ab860a` records that invariant.
+  equivalent runtime message; local mapping `62b1937` records that invariant.
   Complete `rns-core`, formatting, diff and host-lint checks passed. Entry 107
   is next.
 - `2026-08-24`: Commit `956d688e` guards Python incoming-resource removal
   against duplicate/reentrant cancellation. Rust centralizes collection removal
-  in `LinkManager`; local mapping `7fa5f73` pins repeated receiver cancellation
+  in `LinkManager`; local mapping `f5246d2` pins repeated receiver cancellation
   as an action-free no-op. Focused and complete `rns-net`, E2E, formatting,
   diff and host-lint checks passed. Entry 106 is next.
 - `2026-08-24`: Commit `1c83e732` activates Python's optimized IFAC helpers.
   Rust has only the linear helpers already audited in entries 97 and 99; local
-  mapping `11e1f91` exercises them through live driver outbound and inbound
+  mapping `9347131` exercises them through live driver outbound and inbound
   boundaries. Focused and complete `rns-net`, E2E, formatting, diff and
   host-lint checks passed. Entry 105 is next.
 - `2026-08-24`: Commit `5da0870e` optimizes Python HKDF by cloning pre-keyed
-  hash states. Local mapping `6a97cd0` similarly clones one pre-keyed HMAC per
+  hash states. Local mapping `7e2224f` similarly clones one pre-keyed HMAC per
   expansion block and avoids concatenated input allocation, with reference
   parity across the modulo-256 counter wrap. Complete `rns-crypto`, RFC,
   Python-fixture interop, formatting, diff and host-lint checks passed. Entry
   104 is next.
 - `2026-08-24`: Commit `171868c6` registers Python's IFAC and HKDF suites in a
   manual aggregate runner. Cargo already discovers both native test modules;
-  local mapping `f10205b` records that invariant. The full workspace suite,
+  local mapping `89d2628` records that invariant. The full workspace suite,
   formatting, diff and host-lint checks passed. Entry 103 is next.
 - `2026-08-24`: Commit `cfddb9ab` adds HKDF reference, parity, error, and
-  benchmark tests. Local mapping `f049244` adds all three RFC 5869 SHA-256
+  benchmark tests. Local mapping `c22173b` adds all three RFC 5869 SHA-256
   vectors to the existing native error, fixture-interoperability, and benchmark
   coverage. Complete `rns-crypto` unit/exercise/interop, formatting, diff and
   host-lint checks passed. Entry 102 is next.
 - `2026-08-24`: Commit `929aba02` adds deterministic IFAC parity, invariant,
-  corruption, and benchmark tests. Local mapping `51a768b` ports the applicable
+  corruption, and benchmark tests. Local mapping `28f5c22` ports the applicable
   protocol matrix and corruption coverage to Rust's single linear handler.
   Both focused tests, all 894 `rns-net` unit tests, 54 E2E tests, Python IFAC
   interop, formatting, diff and host-lint checks passed. Entry 101 is next.
 - `2026-08-24`: Commit `7347034f` adds an inactive optimized Python outbound
   IFAC helper. Rust's sole outbound helper already preallocates and performs a
-  single linear XOR/copy pass; local mapping `84ce6de` records that invariant.
+  single linear XOR/copy pass; local mapping `33fe321` records that invariant.
   Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
   passed. Entry 100 is next.
 - `2026-08-24`: Commit `aef9e5b4` extracts Python's outbound IFAC transform
   into a helper without changing behavior. Rust already uses the dedicated
-  `ifac::mask_outbound()` boundary; local mapping `be571b3` pins deterministic
+  `ifac::mask_outbound()` boundary; local mapping `495743e` pins deterministic
   output and immutable plaintext input. Focused and complete `rns-net`, E2E,
   formatting, diff and host-lint checks passed. Entry 99 is next.
 - `2026-08-24`: Commit `e806ae58` adds an inactive optimized Python inbound
   IFAC helper. Rust's sole inbound helper already allocates once and performs a
-  single linear XOR/copy pass; local mapping `11bb952` records that invariant.
+  single linear XOR/copy pass; local mapping `6e2ec6c` records that invariant.
   Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
   passed. Entry 98 is next.
 - `2026-08-24`: Commit `602085a1` extracts Python's legacy inbound IFAC
   algorithm into a helper without changing behavior. Rust already has the
   dedicated stateless `ifac::unmask_inbound()` boundary; local mapping
-  `15126e2` proves an invalid packet cannot affect a following valid packet.
+  `8d1cb5f` proves an invalid packet cannot affect a following valid packet.
   Focused and complete `rns-net`, E2E, formatting, diff and host-lint checks
   passed. Entry 97 is next.
 - `2026-08-24`: Commit `84597f31` adds interface hardware MTU to status RPC and
-  `rnstatus`. Local mapping `9520db6` carries normal and Backbone aggregate MTU
+  `rnstatus`. Local mapping `e6a3350` carries normal and Backbone aggregate MTU
   metadata through the Python-compatible response and renders it beside rate,
   while retaining compatibility with older field-absent payloads. Focused RPC
   and CLI regressions, complete `rns-net` and `rns-cli` suites, E2E tests,
   formatting, diff and host-lint checks passed. Entry 96 is next.
 - `2026-08-24`: Commit `88c629e3` adjusts Backbone bitrate/auto-MTU defaults,
   gives Local servers an explicit hardware MTU, and lowers noisy diagnostics.
-  Local mapping `0386059` aligns server peers, standalone clients, Local and
+  Local mapping `e12d936` aligns server peers, standalone clients, Local and
   shared-client metadata; native logging already supplies the intended level
   behavior. Focused and complete `rns-net`, E2E/interoperability, formatting,
   diff and host-lint checks passed. Entry 95 is next.
 - `2026-08-24`: Commit `2058596d` guards Python outgoing-resource removal
   against duplicate/reentrant cancellation. Rust centralizes removal in the
   link manager and terminal cancellation is already idempotent; local mapping
-  `0aa04f1` pins a repeated all-resource cancel as a no-op. Complete `rns-net`,
+  `4f816a0` pins a repeated all-resource cancel as a no-op. Complete `rns-net`,
   E2E/interoperability, formatting, diff and host-lint checks passed. Entry 94
   is next.
 - `2026-08-24`: Commit `b123a756` requires discovery announcements to identify
-  their transport implementation and version. Local mapping `01e6ce0` emits
+  their transport implementation and version. Local mapping `14714db` emits
   `rns-rs` and the compiled native version under the exact `0xFD`/`0xFC` keys,
   with decoded-map coverage and backward-compatible receiving behavior.
   Complete `rns-net`, E2E/interoperability, formatting, diff and host-lint
   checks passed. Entry 93 is next.
 - `2026-08-24`: Commit `bfab2964` excludes tracked peers still within the
   fast-flap grace allowance from blocked-IP status output. Rust already shares
-  the strict blocked predicate across count and list; local mapping `66c41fd`
+  the strict blocked predicate across count and list; local mapping `b12b919`
   pins the mixed blocked/grace-period boundary. Complete `rns-net`,
   E2E/interoperability, formatting, diff and host-lint checks passed. Entry 92
   is next.
 - `2026-08-24`: Commit `1bad7f58` removes a stale-interface active-link packet
   from both Python dedup generations during a failover race. Local mapping
-  `804537d` implements native bounded-FIFO removal and releases the hash at the
+  `fcab026` implements native bounded-FIFO removal and releases the hash at the
   driver/link-route boundary. Focused regressions and complete core/net,
   E2E/interoperability, formatting, diff and host-lint checks passed. Entry 91
   is next.
 - `2026-08-24`: Commit `26e3ca4f` adds shared-medium interface-class hints.
-  Local mapping `afe06eb` supplies the native registry classifier with a full
+  Local mapping `211e677` supplies the native registry classifier with a full
   positive/negative type matrix. Complete `rns-net`, E2E/interoperability,
   formatting, diff and host-lint checks passed. Entry 90 is next.
 - `2026-08-24`: Commit `d25ea38c` adds PPS sampling/status output and excludes
-  local shared-server traffic from aggregate totals. Local mapping `67af8c1`
+  local shared-server traffic from aggregate totals. Local mapping `ef51d1d`
   covers sampling, aggregation, RPC, remote management and `rnstatus -p` with
   focused regressions. Complete `rns-net`/`rns-cli`, E2E/interoperability,
   formatting, diff and host-lint checks passed. Entry 89 is next.
 - `2026-08-24`: Commit `e32d4df7` documents the bitrate and adaptive path
-  timeout query APIs. Local mapping `7a8b704` adds equivalent native Rustdoc;
+  timeout query APIs. Local mapping `26323ea` adds equivalent native Rustdoc;
   documentation generation, formatting, diff checks, and warning-free host
   lint passed. Entry 88 is next.
 - `2026-08-24`: Commit `561e2f23` changes only upstream RNS 1.5.0 changelog
-  text. Local mapping `9506a72` records the reusable non-vendoring and
+  text. Local mapping `6dd92d7` records the reusable non-vendoring and
   source-verification policy in the integration runbook. The full diff and
   diff checks passed. Entry 87 is next.
 - `2026-08-24`: Commit `b397870c` is structurally covered by Rust's silent
   optional bitrate calculation and fixed timeout fallback. Local mapping
-  `fc9e989` documents the invariant and strengthens empty/zero-bitrate
+  `1985606` documents the invariant and strengthens empty/zero-bitrate
   assertions. The focused test, all core tests, formatting, diff checks, and
   warning-free host lint passed. Entry 86 is next.
 - `2026-08-24`: Commit `6f6751d6` now applies the egress limiter after two
   samples, preemptively includes the candidate request in its rate, and checks
-  live state again at recursive-request dispatch. Local mapping `5d733ca`
+  live state again at recursive-request dispatch. Local mapping `576864f`
   carries the exact upstream trailer. Focused pre-port failures, all
   `rns-core`/`rns-net` tests and interoperability suites, formatting, diff
   checks, and warning-free host lint passed. Entry 85 is next.
 - `2026-08-24`: Commit `2aed542e` is structurally covered by Rust's existing
-  single borrowed path lookup. Local mapping `df07f45` documents the invariant
+  single borrowed path lookup. Local mapping `02f228c` documents the invariant
   and strengthens the removed-path fallback regression. The focused test, all
   649 core unit tests, core interoperability/integration suites, formatting,
   diff checks, and warning-free host lint passed. Entry 84 is next.
 - `2026-08-24`: Commit `091e021d` rejects outbound packets at the Pathfinder
-  hop limit before routing or packet-hash retention. Local mapping `6df6413`
+  hop limit before routing or packet-hash retention. Local mapping `c549c0c`
   carries the exact upstream trailer. The focused pre-port failure, all 649
   core unit tests, core interoperability/integration suites, formatting, diff
   checks, and warning-free host lint passed. Entry 82 is final; entry 83 is the
