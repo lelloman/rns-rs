@@ -199,7 +199,7 @@ diff is reviewed and mapped to exactly one rns-rs commit.
 | 110 | `9302415f9e61897ff07b9b7bba5083ebfb5b536f` | Add live profiling results output to rnstatus. | Integrated | Local `6dc1ec3` adds process-global guard-based timing, local RPC and remote-status results, plus nested `rnstatus -z` rendering |
 | 111 | `cf5d6a796ef12e40e57407e4c9c2eedacd19315e` | Rework profilers for running indefinitely. | Integrated | Local `2f388ce` bounds timestamped captures per tag/thread and publishes all-time plus 1/5/30/60-minute statistics and table output |
 | 112 | `40281f91daac478d5ab15d36b9ac20dfa5eb5b04` | Decorator for profiling functions. | Integrated | Local `03a12ec` adds explicit-tag function/closure profiling adapters with default or custom retention and unwind-safe recording |
-| 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Needs coordinated port | Profiling aggregation limits, reentrancy, and time-window semantics |
+| 113 | `dca5b9639ea4d90b99675782eeec8ec7f797970b` | Limit total profiler captures per tag, not per thread; handle reentrant profilers; make stats time windows be non-overlapping. | Integrated | Local `45fd406` applies one shared tag limit, tracks in-flight/reentrant guards independently, and publishes disjoint live-window counts, sums, threads, and statistics |
 | 114 | `9c2f424aaac0eb4a7545cb7731d630e7faf2b2a9` | Merge branch 'live_profiling' into live_profiler_merge | Non-runtime | Merge commit with no independent diff beyond inventoried profiling parents |
 | 115 | `1034d788286c2315e28491275f68cee87624a713` | Merge adjustments | Needs decision | Post-merge Reticulum/profiling adjustments and observable status behavior |
 | 116 | `39899651ee5bb3de3bce49af06162329925aff12` | Merge adjustments | Needs decision | Follow-up logging/profiling adjustments after the merge |
@@ -2441,13 +2441,43 @@ tests, formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
-All 112 commits through `40281f91` have a final disposition. Entries 113–117
+### 113. `dca5b963` — Limit total profiler captures per tag, handle reentrancy, and split windows
+
+**Upstream change:** Moves the 10,000-sample bound from every tag/thread pair
+to one deque per tag, inserts mutable in-flight captures at context entry so a
+thread can reenter the same profiler safely, excludes incomplete captures from
+statistics, moves sample/thread counts into `stats_all`, adds per-window count
+and sum fields, and makes the 0–1/1–5/5–30/30–60 minute windows disjoint.
+
+**Rust applicability:** All retention, aggregation, RPC/MessagePack fields, and
+CLI presentation introduced by entries 110–112 are directly affected. A guard
+that records only on drop is naturally reentrant but does not reproduce
+upstream's bounded in-flight ordering, so the native lifecycle also needed to
+register captures before the profiled call begins.
+
+**Local handling and evidence:** Local `45fd406` assigns each guard a capture
+ID, inserts it into a single bounded per-tag deque at start, and completes that
+exact record at drop. Evicted or still-running captures are safely absent from
+snapshots, nested same-tag guards complete independently, and all-time thread
+cardinality plus disjoint window count/sum/statistics use the final upstream
+wire shape. `rnstatus` reads counts from `stats_all` and renders the six-column
+table with the four range labels. Focused tests cover cross-thread shared
+eviction, active/reentrant guards, all four disjoint windows, RPC shape, and CLI
+output. All 904 `rns-net` unit tests, 54 network integration tests, all 121
+`rns-cli` unit tests and its integration suites, formatting, diff checks, and
+warning-free host lint passed. An exact `dca5b963` worktree verified the Python
+dictionary fields, two-thread aggregate, four non-overlapping windows,
+MessagePack round trip, and renderer labels.
+
+**Final disposition:** Integrated.
+
+All 113 commits through `dca5b963` have a final disposition. Entries 114–117
 await per-commit review. The accepted baseline remains commit 73 until the full
 promotion gates pass.
 
 ## Integration Plan
 
-1. Process outstanding entries 113–117 in upstream ancestry order.
+1. Process outstanding entries 114–117 in upstream ancestry order.
 2. Review each upstream diff against the corresponding Rust implementation.
 3. Add focused regressions and port applicable behavior across protocol, RPC,
    utilities, status output, and documentation.
@@ -2468,6 +2498,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-25`: Commit `dca5b963` moves retention to a shared per-tag bound,
+  handles reentrant/in-flight captures, and makes live windows disjoint. Local
+  mapping `45fd406` ports the lifecycle, evolved wire schema, and six-column
+  `rnstatus` table. Focused and complete affected-crate tests, formatting, diff
+  and host-lint checks, plus exact-target Python interoperability passed. Entry
+  114 is next.
 - `2026-08-25`: Commit `40281f91` adds decorator-based function profiling.
   Local mapping `03a12ec` provides the native explicit-tag closure/function
   adapters, including custom retention, return forwarding, and unwind
