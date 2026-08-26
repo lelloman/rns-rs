@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 134.
+of this tranche resumed on 2026-08-26 and is complete through entry 135.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -234,7 +234,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 134.
 | 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Non-runtime | Local `c4199c9`; removes only stale TODO text and whitespace around an unchanged unconditional return |
 | 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Structurally covered | Local `baabb25`; announce and local-link destination reads share the native engine's exclusive processing turn and need no separate map lock |
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Non-runtime | Local `8b75d72`; quote changes restore older-Python parsing while preserving profiler output and expose no Rust compatibility surface |
-| 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Needs review | New post-target merge; complete parent/diff review required |
+| 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Non-runtime | Local `59172e2`; all runtime parent changes map through entries 121–134, while the merge-only delta changes two benchmark-comment headings and adds a final newline |
 | 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Needs review | New post-target commit; complete diff review required |
 | 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Needs review | New post-target commit; complete diff review required |
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Needs review | New post-target commit; complete diff review required |
@@ -262,6 +262,25 @@ surface.
 appropriate because there is no corresponding output path to exercise. A
 repository-wide search confirmed that RNode code is limited to protocol,
 interface, runtime configuration, ESP32 bridge, and hardware examples.
+
+**Final disposition:** Non-runtime.
+
+### 135. `9f66b5a6` — Merge branch 'optimize'
+
+**Upstream change:** Merges the optimize branch into the benchmark branch. The
+first-parent tree gains the already reviewed entries 122–134. Compared with the
+optimize parent, the merge resolution changes two pasted benchmark headings
+from `Transport Core Throughput` to `Transport Throughput` and adds the missing
+final newline; it changes no executable line.
+
+**Rust applicability:** The branch's runtime work has individual mappings in
+upstream ancestry order. Merge-only benchmark comment presentation has no
+native runtime surface and must not cause those parent changes to be counted
+again.
+
+**Local handling and evidence:** Local `59172e2` requires merge audits to
+compare every parent and classify only resolution deltas. Both parent diffs and
+the combined diff were reviewed; diff checks passed.
 
 **Final disposition:** Non-runtime.
 
@@ -2956,8 +2975,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 135–142 as the next ordered review tranche; entries
-   118–134 are complete in local mappings `f330b6e..8b75d72`.
+2. Continue entries 136–142 as the next ordered review tranche; entries
+   118–135 are complete in local mappings `f330b6e..59172e2`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2973,6 +2992,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Merge `9f66b5a6` introduces no new runtime delta beyond its
+  reviewed parents; its merge resolution changes two benchmark-comment labels
+  and a final newline. Local mapping `59172e2` records parent-aware merge review;
+  diff checks passed. Entry 136 is next.
 - `2026-08-26`: Commit `d38a8de5` restores old-Python parsing by changing
   profiler f-string quote style without changing output. Local mapping
   `8b75d72` records the language-specific disposition; complete diff review and
