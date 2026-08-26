@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 128.
+of this tranche resumed on 2026-08-26 and is complete through entry 129.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -228,7 +228,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 128.
 | 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Integrated | Local `5037209` maps existing `b2fafb2`; bounded TTL cache skips repeat Ed25519 verification and binds cache keys to both destination and signature |
 | 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Structurally covered | Local `a869e2c`; exclusive native engine uses one keyed typed link entry without locks, linear searches, or denormalized cache invalidation |
 | 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Non-runtime | Local `209268b`; cross-language fast-path labels require behaviorally equivalent implementations before measurements are comparable |
-| 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Structurally covered | Local `5979f92`; upstream removes its denormalized forwarding-cache experiment, while native routing deliberately retains one authoritative typed link table |
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Needs review | New post-target commit; complete diff review required |
@@ -2801,6 +2801,25 @@ measurements can be compared. The complete diff and diff checks passed.
 
 **Final disposition:** Non-runtime.
 
+### 129. `17e980ff` — Cleanup
+
+**Upstream change:** Removes the experimental forwarding-cache read path,
+population logic, feature switch, and diagnostic output introduced by entry
+127. Link forwarding again derives its decision from the authoritative link
+table.
+
+**Rust applicability:** Native routing never introduced the denormalized cache:
+its exclusive engine ownership and keyed typed entry already provide the useful
+fast path without duplicate state or invalidation hazards. This cleanup confirms
+that the authoritative-table design is the durable behavior to preserve.
+
+**Local handling and evidence:** Local `5979f92` makes the no-secondary-cache
+invariant explicit beside the routing lookup. Cross-interface forwarding,
+local-client hop rewriting, and instance-local hop preservation tests passed,
+along with formatting, diff checks, and warning-free host lint.
+
+**Final disposition:** Structurally covered.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2852,8 +2871,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 129–142 as the next ordered review tranche; entries
-   118–128 are complete in local mappings `f330b6e..209268b`.
+2. Continue entries 130–142 as the next ordered review tranche; entries
+   118–129 are complete in local mappings `f330b6e..5979f92`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2869,6 +2888,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `17e980ff` removes upstream's experimental denormalized
+  forwarding cache. Local mapping `5979f92` records the native invariant of one
+  authoritative typed link table; focused routing tests, formatting, host lint,
+  and diff checks passed. Entry 130 is next.
 - `2026-08-26`: Commit `f1117099` updates Python benchmark fast-path and usage
   labels only. Local mapping `209268b` requires behavioral equivalence before
   cross-language feature-labelled measurements are compared. Complete diff
