@@ -1482,6 +1482,17 @@ fn test_async_announce_completion_inserts_sig_cache_and_prevents_requeue() {
 }
 
 #[test]
+fn announce_signature_cache_key_binds_destination_and_signature() {
+    let signature = [0x5a; 64];
+    let first = TransportEngine::announce_sig_cache_key([0x11; 16], &signature);
+    let other_destination = TransportEngine::announce_sig_cache_key([0x12; 16], &signature);
+    let other_signature = TransportEngine::announce_sig_cache_key([0x11; 16], &[0x5b; 64]);
+
+    assert_ne!(first, other_destination);
+    assert_ne!(first, other_signature);
+}
+
+#[test]
 fn test_tick_culls_expired_path() {
     let mut engine = TransportEngine::new(make_config(false));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
