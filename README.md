@@ -176,10 +176,10 @@ announces, path requests, then ingress-limited traffic. Their positive maximum
 lengths can be set in `[reticulum]`:
 
 ```ini
-qlen_in_data = 4096
-qlen_in_announce = 256
-qlen_in_pr = 256
-qlen_in_il = 128
+qlen_in_data = 1024
+qlen_in_announce = 128
+qlen_in_pr = 128
+qlen_in_il = 8
 ```
 
 The values above are the defaults. A packet is dropped when its class queue is

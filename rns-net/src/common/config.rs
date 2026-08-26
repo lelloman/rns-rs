@@ -1363,7 +1363,7 @@ qlen_in_il = 104
                 data: 64,
                 announce: 64,
                 path_request: 64,
-                ingress_limited: 64,
+                ingress_limited: 8,
             }
         );
     }

@@ -22,10 +22,10 @@ pub use crate::common::event::{
 /// Concrete Event type using boxed sync Writer.
 pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;
 
-pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 4096;
-pub const DEFAULT_ANNOUNCE_QUEUE_CAPACITY: usize = 256;
-pub const DEFAULT_PATH_REQUEST_QUEUE_CAPACITY: usize = 256;
-pub const DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY: usize = 128;
+pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 1024;
+pub const DEFAULT_ANNOUNCE_QUEUE_CAPACITY: usize = 128;
+pub const DEFAULT_PATH_REQUEST_QUEUE_CAPACITY: usize = 128;
+pub const DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InboundQueueCapacities {
@@ -546,6 +546,19 @@ mod tests {
             Event::Frame { interface_id, .. } => interface_id.0,
             other => panic!("expected frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn inbound_queue_defaults_match_upstream() {
+        assert_eq!(
+            InboundQueueCapacities::default(),
+            InboundQueueCapacities {
+                data: 1024,
+                announce: 128,
+                path_request: 128,
+                ingress_limited: 8,
+            }
+        );
     }
 
     #[test]
