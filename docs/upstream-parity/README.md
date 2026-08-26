@@ -122,6 +122,9 @@ mapping instead of translating implementation-specific benchmark machinery.
 Patch-equivalent commits reached through different upstream merge parents still
 receive separate ordered mappings: record the identical tree effect and explain
 why the later lineage adds no independent runtime behavior.
+Pasted benchmark results are observational context, not acceptance thresholds,
+unless the audit also fixes the hardware, build profile, workload, warm-up and
+sampling method, and an explicit regression budget.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
