@@ -10,6 +10,7 @@ pub enum PacketError {
     ExceedsMtu,
     MissingTransportId,
     InvalidHeaderType,
+    ZeroLengthData,
     /// Hop counts at or above PATHFINDER_M are invalid on received wire packets.
     InvalidHopCount(u8),
 }
@@ -21,6 +22,7 @@ impl fmt::Display for PacketError {
             PacketError::ExceedsMtu => write!(f, "Packet exceeds MTU"),
             PacketError::MissingTransportId => write!(f, "HEADER_2 requires transport_id"),
             PacketError::InvalidHeaderType => write!(f, "Invalid header type"),
+            PacketError::ZeroLengthData => write!(f, "Zero-length data field"),
             PacketError::InvalidHopCount(hops) => write!(f, "Invalid hop count: {}", hops),
         }
     }
@@ -228,6 +230,9 @@ impl RawPacket {
 
             let context = raw[2 + 2 * dst_len];
             let data = raw[2 + 2 * dst_len + 1..].to_vec();
+            if data.is_empty() {
+                return Err(PacketError::ZeroLengthData);
+            }
 
             let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
 
@@ -255,6 +260,9 @@ impl RawPacket {
 
             let context = raw[2 + dst_len];
             let data = raw[2 + dst_len + 1..].to_vec();
+            if data.is_empty() {
+                return Err(PacketError::ZeroLengthData);
+            }
 
             let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
 
@@ -502,6 +510,31 @@ mod tests {
     #[test]
     fn test_unpack_too_short() {
         assert!(RawPacket::unpack(&[0x00; 5]).is_err());
+    }
+
+    #[test]
+    fn unpack_rejects_zero_length_data_for_both_header_types() {
+        for header_type in [constants::HEADER_1, constants::HEADER_2] {
+            let packet = RawPacket::pack(
+                PacketFlags {
+                    header_type,
+                    context_flag: constants::FLAG_UNSET,
+                    transport_type: constants::TRANSPORT_BROADCAST,
+                    destination_type: constants::DESTINATION_SINGLE,
+                    packet_type: constants::PACKET_TYPE_DATA,
+                },
+                0,
+                &[0x42; 16],
+                (header_type == constants::HEADER_2).then_some(&[0x24; 16]),
+                constants::CONTEXT_NONE,
+                b"",
+            )
+            .unwrap();
+            assert!(matches!(
+                RawPacket::unpack(&packet.raw),
+                Err(PacketError::ZeroLengthData)
+            ));
+        }
     }
 
     #[test]
