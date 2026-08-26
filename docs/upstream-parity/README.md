@@ -133,6 +133,8 @@ matching label text alone is not comparability evidence.
 Formatting-only upstream cleanups are non-runtime mappings: inspect the full
 diff for hidden control-flow changes, then record the source-only result instead
 of manufacturing a Rust code change.
+Likewise, removing stale TODOs or comments without changing executable lines is
+source hygiene, not evidence that an equivalent native behavior changed.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
