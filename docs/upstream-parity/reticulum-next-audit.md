@@ -211,12 +211,13 @@ A fresh two-remote refresh after completing the requested 44-commit tranche
 found 25 additional canonical rGit commits after the pinned target `0e070aac`,
 through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
-the completed 44-commit target and form the next ordered tranche; none is
-silently folded into entries 74–117 or treated as reviewed.
+the completed 44-commit target and form the next ordered tranche. They were
+initially inventoried without being silently folded into entries 74–117; review
+of this tranche resumed on 2026-08-26 with entry 118.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
-| 118 | `7311dc85445fa13863fca288e3706d5c72abd738` | Reduced path table lock acquisitions in inbound processing | Needs review | New post-target commit; complete diff review required |
+| 118 | `7311dc85445fa13863fca288e3706d5c72abd738` | Reduced path table lock acquisitions in inbound processing | Structurally covered | Local `f330b6e`; exclusive mutable engine ownership avoids Python's path-table locks and repeated lookups, with absent-path LRPROOF rebalance regression |
 | 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Needs review | New post-target commit; complete diff review required |
 | 120 | `d81421dad3badb7672ac2171e253af6643c5ecdd` | Avoid additional packet hashing under lock in inbound | Needs review | New post-target commit; complete diff review required |
 | 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
@@ -2597,6 +2598,26 @@ formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Non-runtime.
 
+### 118. `7311dc85` — Reduced path table lock acquisitions in inbound processing
+
+**Upstream change:** Reuses one destination path entry during transported
+packet routing and removes several short path-table lock scopes around route
+timestamp and authenticated LRPROOF hop updates. Missing paths remain valid
+no-op cases for the path mutation.
+
+**Rust applicability:** Rust routes outbound packets through one immutable
+`BTreeMap` lookup and owns transport state behind one exclusive mutable engine
+borrow during link/path rebalancing. It therefore has neither Python's shared
+list-entry mutation nor its independently acquired path-table locks.
+
+**Local handling and evidence:** Local `f330b6e` documents the ownership and
+lookup invariant and adds a focused regression proving that a valid LRPROOF
+still updates the link route when the optional destination path has disappeared.
+Both focused rebalance tests, all 651 `rns-core` unit tests, 56 integration
+tests, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Structurally covered.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2648,7 +2669,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Keep entries 118–142 isolated as the next ordered review tranche.
+2. Continue entries 119–142 as the next ordered review tranche; entry 118 is
+   complete in local mapping `f330b6e`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2664,6 +2686,12 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `7311dc85` reduces Python path-table lock acquisitions
+  and repeated lookups during inbound processing. Rust already owns the engine
+  mutably for the corresponding mutations; local mapping `f330b6e` documents
+  that invariant and proves authenticated LRPROOF link rebalancing survives an
+  absent destination path. Focused and complete `rns-core`, formatting, diff,
+  and host-lint checks passed. Entry 119 is next.
 - `2026-08-25`: Commit `0e070aac` restores late Python imports to avoid package
   initialization cycles. Rust resolves modules statically; local mapping
   `18f1656` documents that difference and proves crate-root profiler access.
