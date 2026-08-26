@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 132.
+of this tranche resumed on 2026-08-26 and is complete through entry 133.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -232,7 +232,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 132.
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Non-runtime | Local `1e0abaa`; complete diff is an indentation correction with no changed Python control flow or native behavior |
 | 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Structurally covered | Local `d8025d7`; exclusive engine ownership makes local-destination lookup lock-free, and an unroutable link fast-path miss is intentionally non-warning |
 | 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Non-runtime | Local `c4199c9`; removes only stale TODO text and whitespace around an unchanged unconditional return |
-| 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Needs review | New post-target commit; complete diff review required |
+| 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Structurally covered | Local `baabb25`; announce and local-link destination reads share the native engine's exclusive processing turn and need no separate map lock |
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Needs review | New post-target commit; complete diff review required |
 | 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Needs review | New post-target merge; complete parent/diff review required |
 | 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Needs review | New post-target commit; complete diff review required |
@@ -264,6 +264,25 @@ repository-wide search confirmed that RNode code is limited to protocol,
 interface, runtime configuration, ESP32 bridge, and hardware examples.
 
 **Final disposition:** Non-runtime.
+
+### 133. `dea0124c` — Reduced lock acquisition
+
+**Upstream change:** Replaces two destinations-map lock/read sequences with
+direct keyed lookups: one after announce validation and one while dispatching a
+link request to a local destination. Lookup order and delivery conditions stay
+the same.
+
+**Rust applicability:** Native announce verification, destination-registry
+reads, and local link-request delivery execute within one mutable transport
+engine call. Exclusive ownership supplies the synchronization that Python's
+shared class-level map otherwise needs.
+
+**Local handling and evidence:** Local `baabb25` documents the lock-free keyed
+registry invariant at announce and local-delivery lookup sites. All 653
+`rns-core` unit tests and 56 crate integration tests passed, along with
+formatting, diff checks, and warning-free host lint.
+
+**Final disposition:** Structurally covered.
 
 ### 131. `8221f82d` — Cleanup
 
@@ -2921,8 +2940,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 133–142 as the next ordered review tranche; entries
-   118–132 are complete in local mappings `f330b6e..c4199c9`.
+2. Continue entries 134–142 as the next ordered review tranche; entries
+   118–133 are complete in local mappings `f330b6e..baabb25`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2938,6 +2957,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `dea0124c` removes destination-map locks from upstream
+  announce and local link-request lookups. Local mapping `baabb25` records the
+  native exclusive-engine invariant; all `rns-core` tests, formatting, host
+  lint, and diff checks passed. Entry 134 is next.
 - `2026-08-26`: Commit `aba8d606` removes a stale TODO and whitespace around
   an unchanged return. Local mapping `c4199c9` classifies the source-only
   cleanup; complete diff review and diff checks passed. Entry 133 is next.
