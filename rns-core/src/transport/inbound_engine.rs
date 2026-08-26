@@ -483,7 +483,10 @@ impl TransportEngine {
         PacketBytes::from(raw)
     }
 
-    fn announce_sig_cache_key(destination_hash: [u8; 16], signature: &[u8; 64]) -> [u8; 32] {
+    pub(super) fn announce_sig_cache_key(
+        destination_hash: [u8; 16],
+        signature: &[u8; 64],
+    ) -> [u8; 32] {
         let mut material = [0u8; 80];
         material[..16].copy_from_slice(&destination_hash);
         material[16..].copy_from_slice(signature);
