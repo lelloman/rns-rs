@@ -1,5 +1,9 @@
 FROM rust:1.96.0-bookworm AS builder
 WORKDIR /build
+# Keep release compilation reliable on memory-constrained Docker hosts.
+ENV CARGO_BUILD_JOBS=1 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    RUST_MIN_STACK=67108864
 COPY Cargo.toml Cargo.lock ./
 COPY build build
 COPY rns-crypto rns-crypto

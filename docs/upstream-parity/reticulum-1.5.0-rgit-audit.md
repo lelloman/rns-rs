@@ -1,29 +1,32 @@
-# Reticulum 1.5.0 Upstream Audit
+# Reticulum 1.5.0 rgit Upstream Audit
 
 ## Scope and Baseline
 
-- audit date: `2026-08-24`
-- previous accepted version: `1.4.2`
-- previous normative commit: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`
-- target version: `1.5.0`
+- audit date: `2026-08-26`
+- previous accepted version: `1.5.0` rgit
+- previous normative commit: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
+- target version: `1.5.0` rgit
 - target tag or ref: `rgit/master`
-- target normative commit: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
-- target root tree: `63406bb90d4d3125a9cba3b0811297d58435f4e2`
-- target `RNS` tree: `6aa6691d8dcca0d9aa7b6f7affed803185d20e69`
+- target normative commit: `d80245b62c7169f68995b2f11b30b971de7a5dbf`
+- target root tree: `65b89f07749b33027b6e9b26410c826ff6e11b2a`
+- target `RNS` tree: `131b3b0dcd512eb838bb79a574ec308477d49ae8`
 - version assertion: `RNS.__version__ == "1.5.0"`
-- audited range: `4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45..b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
-- commits in range: `73`
+- audited range: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8..d80245b62c7169f68995b2f11b30b971de7a5dbf`
+- commits in range: `69`
 - repositories checked: canonical rGit `rgit/master` and GitHub mirror `origin/master`
-- local integration range: `88b7098..2e67683` on `dev`
+- local mapping range: `88b7098..5274ee5` on `dev`
 
-All 73 canonical commits are integrated, structurally covered, deferred,
-or non-runtime as recorded below, and the accepted baseline is
-`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`. A fresh 2026-08-21 refresh found
-five newer rGit commits after commit 68 through
-`b3ef214e7257a1e5b674f8b1f002f05e78b090b8`; all five now have final
-dispositions below. The GitHub mirror tip
-`b48b96e61676504e0a4e527b33b9a0b4495c6872` remains behind the accepted
-baseline, so the remotes do not agree.
+All 69 canonical commits after the previous accepted baseline are integrated,
+structurally covered, or non-runtime as recorded in entries 74–142 below.
+Each maps to exactly one non-empty, ancestry-ordered rns-rs commit carrying the
+full canonical `Upstream-Commit` trailer. Entries 1–73 are retained as context
+for the preceding 1.5.0 development-line acceptance; they are outside this
+qualified promotion range.
+
+A fresh two-remote refresh completed on 2026-08-26. Canonical rgit `master`
+remains at `d80245b62c7169f68995b2f11b30b971de7a5dbf`; GitHub `master` remains at
+`b123a756b0e203070f7ff6325aaa2168504e0d82`, so the remotes do not agree and CI
+cannot yet fetch the exact normative object from the mirror.
 
 A fresh 2026-08-22 refresh found eight additional canonical rGit commits after
 the accepted baseline, through
@@ -3108,28 +3111,40 @@ The new entries 118–142 are a subsequent tranche and are not part of this
   superseded copies of mappings 82–91 and has unrelated untracked work, so it
   was deliberately left untouched rather than destructively cleaned up.
 
-The accepted baseline remains commit 73 until the full
-promotion gates pass.
+At this tranche-verification point, the accepted baseline remained commit 73;
+the complete-range promotion evidence is recorded below.
 
 ## Integration Plan
 
-1. Complete the original 44-commit tranche verification above.
-2. Verify all entries 74–142 have exactly one ordered, non-empty local mapping;
-   entries 118–142 are complete in local mappings `f330b6e..5274ee5`.
-3. Run the complete parity gates and promote the baseline only if they pass.
+1. Completed the original 44-commit tranche verification above.
+2. Verified all entries 74–142 have exactly one ordered, non-empty local
+   mapping; entries 118–142 are complete in mappings `f330b6e..5274ee5`.
+3. Recorded the complete parity gates and promoted the qualified 1.5.0 rgit
+   baseline with unavailable validation explicitly unclaimed.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
+
+- `2026-08-26`: Full promotion verification passed the 69-to-69 ordered,
+  non-empty mapping check; exact-target packet, link, Resource, and all five
+  utility interoperability cases; the hook-enabled workspace suite; host
+  release build; formatting, lint, diff, and web UI checks; and the dual-VPS
+  daily smoke including impairment and forced reconnect. A fresh two-remote
+  fetch kept canonical rgit at `d80245b6`. The constrained Docker release image
+  build passed after two compiler-process crashes; the topology matrix was not
+  rerun at the operator's stop point. Physical Weave HIL is unclaimed, and the
+  local ARMv7 attempt was inconclusive due to a host cross-assembler failure.
+  These caveats are preserved in the final parity record.
 
 - `2026-08-26`: Commit `d80245b6` tightens packet validity, announce frame-size
   violations, and monotonic traffic classification. Local mapping `5274ee5`
