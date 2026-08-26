@@ -377,6 +377,9 @@ fn reader_loop(
     // Initial delay for hardware init (matches Python: sleep(2.0))
     thread::sleep(Duration::from_secs(2));
     let mut connected_once = false;
+    // RNode is the PHY-stat-capable interface: retain each modem report until
+    // the matching frame is enqueued, attach it to that frame, then clear it
+    // so later frames cannot inherit stale RSSI or SNR.
     let mut last_rssi: Option<i16> = None;
     let mut last_snr: Option<f32> = None;
     if let Err(e) = detect_and_configure(&mut reader, &writer, &config) {
