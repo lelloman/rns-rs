@@ -510,8 +510,8 @@ mod tests {
         queue.insert(make_entry(0x01, 1, 100.0));
         queue.insert(make_entry(0x02, 2, 200.0));
 
-        // At time 100 + 86400 + 1 = 86501, entry 0x01 should be stale
-        queue.remove_stale(86501.0);
+        // One second beyond the lifetime, only the newer entry remains.
+        queue.remove_stale(100.0 + constants::QUEUED_ANNOUNCE_LIFE + 1.0);
         assert_eq!(queue.entries.len(), 1);
         assert_eq!(queue.entries[0].destination_hash, [0x02; 16]);
     }
