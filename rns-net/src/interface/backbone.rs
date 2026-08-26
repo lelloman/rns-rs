@@ -32,14 +32,47 @@ use crate::interface::{
 };
 use crate::BackbonePeerStateEntry;
 
-/// Maximum frame size inherited by standalone Backbone clients.
-pub(crate) const HW_MTU: usize = 1_048_576;
 /// Upstream listener bitrate estimate used for accepted peers.
-pub(crate) const SERVER_BITRATE_GUESS: u64 = 500_000_000;
-/// MTU selected by upstream autoconfiguration at 500 Mbps.
-pub(crate) const SERVER_PEER_MTU: u32 = 131_072;
+pub(crate) const SERVER_BITRATE_GUESS: u64 = 100_000_000;
 /// Standalone Backbone client bitrate estimate.
 pub(crate) const CLIENT_BITRATE_GUESS: u64 = 100_000_000;
+
+const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
+    if bitrate >= 1_000_000_000 {
+        Some(524_288)
+    } else if bitrate >= 750_000_000 {
+        Some(262_144)
+    } else if bitrate >= 400_000_000 {
+        Some(131_072)
+    } else if bitrate >= 200_000_000 {
+        Some(65_536)
+    } else if bitrate >= 100_000_000 {
+        Some(32_768)
+    } else if bitrate >= 10_000_000 {
+        Some(16_384)
+    } else if bitrate >= 5_000_000 {
+        Some(8_192)
+    } else if bitrate >= 2_000_000 {
+        Some(4_096)
+    } else if bitrate >= 1_000_000 {
+        Some(2_048)
+    } else if bitrate >= 62_500 {
+        Some(1_024)
+    } else {
+        None
+    }
+}
+
+/// Effective frame size selected by upstream autoconfiguration at 100 Mbps.
+pub(crate) const HW_MTU: usize = match auto_mtu_for_bitrate(CLIENT_BITRATE_GUESS) {
+    Some(mtu) => mtu as usize,
+    None => 1_048_576,
+};
+/// MTU selected for listener-accepted peers at the listener bitrate estimate.
+pub(crate) const SERVER_PEER_MTU: u32 = match auto_mtu_for_bitrate(SERVER_BITRATE_GUESS) {
+    Some(mtu) => mtu,
+    None => 1_048_576,
+};
 
 /// Configuration for a backbone interface.
 #[derive(Debug, Clone)]
@@ -2101,10 +2134,29 @@ mod tests {
 
     #[test]
     fn backbone_class_defaults_preserve_server_and_client_distinction() {
-        assert_eq!(SERVER_BITRATE_GUESS, 500_000_000);
-        assert_eq!(SERVER_PEER_MTU, 131_072);
+        assert_eq!(SERVER_BITRATE_GUESS, 100_000_000);
+        assert_eq!(SERVER_PEER_MTU, 32_768);
         assert_eq!(CLIENT_BITRATE_GUESS, 100_000_000);
-        assert_eq!(HW_MTU, 1_048_576);
+        assert_eq!(HW_MTU, 32_768);
+    }
+
+    #[test]
+    fn auto_mtu_thresholds_include_exact_bitrate_boundaries() {
+        for (bitrate, mtu) in [
+            (1_000_000_000, Some(524_288)),
+            (750_000_000, Some(262_144)),
+            (400_000_000, Some(131_072)),
+            (200_000_000, Some(65_536)),
+            (100_000_000, Some(32_768)),
+            (10_000_000, Some(16_384)),
+            (5_000_000, Some(8_192)),
+            (2_000_000, Some(4_096)),
+            (1_000_000, Some(2_048)),
+            (62_500, Some(1_024)),
+            (62_499, None),
+        ] {
+            assert_eq!(auto_mtu_for_bitrate(bitrate), mtu, "bitrate {bitrate}");
+        }
     }
 
     #[test]
