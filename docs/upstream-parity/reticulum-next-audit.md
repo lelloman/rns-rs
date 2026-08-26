@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 121.
+of this tranche resumed on 2026-08-26 and is complete through entry 122.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -221,7 +221,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 121.
 | 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Structurally covered | Local `e7e182e`; one authoritative `HashMap<LinkId, ManagedLink>` indexes every link state and cleanup leaves no stale keyed destination |
 | 120 | `d81421dad3badb7672ac2171e253af6643c5ecdd` | Avoid additional packet hashing under lock in inbound | Structurally covered | Local `7e8a4e6`; `RawPacket` computes its full hash once and derives every truncated reverse-route key from the cached prefix |
 | 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Non-runtime | Local `28cc6f8`; benchmark-only mapping policy records scenario review and native Criterion evidence without treating Python private-state machinery as protocol parity |
-| 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Non-runtime | Local `2781d3c`; separate upstream lineage adds the exact entry-121 benchmark blob, with policy requiring an independent mapping for patch-equivalent merge parents |
 | 123 | `77f763258441fb9ce71db084703b64608559211d` | Avoid extra epoll modifies when EPOLLOUT already set | Needs review | New post-target commit; complete diff review required |
 | 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Needs review | New post-target commit; complete diff review required |
 | 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
@@ -2676,6 +2676,24 @@ upstream diff was reviewed; diff checks and warning-free host lint passed.
 
 **Final disposition:** Non-runtime.
 
+### 122. `5e013464` — Added throughput benchmarker
+
+**Upstream change:** Adds `tests/throughput.py` on a separate upstream parent
+lineage. Its complete 883-line contents and resulting blob
+`7112eaf0` are identical to entry 121; it adds no different scenario, runtime
+module, or tree effect on that lineage.
+
+**Rust applicability:** The same benchmark-only analysis as entry 121 applies,
+but the separate upstream commit still requires its own ordered mapping so the
+later merge ancestry remains auditable.
+
+**Local handling and evidence:** Local `2781d3c` extends the workflow policy to
+require independent mappings for patch-equivalent commits on different merge
+parents while explicitly recording their identical tree effect. The complete
+diff and blob identity were reviewed, and diff checks passed.
+
+**Final disposition:** Non-runtime.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2727,8 +2745,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 122–142 as the next ordered review tranche; entries
-   118–121 are complete in local mappings `f330b6e..28cc6f8`.
+2. Continue entries 123–142 as the next ordered review tranche; entries
+   118–122 are complete in local mappings `f330b6e..2781d3c`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2744,6 +2762,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `5e013464` adds the exact entry-121 throughput benchmark
+  blob on a separate upstream parent lineage. Local mapping `2781d3c` records
+  the patch-equivalent merge-parent policy and preserves its independent audit
+  identity. Complete diff/blob review and diff checks passed. Entry 123 is next.
 - `2026-08-26`: Commit `b9278ce3` adds a Python-only throughput benchmarker.
   It changes no runtime behavior; local mapping `28cc6f8` records how benchmark
   scenarios map to native Criterion evidence without conflating private Python
