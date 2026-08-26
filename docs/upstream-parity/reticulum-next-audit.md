@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 125.
+of this tranche resumed on 2026-08-26 and is complete through entry 126.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -225,7 +225,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 125.
 | 123 | `77f763258441fb9ce71db084703b64608559211d` | Avoid extra epoll modifies when EPOLLOUT already set | Structurally covered | Local `e095553`; native server poller tracks reads only and the cloned writer retries its own pending buffer without writable-interest modifications |
 | 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Non-runtime | Local `cebceae`; output-label changes and pasted machine measurements are observational unless paired with a reproducible environment and explicit regression budget |
 | 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Non-runtime | Local `ecadb09`; comment-only result history is summarized with provenance in audits rather than copied into native harness source |
-| 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Needs review | New post-target commit; complete diff review required |
+| 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Integrated | Local `5037209` maps existing `b2fafb2`; bounded TTL cache skips repeat Ed25519 verification and binds cache keys to both destination and signature |
 | 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Needs review | New post-target commit; complete diff review required |
 | 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
 | 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Needs review | New post-target commit; complete diff review required |
@@ -2744,6 +2744,26 @@ than copied into Criterion source. The complete diff and diff checks passed.
 
 **Final disposition:** Non-runtime.
 
+### 126. `d044db29` — Cache announce signature validation
+
+**Upstream change:** Adds a per-Packet flag after successful announce signature
+validation so repeated validation of that Python object skips Ed25519 work.
+
+**Rust applicability:** Native production work in `b2fafb2` already implements
+a stronger bounded cross-packet `AnnounceSignatureCache`, keyed by
+`SHA-256(destination_hash || signature)`, with configurable capacity and TTL.
+Only successful validation inserts a key; synchronous and asynchronous announce
+paths consume the same cache.
+
+**Local handling and evidence:** Local `5037209` adds the ordered upstream
+mapping and a security regression proving that changing either destination or
+signature changes the cache key. Existing cache hit, insertion, TTL, capacity,
+disablement, unchecked reconstruction, and async completion tests also passed.
+The focused regression, all 653 `rns-core` unit tests, 56 integration tests,
+formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2795,8 +2815,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 126–142 as the next ordered review tranche; entries
-   118–125 are complete in local mappings `f330b6e..ecadb09`.
+2. Continue entries 127–142 as the next ordered review tranche; entries
+   118–126 are complete in local mappings `f330b6e..5037209`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2812,6 +2832,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `d044db29` caches successful announce signature
+  validation. Existing native `b2fafb2` provides a bounded cross-packet TTL
+  cache; local mapping `5037209` pins destination/signature key separation.
+  Focused and complete `rns-core`, formatting, diff, and host-lint checks
+  passed. Entry 127 is next.
 - `2026-08-26`: Commit `516cb106` adds only a third commented benchmark-result
   block and comment formatting. Local mapping `ecadb09` keeps such raw result
   archives in provenance-aware audits rather than native harness source.
