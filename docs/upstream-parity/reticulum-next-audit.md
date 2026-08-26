@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 133.
+of this tranche resumed on 2026-08-26 and is complete through entry 134.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -233,7 +233,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 133.
 | 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Structurally covered | Local `d8025d7`; exclusive engine ownership makes local-destination lookup lock-free, and an unroutable link fast-path miss is intentionally non-warning |
 | 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Non-runtime | Local `c4199c9`; removes only stale TODO text and whitespace around an unchanged unconditional return |
 | 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Structurally covered | Local `baabb25`; announce and local-link destination reads share the native engine's exclusive processing turn and need no separate map lock |
-| 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Needs review | New post-target commit; complete diff review required |
+| 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Non-runtime | Local `8b75d72`; quote changes restore older-Python parsing while preserving profiler output and expose no Rust compatibility surface |
 | 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Needs review | New post-target merge; complete parent/diff review required |
 | 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Needs review | New post-target commit; complete diff review required |
 | 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Needs review | New post-target commit; complete diff review required |
@@ -283,6 +283,22 @@ registry invariant at announce and local-delivery lookup sites. All 653
 formatting, diff checks, and warning-free host lint.
 
 **Final disposition:** Structurally covered.
+
+### 134. `d38a8de5` — Fixed f-strings for old snakes
+
+**Upstream change:** Changes dictionary-key quotes inside six profiler
+f-strings so Python versions predating relaxed f-string parsing accept the
+source. Interpolated fields and rendered text are unchanged.
+
+**Rust applicability:** This is source-language parser compatibility for an
+upstream-only profiler. Rust does not parse or expose these Python f-strings,
+and there is no wire, configuration, or output change to reproduce.
+
+**Local handling and evidence:** Local `8b75d72` records how to classify
+source-language compatibility fixes that preserve behavior. Complete diff
+review and diff checks passed.
+
+**Final disposition:** Non-runtime.
 
 ### 131. `8221f82d` — Cleanup
 
@@ -2940,8 +2956,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 134–142 as the next ordered review tranche; entries
-   118–133 are complete in local mappings `f330b6e..baabb25`.
+2. Continue entries 135–142 as the next ordered review tranche; entries
+   118–134 are complete in local mappings `f330b6e..8b75d72`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2957,6 +2973,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `d38a8de5` restores old-Python parsing by changing
+  profiler f-string quote style without changing output. Local mapping
+  `8b75d72` records the language-specific disposition; complete diff review and
+  diff checks passed. Entry 135 is next.
 - `2026-08-26`: Commit `dea0124c` removes destination-map locks from upstream
   announce and local link-request lookups. Local mapping `baabb25` records the
   native exclusive-engine invariant; all `rns-core` tests, formatting, host
