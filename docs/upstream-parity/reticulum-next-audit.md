@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 135.
+of this tranche resumed on 2026-08-26 and is complete through entry 136.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -235,7 +235,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 135.
 | 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Structurally covered | Local `baabb25`; announce and local-link destination reads share the native engine's exclusive processing turn and need no separate map lock |
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Non-runtime | Local `8b75d72`; quote changes restore older-Python parsing while preserving profiler output and expose no Rust compatibility surface |
 | 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Non-runtime | Local `59172e2`; all runtime parent changes map through entries 121–134, while the merge-only delta changes two benchmark-comment headings and adds a final newline |
-| 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Needs review | New post-target commit; complete diff review required |
+| 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Integrated | Local `4e88224`; native data, announce, path-request, and ingress-limited defaults and docs now use `1024/128/128/8` with an exact-values regression |
 | 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Needs review | New post-target commit; complete diff review required |
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Needs review | New post-target commit; complete diff review required |
 | 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Needs review | New post-target commit; complete diff review required |
@@ -264,6 +264,26 @@ repository-wide search confirmed that RNode code is limited to protocol,
 interface, runtime configuration, ESP32 bridge, and hardware examples.
 
 **Final disposition:** Non-runtime.
+
+### 136. `be4ee329` — Tuned queuelen defaults
+
+**Upstream change:** Lowers default inbound DATA, ANNOUNCE, PATH_REQUEST, and
+INGRESS_LIMITED queue capacities from `4096/256/256/128` to
+`1024/128/128/8`, and updates the interface documentation. The unused outbound
+queue constant is also removed.
+
+**Rust applicability:** Native transport exposes the same four independently
+bounded inbound classes and `qlen_in_*` configuration keys, so their defaults
+are user-visible resource and overload behavior. Rust has no corresponding
+disabled outbound packet queue constant.
+
+**Local handling and evidence:** Local `4e88224` changes all four native
+defaults and README examples, adds an exact-values regression, and updates the
+legacy shared-capacity expectation to respect the new ingress-limited ceiling.
+All 907 `rns-net` unit tests, 54 E2E tests, Python/IFAC interoperability, fixture
+suites, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
 
 ### 135. `9f66b5a6` — Merge branch 'optimize'
 
@@ -2975,8 +2995,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 136–142 as the next ordered review tranche; entries
-   118–135 are complete in local mappings `f330b6e..59172e2`.
+2. Continue entries 137–142 as the next ordered review tranche; entries
+   118–136 are complete in local mappings `f330b6e..4e88224`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2992,6 +3012,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `be4ee329` tunes inbound queue defaults to
+  `1024/128/128/8`. Local mapping `4e88224` updates native defaults, legacy
+  capacity behavior, docs, and an exact regression; the complete `rns-net`
+  suite, interop/fixtures, formatting, host lint, and diff checks passed. Entry
+  137 is next.
 - `2026-08-26`: Merge `9f66b5a6` introduces no new runtime delta beyond its
   reviewed parents; its merge resolution changes two benchmark-comment labels
   and a final newline. Local mapping `59172e2` records parent-aware merge review;
