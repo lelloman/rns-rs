@@ -290,6 +290,10 @@ impl TransportEngine {
             return;
         }
 
+        // This single keyed lookup is the native link fast path. The engine is
+        // already exclusively borrowed, and the typed entry contains every
+        // routing and hop-rewrite field, so a second denormalized cache would
+        // add invalidation risk without avoiding locks or linear searches.
         let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
             return;
         };
