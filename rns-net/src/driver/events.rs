@@ -80,6 +80,14 @@ impl Driver {
                 return;
             }
         };
+        if parsed_packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
+            && packet.len() > rns_core::constants::MTU
+        {
+            if let Some(entry) = self.interfaces.get_mut(&interface_id) {
+                entry.stats.protocol_violations += 1;
+            }
+            return;
+        }
         let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
         let tagless_path_request = is_path_request && parsed_packet.data.len() <= 16;
         if tagless_path_request || self.engine.is_unvalidated_link_packet(&parsed_packet) {

@@ -3711,6 +3711,37 @@ fn excessive_path_request_data_counts_a_protocol_violation() {
 }
 
 #[test]
+fn oversized_announce_counts_a_protocol_violation() {
+    let mut driver = new_test_driver();
+    register_test_generic_interface(&mut driver, 1, "announce-size-violations");
+
+    let packet = RawPacket::pack_with_max_mtu(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        0,
+        &[0xA5; 16],
+        None,
+        constants::CONTEXT_NONE,
+        &vec![0x55; constants::MTU],
+        constants::MTU * 2,
+    )
+    .unwrap();
+    assert!(packet.raw.len() > constants::MTU);
+
+    driver.handle_frame_event(InterfaceId(1), packet.raw, None, None);
+
+    assert_eq!(
+        driver.interfaces[&InterfaceId(1)].stats.protocol_violations,
+        1
+    );
+}
+
+#[test]
 fn ifac_flag_without_ifac_counts_an_ifac_violation() {
     let mut driver = new_test_driver();
     register_test_generic_interface(&mut driver, 1, "ifac-violations");

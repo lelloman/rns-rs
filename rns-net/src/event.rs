@@ -211,7 +211,11 @@ impl EventSender {
         if packet.as_ref().is_some_and(|packet| {
             packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
         }) {
-            return Some(QueueClass::Announce);
+            return Some(if state.announce_bursts.contains_key(interface_id) {
+                QueueClass::IngressLimited
+            } else {
+                QueueClass::Announce
+            });
         }
         if packet
             .as_ref()
@@ -735,6 +739,23 @@ mod tests {
         tx.set_ingress_bursts(InterfaceId(4), None, Some(1.0));
         tx.send(frame(4, path_dest, rns_core::constants::PACKET_TYPE_DATA))
             .unwrap();
+
+        tx.set_ingress_bursts(InterfaceId(4), None, None);
+        let received = rx.recv_classified().unwrap();
+        assert!(received.ingress_limited);
+        assert_eq!(frame_interface(received.event), 4);
+    }
+
+    #[test]
+    fn ingress_limited_announce_keeps_higher_traffic_class() {
+        let (tx, rx) = channel_with_capacity(2);
+        tx.set_ingress_bursts(InterfaceId(4), Some(1.0), None);
+        tx.send(frame(
+            4,
+            [0xA4; 16],
+            rns_core::constants::PACKET_TYPE_ANNOUNCE,
+        ))
+        .unwrap();
 
         tx.set_ingress_bursts(InterfaceId(4), None, None);
         let received = rx.recv_classified().unwrap();
