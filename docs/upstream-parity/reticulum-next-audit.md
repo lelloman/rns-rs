@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 136.
+of this tranche resumed on 2026-08-26 and is complete through entry 137.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -236,7 +236,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 136.
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Non-runtime | Local `8b75d72`; quote changes restore older-Python parsing while preserving profiler output and expose no Rust compatibility surface |
 | 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Non-runtime | Local `59172e2`; all runtime parent changes map through entries 121–134, while the merge-only delta changes two benchmark-comment headings and adds a final newline |
 | 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Integrated | Local `4e88224`; native data, announce, path-request, and ingress-limited defaults and docs now use `1024/128/128/8` with an exact-values regression |
-| 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Needs review | New post-target commit; complete diff review required |
+| 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Non-runtime | Local `40a9523`; adds only a private Python link-transit benchmark size and presentation label, without changing protocol limits or runtime behavior |
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Needs review | New post-target commit; complete diff review required |
 | 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Needs review | New post-target commit; complete diff review required |
 | 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Needs review | New post-target commit; complete diff review required |
@@ -284,6 +284,24 @@ All 907 `rns-net` unit tests, 54 E2E tests, Python/IFAC interoperability, fixtur
 suites, formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
+
+### 137. `dd204e11` — Added 32k throughput run
+
+**Upstream change:** Adds a 32,768-byte link-transit case and its default sample
+count to the private Python throughput matrix, includes it in the link benchmark
+selection, and shortens one printed heading. Runtime transport code is
+unchanged.
+
+**Rust applicability:** The harness constructs private transport state and its
+payload size does not redefine a wire MTU or accepted native packet size. No
+cross-language performance budget or equivalent native hot-path methodology is
+specified.
+
+**Local handling and evidence:** Local `40a9523` records that benchmark-only
+size extensions require a comparable path and accepted performance requirement
+before they are ported. Complete diff review and diff checks passed.
+
+**Final disposition:** Non-runtime.
 
 ### 135. `9f66b5a6` — Merge branch 'optimize'
 
@@ -2995,8 +3013,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 137–142 as the next ordered review tranche; entries
-   118–136 are complete in local mappings `f330b6e..4e88224`.
+2. Continue entries 138–142 as the next ordered review tranche; entries
+   118–137 are complete in local mappings `f330b6e..40a9523`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -3012,6 +3030,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `dd204e11` adds a private 32 KiB link-transit benchmark
+  case and changes a heading. Local mapping `40a9523` records why benchmark
+  payloads do not redefine protocol limits; complete diff review and diff
+  checks passed. Entry 138 is next.
 - `2026-08-26`: Commit `be4ee329` tunes inbound queue defaults to
   `1024/128/128/8`. Local mapping `4e88224` updates native defaults, legacy
   capacity behavior, docs, and an exact regression; the complete `rns-net`
