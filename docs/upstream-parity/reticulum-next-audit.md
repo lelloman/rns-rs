@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 139.
+of this tranche resumed on 2026-08-26 and is complete through entry 140.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -239,7 +239,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 139.
 | 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Non-runtime | Local `40a9523`; adds only a private Python link-transit benchmark size and presentation label, without changing protocol limits or runtime behavior |
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Integrated | Local `bdf37c4`; Backbone defaults now select a 32768-byte effective MTU at 100 Mbps and every automatic-MTU threshold includes its exact boundary |
 | 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Non-runtime | Local `eb3eb65`; queue increases are private benchmark setup that deliberately suppresses drops and do not alter production defaults |
-| 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Needs review | New post-target commit; complete diff review required |
+| 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Integrated | Local `2a2b3ae`; queued announces are bounded to 4096 entries and three hours, while native log macros already avoid disabled-message formatting |
 | 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Needs review | New post-target commit; complete diff review required |
 | 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Needs review | New post-target commit; complete diff review required |
 
@@ -264,6 +264,25 @@ repository-wide search confirmed that RNode code is limited to protocol,
 interface, runtime configuration, ESP32 bridge, and hardware examples.
 
 **Final disposition:** Non-runtime.
+
+### 140. `0536b972` — Tuned QUEUED_ANNOUNCES. Logging.
+
+**Upstream change:** Reduces per-interface queued-announce retention from
+16,384 entries for 24 hours to 4,096 entries for three hours. It also avoids
+computing queue-height and wait-time strings unless extreme logging is enabled.
+
+**Rust applicability:** Native announce queues use the same global capacity and
+lifetime constants for oldest-entry eviction and stale removal. Rust logging
+macros already guard argument evaluation by the enabled level, so the logging
+change is structurally covered.
+
+**Local handling and evidence:** Local `2a2b3ae` updates both retention limits
+and makes the stale-removal regression derive its boundary from the lifetime
+constant. Focused capacity and expiry tests, all 653 `rns-core` unit tests and
+56 integration tests, formatting, diff checks, and warning-free host lint
+passed.
+
+**Final disposition:** Integrated.
 
 ### 138. `be2ba7c2` — Tuned auto MTU configurration
 
@@ -3052,8 +3071,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 140–142 as the next ordered review tranche; entries
-   118–139 are complete in local mappings `f330b6e..eb3eb65`.
+2. Continue entries 141–142 as the next ordered review tranche; entries
+   118–140 are complete in local mappings `f330b6e..2a2b3ae`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -3069,6 +3088,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `0536b972` reduces queued-announce retention to 4,096
+  entries and three hours. Local mapping `2a2b3ae` updates both limits and the
+  expiry regression; all `rns-core` tests, formatting, host lint, and diff
+  checks passed. Entry 141 is next.
 - `2026-08-26`: Commit `47add638` raises queue capacities only inside the
   Python throughput harness. Local mapping `eb3eb65` isolates benchmark
   capacity overrides from production defaults; complete diff review and diff
