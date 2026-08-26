@@ -317,6 +317,11 @@ impl Default for BackboneConfig {
 const MAX_PENDING_BYTES: usize = 512 * 1024;
 
 /// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
+///
+/// The server poller owns only readable interest on the original stream. This
+/// independent writer therefore never enables or re-arms writable poll events;
+/// an already-pending buffer is retried directly before accepting another
+/// frame.
 struct BackboneWriter {
     stream: TcpStream,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
