@@ -218,6 +218,11 @@ impl TransportEngine {
 
     /// Validate a mismatched-hop LRPROOF and update the relay link route and
     /// destination path atomically enough for normal proof routing to resume.
+    ///
+    /// The engine is exclusively borrowed for the whole operation, so the
+    /// link and path mutations need neither separate path-table locks nor
+    /// repeated map lookups. A path can legitimately be absent; that does not
+    /// invalidate the authenticated link-route update.
     pub fn rebalance_link_path_from_lrproof(
         &mut self,
         link_id: &[u8; 16],

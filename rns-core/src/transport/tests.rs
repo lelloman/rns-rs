@@ -739,6 +739,24 @@ fn valid_lrproof_rebalances_relay_link_and_destination_path() {
 }
 
 #[test]
+fn valid_lrproof_rebalances_link_when_destination_path_is_absent() {
+    let (mut engine, link_id, destination_hash, signing_public, proof) =
+        lrproof_rebalance_fixture();
+    assert!(engine.path_table.remove(&destination_hash).is_some());
+
+    assert!(engine.rebalance_link_path_from_lrproof(
+        &link_id,
+        5,
+        InterfaceId(2),
+        &proof,
+        &signing_public,
+    ));
+
+    assert_eq!(engine.link_table[&link_id].remaining_hops, 5);
+    assert_eq!(engine.hops_to(&destination_hash), None);
+}
+
+#[test]
 fn relay_rebalance_rejects_invalid_signature_wrong_interface_and_validated_link() {
     let (mut engine, link_id, destination_hash, signing_public, mut proof) =
         lrproof_rebalance_fixture();
