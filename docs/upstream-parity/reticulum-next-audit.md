@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 130.
+of this tranche resumed on 2026-08-26 and is complete through entry 131.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -230,7 +230,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 130.
 | 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Non-runtime | Local `209268b`; cross-language fast-path labels require behaviorally equivalent implementations before measurements are comparable |
 | 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Structurally covered | Local `5979f92`; upstream removes its denormalized forwarding-cache experiment, while native routing deliberately retains one authoritative typed link table |
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Non-runtime | Local `1e0abaa`; complete diff is an indentation correction with no changed Python control flow or native behavior |
-| 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Structurally covered | Local `d8025d7`; exclusive engine ownership makes local-destination lookup lock-free, and an unroutable link fast-path miss is intentionally non-warning |
 | 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Needs review | New post-target commit; complete diff review required |
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Needs review | New post-target commit; complete diff review required |
@@ -264,6 +264,24 @@ repository-wide search confirmed that RNode code is limited to protocol,
 interface, runtime configuration, ESP32 bridge, and hardware examples.
 
 **Final disposition:** Non-runtime.
+
+### 131. `8221f82d` — Cleanup
+
+**Upstream change:** Replaces a warning for a link packet without an outbound
+route with an extreme-level diagnostic and removes the destinations-map lock
+around one keyed lookup. Packet routing and delivery conditions are unchanged.
+
+**Rust applicability:** Native transport processes the destination registry
+under an exclusive engine borrow, so its keyed lookup needs no independent
+lock. A link entry that cannot route from the receiving interface is already a
+quiet fast-path miss rather than an operator warning.
+
+**Local handling and evidence:** Local `d8025d7` documents both invariants at
+their native decision points. The cross-interface link-routing and local
+delivery regressions passed, along with formatting, diff checks, and
+warning-free host lint.
+
+**Final disposition:** Structurally covered.
 
 ### 2. `38a73f95` — Added ability to include operator LXMF address in interface discovery info
 
@@ -2888,8 +2906,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 131–142 as the next ordered review tranche; entries
-   118–130 are complete in local mappings `f330b6e..1e0abaa`.
+2. Continue entries 132–142 as the next ordered review tranche; entries
+   118–131 are complete in local mappings `f330b6e..d8025d7`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2905,6 +2923,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `8221f82d` removes a Python destination-map lock and
+  demotes a no-route link diagnostic. Local mapping `d8025d7` documents the
+  native lock-free lookup and quiet fast-path miss; focused tests, formatting,
+  host lint, and diff checks passed. Entry 132 is next.
 - `2026-08-26`: Commit `38e9d1cd` corrects Python indentation without changing
   control flow. Local mapping `1e0abaa` records the required full-diff check for
   formatting-only cleanups; diff checks passed. Entry 131 is next.
