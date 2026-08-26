@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 127.
+of this tranche resumed on 2026-08-26 and is complete through entry 128.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -227,7 +227,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 127.
 | 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Non-runtime | Local `ecadb09`; comment-only result history is summarized with provenance in audits rather than copied into native harness source |
 | 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Integrated | Local `5037209` maps existing `b2fafb2`; bounded TTL cache skips repeat Ed25519 verification and binds cache keys to both destination and signature |
 | 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Structurally covered | Local `a869e2c`; exclusive native engine uses one keyed typed link entry without locks, linear searches, or denormalized cache invalidation |
-| 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Non-runtime | Local `209268b`; cross-language fast-path labels require behaviorally equivalent implementations before measurements are comparable |
 | 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Needs review | New post-target commit; complete diff review required |
@@ -2785,6 +2785,22 @@ formatting, diff checks, and warning-free host lint.
 
 **Final disposition:** Structurally covered.
 
+### 128. `f1117099` — Updated througput benchmarker
+
+**Upstream change:** Detects the experimental Python fast-path flag under its
+actual name, removes the `informational` qualifier, and changes one usage line
+from repeatable to singular. Benchmark workloads and runtime code are unchanged.
+
+**Rust applicability:** These are Python harness presentation details. Native
+routing is structurally fast without the named Python cache switch, so identical
+label text would not describe identical implementation modes.
+
+**Local handling and evidence:** Local `209268b` records that cross-language
+benchmark feature labels require behaviorally equivalent implementations before
+measurements can be compared. The complete diff and diff checks passed.
+
+**Final disposition:** Non-runtime.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2836,8 +2852,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 128–142 as the next ordered review tranche; entries
-   118–127 are complete in local mappings `f330b6e..a869e2c`.
+2. Continue entries 129–142 as the next ordered review tranche; entries
+   118–128 are complete in local mappings `f330b6e..209268b`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2853,6 +2869,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `f1117099` updates Python benchmark fast-path and usage
+  labels only. Local mapping `209268b` requires behavioral equivalence before
+  cross-language feature-labelled measurements are compared. Complete diff
+  review and diff checks passed. Entry 129 is next.
 - `2026-08-26`: Commit `2d216714` adds an experimental denormalized Python link
   forwarding cache. Native routing already uses one lock-free keyed typed
   entry; local mapping `a869e2c` documents that safer fast-path invariant.
