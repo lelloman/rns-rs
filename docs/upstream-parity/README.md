@@ -130,6 +130,9 @@ source; summarize their provenance and relevance in the audit instead.
 When comparing upstream and native benchmark results, feature labels such as
 `fast path` must identify behaviorally equivalent implementations or settings;
 matching label text alone is not comparability evidence.
+Formatting-only upstream cleanups are non-runtime mappings: inspect the full
+diff for hidden control-flow changes, then record the source-only result instead
+of manufacturing a Rust code change.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
