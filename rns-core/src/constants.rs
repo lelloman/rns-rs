@@ -163,10 +163,10 @@ pub const ROAMING_PATH_TIME: f64 = 21600.0;
 pub const ANNOUNCE_CAP: f64 = 0.02;
 
 /// Maximum queued announces per interface
-pub const MAX_QUEUED_ANNOUNCES: usize = 16384;
+pub const MAX_QUEUED_ANNOUNCES: usize = 4096;
 
-/// Queued announce lifetime (24 hours)
-pub const QUEUED_ANNOUNCE_LIFE: f64 = 86400.0;
+/// Queued announce lifetime (3 hours)
+pub const QUEUED_ANNOUNCE_LIFE: f64 = 3.0 * 60.0 * 60.0;
 
 /// Retention TTL for announce retransmission state (seconds)
 pub const ANNOUNCE_TABLE_TTL: f64 = 30.0;
