@@ -133,6 +133,9 @@ source; summarize their provenance and relevance in the audit instead.
 When comparing upstream and native benchmark results, feature labels such as
 `fast path` must identify behaviorally equivalent implementations or settings;
 matching label text alone is not comparability evidence.
+Benchmark-only payload-size additions do not redefine protocol MTUs or native
+acceptance limits; port them only when the audit establishes a comparable hot
+path and an accepted performance requirement.
 Formatting-only upstream cleanups are non-runtime mappings: inspect the full
 diff for hidden control-flow changes, then record the source-only result instead
 of manufacturing a Rust code change.
