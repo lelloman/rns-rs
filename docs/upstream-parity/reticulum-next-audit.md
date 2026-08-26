@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 138.
+of this tranche resumed on 2026-08-26 and is complete through entry 139.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -238,7 +238,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 138.
 | 136 | `be4ee32908d2ab94a8f5de571f67a88407b1b15a` | Tuned queuelen defaults | Integrated | Local `4e88224`; native data, announce, path-request, and ingress-limited defaults and docs now use `1024/128/128/8` with an exact-values regression |
 | 137 | `dd204e11ce7aed7aa50307a67128e560477f8612` | Added 32k throughput run | Non-runtime | Local `40a9523`; adds only a private Python link-transit benchmark size and presentation label, without changing protocol limits or runtime behavior |
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Integrated | Local `bdf37c4`; Backbone defaults now select a 32768-byte effective MTU at 100 Mbps and every automatic-MTU threshold includes its exact boundary |
-| 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Needs review | New post-target commit; complete diff review required |
+| 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Non-runtime | Local `eb3eb65`; queue increases are private benchmark setup that deliberately suppresses drops and do not alter production defaults |
 | 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Needs review | New post-target commit; complete diff review required |
 | 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Needs review | New post-target commit; complete diff review required |
 | 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Needs review | New post-target commit; complete diff review required |
@@ -284,6 +284,25 @@ below-minimum case. All 42 Backbone tests, formatting, diff checks, and
 warning-free host lint passed.
 
 **Final disposition:** Integrated.
+
+### 139. `47add638` — Increase queues for throughput tests
+
+**Upstream change:** Before constructing the benchmark Reticulum instance,
+raises its four inbound queue class capacities to `4096/1024/1024/1024` to
+avoid drops at high synthetic feed rates. Production constants and runtime
+configuration are unchanged.
+
+**Rust applicability:** This is private benchmark environment setup, not a
+compatibility default. Native Criterion hot paths do not use the Python
+inbound worker queues, so copying these values would neither reproduce the
+workload nor improve comparability.
+
+**Local handling and evidence:** Local `eb3eb65` requires benchmark-local
+capacity overrides to remain isolated from production defaults and accompany
+reported results when they suppress overload behavior. Complete diff review
+and diff checks passed.
+
+**Final disposition:** Non-runtime.
 
 ### 136. `be4ee329` — Tuned queuelen defaults
 
@@ -3033,8 +3052,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 139–142 as the next ordered review tranche; entries
-   118–138 are complete in local mappings `f330b6e..bdf37c4`.
+2. Continue entries 140–142 as the next ordered review tranche; entries
+   118–139 are complete in local mappings `f330b6e..eb3eb65`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -3050,6 +3069,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `47add638` raises queue capacities only inside the
+  Python throughput harness. Local mapping `eb3eb65` isolates benchmark
+  capacity overrides from production defaults; complete diff review and diff
+  checks passed. Entry 140 is next.
 - `2026-08-26`: Commit `be2ba7c2` lowers Backbone's estimate to 100 Mbps and
   makes automatic-MTU thresholds inclusive. Local mapping `bdf37c4` applies the
   32768-byte effective default and full boundary regression; all Backbone tests,
