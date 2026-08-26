@@ -10,34 +10,36 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.0`
 - Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`
-- Commit date: `2026-08-21 18:25:59 +0200`
-- Subject: `Added total announce/pr frequency stats`
+- Normative commit: `d80245b62c7169f68995b2f11b30b971de7a5dbf`
+- Commit date: `2026-08-25 14:02:08 +0200`
+- Subject: `Traffic class and violation handling`
 
 The normative baseline is a 1.5.0 rgit `master` development commit observed
-and accepted on 2026-08-21. It follows the signed `1.4.2` tag target
+and accepted on 2026-08-26. It follows the signed `1.4.2` tag target
 `b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
 1.5.0 but has not tagged this development line. GitHub `master` remains at the
 signed-release target and a clean GitHub clone cannot fetch the accepted rgit
-commit by SHA. Exact-target local interop
-for runtime behavior remains recorded at the previous accepted commit. The
+commit by SHA. Exact-target local packet, link, resource, and utility interop
+passed before promotion. The
 current normative checkout asserts `RNS` tree
-`6aa6691d8dcca0d9aa7b6f7affed803185d20e69`. The CI interop lane remains pinned
+`131b3b0dcd512eb838bb79a574ec308477d49ae8`; its root tree is
+`65b89f07749b33027b6e9b26410c826ff6e11b2a`. The CI interop lane remains pinned
 to the fetchable signed-release commit and `RNS` tree
 `3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
 
-The post-release commit disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.4.2-rgit-parity.md`](docs/upstream-parity/reticulum-1.4.2-rgit-parity.md),
+The current development-line disposition and acceptance record is in
+[`docs/upstream-parity/reticulum-1.5.0-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.0-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.4.2-rgit-audit.md`](docs/upstream-parity/reticulum-1.4.2-rgit-audit.md).
+[`docs/upstream-parity/reticulum-1.5.0-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.0-rgit-audit.md).
 The signed-release acceptance remains preserved in the original 1.4.2 records.
-Historical conformance fixtures retain their source provenance. Docker,
-cross-build and physical Weave HIL validation were not rerun for this
-status-display baseline advancement.
+Historical conformance fixtures retain their source provenance. The Docker
+release image build and dual-VPS daily smoke were rerun; the Docker topology
+matrix and physical Weave HIL are explicitly unclaimed, and the local ARMv7
+cross-build was inconclusive due to a host toolchain assembler failure.
 
-## In-Progress 1.5.0 Development Porting Queue
+## Completed 1.5.0 rgit Development Porting Queue
 
-The normative baseline has advanced through
+The first 73 commits advanced the normative baseline through
 `b3ef214e7257a1e5b674f8b1f002f05e78b090b8`. The first commit fixes
 contradictory WiFi status lines in Python's `rnodeconf` utility and is
 non-runtime here because this repository has no equivalent utility. The second
@@ -272,8 +274,15 @@ The seventy-third commit adds aggregate announce and path-request frequencies
 to status totals. Rust now sums the existing bounded per-interface frequency
 estimators, exposes `arxf`, `atxf`, `prxf`, and `ptxf` through local and remote
 status, and appends their human-readable values to detailed `rnstatus` totals.
-The full moving-target inventory and evidence are maintained in
-[`docs/upstream-parity/reticulum-next-audit.md`](docs/upstream-parity/reticulum-next-audit.md).
+The subsequent 69 commits through `d80245b6` add or refine protocol-violation
+accounting, transport statistics, adaptive timeouts, inbound queueing,
+interface MTU behavior, profiler reporting, link lookup/caching paths, queued
+announces, and traffic-class handling. All 69 have final dispositions and
+exactly one ordered local mapping: 30 are integrated, 24 are structurally
+covered by native invariants, and 15 are non-runtime upstream changes.
+
+The full inventory and evidence are maintained in
+[`docs/upstream-parity/reticulum-1.5.0-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.0-rgit-audit.md).
 
 ## Completed 1.4.2..1.4.2-rgit Porting Queue
 
