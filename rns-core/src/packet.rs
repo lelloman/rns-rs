@@ -302,7 +302,10 @@ impl RawPacket {
         self.packet_hash
     }
 
-    /// Truncated hash (first 16 bytes) of the hashable part.
+    /// Truncated hash (first 16 bytes) of the cached packet hash.
+    ///
+    /// Packet construction and unpacking compute `packet_hash` once; routing
+    /// paths use this prefix instead of hashing the raw packet again.
     pub fn get_truncated_hash(&self) -> [u8; 16] {
         let mut result = [0u8; 16];
         result.copy_from_slice(&self.packet_hash[..16]);
@@ -467,6 +470,33 @@ mod tests {
         assert_eq!(unpacked.context, constants::CONTEXT_NONE);
         assert_eq!(unpacked.data, data);
         assert_eq!(unpacked.packet_hash, pkt.packet_hash);
+    }
+
+    #[test]
+    fn truncated_hash_is_derived_from_cached_packet_hash() {
+        let mut packet = RawPacket::pack(
+            PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_DATA,
+            },
+            1,
+            &[0x42; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"cached hash",
+        )
+        .unwrap();
+        let expected: [u8; 16] = packet.packet_hash[..16].try_into().unwrap();
+
+        // Changing the retained wire buffer demonstrates that this accessor is
+        // a prefix operation, not a second hash computation.
+        let last = packet.raw.len() - 1;
+        packet.raw[last] ^= 0xff;
+
+        assert_eq!(packet.get_truncated_hash(), expected);
     }
 
     #[test]
