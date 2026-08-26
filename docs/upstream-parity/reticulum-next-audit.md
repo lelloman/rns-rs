@@ -213,14 +213,14 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 120.
+of this tranche resumed on 2026-08-26 and is complete through entry 121.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
 | 118 | `7311dc85445fa13863fca288e3706d5c72abd738` | Reduced path table lock acquisitions in inbound processing | Structurally covered | Local `f330b6e`; exclusive mutable engine ownership avoids Python's path-table locks and repeated lookups, with absent-path LRPROOF rebalance regression |
 | 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Structurally covered | Local `e7e182e`; one authoritative `HashMap<LinkId, ManagedLink>` indexes every link state and cleanup leaves no stale keyed destination |
 | 120 | `d81421dad3badb7672ac2171e253af6643c5ecdd` | Avoid additional packet hashing under lock in inbound | Structurally covered | Local `7e8a4e6`; `RawPacket` computes its full hash once and derives every truncated reverse-route key from the cached prefix |
-| 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
+| 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Non-runtime | Local `28cc6f8`; benchmark-only mapping policy records scenario review and native Criterion evidence without treating Python private-state machinery as protocol parity |
 | 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
 | 123 | `77f763258441fb9ce71db084703b64608559211d` | Avoid extra epoll modifies when EPOLLOUT already set | Needs review | New post-target commit; complete diff review required |
 | 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Needs review | New post-target commit; complete diff review required |
@@ -2657,6 +2657,25 @@ formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
+### 121. `b9278ce3` — Added throughput benchmarker
+
+**Upstream change:** Adds an 883-line Python benchmark harness for inline and
+drainer throughput across transported SINGLE/LINK packets, terminus delivery,
+announce ingress, and known-path outbound insertion. It constructs extensive
+private Python transport and link state and changes no runtime module.
+
+**Rust applicability:** This is performance tooling rather than observable
+Reticulum behavior. Native Criterion harnesses already exercise link, request,
+resource, and shared-client dispatch, but their architecture and measurements
+do not map one-to-one to Python's threads, locks, or drainer implementation.
+
+**Local handling and evidence:** Local `28cc6f8` adds the audit policy for
+benchmark-only commits: review scenarios, cite native evidence, and port only
+protocol invariants or explicitly accepted performance requirements. The full
+upstream diff was reviewed; diff checks and warning-free host lint passed.
+
+**Final disposition:** Non-runtime.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2708,8 +2727,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 121–142 as the next ordered review tranche; entries
-   118–120 are complete in local mappings `f330b6e..7e8a4e6`.
+2. Continue entries 122–142 as the next ordered review tranche; entries
+   118–121 are complete in local mappings `f330b6e..28cc6f8`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2725,6 +2744,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `b9278ce3` adds a Python-only throughput benchmarker.
+  It changes no runtime behavior; local mapping `28cc6f8` records how benchmark
+  scenarios map to native Criterion evidence without conflating private Python
+  machinery with protocol parity. Diff and host-lint checks passed. Entry 122
+  is next.
 - `2026-08-26`: Commit `d81421da` avoids rehashing packets during inbound
   reverse-route insertion. Rust already caches the full packet hash and copies
   its truncated prefix; local mapping `7e8a4e6` documents and pins that
