@@ -235,6 +235,9 @@ pub enum LinkManagerAction {
 
 /// Manages multiple links, link destinations, and request/response.
 pub struct LinkManager {
+    /// The authoritative O(1) link-id index for pending, active, and closing
+    /// links. Link state lives in each `ManagedLink`, so lifecycle transitions
+    /// cannot desynchronise separate list and lookup-map representations.
     links: HashMap<LinkId, ManagedLink>,
     link_destinations: HashMap<[u8; 16], LinkDestination>,
     request_handlers: Vec<RequestHandlerEntry>,

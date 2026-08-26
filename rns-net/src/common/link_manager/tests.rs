@@ -748,6 +748,9 @@ fn tick_removes_every_closed_pending_link() {
         link_ids.push(link_id);
     }
     assert_eq!(mgr.link_count(), link_ids.len());
+    for link_id in &link_ids {
+        assert!(mgr.is_link_destination(link_id));
+    }
 
     for link_id in &link_ids {
         mgr.teardown_link(link_id);
@@ -765,6 +768,7 @@ fn tick_removes_every_closed_pending_link() {
     assert_eq!(deregistered.len(), link_ids.len());
     for link_id in link_ids {
         assert!(deregistered.contains(&link_id));
+        assert!(!mgr.is_link_destination(&link_id));
     }
 }
 
