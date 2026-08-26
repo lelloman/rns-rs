@@ -314,6 +314,8 @@ impl TransportEngine {
                 skip_local_hops_delta: instance_local_link,
             },
         ) else {
+            // A link entry with no route from this receiving interface is an
+            // expected fast-path miss, not an operator-facing warning.
             return;
         };
 
@@ -364,6 +366,8 @@ impl TransportEngine {
     ) {
         if (ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
             || ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA)
+            // The engine's exclusive borrow makes this a direct, lock-free
+            // destination lookup; delivery reuses the same keyed registry.
             && self
                 .local_destinations
                 .contains_key(&ctx.packet.destination_hash)
