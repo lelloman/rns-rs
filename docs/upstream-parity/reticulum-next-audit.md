@@ -213,12 +213,12 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 with entry 118.
+of this tranche resumed on 2026-08-26 and is complete through entry 119.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
 | 118 | `7311dc85445fa13863fca288e3706d5c72abd738` | Reduced path table lock acquisitions in inbound processing | Structurally covered | Local `f330b6e`; exclusive mutable engine ownership avoids Python's path-table locks and repeated lookups, with absent-path LRPROOF rebalance regression |
-| 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Needs review | New post-target commit; complete diff review required |
+| 119 | `629e4fde2d9095246952874d4b0ce3965b16d0b9` | Added hash map lookups for pending and active links | Structurally covered | Local `e7e182e`; one authoritative `HashMap<LinkId, ManagedLink>` indexes every link state and cleanup leaves no stale keyed destination |
 | 120 | `d81421dad3badb7672ac2171e253af6643c5ecdd` | Avoid additional packet hashing under lock in inbound | Needs review | New post-target commit; complete diff review required |
 | 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
 | 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Needs review | New post-target commit; complete diff review required |
@@ -2618,6 +2618,26 @@ tests, formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Structurally covered.
 
+### 119. `629e4fde` — Added hash map lookups for pending and active links
+
+**Upstream change:** Adds link-ID maps alongside Python's pending and active
+link lists, replaces linear inbound lookups with keyed access, and synchronizes
+the maps during registration, activation, and closed-link cleanup.
+
+**Rust applicability:** `LinkManager` already stores every pending, active, and
+closing `ManagedLink` in one `HashMap<LinkId, ManagedLink>`. Link state is held
+inside the indexed value, so activation requires no move between collections
+and cleanup removes the only authoritative entry.
+
+**Local handling and evidence:** Local `e7e182e` documents the single-map
+lifecycle invariant and strengthens the multi-link cleanup regression to prove
+all keyed destination lookups exist before teardown and disappear afterward.
+The focused regression, all 906 `rns-net` unit tests, 60 integration and
+interoperability tests, formatting, diff checks, and warning-free host lint
+passed.
+
+**Final disposition:** Structurally covered.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2669,8 +2689,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 119–142 as the next ordered review tranche; entry 118 is
-   complete in local mapping `f330b6e`.
+2. Continue entries 120–142 as the next ordered review tranche; entries
+   118–119 are complete in local mappings `f330b6e..e7e182e`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2686,6 +2706,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `629e4fde` adds keyed Python pending/active-link maps.
+  Rust already uses one authoritative hash map for every link state; local
+  mapping `e7e182e` documents that lifecycle and proves multi-link cleanup
+  leaves no stale keyed destinations. Focused and complete `rns-net`,
+  formatting, diff, and host-lint checks passed. Entry 120 is next.
 - `2026-08-26`: Commit `7311dc85` reduces Python path-table lock acquisitions
   and repeated lookups during inbound processing. Rust already owns the engine
   mutably for the corresponding mutations; local mapping `f330b6e` documents
