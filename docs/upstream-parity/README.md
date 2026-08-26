@@ -112,6 +112,14 @@ is absent, integrate the dependency first; do not squash the commits together.
    `UPSTREAM.md` only after every commit has a final disposition and all parity
    gates in the parity template have passed.
 
+Benchmark-only upstream commits receive the same complete diff review, but a
+Python harness that constructs private implementation state is not itself a
+runtime compatibility surface. Record its scenarios and any corresponding
+native Criterion coverage in the audit. Port a scenario when it exposes a
+protocol invariant or an accepted performance requirement; otherwise give the
+commit a `Non-runtime` disposition with a non-empty local policy or evidence
+mapping instead of translating implementation-specific benchmark machinery.
+
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
 
