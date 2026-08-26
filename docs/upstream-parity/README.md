@@ -135,6 +135,9 @@ diff for hidden control-flow changes, then record the source-only result instead
 of manufacturing a Rust code change.
 Likewise, removing stale TODOs or comments without changing executable lines is
 source hygiene, not evidence that an equivalent native behavior changed.
+Source-language parser or interpreter compatibility fixes are non-runtime for
+Rust when they preserve upstream output and behavior; record the supported
+upstream environment without translating language-specific syntax.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
