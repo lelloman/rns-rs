@@ -367,7 +367,8 @@ impl TransportEngine {
         if (ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
             || ctx.packet.flags.packet_type == constants::PACKET_TYPE_DATA)
             // The engine's exclusive borrow makes this a direct, lock-free
-            // destination lookup; delivery reuses the same keyed registry.
+            // destination lookup for data and link requests alike; delivery
+            // reuses the same keyed registry.
             && self
                 .local_destinations
                 .contains_key(&ctx.packet.destination_hash)
@@ -606,6 +607,8 @@ impl TransportEngine {
 
         let received_from = self.announce_received_from(&ctx.packet, ctx.now);
 
+        // Announce verification and this registry read share the engine's
+        // exclusive processing turn, so no destinations-map lock is needed.
         if self
             .local_destinations
             .contains_key(&ctx.packet.destination_hash)
