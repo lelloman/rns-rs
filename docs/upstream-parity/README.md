@@ -127,6 +127,9 @@ unless the audit also fixes the hardware, build profile, workload, warm-up and
 sampling method, and an explicit regression budget.
 Comment-only benchmark result archives need not be copied into native harness
 source; summarize their provenance and relevance in the audit instead.
+When comparing upstream and native benchmark results, feature labels such as
+`fast path` must identify behaviorally equivalent implementations or settings;
+matching label text alone is not comparability evidence.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
