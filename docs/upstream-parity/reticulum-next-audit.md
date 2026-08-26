@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 140.
+of this tranche resumed on 2026-08-26 and is complete through entry 141.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -240,7 +240,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 140.
 | 138 | `be2ba7c2f3f7481760dd18c14aec75c86d65909a` | Tuned auto MTU configurration | Integrated | Local `bdf37c4`; Backbone defaults now select a 32768-byte effective MTU at 100 Mbps and every automatic-MTU threshold includes its exact boundary |
 | 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Non-runtime | Local `eb3eb65`; queue increases are private benchmark setup that deliberately suppresses drops and do not alter production defaults |
 | 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Integrated | Local `2a2b3ae`; queued announces are bounded to 4096 entries and three hours, while native log macros already avoid disabled-message formatting |
-| 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Needs review | New post-target commit; complete diff review required |
+| 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Structurally covered | Local `e40e83b`; RNode is the only native PHY-stat producer and attaches optional RSSI/SNR to each queued frame before clearing pending values |
 | 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Needs review | New post-target commit; complete diff review required |
 
 ## Per-Commit Analysis
@@ -283,6 +283,26 @@ constant. Focused capacity and expiry tests, all 653 `rns-core` unit tests and
 passed.
 
 **Final disposition:** Integrated.
+
+### 141. `dcbc7638` — Fixed RSSI/SNR reporting regression
+
+**Upstream change:** Adds an explicit PHY-stat capability flag and initialized
+RSSI/SNR/quality fields to base interfaces, enables the capability for RNode
+interfaces, and stops clearing RNode RSSI/SNR before transport can attach them
+to the received packet.
+
+**Rust applicability:** Native interfaces do not expose Python-style optional
+attributes. RNode decoding is the explicit PHY-stat producer: it retains modem
+RSSI and SNR reports, attaches them as optional fields to the next frame event,
+then clears them so subsequent frames cannot inherit stale metadata. The same
+typed fields travel through transport and delayed announce release.
+
+**Local handling and evidence:** Local `e40e83b` documents the per-frame
+capability and lifetime invariant at the RNode receive loop. All 14 RNode tests
+and the delayed-announce metadata regression passed, along with formatting,
+diff checks, and warning-free host lint.
+
+**Final disposition:** Structurally covered.
 
 ### 138. `be2ba7c2` — Tuned auto MTU configurration
 
@@ -3071,8 +3091,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 141–142 as the next ordered review tranche; entries
-   118–140 are complete in local mappings `f330b6e..2a2b3ae`.
+2. Complete entry 142 as the final ordered review in this tranche; entries
+   118–141 are complete in local mappings `f330b6e..e40e83b`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -3088,6 +3108,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `dcbc7638` fixes Python RNode PHY-stat capability and
+  metadata lifetime. Local mapping `e40e83b` records the native per-frame typed
+  metadata invariant; RNode and delayed-delivery regressions, formatting, host
+  lint, and diff checks passed. Entry 142 is next.
 - `2026-08-26`: Commit `0536b972` reduces queued-announce retention to 4,096
   entries and three hours. Local mapping `2a2b3ae` updates both limits and the
   expiry regression; all `rns-core` tests, formatting, host lint, and diff
