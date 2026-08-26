@@ -119,6 +119,9 @@ native Criterion coverage in the audit. Port a scenario when it exposes a
 protocol invariant or an accepted performance requirement; otherwise give the
 commit a `Non-runtime` disposition with a non-empty local policy or evidence
 mapping instead of translating implementation-specific benchmark machinery.
+Patch-equivalent commits reached through different upstream merge parents still
+receive separate ordered mappings: record the identical tree effect and explain
+why the later lineage adds no independent runtime behavior.
 
 Useful inspection commands, where `UPSTREAM_REPO` is the first active line from
 `.local/reticulum-upstream.path`:
