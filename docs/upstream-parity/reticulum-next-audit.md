@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 123.
+of this tranche resumed on 2026-08-26 and is complete through entry 124.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -223,7 +223,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 123.
 | 121 | `b9278ce352332a16508b2927e404e4f5dda806e8` | Added throughput benchmarker | Non-runtime | Local `28cc6f8`; benchmark-only mapping policy records scenario review and native Criterion evidence without treating Python private-state machinery as protocol parity |
 | 122 | `5e013464da0c85f147ab8512edb93507e34e1df4` | Added throughput benchmarker | Non-runtime | Local `2781d3c`; separate upstream lineage adds the exact entry-121 benchmark blob, with policy requiring an independent mapping for patch-equivalent merge parents |
 | 123 | `77f763258441fb9ce71db084703b64608559211d` | Avoid extra epoll modifies when EPOLLOUT already set | Structurally covered | Local `e095553`; native server poller tracks reads only and the cloned writer retries its own pending buffer without writable-interest modifications |
-| 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Needs review | New post-target commit; complete diff review required |
+| 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Non-runtime | Local `cebceae`; output-label changes and pasted machine measurements are observational unless paired with a reproducible environment and explicit regression budget |
 | 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
 | 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Needs review | New post-target commit; complete diff review required |
 | 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Needs review | New post-target commit; complete diff review required |
@@ -2713,6 +2713,23 @@ passed.
 
 **Final disposition:** Structurally covered.
 
+### 124. `7e197542` — Updated througput bench
+
+**Upstream change:** Relabels inline benchmark output as `direct`, shortens the
+matrix title, and appends commented fastpath/no-fastpath measurements. No
+runtime or benchmark workload behavior changes.
+
+**Rust applicability:** Output wording and measurements from an unspecified
+Python benchmark host are not protocol behavior or portable Rust performance
+requirements.
+
+**Local handling and evidence:** Local `cebceae` requires fixed hardware,
+build profile, workload, sampling method, and regression budget before pasted
+measurements become acceptance thresholds. The complete diff and diff checks
+passed.
+
+**Final disposition:** Non-runtime.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2764,8 +2781,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 124–142 as the next ordered review tranche; entries
-   118–123 are complete in local mappings `f330b6e..e095553`.
+2. Continue entries 125–142 as the next ordered review tranche; entries
+   118–124 are complete in local mappings `f330b6e..cebceae`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2781,6 +2798,10 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `7e197542` changes benchmark labels and pastes
+  machine-specific throughput results. Local mapping `cebceae` records the
+  reproducibility requirements for treating such measurements as thresholds.
+  Complete diff review and diff checks passed. Entry 125 is next.
 - `2026-08-26`: Commit `77f76325` avoids repeated Python EPOLLOUT interest
   modifications. Rust's read-only server poller and independent cloned writer
   make that state structurally absent; local mapping `e095553` documents the
