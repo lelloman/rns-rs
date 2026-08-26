@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 141.
+of this tranche resumed on 2026-08-26 and is complete through entry 142.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -241,7 +241,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 141.
 | 139 | `47add6381d2a46d5b04a62e2cdcf58cf48808ad4` | Increase queues for throughput tests | Non-runtime | Local `eb3eb65`; queue increases are private benchmark setup that deliberately suppresses drops and do not alter production defaults |
 | 140 | `0536b972d788e3a724393caa2d3acae2893a656a` | Tuned QUEUED_ANNOUNCES. Logging. | Integrated | Local `2a2b3ae`; queued announces are bounded to 4096 entries and three hours, while native log macros already avoid disabled-message formatting |
 | 141 | `dcbc7638d07fe119a733e252d1b2c7a4691ae3fb` | Fixed RSSI/SNR reporting regression | Structurally covered | Local `e40e83b`; RNode is the only native PHY-stat producer and attaches optional RSSI/SNR to each queued frame before clearing pending values |
-| 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Needs review | New post-target commit; complete diff review required |
+| 142 | `d80245b62c7169f68995b2f11b30b971de7a5dbf` | Traffic class and violation handling | Integrated | Local `5274ee5`; empty data is malformed, oversized announces count as protocol violations, and burst-limited announces preserve the higher ingress-limited queue class |
 
 ## Per-Commit Analysis
 
@@ -303,6 +303,29 @@ and the delayed-announce metadata regression passed, along with formatting,
 diff checks, and warning-free host lint.
 
 **Final disposition:** Structurally covered.
+
+### 142. `d80245b6` — Traffic class and violation handling
+
+**Upstream change:** Rejects packets with zero-length data, raises malformed
+packet diagnostics to debug, treats announce frames larger than the protocol
+MTU as interface protocol violations, and promotes announce/path-request
+traffic class with a maximum operation so an existing higher ingress-limited
+class cannot be downgraded.
+
+**Rust applicability:** Native parsing, driver violation accounting, and the
+prioritized inbound queue are separate typed layers, so each rule is directly
+applicable. Malformed input already increments protocol violations without a
+noisy log; the missing empty-data, announce-size, and announce-class rules
+required implementation.
+
+**Local handling and evidence:** Local `5274ee5` adds a distinct empty-data
+parse error for both header formats, rejects over-MTU announces with violation
+accounting, and queues burst-limited announces in the higher ingress-limited
+class even if limiter state changes before dequeue. All 654 `rns-core` and 910
+`rns-net` unit tests, 110 combined integration/E2E tests, Python/IFAC interop,
+fixtures, formatting, diff checks, and warning-free host lint passed.
+
+**Final disposition:** Integrated.
 
 ### 138. `be2ba7c2` — Tuned auto MTU configurration
 
@@ -3091,9 +3114,9 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Complete entry 142 as the final ordered review in this tranche; entries
-   118–141 are complete in local mappings `f330b6e..e40e83b`.
-3. Leave baseline promotion for the complete parity-gate workflow.
+2. Verify all entries 74–142 have exactly one ordered, non-empty local mapping;
+   entries 118–142 are complete in local mappings `f330b6e..5274ee5`.
+3. Run the complete parity gates and promote the baseline only if they pass.
 
 ## Promotion Gates
 
@@ -3108,6 +3131,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `d80245b6` tightens packet validity, announce frame-size
+  violations, and monotonic traffic classification. Local mapping `5274ee5`
+  implements all three with focused regressions; complete `rns-core` and
+  `rns-net` suites, interop/fixtures, formatting, host lint, and diff checks
+  passed. All entries through 142 are reviewed; promotion verification is next.
 - `2026-08-26`: Commit `dcbc7638` fixes Python RNode PHY-stat capability and
   metadata lifetime. Local mapping `e40e83b` records the native per-frame typed
   metadata invariant; RNode and delayed-delivery regressions, formatting, host
