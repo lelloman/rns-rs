@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 131.
+of this tranche resumed on 2026-08-26 and is complete through entry 132.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -231,7 +231,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 131.
 | 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Structurally covered | Local `5979f92`; upstream removes its denormalized forwarding-cache experiment, while native routing deliberately retains one authoritative typed link table |
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Non-runtime | Local `1e0abaa`; complete diff is an indentation correction with no changed Python control flow or native behavior |
 | 131 | `8221f82dc0439cea4009470b4a1133dd5272ca6e` | Cleanup | Structurally covered | Local `d8025d7`; exclusive engine ownership makes local-destination lookup lock-free, and an unroutable link fast-path miss is intentionally non-warning |
-| 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Needs review | New post-target commit; complete diff review required |
+| 132 | `aba8d606dd0d4b1ff3be11b5b9c7d62ff25a49e5` | Cleanup | Non-runtime | Local `c4199c9`; removes only stale TODO text and whitespace around an unchanged unconditional return |
 | 133 | `dea0124c5759185c60c5545601e72a9a5970f28c` | Reduced lock acquisition | Needs review | New post-target commit; complete diff review required |
 | 134 | `d38a8de571421f4091b2e977c5864931bce4c01b` | Fixed f-strings for old snakes | Needs review | New post-target commit; complete diff review required |
 | 135 | `9f66b5a6a32bb9d2ef090c43904834828f39c49c` | Merge branch 'optimize' | Needs review | New post-target merge; complete parent/diff review required |
@@ -282,6 +282,21 @@ delivery regressions passed, along with formatting, diff checks, and
 warning-free host lint.
 
 **Final disposition:** Structurally covered.
+
+### 132. `aba8d606` — Cleanup
+
+**Upstream change:** Removes blank whitespace and a stale TODO questioning an
+unconditional return. The return existed before and after the commit, so no
+executable control flow changes.
+
+**Rust applicability:** Upstream comment and whitespace hygiene has no native
+runtime, wire, configuration, or API surface.
+
+**Local handling and evidence:** Local `c4199c9` records that removing stale
+comments without executable changes is source hygiene rather than native
+behavioral evidence. The complete diff and diff checks passed.
+
+**Final disposition:** Non-runtime.
 
 ### 2. `38a73f95` — Added ability to include operator LXMF address in interface discovery info
 
@@ -2906,8 +2921,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 132–142 as the next ordered review tranche; entries
-   118–131 are complete in local mappings `f330b6e..d8025d7`.
+2. Continue entries 133–142 as the next ordered review tranche; entries
+   118–132 are complete in local mappings `f330b6e..c4199c9`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2923,6 +2938,9 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `aba8d606` removes a stale TODO and whitespace around
+  an unchanged return. Local mapping `c4199c9` classifies the source-only
+  cleanup; complete diff review and diff checks passed. Entry 133 is next.
 - `2026-08-26`: Commit `8221f82d` removes a Python destination-map lock and
   demotes a no-route link diagnostic. Local mapping `d8025d7` documents the
   native lock-free lookup and quiet fast-path miss; focused tests, formatting,
