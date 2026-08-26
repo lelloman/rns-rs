@@ -122,6 +122,9 @@ mapping instead of translating implementation-specific benchmark machinery.
 Patch-equivalent commits reached through different upstream merge parents still
 receive separate ordered mappings: record the identical tree effect and explain
 why the later lineage adds no independent runtime behavior.
+For merge commits, compare the result with every parent and classify only the
+merge-resolution delta; do not attribute already reviewed parent changes to the
+merge a second time.
 Pasted benchmark results are observational context, not acceptance thresholds,
 unless the audit also fixes the hardware, build profile, workload, warm-up and
 sampling method, and an explicit regression budget.
