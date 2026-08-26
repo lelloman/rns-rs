@@ -136,6 +136,9 @@ matching label text alone is not comparability evidence.
 Benchmark-only payload-size additions do not redefine protocol MTUs or native
 acceptance limits; port them only when the audit establishes a comparable hot
 path and an accepted performance requirement.
+Benchmark-local capacity overrides must remain isolated from production
+defaults and be reported with results whenever they suppress overload or drop
+behavior that the benchmark would otherwise exercise.
 Formatting-only upstream cleanups are non-runtime mappings: inspect the full
 diff for hidden control-flow changes, then record the source-only result instead
 of manufacturing a Rust code change.
