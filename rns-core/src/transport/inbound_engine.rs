@@ -294,6 +294,8 @@ impl TransportEngine {
         // already exclusively borrowed, and the typed entry contains every
         // routing and hop-rewrite field, so a second denormalized cache would
         // add invalidation risk without avoiding locks or linear searches.
+        // Keep this authoritative-table path even when profiling suggests a
+        // cache: upstream's corresponding denormalized experiment was removed.
         let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
             return;
         };
