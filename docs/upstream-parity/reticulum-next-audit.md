@@ -213,7 +213,7 @@ through `d80245b62c7169f68995b2f11b30b971de7a5dbf`. The GitHub mirror remains at
 `b123a756`, so the remotes still disagree. These entries are explicitly outside
 the completed 44-commit target and form the next ordered tranche. They were
 initially inventoried without being silently folded into entries 74–117; review
-of this tranche resumed on 2026-08-26 and is complete through entry 126.
+of this tranche resumed on 2026-08-26 and is complete through entry 127.
 
 | # | Upstream commit | Subject | Provisional disposition | Review scope |
 |---:|---|---|---|---|
@@ -226,7 +226,7 @@ of this tranche resumed on 2026-08-26 and is complete through entry 126.
 | 124 | `7e197542e52fe6af7cf4ac25bac0304b9710247b` | Updated througput bench | Non-runtime | Local `cebceae`; output-label changes and pasted machine measurements are observational unless paired with a reproducible environment and explicit regression budget |
 | 125 | `516cb106c1dbd6b25475d19907a8e7435da35027` | Updated througput benchmarker | Non-runtime | Local `ecadb09`; comment-only result history is summarized with provenance in audits rather than copied into native harness source |
 | 126 | `d044db29317d2a6490e21cdad5163161508a6537` | Cache announce signature validation | Integrated | Local `5037209` maps existing `b2fafb2`; bounded TTL cache skips repeat Ed25519 verification and binds cache keys to both destination and signature |
-| 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Needs review | New post-target commit; complete diff review required |
+| 127 | `2d2167140dda3052c9ab468f8b38cbecc3566c94` | FP cache experiment | Structurally covered | Local `a869e2c`; exclusive native engine uses one keyed typed link entry without locks, linear searches, or denormalized cache invalidation |
 | 128 | `f1117099021c357a1f9128ba8e22ef06591a46e2` | Updated througput benchmarker | Needs review | New post-target commit; complete diff review required |
 | 129 | `17e980ff7982ee5e952f777488e70d11aea007e1` | Cleanup | Needs review | New post-target commit; complete diff review required |
 | 130 | `38e9d1cdd48c83acb115bb166694409d919f2358` | Cleanup | Needs review | New post-target commit; complete diff review required |
@@ -2764,6 +2764,27 @@ formatting, diff checks, and warning-free host lint passed.
 
 **Final disposition:** Integrated.
 
+### 127. `2d216714` — FP cache experiment
+
+**Upstream change:** Adds an experimental Python link-forwarding cache holding
+same-interface state, both hop counts, both interfaces, and the local-hop
+rewrite target. Cache hits bypass normal inbound classification and link-table
+interpretation. The same commit also removes an active-link lock around an
+already keyed lookup.
+
+**Rust applicability:** Native inbound routing already owns the transport
+engine mutably, performs one keyed link-table lookup, and feeds the typed entry
+to a small routing helper. It has no list scan or per-lookup lock to remove. A
+second denormalized cache would instead require invalidation whenever link
+state changes.
+
+**Local handling and evidence:** Local `a869e2c` documents the single-lookup
+fast-path invariant. Focused tests passed for both cross-interface directions,
+local-client hop rewriting, and instance-local hop preservation, along with
+formatting, diff checks, and warning-free host lint.
+
+**Final disposition:** Structurally covered.
+
 All 117 inventoried commits through the original target `0e070aac` have a final
 disposition. This completes all 44 commits after accepted baseline `b3ef214e`
 that were in the requested tranche. The accepted baseline remains commit 73:
@@ -2815,8 +2836,8 @@ promotion gates pass.
 ## Integration Plan
 
 1. Complete the original 44-commit tranche verification above.
-2. Continue entries 127–142 as the next ordered review tranche; entries
-   118–126 are complete in local mappings `f330b6e..5037209`.
+2. Continue entries 128–142 as the next ordered review tranche; entries
+   118–127 are complete in local mappings `f330b6e..a869e2c`.
 3. Leave baseline promotion for the complete parity-gate workflow.
 
 ## Promotion Gates
@@ -2832,6 +2853,11 @@ promotion gates pass.
 
 ## Acceptance Record
 
+- `2026-08-26`: Commit `2d216714` adds an experimental denormalized Python link
+  forwarding cache. Native routing already uses one lock-free keyed typed
+  entry; local mapping `a869e2c` documents that safer fast-path invariant.
+  Focused routing, formatting, diff, and host-lint checks passed. Entry 128 is
+  next.
 - `2026-08-26`: Commit `d044db29` caches successful announce signature
   validation. Existing native `b2fafb2` provides a bounded cross-packet TTL
   cache; local mapping `5037209` pins destination/signature key separation.
