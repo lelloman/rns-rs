@@ -77,7 +77,7 @@ efficiency, and dataplane egress control.
 | 31 | `77c8256a1a8f8e638ff50906b7aa00f6bd450a0a` | Fixed invalid prefix stripping in rngit page server | Integrated | Local `f1bf5ce`; blob paths remove only one exact `./`, retain dotfiles and other leading dots, normalize inner `/./`, and leave absolute paths for rejection |
 | 32 | `b28f5ebf7a4fbedbbedafd539d9d33d2f1992a9e` | Allow inbound queue utilization in drainer benchmarks | Non-runtime | Local `4b0aad3`; benchmark pacing waits to `target - 800`, leaving most of an assumed 1024-entry queue occupied without changing production or native acceptance limits |
 | 33 | `6e8c976421748584b10cf964bfede577370aebd7` | Worker spawn prep | Structurally covered | Local `5943fbc`; introduces `TRANSPORT_WORKERS = 1` and a one-iteration spawn loop, while native queue workers already have explicit single-owner lifecycle |
-| 34 | `9878b1837726109a3a9a5b4e59db067a3e40ca7a` | Added transmit buffer, TX drops and stalled status output to rnstatus | Needs coordinated port | Native status exposes neither the pending/coalesced byte total nor per-interface dropped-frame, dropped-byte and stalled fields required by the egress-control work |
+| 34 | `9878b1837726109a3a9a5b4e59db067a3e40ca7a` | Added transmit buffer, TX drops and stalled status output to rnstatus | Integrated | Local `1a36ad6`; exact queued/in-flight HDLC bytes, drop frames/bytes and stall state flow through local and remote status, aggregate Backbone peers, and rnstatus rendering/sorts |
 | 35 | `c1d7c12b52117cc4c81cb87632556069ef8f878b` | Fixed stream-based resource initialized transfer failing when total sized happened to not fall withing MAX_EFFICIENT_SIZE | Structurally covered | Native stream Resources require an explicit length and split the first metadata-bearing segment and later segments arithmetically, with exact-boundary tests |
 | 36 | `ccc5468bcc65842f9c44c8d80249df7645033297` | Updated changelog | Non-runtime | Release notes only |
 | 37 | `53ed9c1ed3fd10b4cba477c00786e17d7f1d4a95` | Updated version | Non-runtime | Upstream version metadata only |
@@ -611,10 +611,17 @@ crate changed for this documentation-only structural mapping.
 
 ### 34. Egress status reporting
 
-Entry 34 adds transmit-buffer bytes, dropped frames
-and bytes, and stalled state to the interface-statistics and `rnstatus`
-surfaces. Those fields depend on the pending native egress-control and
-coalescing design, so entry 34 **Needs coordinated port** with entries 7–12.
+Entry 34 adds transmit-buffer bytes, dropped frames and bytes, and stalled
+state to the interface-statistics and `rnstatus` surfaces. Local `1a36ad6`
+exposes the exact shared reservation established by entry 12 (including queued
+and concrete-writer bytes), publishes all four upstream-compatible keys over
+both local RPC and remote management, aggregates dynamic Backbone children,
+and adds the display, waiting/stalled annotation and `txdrp`, `txdrb`, and
+`txbuf` sorts. Focused metric, pickle, and renderer regressions passed. The
+complete all-feature `rns-net` suite passed 937 unit tests, 54 network E2E
+tests, 23 hook E2E tests and all interoperability/fixture tests; the complete
+`rns-cli` suite passed 122 library tests and all binary/integration tests.
+This entry is **Integrated**.
 
 ### 35. `c1d7c12b` — Fix initialized stream Resource segmentation
 
@@ -739,6 +746,11 @@ follow-up**.
   live smoke profile passed Resources, concurrent links, impairment, and
   forced Backbone reconnect recovery. This is operational evidence only, not
   exact-target 1.5.2 interoperability acceptance.
+- 2026-08-29: entry 34 was integrated as local `1a36ad6`. Exact transmit
+  reservations, drops and stall state now reach local/remote status and
+  `rnstatus`; focused regressions, the complete all-feature `rns-net` suite
+  (937 unit, 54 network E2E and 23 hook E2E tests plus interop/fixtures), and
+  the complete `rns-cli` suite passed.
 - 2026-08-29: entry 1 was integrated as local `b953832`. The focused ingress
   controller regressions, complete `rns-net` feature suite (913 unit and 54
   network E2E tests plus integration tests), formatting, and warning-free
