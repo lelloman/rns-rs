@@ -535,12 +535,24 @@ triggered for this documentation-only mapping.
 
 **Final disposition:** Non-runtime.
 
-### 20–21. `ff3a7220` and `d32ba8c1` — Identity error and return fixes
+### 20. `ff3a7220` — Avoid rebind of exception reference
 
-Upstream avoids rebinding an active exception during cache cleanup and makes
-public/private key loaders honor their documented boolean return contract.
-Native error values are lexical and identity constructors accept fixed-size key
-arrays with typed return values, so both commits are **Structurally covered**.
+**Upstream change:** Renames the nested temporary-file cleanup exception so it
+does not erase the outer serialization exception that must be re-raised.
+
+**Rust applicability and evidence:** Native persistence binds each filesystem
+failure to a separate lexical `io::Error`; inner cleanup scopes cannot mutate or
+erase an outer error binding. Atomic known-destination saves return the original
+typed result rather than re-raising a dynamically scoped exception. This is a
+Python exception-lifetime fix with no independent Rust runtime change.
+
+**Final disposition:** Structurally covered.
+
+### 21. `d32ba8c` — Fixed inconsistency against advertised return type
+
+Upstream makes public/private key loaders honor their documented boolean return
+contract. Native identity constructors accept fixed-size key arrays with typed
+return values, so this commit is **Structurally covered**.
 
 ### 22–30. Python compatibility, build, and packaging maintenance
 
