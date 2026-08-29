@@ -86,7 +86,7 @@ efficiency, and dataplane egress control.
 | 40 | `6bc0481cdfbd691bc0b5e401da4ad256c2fee42a` | Always remember to flush | Structurally covered | Local `ae0ddb0`; native declared-length streaming reads the source directly without a buffered proxy to flush/rewind, while receive files are synced before publication |
 | 41 | `5b4117dadc3a0ef6deffb87efbe039d1b77f966a` | Skip local shared instance interfaces in ingress/egress control | Integrated | Local `3a10336`; Local shared-instance writers retain HDLC coalescing but expose no egress-control budget/gate, and Local ingress was already outside the Backbone-only controller |
 | 42 | `943771a3f9cf2318401aa469fa42093e01b2d126` | Updated version | Non-runtime | Local `37ecca6`; changes only Python package metadata from 1.5.1 to the audited 1.5.2 target; native crate versions remain independently released |
-| 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Needs coordinated port | Changes ingress high/mid/low defaults to 90/68/10 percent and must be applied with the pending ingress-controller port |
+| 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Integrated | Local `723077e`; Backbone ingress high/mid/low watermarks now derive as 90/68/10 percent, with exact default/small-capacity and live gate/release regressions |
 | 44 | `d5b2fc56094cadba6bf660d2422c67aa93112383` | Updated changelog | Non-runtime | Release notes only |
 | 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Documentation follow-up | Native rns-git supports `blocked_identities`, but its generated config and operator documentation do not show the null-identity hash example |
 | 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Release notes only |
@@ -676,8 +676,12 @@ complete `rns-net` Backbone feature suite passed 934 unit and 54 network E2E
 tests plus all enabled interop/fixture tests; formatting and warning-free
 all-target lint passed. Entry 41 is **Integrated**.
 
-Entry 43 changes Backbone ingress watermarks to 90/68/10 percent and remains a
-**Needs coordinated port** follow-up to entries 1 and 3.
+Entry 43 changes Backbone ingress watermarks to 90/68/10 percent. Local
+`723077e` applies those final defaults to the entry-1 controller and updates
+both exact arithmetic and live gating regressions. The focused tests and
+complete `rns-net` Backbone feature suite passed 934 unit and 54 network E2E
+tests plus all enabled interop/fixture tests; formatting and warning-free
+all-target lint passed. Entry 43 is **Integrated**.
 
 ### 42, 44, and 46–48. Final release and logging metadata
 
