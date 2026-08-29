@@ -54,7 +54,7 @@ efficiency, and dataplane egress control.
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Integrated | Local `257e162`; a standalone native buffer coalesces below 64 KiB, isolates larger frames, resumes partial writes, releases its tail, and accounts bytes, frames, and chunks |
 | 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Integrated | Local `ce58265`; async writers batch queued frames, Backbone and Local socket writers drain coalesced on-wire chunks, and partial Backbone writes resume without duplicate enqueue |
 | 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Needs coordinated port | Local `f541abe` stages the drain/reopen accounting prerequisite; byte-valve tests land with entry 11 and ETA, hysteresis, dead-peer, and drop-gate tests with entry 12 |
-| 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Needs coordinated port | The native 256-frame async queue can retain far more than 4 MiB and has no atomic byte-limit admission decision |
+| 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Integrated | Local `7106de0`; optional byte-limited append atomically rejects any frame that would cross the bound, leaves state unchanged, and admits again after drain |
 | 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Needs coordinated port | Native `WouldBlock` backoff and Backbone pending-buffer disconnect cover parts of overload handling, but not the upstream byte HWM, drain-rate gate, drop accounting, hysteresis, or 12-second dead-peer policy |
 | 13 | `281c47f3e0998527c22aaf66017b606b91cda5f7` | Fixed invalid reference in exception description | Structurally covered | Rust AES key sizes are enforced by typed inputs and errors do not interpolate an unavailable instance reference |
 | 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Native interface iteration and error logging use typed Rust results rather than Python exception-scope bindings |
@@ -366,13 +366,17 @@ limit applies only after an item has left that queue and reached a
 nonblocking socket. Neither bound can enforce a per-interface 4 MiB total
 admission ceiling across queued and partially written frames.
 
-**Local handling and evidence:** `async_writer_returns_wouldblock_when_queue_is_full`
-passed and confirms only frame-count admission. No native metric tracks total
-queued plus pending wire bytes.
+**Local handling and evidence:** Local `7106de0` adds optional byte-limited
+append at the single-owner coalescing boundary. Admission uses the total
+buffered byte count, rejects overflow and oversized frames before changing any
+counter or chunk, preserves unlimited callers, and immediately admits again
+after drain. Focused tests exercise a repeated 4 KiB hard bound, exact-limit
+admission, oversized rejection, unchanged state, drain/reopen, and unlimited
+operation. The complete `rns-net` feature suite passed 926 unit tests, 54 E2E
+tests, and all interoperability and fixture tests on 2026-08-29; formatting and
+warning-free all-target crate lint also passed.
 
-**Final disposition:** Needs coordinated port. Add byte accounting atomically
-at the chosen coalescing/async-writer boundary before implementing entry 12's
-controller.
+**Final disposition:** Integrated.
 
 ### 12. `99c428a9` — Added dataplane egress control
 
