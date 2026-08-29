@@ -71,7 +71,7 @@ efficiency, and dataplane egress control.
 | 25 | `5fdd661081893cd5b5ce90662ca0ddf40a9c41ad` | Updated makefile | Non-runtime | Local `3752fff`; adds `build_native` and `native` targets around `setup.py --native`, while Rust uses Cargo and gains no runtime or packaging behavior from them |
 | 26 | `5b04a880268f8f4e1d136e43dba10b74f1713516` | Updated makefile | Non-runtime | Local `2d8613a`; extends upstream `clean` with generated C-file paths for Python/Cython packages, which do not exist in the Cargo workspace |
 | 27 | `3543dc980213770155e86b5d209bfb387fbfc407` | Load module compilation status from buildinfo if available | Non-runtime | Local `d886156`; prefers generated `RNS._buildinfo.compiled` with Cython fallback, while Rust build identity is compile-time Cargo metadata rather than a Python flag |
-| 28 | `b7fe01237d8189c54931cdd302d9835e81f55440` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
+| 28 | `b7fe01237d8189c54931cdd302d9835e81f55440` | Updated setup.py | Non-runtime | Full diff review: adds Cython extension discovery/exclusions, native compiler flags, symbol stripping, generated build info, and `--native` wheel plumbing; Cargo packaging is independent |
 | 29 | `fa07c8c87c33d2408e9560e1e8367cab1991b85c` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
 | 30 | `dc9cf0c2f4f3432283148abc82146301682aaf99` | Updated setup.py | Non-runtime | Python packaging correction only |
 | 31 | `77c8256a1a8f8e638ff50906b7aa00f6bd450a0a` | Fixed invalid prefix stripping in rngit page server | Needs port | Native `normalize_blob_path()` uses `trim_start_matches(['.', '/'])`, the same over-broad character stripping fixed upstream |
