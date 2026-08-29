@@ -12,6 +12,10 @@ pub struct Aes128 {
 }
 
 impl Aes128 {
+    /// Construct AES-128 with a compile-time-sized 128-bit key.
+    ///
+    /// The array reference deliberately makes an invalid key length
+    /// unrepresentable at this API boundary.
     pub fn new(key: &[u8; 16]) -> Self {
         Aes128 { key: *key }
     }

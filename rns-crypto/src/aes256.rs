@@ -12,6 +12,10 @@ pub struct Aes256 {
 }
 
 impl Aes256 {
+    /// Construct AES-256 with a compile-time-sized 256-bit key.
+    ///
+    /// The array reference deliberately makes an invalid key length
+    /// unrepresentable at this API boundary.
     pub fn new(key: &[u8; 32]) -> Self {
         Aes256 { key: *key }
     }
