@@ -570,6 +570,8 @@ struct IngressThresholds {
 }
 
 fn ingress_thresholds(data_capacity: usize) -> IngressThresholds {
+    // Keep initialization silent; only actual throttle/release transitions are
+    // operational events. Upstream removed its accidental critical HWM log.
     let high = ((DP_IC_HIGH_WM_PCT * data_capacity) / 100).max(4);
     IngressThresholds {
         high,
