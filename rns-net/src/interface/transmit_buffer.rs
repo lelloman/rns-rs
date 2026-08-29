@@ -316,4 +316,28 @@ mod tests {
         assert_eq!(buffer.buffered_frames(), 0);
         assert_eq!(buffer.buffered_chunks(), 0);
     }
+
+    #[test]
+    fn fully_drained_accounting_reopens_capacity_for_the_next_burst() {
+        let mut buffer = TransmitBuffer::new();
+        let mut writer = StepWriter {
+            max_write: usize::MAX,
+            ..StepWriter::default()
+        };
+
+        for _ in 0..10 {
+            buffer.append(vec![0x41; 202]);
+        }
+        buffer.flush();
+        assert_eq!(buffer.buffered_bytes(), 2_020);
+        assert_eq!(buffer.drain_to(&mut writer).unwrap(), 2_020);
+        assert_eq!(buffer.buffered_bytes(), 0);
+        assert_eq!(buffer.buffered_frames(), 0);
+
+        for _ in 0..10 {
+            buffer.append(vec![0x42; 202]);
+        }
+        assert_eq!(buffer.buffered_bytes(), 2_020);
+        assert_eq!(buffer.buffered_frames(), 10);
+    }
 }
