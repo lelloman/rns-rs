@@ -83,7 +83,7 @@ efficiency, and dataplane egress control.
 | 37 | `53ed9c1ed3fd10b4cba477c00786e17d7f1d4a95` | Updated version | Non-runtime | Local `4ab552b`; changes only Python package metadata from 1.5.0 to intermediate 1.5.1; native crate versions remain independently released |
 | 38 | `149e4151095adf098b8f53eab0c03b37169e8559` | Prepare release | Non-runtime | Local `25abe40`; regenerates 1.5.1 docs, fixes documented queue defaults to 1024/128/128/8, and changes no runtime; native defaults are verified from code/tests instead of vendored generated output |
 | 39 | `4eebf0b685322c9240d07e545fb5585e4dfcc16d` | Guard empty keepalive frames | Integrated | Local `c2ee65f`; HDLC readers already discard empty flag pairs and raw UDP now ignores zero-length datagrams while delivering the following non-empty frame |
-| 40 | `6bc0481cdfbd691bc0b5e401da4ad256c2fee42a` | Always remember to flush | Structurally covered | Native streaming Resources read the declared source directly without the upstream temporary proxy; persisted receive files are flushed and synced before publication |
+| 40 | `6bc0481cdfbd691bc0b5e401da4ad256c2fee42a` | Always remember to flush | Structurally covered | Local `ae0ddb0`; native declared-length streaming reads the source directly without a buffered proxy to flush/rewind, while receive files are synced before publication |
 | 41 | `5b4117dadc3a0ef6deffb87efbe039d1b77f966a` | Skip local shared instance interfaces in ingress/egress control | Needs coordinated port | The future native dataplane controllers must preserve Local client exemption when implementing entries 1 and 12 |
 | 42 | `943771a3f9cf2318401aa469fa42093e01b2d126` | Updated version | Non-runtime | Upstream version metadata only |
 | 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Needs coordinated port | Changes ingress high/mid/low defaults to 90/68/10 percent and must be applied with the pending ingress-controller port |
@@ -661,7 +661,10 @@ The upstream fix flushes and rewinds a temporary file used to proxy a
 zero-stat readable source. Native stream Resources consume a caller-provided
 reader against an explicit declared length and do not use that proxy; received
 files are flushed and synced before publication. This entry is **Structurally
-covered**.
+covered**. Local `ae0ddb0` pins the direct-reader invariant on the streaming
+API. The complete `rns-net` Backbone feature suite passed 933 unit and 54
+network E2E tests plus all enabled interop/fixture tests; formatting and
+warning-free all-target lint passed.
 
 ### 41 and 43. Dataplane-control exclusions and tuned defaults
 
