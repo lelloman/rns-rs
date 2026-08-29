@@ -45,7 +45,7 @@ efficiency, and dataplane egress control.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `de76b8939fb7e73e0b0c681623d1177d422492b7` | Added dataplane ingress control | Integrated | Local `b953832`; accepted Backbone peers now account production, gate the busiest readable socket at DATA pressure, and release it after queue recovery and its calculated hold |
-| 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Removes one diagnostic and the unused Python forwarding-cache field; native routing already has no secondary cache, recorded by local `5979f92` |
+| 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Local `9f5edb3`; threshold initialization remains silent and native routing retains one authoritative link table, with no secondary forwarding cache |
 | 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Needs coordinated port | Native queue capacities are finalized before readers start, but the new gate must derive all watermarks from the configured DATA capacity before it is activated |
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Native accepted peers keep read polling independent from a cloned writer and every async enqueue wakes its writer; focused backpressure and async-writer tests pass |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Removes a duplicate Python class assignment and adds a TODO comment; no executed behavior changes |
@@ -141,9 +141,12 @@ Rust never retained the denormalized forwarding cache and has no matching
 diagnostic.
 
 **Local handling and evidence:** The authoritative native link-table invariant
-and absence of a secondary forwarding cache are already recorded beside the
-routing lookup by local mapping `5979f92`. The complete two-line upstream diff
-was reviewed.
+and absence of a secondary forwarding cache are recorded beside the routing
+lookup by local mapping `5979f92`. Local `9f5edb3` additionally records that
+threshold initialization remains silent and only actual throttle/release
+transitions are operational events. The complete two-line upstream diff was
+reviewed. The complete `rns-net` feature suite, formatting, and warning-free
+all-target crate lint passed on 2026-08-29.
 
 **Final disposition:** Non-runtime.
 
@@ -558,3 +561,6 @@ follow-up**.
   controller regressions, complete `rns-net` feature suite (913 unit and 54
   network E2E tests plus integration tests), formatting, and warning-free
   all-target crate lint passed.
+- 2026-08-29: entry 2 was mapped as non-runtime by local `9f5edb3`; the
+  complete two-line cleanup was reviewed and the full `rns-net` validation
+  remained green.
