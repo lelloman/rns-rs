@@ -23,7 +23,6 @@ pub mod serial_iface;
 pub mod tcp;
 #[cfg(feature = "iface-tcp")]
 pub mod tcp_server;
-#[allow(dead_code)]
 pub(crate) mod transmit_buffer;
 #[cfg(feature = "iface-udp")]
 pub mod udp;
@@ -75,6 +74,18 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// Each implementation wraps a socket + framing.
 pub trait Writer: Send {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+        for frame in frames {
+            self.send_frame(frame)?;
+        }
+        Ok(())
+    }
+
+    /// Resume bytes accepted by a previous call that returned `WouldBlock`.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 
     fn shutdown(&mut self) {}
 }
@@ -160,16 +171,19 @@ impl Writer for AsyncWriter {
             ));
         }
 
+        // Publish accounting before the frame becomes visible to the worker.
+        self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
         match self.tx.try_send(data.to_vec()) {
-            Ok(()) => {
-                self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
-                Ok(())
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "interface writer queue is full",
+                ))
             }
-            Err(TrySendError::Full(_)) => Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "interface writer queue is full",
-            )),
             Err(TrySendError::Disconnected(_)) => {
+                self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
                 self.metrics.worker_alive.store(false, Ordering::Relaxed);
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
@@ -235,9 +249,23 @@ fn async_writer_loop(
     event_tx: EventSender,
     metrics: AsyncWriterMetrics,
 ) {
-    while let Ok(frame) = rx.recv() {
-        metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
-        if let Err(err) = writer.send_frame(&frame) {
+    while let Ok(first) = rx.recv() {
+        let mut frames = vec![first];
+        frames.extend(rx.try_iter());
+        metrics
+            .queued_frames
+            .fetch_sub(frames.len(), Ordering::Relaxed);
+
+        let mut result = writer.send_frames(&frames);
+        while result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
+        {
+            thread::sleep(Duration::from_millis(1));
+            result = writer.flush();
+        }
+
+        if let Err(err) = result {
             metrics.worker_alive.store(false, Ordering::Relaxed);
             log::warn!(
                 "[{}:{}] async writer exiting after send failure: {}",
@@ -618,6 +646,25 @@ mod tests {
         }
     }
 
+    struct BatchRecordingWriter {
+        batch_tx: mpsc::Sender<usize>,
+        first_release: Option<mpsc::Receiver<()>>,
+    }
+
+    impl Writer for BatchRecordingWriter {
+        fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
+            unreachable!("the async worker must use batch delivery")
+        }
+
+        fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+            self.batch_tx.send(frames.len()).unwrap();
+            if let Some(release) = self.first_release.take() {
+                release.recv().unwrap();
+            }
+            Ok(())
+        }
+    }
+
     impl Writer for FailingWriter {
         fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"))
@@ -703,5 +750,31 @@ mod tests {
             assert_eq!(received, (index as u64).to_be_bytes());
         }
         assert!(metrics.worker_alive());
+    }
+
+    #[test]
+    fn async_writer_coalesces_frames_waiting_behind_an_active_batch() {
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (batch_tx, batch_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (mut writer, _) = wrap_async_writer(
+            Box::new(BatchRecordingWriter {
+                batch_tx,
+                first_release: Some(release_rx),
+            }),
+            InterfaceId(12),
+            "batch",
+            event_tx,
+            16,
+        );
+
+        writer.send_frame(&[0]).unwrap();
+        assert_eq!(batch_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
+        for index in 1..=10 {
+            writer.send_frame(&[index]).unwrap();
+        }
+        release_tx.send(()).unwrap();
+
+        assert_eq!(batch_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 10);
     }
 }

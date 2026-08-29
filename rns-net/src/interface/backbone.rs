@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{self, Read, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{self, Read};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -26,6 +28,7 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
+use crate::interface::transmit_buffer::TransmitBuffer;
 use crate::interface::{
     lock_or_recover, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceFactory, StartContext,
     StartResult, Writer,
@@ -369,7 +372,7 @@ struct BackboneWriter {
     interface_name: String,
     interface_id: InterfaceId,
     event_tx: EventSender,
-    pending: Vec<u8>,
+    transmit_buffer: TransmitBuffer,
     stall_started: Option<Instant>,
     disconnect_notified: bool,
     write_stall_flag: Arc<AtomicBool>,
@@ -377,11 +380,15 @@ struct BackboneWriter {
 
 impl Writer for BackboneWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        self.send_frames(&[data.to_vec()])
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         let write_stall_timeout =
             lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
-        if !self.pending.is_empty() {
-            self.flush_pending(write_stall_timeout)?;
-            if !self.pending.is_empty() {
+        if self.transmit_buffer.buffered_bytes() > 0 {
+            self.drain_transmit(write_stall_timeout)?;
+            if self.transmit_buffer.buffered_bytes() > 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "backbone writer still stalled",
@@ -389,8 +396,16 @@ impl Writer for BackboneWriter {
             }
         }
 
-        let frame = hdlc::frame(data);
-        self.write_buffer(&frame, write_stall_timeout)
+        for frame in frames {
+            self.transmit_buffer.append(hdlc::frame(frame));
+        }
+        self.transmit_buffer.flush();
+        self.drain_transmit(write_stall_timeout)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let timeout = lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
+        self.drain_transmit(timeout)
     }
 
     fn shutdown(&mut self) {
@@ -399,60 +414,35 @@ impl Writer for BackboneWriter {
 }
 
 impl BackboneWriter {
-    fn write_buffer(
-        &mut self,
-        data: &[u8],
-        write_stall_timeout: Option<Duration>,
-    ) -> io::Result<()> {
-        let mut written = 0usize;
-        while written < data.len() {
-            match self.stream.write(&data[written..]) {
-                Ok(0) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "backbone writer wrote zero bytes",
-                    ))
-                }
-                Ok(n) => {
-                    written += n;
-                    self.stall_started = None;
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let now = Instant::now();
-                    let started = self.stall_started.get_or_insert(now);
-                    if let Some(timeout) = write_stall_timeout {
-                        if now.duration_since(*started) >= timeout {
-                            return Err(self.disconnect_for_write_stall(timeout));
-                        }
-                    }
-                    if self.pending.len() + data[written..].len() > MAX_PENDING_BYTES {
-                        return Err(self.disconnect_for_write_stall(
-                            write_stall_timeout.unwrap_or(Duration::from_secs(30)),
-                        ));
-                    }
-                    self.pending.extend_from_slice(&data[written..]);
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "backbone writer would block",
-                    ));
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-
-    fn flush_pending(&mut self, write_stall_timeout: Option<Duration>) -> io::Result<()> {
-        if self.pending.is_empty() {
+    fn drain_transmit(&mut self, write_stall_timeout: Option<Duration>) -> io::Result<()> {
+        if self.transmit_buffer.buffered_bytes() == 0 {
             return Ok(());
         }
 
-        let pending = std::mem::take(&mut self.pending);
-        match self.write_buffer(&pending, write_stall_timeout) {
-            Ok(()) => Ok(()),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
-            Err(e) => Err(e),
+        let written = self.transmit_buffer.drain_to(&mut self.stream)?;
+        if written > 0 {
+            self.stall_started = None;
         }
+        if self.transmit_buffer.buffered_bytes() == 0 {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        let started = self.stall_started.get_or_insert(now);
+        if let Some(timeout) = write_stall_timeout {
+            if now.duration_since(*started) >= timeout {
+                return Err(self.disconnect_for_write_stall(timeout));
+            }
+        }
+        if self.transmit_buffer.buffered_bytes() > MAX_PENDING_BYTES {
+            return Err(self.disconnect_for_write_stall(
+                write_stall_timeout.unwrap_or(Duration::from_secs(30)),
+            ));
+        }
+        Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "backbone writer would block",
+        ))
     }
 
     fn disconnect_for_write_stall(&mut self, timeout: Duration) -> io::Error {
@@ -941,7 +931,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 interface_name: name.clone(),
                                 interface_id: client_id,
                                 event_tx: tx.clone(),
-                                pending: Vec::new(),
+                                transmit_buffer: TransmitBuffer::new(),
                                 stall_started: None,
                                 disconnect_notified: false,
                                 write_stall_flag: Arc::clone(&write_stall_flag),
@@ -1412,11 +1402,28 @@ impl Default for BackboneClientConfig {
 /// Writer that sends HDLC-framed data over a TCP stream (client mode).
 struct BackboneClientWriter {
     stream: TcpStream,
+    transmit_buffer: TransmitBuffer,
 }
 
 impl Writer for BackboneClientWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.stream.write_all(&hdlc::frame(data))
+        self.send_frames(&[data.to_vec()])
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
+        for frame in frames {
+            self.transmit_buffer.append(hdlc::frame(frame));
+        }
+        self.transmit_buffer.flush();
+        while self.transmit_buffer.sendable_bytes() > 0 {
+            if self.transmit_buffer.drain_to(&mut self.stream)? == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "backbone client writer made no progress",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1476,6 +1483,7 @@ pub(crate) fn start_client_with_ifac(
 
     Ok(Box::new(BackboneClientWriter {
         stream: writer_stream,
+        transmit_buffer: TransmitBuffer::new(),
     }))
 }
 
@@ -1616,6 +1624,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
                 );
                 let new_writer: Box<dyn Writer> = Box::new(BackboneClientWriter {
                     stream: writer_stream,
+                    transmit_buffer: TransmitBuffer::new(),
                 });
                 let _ = tx.send(Event::InterfaceUp(
                     config.interface_id,

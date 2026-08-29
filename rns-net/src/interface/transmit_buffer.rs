@@ -145,10 +145,12 @@ impl TransmitBuffer {
         self.visible_bytes.saturating_sub(self.sent_bytes)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn buffered_frames(&self) -> usize {
         self.total_frames.saturating_sub(self.sent_frames)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn buffered_chunks(&self) -> usize {
         self.chunks.len()
     }
