@@ -64,7 +64,7 @@ efficiency, and dataplane egress control.
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Local `1a042a7`; the release page resolves `latest` before constructing output, and the regression pins the resolved tag in both breadcrumb and heading |
 | 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Local `9d0da01`; Python/Cython mirror compilation, extension loading, and package globbing do not apply to statically resolved and linked Rust crates |
 | 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Local `6f09d8a`; native persistence uses distinct lexical `io::Error` values, so cleanup cannot erase an outer serialization failure |
-| 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Native identity construction has typed fixed-size inputs and return values rather than fall-through `None` behavior |
+| 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Local `1d28228`; fixed-width identity constructors return `Self` directly, eliminating fall-through `None` or mismatched boolean contracts |
 | 22 | `75cbc73f64f3d1d020b7e86ec12f6fd0f3cfdca3` | Removed dead Python 2 code from umsgpack | Non-runtime | Removes compatibility code from a vendored Python serializer; native MessagePack handling does not vendor this module |
 | 23 | `e714c559cc00ce4d7abc232a86a62d5d3b5c7376` | Updated tests init | Non-runtime | Upstream-only Python test package initialization change |
 | 24 | `ae0191578f2ce439e209b8982af7ae033e954e2f` | Updated Cython dev shim | Non-runtime | Python/Cython development shim has no native runtime counterpart |
@@ -553,9 +553,20 @@ upstream fix and the native lexical-error invariant.
 
 ### 21. `d32ba8c` — Fixed inconsistency against advertised return type
 
-Upstream makes public/private key loaders honor their documented boolean return
-contract. Native identity constructors accept fixed-size key arrays with typed
-return values, so this commit is **Structurally covered**.
+**Upstream change:** Makes the private loader log and return `false` instead of
+raising, and makes the public loader explicitly return `true` or `false` rather
+than falling through with `None` on success.
+
+**Rust applicability and evidence:** Native `Identity::from_private_key()` and
+`Identity::from_public_key()` accept only 64-byte array references and return
+`Self` directly. Invalid lengths are unrepresentable and successful
+construction cannot fall through to a different return type. Local `1d28228`
+documents this contract on both constructors. The complete `rns-crypto` suite
+passed 73 unit tests, 11 benchmark-harness tests, 11 interoperability tests, and
+doc tests on 2026-08-29; formatting and warning-free all-target crate lint also
+passed.
+
+**Final disposition:** Structurally covered.
 
 ### 22–30. Python compatibility, build, and packaging maintenance
 
