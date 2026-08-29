@@ -88,7 +88,7 @@ efficiency, and dataplane egress control.
 | 42 | `943771a3f9cf2318401aa469fa42093e01b2d126` | Updated version | Non-runtime | Local `37ecca6`; changes only Python package metadata from 1.5.1 to the audited 1.5.2 target; native crate versions remain independently released |
 | 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Integrated | Local `723077e`; Backbone ingress high/mid/low watermarks now derive as 90/68/10 percent, with exact default/small-capacity and live gate/release regressions |
 | 44 | `d5b2fc56094cadba6bf660d2422c67aa93112383` | Updated changelog | Non-runtime | Local `af445e9`; adds the 1.5.2 maintenance-release narrative and moves unchanged signed-retrieval instructions; its compatibility claims are verified from entries 35, 39 and 43 |
-| 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Documentation follow-up | Native rns-git supports `blocked_identities`, but its generated config and operator documentation do not show the null-identity hash example |
+| 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Integrated | Local `ff73797`; generated rns-git server config and operator docs identify `d7db22f63b453c23bb0688dde565b7c1` for blocking unidentified peers, with generation regression |
 | 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Release notes only |
 | 47 | `ad3c06636b8d32afb0e68fe25cc12847c240926f` | Adjusted logging | Non-runtime | Changes denied/missing rngit artifact and page-download messages from warning to debug without changing responses or access decisions |
 | 48 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` | Prepare release | Non-runtime | Generated documentation and tagged 1.5.2 release metadata |
@@ -693,8 +693,11 @@ results. They are **Non-runtime**.
 
 Native rns-git already parses and enforces `blocked_identities`, including for
 page and management access, but its generated configuration and operator guide
-do not show upstream's null-identity hash. This entry is a **Documentation
-follow-up**.
+did not show upstream's null-identity hash. Local `ff73797` adds the exact hash
+and purpose to both surfaces and pins it in the generated-config regression.
+The complete `rns-git` suite passed 196 unit, 6 E2E, 11 release and 6 stats
+tests; formatting and warning-free all-target lint passed. This entry is
+**Integrated**.
 
 ## Integration Plan
 
