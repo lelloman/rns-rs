@@ -42,8 +42,20 @@ impl TransmitBuffer {
     }
 
     /// Append one finalized on-wire frame.
-    pub(crate) fn append(&mut self, frame: Vec<u8>) {
+    pub(crate) fn append(&mut self, frame: Vec<u8>) -> bool {
+        self.append_with_limit(frame, None)
+    }
+
+    /// Append one frame unless doing so would exceed `limit` buffered bytes.
+    pub(crate) fn append_with_limit(&mut self, frame: Vec<u8>, limit: Option<usize>) -> bool {
         let frame_len = frame.len();
+        if limit.is_some_and(|limit| {
+            self.buffered_bytes()
+                .checked_add(frame_len)
+                .is_none_or(|total| total > limit)
+        }) {
+            return false;
+        }
         self.total_bytes = self.total_bytes.saturating_add(frame_len);
         self.total_frames = self.total_frames.saturating_add(1);
 
@@ -54,7 +66,7 @@ impl TransmitBuffer {
                 data: frame,
                 frames: 1,
             });
-            return;
+            return true;
         }
 
         if !self.tail.is_empty() && self.tail.len() + frame_len > COALESCE_TARGET {
@@ -67,6 +79,7 @@ impl TransmitBuffer {
         if self.chunks.is_empty() {
             self.flush_tail();
         }
+        true
     }
 
     /// Make the current coalescing tail visible to the consumer.
@@ -339,5 +352,46 @@ mod tests {
         }
         assert_eq!(buffer.buffered_bytes(), 2_020);
         assert_eq!(buffer.buffered_frames(), 10);
+    }
+
+    #[test]
+    fn byte_limit_is_a_hard_valve_and_reopens_after_drain() {
+        let mut buffer = TransmitBuffer::new();
+        let mut accepted_bytes = 0;
+        let mut rejected = 0;
+        for _ in 0..200 {
+            for size in [502, 702] {
+                if buffer.append_with_limit(vec![0x55; size], Some(4_096)) {
+                    accepted_bytes += size;
+                    assert!(buffer.buffered_bytes() <= 4_096);
+                } else {
+                    rejected += 1;
+                    assert!(buffer.buffered_bytes() + size > 4_096);
+                }
+            }
+        }
+        assert!(rejected > 0);
+
+        let mut writer = StepWriter {
+            max_write: usize::MAX,
+            ..StepWriter::default()
+        };
+        buffer.flush();
+        assert_eq!(buffer.drain_to(&mut writer).unwrap(), accepted_bytes);
+        assert_eq!(buffer.buffered_bytes(), 0);
+        assert!(buffer.append_with_limit(vec![0x33; 2_048], Some(2_048)));
+    }
+
+    #[test]
+    fn byte_limit_rejects_oversized_frame_without_changing_state() {
+        let mut buffer = TransmitBuffer::new();
+        assert!(buffer.append_with_limit(vec![0x11; 500], Some(2_048)));
+        assert!(!buffer.append_with_limit(vec![0x22; 3_000], Some(2_048)));
+        assert_eq!(buffer.buffered_bytes(), 500);
+        assert_eq!(buffer.buffered_frames(), 1);
+
+        assert!(buffer.append(vec![0x44; 3_000]));
+        assert_eq!(buffer.buffered_bytes(), 3_500);
+        assert_eq!(buffer.buffered_frames(), 2);
     }
 }
