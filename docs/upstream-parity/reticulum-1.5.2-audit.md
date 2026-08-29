@@ -50,8 +50,8 @@ efficiency, and dataplane egress control.
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Local `925413f`; native accepted peers keep read polling independent from a cloned writer, and the strengthened async-writer regression proves queued output progresses without another send trigger |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Local `360f095`; records that the native standalone client's blocking socket is deliberately split between a dedicated reader thread and cloned writer path |
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Integrated | Local `a513526`; the shared native decoder now uses a consumed offset with half-buffer compaction, preserves unknown escape pairs, and covers a 20,000-frame coalesced flood |
-| 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | Local `f1fd1a3` stages the architecture-neutral contract with a 50,000-frame ordered async-writer burst; chunk, partial-write, and byte-accounting cases remain coupled to entries 8–9 |
-| 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Needs coordinated port | Native async writers bound a queue by frame count and issue one framed write per item; they have no 64 KiB coalescing chunks or byte/frame/sendable accounting |
+| 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Integrated | Local `f1fd1a3` adds the 50,000-frame ordered async-writer burst; the entry 8 buffer tests complete the chunk, partial-write, tail-release, and accounting contract |
+| 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Integrated | Local `257e162`; a standalone native buffer coalesces below 64 KiB, isolates larger frames, resumes partial writes, releases its tail, and accounts bytes, frames, and chunks |
 | 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Needs coordinated port | Native Backbone and Local paths already share `hdlc::Decoder`, but both still use the per-frame async writer and therefore lack the new transmit-buffer behavior |
 | 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Needs coordinated port | The test-only contract adds byte-valve, drain ETA, hysteresis, dead-peer and drop-gate scenarios not covered by current queue-full/write-stall tests |
 | 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Needs coordinated port | The native 256-frame async queue can retain far more than 4 MiB and has no atomic byte-limit admission decision |
@@ -267,15 +267,14 @@ byte/frame accounting.
 **Local handling and evidence:** Local `f1fd1a3` adds a 50,000-frame burst
 through the current async writer and proves exact in-order delivery without
 loss in 0.02 seconds. This stages the architecture-neutral portion of the
-upstream test-first commit while leaving tests that require chunks, partial
-chunk resumption, explicit flush, and byte/frame accounting for the actual
-buffer in entries 8–9. The complete `rns-net` feature suite passed 916 unit
-tests, 54 E2E tests, and all interoperability and fixture tests on 2026-08-29;
-formatting and warning-free all-target crate lint also passed.
+upstream test-first commit. Entry 8 mapping `257e162` completes the buffer-side
+contract with focused chunk-bound, large-frame, partial-write, `WouldBlock`,
+tail-release, byte/frame accounting, and 50,000-frame burst tests. Native
+producer/consumer synchronization remains at the existing channel boundary,
+so the async burst and standalone single-owner buffer together cover the
+upstream concurrency scenario without adding a second lock.
 
-**Final disposition:** Needs coordinated port with entries 8 and 9. Native
-tests should preserve the protocol and concurrency scenarios while expressing
-performance claims through a controlled benchmark or invariant.
+**Final disposition:** Integrated.
 
 ### 8. `0ec84c74` — Added coalescing transmit buffer
 
@@ -292,14 +291,17 @@ buffer, but it neither coalesces frames nor supplies the accounting needed by
 entry 12. Standalone Backbone and Local writers use `write_all()` in their
 worker and have no equivalent buffer.
 
-**Local handling and evidence:** Source inspection of
-`rns-net/src/interface/mod.rs`, `interface/backbone.rs`, and
-`interface/local.rs` found no 64 KiB chunk queue or byte-accounting layer.
+**Local handling and evidence:** Local `257e162` adds a standalone,
+single-owner `TransmitBuffer` with immutable visible chunks, a resumable head
+offset, a producer tail, automatic and explicit tail release, and cumulative
+byte/frame/chunk accounting. Six focused tests cover sparse visibility, 64 KiB
+chunk bounds, large-frame isolation, partial writes, clean `WouldBlock`, exact
+ordering/accounting, and a 50,000-frame burst. The complete `rns-net` feature
+suite passed 922 unit tests, 54 E2E tests, and all interoperability and fixture
+tests on 2026-08-29; formatting and warning-free all-target crate lint also
+passed. Wiring remains deliberately reserved for entry 9.
 
-**Final disposition:** Needs coordinated port. The native design should avoid
-stacking redundant queues: coalescing and byte accounting belong in or directly
-under the existing async writer boundary, with one clear owner for retry and
-shutdown behavior.
+**Final disposition:** Integrated.
 
 ### 9. `89e73db9` — Wire coalesced TX and optimized HDLC into interfaces
 
