@@ -604,6 +604,18 @@ mod tests {
         shutdown_called: Arc<AtomicBool>,
     }
 
+    struct RecordingWriter {
+        sent_tx: mpsc::Sender<Vec<u8>>,
+    }
+
+    impl Writer for RecordingWriter {
+        fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+            self.sent_tx
+                .send(data.to_vec())
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "test receiver closed"))
+        }
+    }
+
     impl Writer for FailingWriter {
         fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"))
@@ -664,5 +676,30 @@ mod tests {
         assert!(matches!(event, Event::InterfaceDown(InterfaceId(9))));
         assert!(!metrics.worker_alive());
         assert!(shutdown_called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn async_writer_preserves_order_through_fifty_thousand_frame_burst() {
+        const FRAME_COUNT: usize = 50_000;
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (sent_tx, sent_rx) = mpsc::channel();
+        let (mut writer, metrics) = wrap_async_writer(
+            Box::new(RecordingWriter { sent_tx }),
+            InterfaceId(11),
+            "burst",
+            event_tx,
+            FRAME_COUNT,
+        );
+
+        for index in 0..FRAME_COUNT {
+            let payload = (index as u64).to_be_bytes();
+            writer.send_frame(&payload).unwrap();
+        }
+
+        for index in 0..FRAME_COUNT {
+            let received = sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(received, (index as u64).to_be_bytes());
+        }
+        assert!(metrics.worker_alive());
     }
 }
