@@ -8,34 +8,27 @@ The current upstream reference baseline is:
 - Normative repository: `rns://7649a50d84610232d1416b41d2896aff/reticulum/reticulum`
 - GitHub release mirror: `https://github.com/markqvist/Reticulum`
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
-- Version: `1.5.0`
-- Version metadata commit: `e81532f541ef5747b5309459edaaec89c03aeffa`
-- Normative commit: `d80245b62c7169f68995b2f11b30b971de7a5dbf`
-- Commit date: `2026-08-25 14:02:08 +0200`
-- Subject: `Traffic class and violation handling`
+- Version: `1.5.2`
+- Version metadata commit: `943771a3f9cf2318401aa469fa42093e01b2d126`
+- Normative commit: `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6`
+- Commit date: `2026-08-29 04:16:13 +0200`
+- Subject: `Prepare release`
 
-The normative baseline is a 1.5.0 rgit `master` development commit observed
-and accepted on 2026-08-26. It follows the signed `1.4.2` tag target
-`b48b96e61676504e0a4e527b33b9a0b4495c6872`; upstream still asserts version
-1.5.0 but has not tagged this development line. GitHub `master` remains at the
-signed-release target and a clean GitHub clone cannot fetch the accepted rgit
-commit by SHA. Exact-target local packet, link, resource, and utility interop
-passed before promotion. The
-current normative checkout asserts `RNS` tree
-`131b3b0dcd512eb838bb79a574ec308477d49ae8`; its root tree is
-`65b89f07749b33027b6e9b26410c826ff6e11b2a`. The CI interop lane remains pinned
-to the fetchable signed-release commit and `RNS` tree
-`3286dd665827d2e591b47efaa5706b643e9b8d5a` until the GitHub mirror advances.
+The normative baseline is the tagged Reticulum 1.5.2 release accepted on
+2026-08-29. Canonical rgit and the GitHub mirror agreed at the exact target,
+whose `RNS` tree is `926167c7552b5bb538ff46cdd19b3ee2d16827b3` and root
+tree is `c2471478c17f2723a7dd6eabd0b85942c9402baf`. Exact-target packet,
+link, Resource, and utility interoperability passed before promotion, and the
+CI interop matrix is pinned to the same commit and `RNS` tree. Historical
+conformance fixtures retain their recorded source provenance.
 
-The current development-line disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.0-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.0-rgit-parity.md),
+The current disposition and acceptance record is in
+[`docs/upstream-parity/reticulum-1.5.2-parity.md`](docs/upstream-parity/reticulum-1.5.2-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.0-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.0-rgit-audit.md).
-The signed-release acceptance remains preserved in the original 1.4.2 records.
-Historical conformance fixtures retain their source provenance. The Docker
-release image build and dual-VPS daily smoke were rerun; the Docker topology
-matrix and physical Weave HIL are explicitly unclaimed, and the local ARMv7
-cross-build was inconclusive due to a host toolchain assembler failure.
+[`docs/upstream-parity/reticulum-1.5.2-audit.md`](docs/upstream-parity/reticulum-1.5.2-audit.md).
+The hook-enabled host release build and dual-VPS daily smoke passed. The Docker
+topology matrix, local ARMv7 cross-build, and physical Weave HIL were not rerun
+for this promotion and are explicitly unclaimed.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
