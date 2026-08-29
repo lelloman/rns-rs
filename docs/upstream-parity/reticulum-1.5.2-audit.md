@@ -69,7 +69,7 @@ efficiency, and dataplane egress control.
 | 23 | `e714c559cc00ce4d7abc232a86a62d5d3b5c7376` | Updated tests init | Non-runtime | Local `94d2b21`; switches upstream tests between CRNS compiled and interpreted imports via `RNS_COMPILE` and prints the Python mode, without a native surface change |
 | 24 | `ae0191578f2ce439e209b8982af7ae033e954e2f` | Updated Cython dev shim | Non-runtime | Local `67f054d`; parallelizes CRNS compilation, stamps directives/ABI, rebuilds stale modules, and narrows fallback, with no Cargo/rustc shim counterpart |
 | 25 | `5fdd661081893cd5b5ce90662ca0ddf40a9c41ad` | Updated makefile | Non-runtime | Local `3752fff`; adds `build_native` and `native` targets around `setup.py --native`, while Rust uses Cargo and gains no runtime or packaging behavior from them |
-| 26 | `5b04a880268f8f4e1d136e43dba10b74f1713516` | Updated makefile | Non-runtime | Upstream Python/Cython build convenience targets only |
+| 26 | `5b04a880268f8f4e1d136e43dba10b74f1713516` | Updated makefile | Non-runtime | Full diff review: extends upstream `clean` with generated C-file paths for Python/Cython packages; these paths and artifacts do not exist in the Cargo workspace |
 | 27 | `3543dc980213770155e86b5d209bfb387fbfc407` | Load module compilation status from buildinfo if available | Non-runtime | Python package build-info reporting has no statically linked Rust runtime analogue |
 | 28 | `b7fe01237d8189c54931cdd302d9835e81f55440` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
 | 29 | `fa07c8c87c33d2408e9560e1e8367cab1991b85c` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
