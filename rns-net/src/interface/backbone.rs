@@ -74,6 +74,14 @@ pub(crate) const SERVER_PEER_MTU: u32 = match auto_mtu_for_bitrate(SERVER_BITRAT
     None => 1_048_576,
 };
 
+const DP_IC_HIGH_WM_PCT: usize = 85;
+const DP_IC_MID_WM_PCT: usize = 10;
+const DP_IC_LOW_WM_PCT: usize = 1;
+const DP_IC_INTERVAL: Duration = Duration::from_millis(250);
+const DP_IC_RCVBUF: usize = 32_768;
+const DP_IC_IF_HEADROOM: usize = 32;
+const DP_IC_PENALTY: f64 = 1.5;
+
 /// Configuration for a backbone interface.
 #[derive(Debug, Clone)]
 pub struct BackboneConfig {
@@ -546,6 +554,100 @@ struct ClientState {
     connected_at: Instant,
     has_received_data: bool,
     write_stall_flag: Arc<AtomicBool>,
+    dp_ingress_bytes: u64,
+    dp_ingress_packets: u64,
+    dp_ingress_hold: Option<Instant>,
+    dp_ingress_gated: bool,
+    dp_ingress_throttle_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IngressThresholds {
+    high: usize,
+    immediate: usize,
+    mid: usize,
+    low: usize,
+}
+
+fn ingress_thresholds(data_capacity: usize) -> IngressThresholds {
+    let high = ((DP_IC_HIGH_WM_PCT * data_capacity) / 100).max(4);
+    IngressThresholds {
+        high,
+        immediate: high.max(128),
+        mid: ((DP_IC_MID_WM_PCT * data_capacity) / 100).max(2),
+        low: (DP_IC_LOW_WM_PCT * data_capacity) / 100,
+    }
+}
+
+fn busiest_ingress_key(producers: impl Iterator<Item = (usize, u64)>) -> Option<usize> {
+    producers
+        .filter(|(_, packets)| *packets > 0)
+        .max_by_key(|(_, packets)| *packets)
+        .map(|(key, _)| key)
+}
+
+fn throttle_busiest_ingress(
+    poller: &Poller,
+    clients: &mut HashMap<usize, ClientState>,
+    sample_span: Duration,
+) -> io::Result<Option<InterfaceId>> {
+    let Some(key) = busiest_ingress_key(
+        clients
+            .iter()
+            .map(|(key, client)| (*key, client.dp_ingress_packets)),
+    ) else {
+        return Ok(None);
+    };
+    if clients
+        .get(&key)
+        .is_some_and(|client| client.dp_ingress_gated)
+    {
+        return Ok(None);
+    }
+
+    let allocation_divisor = clients.len().max(DP_IC_IF_HEADROOM) as f64 * DP_IC_PENALTY;
+    let hold = Duration::from_secs_f64(
+        (sample_span.as_secs_f64().max(0.001) * allocation_divisor).max(0.001),
+    );
+    let client = clients.get_mut(&key).expect("selected client disappeared");
+    poller.modify(&client.stream, PollEvent::none(key))?;
+    client.dp_ingress_gated = true;
+    client.dp_ingress_hold = Some(Instant::now() + hold);
+    client.dp_ingress_throttle_count = client.dp_ingress_throttle_count.saturating_add(1);
+    log::info!(
+        "ingress throttled on BackboneInterface/{} for {:.3}s",
+        client.id.0,
+        hold.as_secs_f64(),
+    );
+    Ok(Some(client.id))
+}
+
+fn release_one_ingress(
+    poller: &Poller,
+    clients: &mut HashMap<usize, ClientState>,
+    now: Instant,
+) -> io::Result<Option<InterfaceId>> {
+    let Some(key) = clients
+        .iter()
+        .find(|(_, client)| {
+            client.dp_ingress_gated
+                && client
+                    .dp_ingress_hold
+                    .is_none_or(|hold_until| now >= hold_until)
+        })
+        .map(|(key, _)| *key)
+    else {
+        return Ok(None);
+    };
+    let client = clients.get_mut(&key).expect("selected client disappeared");
+    poller.modify(&client.stream, PollEvent::readable(key))?;
+    client.dp_ingress_gated = false;
+    client.dp_ingress_hold = None;
+    log::info!(
+        "released ingress throttle on BackboneInterface/{}",
+        client.id.0
+    );
+    Ok(Some(client.id))
 }
 
 #[derive(Debug, Clone)]
@@ -722,6 +824,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
     let mut peers: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
     let mut events = Events::new();
     let mut next_key: usize = 1;
+    let mut ingress_snapshot_at = Instant::now();
 
     loop {
         let runtime_snapshot = runtime.lock().unwrap().clone();
@@ -735,7 +838,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
         }
 
         events.clear();
-        poller.wait(&mut events, Some(Duration::from_secs(1)))?;
+        poller.wait(&mut events, Some(DP_IC_INTERVAL))?;
 
         for ev in events.iter() {
             if ev.key == LISTENER_KEY {
@@ -787,6 +890,9 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                             stream.set_nonblocking(true).ok();
                             stream.set_nodelay(true).ok();
                             set_tcp_keepalive(&stream).ok();
+                            SockRef::from(&stream)
+                                .set_recv_buffer_size(DP_IC_RCVBUF)
+                                .ok();
 
                             // Prevent SIGPIPE on macOS when writing to broken pipes
                             #[cfg(target_os = "macos")]
@@ -847,6 +953,11 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                     connected_at: Instant::now(),
                                     has_received_data: false,
                                     write_stall_flag,
+                                    dp_ingress_bytes: 0,
+                                    dp_ingress_packets: 0,
+                                    dp_ingress_hold: None,
+                                    dp_ingress_gated: false,
+                                    dp_ingress_throttle_count: 0,
                                 },
                             );
                             peers
@@ -935,7 +1046,11 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                         let client = clients.get_mut(&key).unwrap();
                         client_id = client.id;
                         client.has_received_data = true;
+                        client.dp_ingress_bytes = client.dp_ingress_bytes.saturating_add(n as u64);
                         let decoded = client.decoder.feed_with_diagnostics(&buf[..n]);
+                        client.dp_ingress_packets = client
+                            .dp_ingress_packets
+                            .saturating_add(decoded.frames.len() as u64);
                         for frame_len in decoded.invalid_frame_lengths {
                             log::debug!(
                             "[{}] invalid HDLC frame of {} bytes received from client {}, dropping frame",
@@ -957,6 +1072,15 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 cleanup(&poller, &clients, &listener);
                                 return Ok(());
                             }
+                        }
+                        let queue = tx.inbound_queue_snapshot();
+                        let thresholds = ingress_thresholds(queue.capacities[0]);
+                        if queue.heights[0] >= thresholds.immediate {
+                            let _ = throttle_busiest_ingress(
+                                &poller,
+                                &mut clients,
+                                ingress_snapshot_at.elapsed(),
+                            )?;
                         }
                     }
                 }
@@ -986,9 +1110,28 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                     });
                 } else if let Some(client) = clients.get(&key) {
                     // Re-arm client (oneshot semantics)
-                    poller.modify(&client.stream, PollEvent::readable(key))?;
+                    if !client.dp_ingress_gated {
+                        poller.modify(&client.stream, PollEvent::readable(key))?;
+                    }
                 }
             }
+        }
+
+        if ingress_snapshot_at.elapsed() >= DP_IC_INTERVAL {
+            let now = Instant::now();
+            let queue = tx.inbound_queue_snapshot();
+            let thresholds = ingress_thresholds(queue.capacities[0]);
+            if queue.heights[0] > thresholds.mid {
+                let _ =
+                    throttle_busiest_ingress(&poller, &mut clients, ingress_snapshot_at.elapsed())?;
+            } else if queue.heights[0] < thresholds.low {
+                let _ = release_one_ingress(&poller, &mut clients, now)?;
+            }
+            for client in clients.values_mut() {
+                client.dp_ingress_bytes = 0;
+                client.dp_ingress_packets = 0;
+            }
+            ingress_snapshot_at = now;
         }
 
         if let Some(timeout) = idle_timeout {
@@ -2181,6 +2324,96 @@ mod tests {
             }
             other => panic!("expected InterfaceUp with info, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn dataplane_ingress_thresholds_match_upstream_defaults() {
+        assert_eq!(
+            ingress_thresholds(1024),
+            IngressThresholds {
+                high: 870,
+                immediate: 870,
+                mid: 102,
+                low: 10,
+            }
+        );
+        assert_eq!(
+            ingress_thresholds(8),
+            IngressThresholds {
+                high: 6,
+                immediate: 128,
+                mid: 2,
+                low: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn dataplane_ingress_selects_the_largest_packet_producer() {
+        assert_eq!(
+            busiest_ingress_key([(7, 12), (8, 41), (9, 3)].into_iter()),
+            Some(8)
+        );
+        assert_eq!(busiest_ingress_key([(7, 0), (8, 0)].into_iter()), None);
+    }
+
+    #[test]
+    fn backbone_gates_the_largest_producer_before_data_queue_overflow() {
+        let port = find_free_port();
+        let capacities = crate::event::InboundQueueCapacities {
+            data: 200,
+            announce: 8,
+            path_request: 8,
+            ingress_limited: 8,
+        };
+        let (tx, rx) = crate::event::channel_with_queue_capacities(16, capacities);
+        let observer = tx.clone();
+        let next_id = Arc::new(AtomicU64::new(8075));
+        let config = make_server_config(port, 80, None, None, None, BackboneAbuseConfig::default());
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        let _ = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+
+        let payload = vec![0u8; 32];
+        let framed = hdlc::frame(&payload);
+        let mut burst = Vec::with_capacity(framed.len() * 180);
+        for _ in 0..180 {
+            burst.extend_from_slice(&framed);
+        }
+        client.write_all(&burst).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while observer.inbound_queue_snapshot().heights[0] < 170 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread::sleep(Duration::from_millis(100));
+        let gated = observer.inbound_queue_snapshot();
+        assert!(
+            gated.heights[0] >= 170,
+            "DATA queue never reached the high watermark"
+        );
+        assert_eq!(gated.dropped[0], 0);
+
+        client.write_all(&hdlc::frame(&[1u8; 32])).unwrap();
+        thread::sleep(Duration::from_millis(300));
+        let after_marker = observer.inbound_queue_snapshot();
+        assert_eq!(after_marker.heights[0], gated.heights[0]);
+        assert_eq!(
+            after_marker.dropped[0], gated.dropped[0],
+            "the producer remained readable and overflowed the DATA queue"
+        );
+
+        for _ in 0..gated.heights[0] {
+            let event = recv_non_peer_event(&rx, Duration::from_secs(1)).unwrap();
+            assert!(matches!(event, Event::Frame { .. }));
+        }
+        let released = recv_non_peer_event(&rx, Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(released, Event::Frame { data, .. } if data == vec![1u8; 32]),
+            "held producer was not released after DATA pressure recovered"
+        );
     }
 
     #[test]
