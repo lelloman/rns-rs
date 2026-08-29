@@ -387,6 +387,8 @@ fn release_pages_render_published_releases_latest_artifacts_and_thanks() {
     )
     .unwrap();
     assert!(release.contains(">Release v1"));
+    assert!(release.contains("`! / v1\n\n>Release v1"), "{release}");
+    assert!(!release.contains("`! / latest\n\n>Release"));
     assert!(release.contains(">Release"));
     assert!(release.contains("dist.tar"));
     assert!(release.contains("Thanks (0)"));
