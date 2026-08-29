@@ -449,9 +449,23 @@ binding invariant against the complete upstream diff.
 
 **Final disposition:** Structurally covered.
 
-### 15–18. Runtime correctness fixes already covered structurally
+### 15. `79cad39e` — Fixed missing import
 
-Entries 15–18 fix Python import, keepalive framing, CLI argument,
+**Upstream change:** Imports the top-level `RNS` module used by rnsh retry
+diagnostics.
+
+**Rust applicability and evidence:** rns-rs does not implement the upstream
+Python rnsh utility. Native retry paths use statically resolved `log` macros
+and typed module imports, all checked during compilation; there is no dynamic
+module-global `RNS` name that can be omitted. The entry is therefore a
+source-language/runtime binding fix rather than a wire or CLI compatibility
+change for an implemented native surface.
+
+**Final disposition:** Structurally covered.
+
+### 16–18. Runtime correctness fixes already covered structurally
+
+Entries 16–18 fix keepalive framing, CLI argument,
 and release-page initialization errors. The corresponding native paths do not
 share those failure mechanisms: AES and identity-facing inputs are typed,
 errors and dependencies are lexically resolved, the Local physical keepalive
