@@ -1988,11 +1988,7 @@ fn validate_git_path(path: &str) -> Result<()> {
 }
 
 fn normalize_blob_path(path: &str) -> String {
-    path.trim_start_matches(['.', '/'])
-        .split('/')
-        .filter(|component| *component != ".")
-        .collect::<Vec<_>>()
-        .join("/")
+    path.strip_prefix("./").unwrap_or(path).replace("/./", "/")
 }
 
 fn validate_refish(value: &str) -> Result<()> {
@@ -3117,6 +3113,16 @@ mod tests {
     use super::*;
     use crate::acl::Access;
     use crate::config::ServerConfig;
+
+    #[test]
+    fn blob_path_normalization_removes_only_the_explicit_relative_prefix() {
+        assert_eq!(normalize_blob_path("./docs/guide.md"), "docs/guide.md");
+        assert_eq!(normalize_blob_path("docs/./guide.md"), "docs/guide.md");
+        assert_eq!(normalize_blob_path(".hidden/config"), ".hidden/config");
+        assert_eq!(normalize_blob_path(".../guide.md"), ".../guide.md");
+        assert_eq!(normalize_blob_path("/absolute.md"), "/absolute.md");
+        assert!(validate_git_path(&normalize_blob_path("/absolute.md")).is_err());
+    }
     use crate::logging;
     use rns_core::msgpack::{self, Value};
     use rns_crypto::OsRng;
