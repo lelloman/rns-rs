@@ -20,6 +20,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
+use crate::interface::transmit_buffer::TransmitBuffer;
 use crate::interface::{ListenerControl, Writer};
 
 /// Hardware MTU used by both sides of the local shared-instance interface.
@@ -75,10 +76,15 @@ impl Default for LocalClientConfig {
 struct LocalWriter {
     stream: TcpStream,
     sleep_hold: Option<ClientSleepHold>,
+    transmit_buffer: TransmitBuffer,
 }
 
 impl Writer for LocalWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+        self.send_frames(&[data.to_vec()])
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         if self
             .sleep_hold
             .as_ref()
@@ -87,8 +93,28 @@ impl Writer for LocalWriter {
             log::debug!("TX paused for LocalInterface client, dropping outbound packet");
             return Ok(());
         }
-        self.stream.write_all(&hdlc::frame(data))
+        append_and_drain(&mut self.transmit_buffer, &mut self.stream, frames)
     }
+}
+
+fn append_and_drain(
+    buffer: &mut TransmitBuffer,
+    writer: &mut impl Write,
+    frames: &[Vec<u8>],
+) -> io::Result<()> {
+    for frame in frames {
+        buffer.append(hdlc::frame(frame));
+    }
+    buffer.flush();
+    while buffer.sendable_bytes() > 0 {
+        if buffer.drain_to(writer)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "local writer made no progress",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -354,6 +380,7 @@ fn unix_server_loop(
         let writer: Box<dyn Writer> = Box::new(UnixLocalWriter {
             stream: writer_stream,
             sleep_hold: sleep_hold.clone(),
+            transmit_buffer: TransmitBuffer::new(),
         });
 
         let event = if let Some(template) = &dynamic_template {
@@ -383,12 +410,16 @@ fn unix_server_loop(
 struct UnixLocalWriter {
     stream: std::os::unix::net::UnixStream,
     sleep_hold: Option<ClientSleepHold>,
+    transmit_buffer: TransmitBuffer,
 }
 
 #[cfg(target_os = "linux")]
 impl Writer for UnixLocalWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        use std::io::Write;
+        self.send_frames(&[data.to_vec()])
+    }
+
+    fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         if self
             .sleep_hold
             .as_ref()
@@ -397,7 +428,7 @@ impl Writer for UnixLocalWriter {
             log::debug!("TX paused for LocalInterface client, dropping outbound packet");
             return Ok(());
         }
-        self.stream.write_all(&hdlc::frame(data))
+        append_and_drain(&mut self.transmit_buffer, &mut self.stream, frames)
     }
 }
 
@@ -464,6 +495,7 @@ fn spawn_local_client_handler(
     let writer: Box<dyn Writer> = Box::new(LocalWriter {
         stream: writer_stream,
         sleep_hold: sleep_hold.clone(),
+        transmit_buffer: TransmitBuffer::new(),
     });
 
     let event = if let Some(template) = dynamic_template {
@@ -582,10 +614,12 @@ impl LocalClientStream {
             LocalClientStream::Unix(stream) => Ok(Box::new(UnixLocalWriter {
                 stream: stream.try_clone()?,
                 sleep_hold: None,
+                transmit_buffer: TransmitBuffer::new(),
             })),
             LocalClientStream::Tcp(stream) => Ok(Box::new(LocalWriter {
                 stream: stream.try_clone()?,
                 sleep_hold: None,
+                transmit_buffer: TransmitBuffer::new(),
             })),
         }
     }
@@ -599,6 +633,7 @@ fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn 
     Ok(Box::new(LocalWriter {
         stream: stream.try_clone()?,
         sleep_hold: None,
+        transmit_buffer: TransmitBuffer::new(),
     }))
 }
 
@@ -1084,6 +1119,7 @@ mod tests {
         let mut writer = LocalWriter {
             stream: server_stream,
             sleep_hold: Some(sleep_hold.clone()),
+            transmit_buffer: TransmitBuffer::new(),
         };
 
         writer.send_frame(b"live").unwrap();
@@ -1129,6 +1165,7 @@ mod tests {
         let mut writer = LocalWriter {
             stream: writer_stream,
             sleep_hold: Some(sleep_hold),
+            transmit_buffer: TransmitBuffer::new(),
         };
 
         thread::sleep(Duration::from_millis(50));
@@ -1177,6 +1214,7 @@ mod tests {
         let writer: Box<dyn Writer> = Box::new(LocalWriter {
             stream: server_stream,
             sleep_hold: None,
+            transmit_buffer: TransmitBuffer::new(),
         });
         spawn_physical_keepalive_loop(
             writer,
