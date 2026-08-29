@@ -71,7 +71,9 @@ Important config paths:
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
   all collection, or `stats_push_ignore_identities` to suppress only push
   counters for automation identities. Set `blocked_identities` to deny listed
-  identities all repository, page, and management operations. Repository pages
+  identities all repository, page, and management operations. To reject
+  unidentified peers such as scrapers and crawlers, include Reticulum's null
+  identity hash `d7db22f63b453c23bb0688dde565b7c1`. Repository pages
   include a persistent Thanks counter stored next to the bare repository as
   `<repo>.thanks`.
   Release metadata is stored next to the bare repository as
