@@ -78,7 +78,7 @@ efficiency, and dataplane egress control.
 | 32 | `b28f5ebf7a4fbedbbedafd539d9d33d2f1992a9e` | Allow inbound queue utilization in drainer benchmarks | Non-runtime | Local `4b0aad3`; benchmark pacing waits to `target - 800`, leaving most of an assumed 1024-entry queue occupied without changing production or native acceptance limits |
 | 33 | `6e8c976421748584b10cf964bfede577370aebd7` | Worker spawn prep | Structurally covered | Local `5943fbc`; introduces `TRANSPORT_WORKERS = 1` and a one-iteration spawn loop, while native queue workers already have explicit single-owner lifecycle |
 | 34 | `9878b1837726109a3a9a5b4e59db067a3e40ca7a` | Added transmit buffer, TX drops and stalled status output to rnstatus | Integrated | Local `1a36ad6`; exact queued/in-flight HDLC bytes, drop frames/bytes and stall state flow through local and remote status, aggregate Backbone peers, and rnstatus rendering/sorts |
-| 35 | `c1d7c12b52117cc4c81cb87632556069ef8f878b` | Fixed stream-based resource initialized transfer failing when total sized happened to not fall withing MAX_EFFICIENT_SIZE | Structurally covered | Native stream Resources require an explicit length and split the first metadata-bearing segment and later segments arithmetically, with exact-boundary tests |
+| 35 | `c1d7c12b52117cc4c81cb87632556069ef8f878b` | Fixed stream-based resource initialized transfer failing when total sized happened to not fall withing MAX_EFFICIENT_SIZE | Structurally covered | Local `368eb76`; native declared-length streaming reduces only the first segment capacity for metadata, and an exact data-limit regression proves the resulting two-segment plan |
 | 36 | `ccc5468bcc65842f9c44c8d80249df7645033297` | Updated changelog | Non-runtime | Release notes only |
 | 37 | `53ed9c1ed3fd10b4cba477c00786e17d7f1d4a95` | Updated version | Non-runtime | Upstream version metadata only |
 | 38 | `149e4151095adf098b8f53eab0c03b37169e8559` | Prepare release | Non-runtime | Generated upstream documentation for the intermediate release |
@@ -630,7 +630,13 @@ around `MAX_EFFICIENT_SIZE`, including metadata-bearing first segments. Native
 stream Resources require a declared length, calculate the first segment's
 reduced payload capacity explicitly, and reject short or trailing source data.
 Existing exact-limit and multipart stream tests cover the native invariant, so
-this entry is **Structurally covered**.
+this entry is **Structurally covered**. Local `368eb76` adds the exact upstream
+edge case: a stream whose data alone equals `MAX_EFFICIENT_SIZE` and whose
+metadata therefore makes the logical transfer larger. The regression proves a
+two-segment advertisement and that only `MAX_EFFICIENT_SIZE - metadata` bytes
+are consumed for segment one. The focused test and complete `rns-net` Backbone
+feature suite passed 932 unit and 54 network E2E tests plus all enabled
+interop/fixture tests; formatting and warning-free all-target lint passed.
 
 ### 36–38. Intermediate release metadata
 
