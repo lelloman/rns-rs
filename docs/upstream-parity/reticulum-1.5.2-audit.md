@@ -70,7 +70,7 @@ efficiency, and dataplane egress control.
 | 24 | `ae0191578f2ce439e209b8982af7ae033e954e2f` | Updated Cython dev shim | Non-runtime | Local `67f054d`; parallelizes CRNS compilation, stamps directives/ABI, rebuilds stale modules, and narrows fallback, with no Cargo/rustc shim counterpart |
 | 25 | `5fdd661081893cd5b5ce90662ca0ddf40a9c41ad` | Updated makefile | Non-runtime | Local `3752fff`; adds `build_native` and `native` targets around `setup.py --native`, while Rust uses Cargo and gains no runtime or packaging behavior from them |
 | 26 | `5b04a880268f8f4e1d136e43dba10b74f1713516` | Updated makefile | Non-runtime | Local `2d8613a`; extends upstream `clean` with generated C-file paths for Python/Cython packages, which do not exist in the Cargo workspace |
-| 27 | `3543dc980213770155e86b5d209bfb387fbfc407` | Load module compilation status from buildinfo if available | Non-runtime | Full diff review: prefers generated `RNS._buildinfo.compiled` and falls back to Cython detection; Rust build identity is compile-time Cargo metadata, not a Python module flag |
+| 27 | `3543dc980213770155e86b5d209bfb387fbfc407` | Load module compilation status from buildinfo if available | Non-runtime | Local `d886156`; prefers generated `RNS._buildinfo.compiled` with Cython fallback, while Rust build identity is compile-time Cargo metadata rather than a Python flag |
 | 28 | `b7fe01237d8189c54931cdd302d9835e81f55440` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
 | 29 | `fa07c8c87c33d2408e9560e1e8367cab1991b85c` | Updated setup.py | Non-runtime | Python extension-build and packaging changes only |
 | 30 | `dc9cf0c2f4f3432283148abc82146301682aaf99` | Updated setup.py | Non-runtime | Python packaging correction only |
