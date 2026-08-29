@@ -6,6 +6,10 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rns_net::pickle::PickleValue;
+use rns_net::rpc::derive_auth_key;
+use rns_net::{RpcAddr, RpcClient};
+
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 static HARNESS_START_LOCK: Mutex<()> = Mutex::new(());
@@ -55,6 +59,7 @@ struct Harness {
     listener_config: PathBuf,
     client_home: PathBuf,
     listener_home: PathBuf,
+    client_control_port: u16,
     _client_daemon: ProcessGuard,
     _listener_daemon: ProcessGuard,
 }
@@ -169,6 +174,7 @@ impl Harness {
             listener_config,
             client_home,
             listener_home,
+            client_control_port,
             _client_daemon: client_daemon,
             _listener_daemon: listener_daemon,
         }
@@ -227,6 +233,7 @@ impl Harness {
         implementation: Implementation,
         utility: &str,
         identity: &Path,
+        destination: &str,
         extra: &[String],
     ) -> ProcessGuard {
         let mut command = match implementation {
@@ -264,11 +271,49 @@ impl Harness {
             );
             thread::sleep(Duration::from_millis(25));
         }
-        // Upstream prints its readiness line immediately before issuing the
-        // initial announce. Give that one-shot announce time to cross both
-        // transport daemons before starting a client under parallel test load.
-        thread::sleep(Duration::from_millis(500));
+        // Upstream prints its readiness line immediately before issuing a
+        // one-shot announce. Confirm that the client daemon has learned the
+        // path, explicitly requesting it when the announce was missed under
+        // CI load, before starting a short-lived utility client.
+        self.wait_for_client_path(destination, &listener);
         listener
+    }
+
+    fn wait_for_client_path(&self, destination: &str, listener: &ProcessGuard) {
+        let destination = parse_destination_hash(destination);
+        let identity_path = self
+            .client_config
+            .join("storage")
+            .join("identities")
+            .join("identity");
+        let identity = rns_net::storage::load_identity(&identity_path)
+            .unwrap_or_else(|error| panic!("load client daemon identity: {error}"));
+        let auth_key = derive_auth_key(
+            &identity
+                .get_private_key()
+                .expect("client daemon identity has a private key"),
+        );
+        let address = RpcAddr::Tcp("127.0.0.1".into(), self.client_control_port);
+        let deadline = Instant::now() + START_TIMEOUT;
+        let mut requested = false;
+        loop {
+            if query_has_path(&address, &auth_key, &destination).unwrap_or(false) {
+                return;
+            }
+            if !requested {
+                request_path(&address, &auth_key, &destination)
+                    .unwrap_or_else(|error| panic!("request listener path: {error}"));
+                requested = true;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "client daemon did not learn listener path:\nlistener:\n{}\nclient daemon:\n{}\nlistener daemon:\n{}",
+                fs::read_to_string(&listener.log).unwrap_or_default(),
+                fs::read_to_string(&self._client_daemon.log).unwrap_or_default(),
+                fs::read_to_string(&self._listener_daemon.log).unwrap_or_default()
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn config(&self, side: Side) -> &Path {
@@ -312,6 +357,54 @@ fn wait_for_port(port: u16, process: &mut ProcessGuard, description: &str) {
         );
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn parse_destination_hash(destination: &str) -> [u8; 16] {
+    assert_eq!(destination.len(), 32, "invalid destination hash");
+    let mut hash = [0u8; 16];
+    for (index, byte) in hash.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&destination[index * 2..index * 2 + 2], 16)
+            .expect("destination hash is hexadecimal");
+    }
+    hash
+}
+
+fn query_has_path(
+    address: &RpcAddr,
+    auth_key: &[u8; 32],
+    destination: &[u8; 16],
+) -> Result<bool, String> {
+    let mut client =
+        RpcClient::connect(address, auth_key).map_err(|error| format!("RPC connect: {error}"))?;
+    let response = client
+        .call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("next_hop".into()),
+            ),
+            (
+                PickleValue::String("destination_hash".into()),
+                PickleValue::Bytes(destination.to_vec()),
+            ),
+        ]))
+        .map_err(|error| format!("RPC call: {error}"))?;
+    Ok(response.as_bytes().is_some_and(|bytes| bytes.len() == 16))
+}
+
+fn request_path(
+    address: &RpcAddr,
+    auth_key: &[u8; 32],
+    destination: &[u8; 16],
+) -> Result<(), String> {
+    let mut client =
+        RpcClient::connect(address, auth_key).map_err(|error| format!("RPC connect: {error}"))?;
+    client
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("request_path".into()),
+            PickleValue::Bytes(destination.to_vec()),
+        )]))
+        .map_err(|error| format!("RPC call: {error}"))?;
+    Ok(())
 }
 
 fn spawn_logged(mut command: Command, log: &Path) -> ProcessGuard {
@@ -540,6 +633,7 @@ fn rust_rncp_send_and_fetch_end_to_end() {
         Implementation::Rust,
         "rncp",
         &listener_identity,
+        &destination,
         &listener_args,
     );
 
@@ -574,6 +668,7 @@ fn rust_rnx_executes_end_to_end() {
         Implementation::Rust,
         "rnx",
         &listener_identity,
+        &destination,
         &["--noauth".into()],
     );
     let output = rnx_execute(
@@ -616,6 +711,7 @@ fn python_rncp_client_sends_to_rust_listener() {
         Implementation::Rust,
         "rncp",
         &listener_identity,
+        &destination,
         &[
             "--no-auth".into(),
             "--save".into(),
@@ -672,6 +768,7 @@ fn rust_rncp_client_sends_to_python_listener() {
         Implementation::Python,
         "rncp",
         &listener_identity,
+        &destination,
         &[
             "--no-auth".into(),
             "--save".into(),
@@ -723,6 +820,7 @@ fn python_rnx_client_executes_on_rust_listener() {
         Implementation::Rust,
         "rnx",
         &listener_identity,
+        &destination,
         &["--noauth".into()],
     );
     let output = rnx_execute(
@@ -747,6 +845,7 @@ fn python_rnx_client_executes_on_rust_listener() {
         Implementation::Rust,
         "rnx",
         &large_listener_identity,
+        &large_destination,
         &["--noauth".into()],
     );
     let large = rnx_execute_command(
@@ -770,6 +869,7 @@ fn rust_rnx_client_executes_on_python_listener() {
         Implementation::Python,
         "rnx",
         &listener_identity,
+        &destination,
         &["--noauth".into()],
     );
     let output = rnx_execute(
