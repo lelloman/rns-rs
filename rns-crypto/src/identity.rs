@@ -64,6 +64,10 @@ impl Identity {
         }
     }
 
+    /// Load a complete private identity from its fixed-width key material.
+    ///
+    /// Valid input is represented by the 64-byte type itself, so successful
+    /// construction returns `Self` directly instead of a fall-through status.
     pub fn from_private_key(prv_bytes: &[u8; 64]) -> Self {
         let x_prv_bytes: [u8; 32] = prv_bytes[..32].try_into().unwrap();
         let ed_seed: [u8; 32] = prv_bytes[32..].try_into().unwrap();
@@ -89,6 +93,10 @@ impl Identity {
         }
     }
 
+    /// Load a public-only identity from fixed-width public key material.
+    ///
+    /// Valid input is represented by the 64-byte type itself, so successful
+    /// construction returns `Self` directly instead of a fall-through status.
     pub fn from_public_key(pub_bytes: &[u8; 64]) -> Self {
         let x_pub_bytes: [u8; 32] = pub_bytes[..32].try_into().unwrap();
         let ed_pub_bytes: [u8; 32] = pub_bytes[32..].try_into().unwrap();
