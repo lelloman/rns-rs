@@ -44,7 +44,7 @@ efficiency, and dataplane egress control.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `de76b8939fb7e73e0b0c681623d1177d422492b7` | Added dataplane ingress control | Needs coordinated port | Native queues are bounded and counted but drop at capacity; no per-peer Backbone read gate, producer selection, hold/release hysteresis, or throttle counter exists |
+| 1 | `de76b8939fb7e73e0b0c681623d1177d422492b7` | Added dataplane ingress control | Integrated | Local `b953832`; accepted Backbone peers now account production, gate the busiest readable socket at DATA pressure, and release it after queue recovery and its calculated hold |
 | 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Removes one diagnostic and the unused Python forwarding-cache field; native routing already has no secondary cache, recorded by local `5979f92` |
 | 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Needs coordinated port | Native queue capacities are finalized before readers start, but the new gate must derive all watermarks from the configured DATA capacity before it is activated |
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Native accepted peers keep read polling independent from a cloned writer and every async enqueue wakes its writer; focused backpressure and async-writer tests pass |
@@ -118,11 +118,17 @@ it after a read. `EventSender::send()` classifies and drops a full inbound class
 without exposing a pause signal to that poll loop. Existing queue saturation
 tests verify the current drop policy; they do not prove the new gate.
 
-**Final disposition:** Needs coordinated port. The queue must expose DATA
-pressure to the Backbone poller without moving packet parsing or mutable
-transport state into reader threads. Per-child byte/packet accounting, fair
-selection, hold/release hysteresis, socket buffer sizing, and observable
-throttle counts must be designed together.
+**Final disposition:** Integrated by local `b953832`. The existing queue
+snapshot is read by the single-owner Backbone poll loop, which now maintains
+per-child byte/packet samples, gates the largest producer by removing readable
+interest at the periodic or immediate DATA watermark, preserves the calculated
+hold, and releases one eligible child after pressure recovers. Accepted sockets
+request the upstream 32 KiB receive buffer. Focused tests pin the initial
+85/10/1 thresholds, largest-producer selection, absence of queue overflow while
+gated, and delivery after release. `cargo test -p rns-net --features
+iface-backbone` passed 913 unit tests, 54 network E2E tests, and all integration
+tests on 2026-08-29; formatting and warning-free all-target `rns-net` Clippy
+also passed.
 
 ### 2. `3b7cfc06` — Cleanup
 
@@ -548,3 +554,7 @@ follow-up**.
   live smoke profile passed Resources, concurrent links, impairment, and
   forced Backbone reconnect recovery. This is operational evidence only, not
   exact-target 1.5.2 interoperability acceptance.
+- 2026-08-29: entry 1 was integrated as local `b953832`. The focused ingress
+  controller regressions, complete `rns-net` feature suite (913 unit and 54
+  network E2E tests plus integration tests), formatting, and warning-free
+  all-target crate lint passed.
