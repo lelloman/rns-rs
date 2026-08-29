@@ -1480,7 +1480,9 @@ pub(crate) fn start_client_with_ifac(
 }
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
-/// On disconnect, attempts reconnection.
+/// On disconnect, attempts reconnection. The socket intentionally remains in
+/// blocking mode: this dedicated thread owns reads, while a cloned stream and
+/// the interface writer path own writes.
 fn client_reader_loop(
     mut stream: TcpStream,
     config: BackboneClientConfig,
