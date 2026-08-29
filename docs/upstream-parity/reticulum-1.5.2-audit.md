@@ -431,9 +431,24 @@ passed.
 
 **Final disposition:** Structurally covered.
 
-### 14–18. Runtime correctness fixes already covered structurally
+### 14. `de0dac69` — Fixed missing exception reference
 
-Entries 14–18 fix Python name binding, import, keepalive framing, CLI argument,
+**Upstream change:** Binds the `RuntimeError` caught while snapshotting the
+process-wide spawned-interface map so its diagnostic can safely include the
+exception.
+
+**Rust applicability and evidence:** Native egress evaluation is owned by each
+`BackboneWriter`; it does not concurrently iterate a process-wide interface
+map. Errors are lexical `io::Error` values passed directly to the writer worker
+and interface-down path, so there is no dynamically scoped exception name to
+lose. The complete entry 12 `rns-net` suite exercises egress evaluation and
+write-stall teardown without an unbound diagnostic path.
+
+**Final disposition:** Structurally covered.
+
+### 15–18. Runtime correctness fixes already covered structurally
+
+Entries 15–18 fix Python import, keepalive framing, CLI argument,
 and release-page initialization errors. The corresponding native paths do not
 share those failure mechanisms: AES and identity-facing inputs are typed,
 errors and dependencies are lexically resolved, the Local physical keepalive
