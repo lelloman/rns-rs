@@ -60,7 +60,7 @@ efficiency, and dataplane egress control.
 | 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Local `fb23eeb`; egress evaluation is writer-owned and its typed Rust errors cannot lose a dynamically scoped exception binding |
 | 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Local `df857f3`; native retry/logging dependencies resolve statically and rns-rs has no Python rnsh module-global `RNS` binding |
 | 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Local `bf4a6fb`; the physical keepalive loop passes a literal empty payload to the shared writer and its focused test observes exactly two HDLC flags |
-| 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Native CLI parsers expose only implemented flags and contain no equivalent dangling example-config reference |
+| 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Local `7835313`; rns-rs ships no rnir binary and therefore exposes neither its broken `--exampleconfig` option nor the undefined value |
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Native release-page rendering resolves `latest` and its not-found result before constructing navigation output |
 | 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Python/Cython module-loader and namespace-package support does not apply to statically linked Rust crates |
 | 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Native persistence uses lexical Rust error values and cannot rebind an active exception variable |
@@ -491,6 +491,9 @@ binary, so it exposes neither the broken option nor the undefined value. Native
 argument dispatch is compiled from explicit binary entry points and match arms;
 the separate rnsd `--exampleconfig` option is implemented and is not the
 surface changed upstream.
+
+**Local handling:** Mapping commit `7835313` records the executable inventory
+and distinguishes the implemented rnsd option from the absent rnir surface.
 
 **Final disposition:** Structurally covered.
 
