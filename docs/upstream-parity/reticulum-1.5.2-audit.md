@@ -46,7 +46,7 @@ efficiency, and dataplane egress control.
 |---:|---|---|---|---|
 | 1 | `de76b8939fb7e73e0b0c681623d1177d422492b7` | Added dataplane ingress control | Integrated | Local `b953832`; accepted Backbone peers now account production, gate the busiest readable socket at DATA pressure, and release it after queue recovery and its calculated hold |
 | 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Local `9f5edb3`; threshold initialization remains silent and native routing retains one authoritative link table, with no secondary forwarding cache |
-| 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Needs coordinated port | Native queue capacities are finalized before readers start, but the new gate must derive all watermarks from the configured DATA capacity before it is activated |
+| 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Integrated | Local `a4b426e`; the Backbone poll loop derives and fixes all ingress watermarks from the configured DATA capacity before registering its listener or accepting peers |
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Native accepted peers keep read polling independent from a cloned writer and every async enqueue wakes its writer; focused backpressure and async-writer tests pass |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Removes a duplicate Python class assignment and adds a TODO comment; no executed behavior changes |
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Needs port | Native decoding is functionally bounded and streaming, but front-drains its `Vec` after every frame and lacks the upstream offset/half-buffer compaction invariant; malformed escape handling also differs |
@@ -163,11 +163,15 @@ of dataplane gate watermarks, so the exact upstream bug is absent until entry 1
 is implemented.
 
 **Local handling and evidence:** `InboundQueueCapacities` and queue construction
-already establish the configured DATA bound before `Driver` starts. The new
-gate must preserve this ordering and derive its high/mid/low thresholds from
-that actual capacity rather than introduce independent defaults.
+already establish the configured DATA bound before `Driver` starts. Local
+`a4b426e` now snapshots that actual DATA capacity and derives the gate's
+high/mid/low thresholds before the Backbone listener is registered. The custom
+200-packet capacity regression proves that the resulting 170-packet immediate
+watermark gates the producer without drops and releases it after recovery. The
+complete `rns-net` feature suite, formatting, and warning-free all-target crate
+lint passed on 2026-08-29.
 
-**Final disposition:** Needs coordinated port with entry 1.
+**Final disposition:** Integrated.
 
 ### 4. `419956ba` — Over-optimization is the root of all evil
 
