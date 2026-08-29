@@ -516,9 +516,20 @@ tests, 11 release integration tests, 6 statistics tests, and doc tests on
 
 ### 19. `803b5489` — Allow loading compiled modules
 
-This adds Python/Cython module discovery and namespace-package behavior. Rust
-crates are statically resolved and linked, so the change is **Non-runtime** for
-the native implementation.
+**Upstream change:** Replaces the simple pyximport shim with an RNS-tree import
+finder that precompiles Python sources into an ABI-suffixed mirror, falls back
+for unbuildable modules, and teaches ten package initializers to discover
+`.so` and `.pyd` modules alongside Python sources.
+
+**Rust applicability and evidence:** Cargo resolves the native crate/module
+graph statically and rustc links compiled artifacts before execution. rns-rs
+does not load Python package initializers, Cython mirrors, namespace packages,
+or ABI-suffixed extension modules, so there is no corresponding runtime loader
+or package export list to change. The full upstream diff affects only Python
+development/import machinery and introduces no protocol, persistence, config,
+RPC, or CLI behavior consumed by native code.
+
+**Final disposition:** Non-runtime.
 
 ### 20–21. `ff3a7220` and `d32ba8c1` — Identity error and return fixes
 
