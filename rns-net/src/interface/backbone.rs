@@ -28,10 +28,12 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::transmit_buffer::TransmitBuffer;
+use crate::interface::transmit_buffer::{
+    EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
+};
 use crate::interface::{
-    lock_or_recover, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceFactory, StartContext,
-    StartResult, Writer,
+    lock_or_recover, DynamicInterfaceTemplate, EgressControl, InterfaceConfigData,
+    InterfaceFactory, StartContext, StartResult, Writer,
 };
 use crate::BackbonePeerStateEntry;
 
@@ -356,10 +358,6 @@ impl Default for BackboneConfig {
     }
 }
 
-/// Maximum pending buffer size per client (512 KB). Clients exceeding this are
-/// disconnected to prevent unbounded memory growth from slow readers.
-const MAX_PENDING_BYTES: usize = 512 * 1024;
-
 /// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
 ///
 /// The server poller owns only readable interest on the original stream. This
@@ -373,6 +371,9 @@ struct BackboneWriter {
     interface_id: InterfaceId,
     event_tx: EventSender,
     transmit_buffer: TransmitBuffer,
+    egress_controller: EgressController,
+    egress_control: EgressControl,
+    egress_started: Instant,
     stall_started: Option<Instant>,
     disconnect_notified: bool,
     write_stall_flag: Arc<AtomicBool>,
@@ -396,8 +397,31 @@ impl Writer for BackboneWriter {
             }
         }
 
+        let elapsed = self.egress_started.elapsed();
+        let _ = self.egress_controller.evaluate(
+            elapsed,
+            self.transmit_buffer.buffered_bytes(),
+            self.transmit_buffer.sendable_bytes(),
+            self.transmit_buffer.total_sent_bytes(),
+        );
+        self.egress_control
+            .set_stalled(self.egress_controller.stalled());
         for frame in frames {
-            self.transmit_buffer.append(hdlc::frame(frame));
+            let encoded = hdlc::frame(frame);
+            let encoded_len = encoded.len();
+            if self.egress_control.stalled()
+                || !self
+                    .transmit_buffer
+                    .append_with_limit(encoded, Some(EGRESS_HIGH_WATERMARK))
+            {
+                self.egress_control.record_drop(encoded_len);
+                log::debug!(
+                    "[{}:{}] egress control dropped outbound frame of {} bytes",
+                    self.interface_name,
+                    self.interface_id.0,
+                    encoded_len
+                );
+            }
         }
         self.transmit_buffer.flush();
         self.drain_transmit(write_stall_timeout)
@@ -406,6 +430,10 @@ impl Writer for BackboneWriter {
     fn flush(&mut self) -> io::Result<()> {
         let timeout = lock_or_recover(&self.runtime, "backbone runtime").write_stall_timeout;
         self.drain_transmit(timeout)
+    }
+
+    fn egress_control(&self) -> Option<EgressControl> {
+        Some(self.egress_control.clone())
     }
 
     fn shutdown(&mut self) {
@@ -423,21 +451,27 @@ impl BackboneWriter {
         if written > 0 {
             self.stall_started = None;
         }
+        let elapsed = self.egress_started.elapsed();
+        let dead = self.egress_controller.evaluate(
+            elapsed,
+            self.transmit_buffer.buffered_bytes(),
+            self.transmit_buffer.sendable_bytes(),
+            self.transmit_buffer.total_sent_bytes(),
+        );
+        self.egress_control
+            .set_stalled(self.egress_controller.stalled());
+        if dead {
+            return Err(self.disconnect_for_write_stall(EGRESS_DEAD_TIME));
+        }
         if self.transmit_buffer.buffered_bytes() == 0 {
             return Ok(());
         }
 
         let now = Instant::now();
         let started = self.stall_started.get_or_insert(now);
-        if let Some(timeout) = write_stall_timeout {
-            if now.duration_since(*started) >= timeout {
-                return Err(self.disconnect_for_write_stall(timeout));
-            }
-        }
-        if self.transmit_buffer.buffered_bytes() > MAX_PENDING_BYTES {
-            return Err(self.disconnect_for_write_stall(
-                write_stall_timeout.unwrap_or(Duration::from_secs(30)),
-            ));
+        let timeout = write_stall_timeout.unwrap_or(EGRESS_DEAD_TIME);
+        if now.duration_since(*started) >= timeout {
+            return Err(self.disconnect_for_write_stall(timeout));
         }
         Err(io::Error::new(
             io::ErrorKind::WouldBlock,
@@ -932,6 +966,9 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                                 interface_id: client_id,
                                 event_tx: tx.clone(),
                                 transmit_buffer: TransmitBuffer::new(),
+                                egress_controller: EgressController::default(),
+                                egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
+                                egress_started: Instant::now(),
                                 stall_started: None,
                                 disconnect_notified: false,
                                 write_stall_flag: Arc::clone(&write_stall_flag),
@@ -1403,6 +1440,7 @@ impl Default for BackboneClientConfig {
 struct BackboneClientWriter {
     stream: TcpStream,
     transmit_buffer: TransmitBuffer,
+    egress_control: EgressControl,
 }
 
 impl Writer for BackboneClientWriter {
@@ -1412,7 +1450,14 @@ impl Writer for BackboneClientWriter {
 
     fn send_frames(&mut self, frames: &[Vec<u8>]) -> io::Result<()> {
         for frame in frames {
-            self.transmit_buffer.append(hdlc::frame(frame));
+            let encoded = hdlc::frame(frame);
+            let encoded_len = encoded.len();
+            if !self
+                .transmit_buffer
+                .append_with_limit(encoded, Some(EGRESS_HIGH_WATERMARK))
+            {
+                self.egress_control.record_drop(encoded_len);
+            }
         }
         self.transmit_buffer.flush();
         while self.transmit_buffer.sendable_bytes() > 0 {
@@ -1424,6 +1469,10 @@ impl Writer for BackboneClientWriter {
             }
         }
         Ok(())
+    }
+
+    fn egress_control(&self) -> Option<EgressControl> {
+        Some(self.egress_control.clone())
     }
 }
 
@@ -1484,6 +1533,7 @@ pub(crate) fn start_client_with_ifac(
     Ok(Box::new(BackboneClientWriter {
         stream: writer_stream,
         transmit_buffer: TransmitBuffer::new(),
+        egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
     }))
 }
 
@@ -1625,6 +1675,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
                 let new_writer: Box<dyn Writer> = Box::new(BackboneClientWriter {
                     stream: writer_stream,
                     transmit_buffer: TransmitBuffer::new(),
+                    egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
                 });
                 let _ = tx.send(Event::InterfaceUp(
                     config.interface_id,

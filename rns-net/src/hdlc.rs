@@ -8,6 +8,17 @@ const FLAG: u8 = 0x7E;
 const ESC: u8 = 0x7D;
 const ESC_MASK: u8 = 0x20;
 
+/// Exact on-wire length after HDLC escaping and delimiter insertion.
+pub(crate) fn framed_len(data: &[u8]) -> usize {
+    data.len()
+        .saturating_add(
+            data.iter()
+                .filter(|&&byte| byte == FLAG || byte == ESC)
+                .count(),
+        )
+        .saturating_add(2)
+}
+
 /// Escape special bytes in data (FLAG and ESC).
 pub fn escape(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
@@ -30,7 +41,7 @@ pub fn escape(data: &[u8]) -> Vec<u8> {
 /// Wrap data in HDLC frame: [FLAG] + escape(data) + [FLAG].
 pub fn frame(data: &[u8]) -> Vec<u8> {
     let escaped = escape(data);
-    let mut out = Vec::with_capacity(escaped.len() + 2);
+    let mut out = Vec::with_capacity(framed_len(data));
     out.push(FLAG);
     out.extend_from_slice(&escaped);
     out.push(FLAG);
@@ -223,6 +234,18 @@ mod tests {
         assert_eq!(framed[0], FLAG);
         assert_eq!(*framed.last().unwrap(), FLAG);
         assert_eq!(&framed[1..framed.len() - 1], &escape(data));
+    }
+
+    #[test]
+    fn framed_len_matches_exact_encoded_length() {
+        for data in [
+            Vec::new(),
+            vec![0x01, 0x02],
+            vec![FLAG, ESC, 0x03],
+            vec![FLAG; 1_024],
+        ] {
+            assert_eq!(framed_len(&data), frame(&data).len());
+        }
     }
 
     #[test]

@@ -2,8 +2,78 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::time::Duration;
 
 pub(crate) const COALESCE_TARGET: usize = 65_536;
+pub(crate) const EGRESS_MID_WATERMARK: usize = 128 * 1024;
+pub(crate) const EGRESS_HIGH_WATERMARK: usize = 4 * 1024 * 1024;
+const EGRESS_INTERVAL: Duration = Duration::from_secs(1);
+const EGRESS_STALL_TICKS: u8 = 3;
+const EGRESS_MAX_ETA_SECS: f64 = 10.0;
+const EGRESS_RELEASE_ETA_SECS: f64 = 5.0;
+pub(crate) const EGRESS_DEAD_TIME: Duration = Duration::from_secs(12);
+
+#[derive(Debug, Default)]
+pub(crate) struct EgressController {
+    previous_sent: usize,
+    zero_ticks: u8,
+    last_evaluation: Duration,
+    last_drain: Duration,
+    stalled: bool,
+}
+
+impl EgressController {
+    pub(crate) fn stalled(&self) -> bool {
+        self.stalled
+    }
+
+    /// Evaluate one interval. Returns `true` when the peer made no progress
+    /// for the dead-peer deadline and should be torn down.
+    pub(crate) fn evaluate(
+        &mut self,
+        now: Duration,
+        buffered: usize,
+        sendable: usize,
+        total_sent: usize,
+    ) -> bool {
+        if now.saturating_sub(self.last_evaluation) < EGRESS_INTERVAL {
+            return false;
+        }
+        self.last_evaluation = now;
+        let drained = total_sent.saturating_sub(self.previous_sent);
+        self.previous_sent = total_sent;
+
+        if buffered == 0 || sendable == 0 {
+            self.zero_ticks = 0;
+            self.last_drain = now;
+            self.stalled = false;
+            return false;
+        }
+        if now.saturating_sub(self.last_drain) >= EGRESS_DEAD_TIME {
+            return true;
+        }
+
+        if drained > 0 {
+            self.last_drain = now;
+            self.zero_ticks = 0;
+            let clear_eta = buffered as f64 / drained as f64;
+            if buffered > EGRESS_MID_WATERMARK && clear_eta > EGRESS_MAX_ETA_SECS {
+                self.stalled = true;
+            } else if buffered <= EGRESS_MID_WATERMARK || clear_eta < EGRESS_RELEASE_ETA_SECS {
+                self.stalled = false;
+            }
+        } else if buffered > EGRESS_MID_WATERMARK {
+            self.zero_ticks = self.zero_ticks.saturating_add(1);
+            if self.zero_ticks >= EGRESS_STALL_TICKS {
+                self.stalled = true;
+            }
+        } else {
+            self.zero_ticks = 0;
+            self.stalled = false;
+        }
+        false
+    }
+}
 
 struct Chunk {
     data: Vec<u8>,
@@ -42,6 +112,7 @@ impl TransmitBuffer {
     }
 
     /// Append one finalized on-wire frame.
+    #[allow(dead_code)]
     pub(crate) fn append(&mut self, frame: Vec<u8>) -> bool {
         self.append_with_limit(frame, None)
     }
@@ -156,6 +227,10 @@ impl TransmitBuffer {
 
     pub(crate) fn sendable_bytes(&self) -> usize {
         self.visible_bytes.saturating_sub(self.sent_bytes)
+    }
+
+    pub(crate) fn total_sent_bytes(&self) -> usize {
+        self.sent_bytes
     }
 
     #[allow(dead_code)]
@@ -393,5 +468,60 @@ mod tests {
         assert!(buffer.append(vec![0x44; 3_000]));
         assert_eq!(buffer.buffered_bytes(), 3_500);
         assert_eq!(buffer.buffered_frames(), 2);
+    }
+
+    #[test]
+    fn egress_controller_gates_after_three_zero_drain_ticks_and_releases_below_mid() {
+        let mut controller = EgressController::default();
+        let buffered = EGRESS_MID_WATERMARK + 1;
+        assert!(!controller.evaluate(Duration::from_secs(1), buffered, buffered, 0));
+        assert!(!controller.stalled());
+        assert!(!controller.evaluate(Duration::from_secs(2), buffered, buffered, 0));
+        assert!(!controller.stalled());
+        assert!(!controller.evaluate(Duration::from_secs(3), buffered, buffered, 0));
+        assert!(controller.stalled());
+
+        assert!(!controller.evaluate(
+            Duration::from_secs(4),
+            EGRESS_MID_WATERMARK,
+            EGRESS_MID_WATERMARK,
+            1
+        ));
+        assert!(!controller.stalled());
+    }
+
+    #[test]
+    fn egress_controller_applies_eta_hysteresis() {
+        let mut controller = EgressController::default();
+        let buffered = EGRESS_MID_WATERMARK * 2;
+
+        assert!(!controller.evaluate(Duration::from_secs(1), buffered, buffered, 1));
+        assert!(controller.stalled());
+
+        // Eight seconds is inside the five-to-ten-second hysteresis band.
+        assert!(!controller.evaluate(Duration::from_secs(2), buffered, buffered, 1 + buffered / 8));
+        assert!(controller.stalled());
+
+        assert!(!controller.evaluate(
+            Duration::from_secs(3),
+            buffered,
+            buffered,
+            1 + buffered / 8 + buffered
+        ));
+        assert!(!controller.stalled());
+    }
+
+    #[test]
+    fn egress_controller_resets_empty_and_escalates_dead_peer() {
+        let mut controller = EgressController::default();
+        let buffered = EGRESS_MID_WATERMARK + 1;
+        assert!(!controller.evaluate(Duration::from_secs(1), 0, 0, 0));
+        assert!(!controller.stalled());
+
+        assert!(!controller.evaluate(Duration::from_secs(2), buffered, buffered, 0));
+        assert!(!controller.evaluate(Duration::from_secs(3), buffered, buffered, 0));
+        assert!(!controller.evaluate(Duration::from_secs(4), buffered, buffered, 0));
+        assert!(controller.stalled());
+        assert!(controller.evaluate(Duration::from_secs(13), buffered, buffered, 0));
     }
 }
