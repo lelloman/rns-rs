@@ -61,7 +61,7 @@ efficiency, and dataplane egress control.
 | 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Local `df857f3`; native retry/logging dependencies resolve statically and rns-rs has no Python rnsh module-global `RNS` binding |
 | 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Local `bf4a6fb`; the physical keepalive loop passes a literal empty payload to the shared writer and its focused test observes exactly two HDLC flags |
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Local `7835313`; rns-rs ships no rnir binary and therefore exposes neither its broken `--exampleconfig` option nor the undefined value |
-| 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Native release-page rendering resolves `latest` and its not-found result before constructing navigation output |
+| 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Local `1a042a7`; the release page resolves `latest` before constructing output, and the regression pins the resolved tag in both breadcrumb and heading |
 | 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Python/Cython module-loader and namespace-package support does not apply to statically linked Rust crates |
 | 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Native persistence uses lexical Rust error values and cannot rebind an active exception variable |
 | 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Native identity construction has typed fixed-size inputs and return values rather than fall-through `None` behavior |
@@ -497,11 +497,22 @@ and distinguishes the implemented rnsd option from the absent rnir surface.
 
 **Final disposition:** Structurally covered.
 
-### 18. Runtime correctness fix already covered structurally
+### 18. `67a45ac5` — Fixed nav init order
 
-Entry 18 fixes release-page initialization order. Native release-page rendering
-resolves `latest` before it builds navigation, so it is **Structurally covered**
-rather than an independent port.
+**Upstream change:** Initializes release-page navigation before resolving the
+special `latest` tag, preventing uninitialized navigation state when no latest
+release exists while retaining the requested tag in that early breadcrumb.
+
+**Rust applicability and evidence:** Native `render_release_page()` resolves
+`latest`, handles its not-found result, loads the published release, and only
+then constructs the breadcrumb and heading from `release.tag`. Local `1a042a7`
+strengthens the release-page integration test to prove a `latest` request emits
+the concrete `v1` tag in both breadcrumb and heading and never leaves `latest`
+in the navigation. The complete `rns-git` suite passed 195 unit tests, 6 E2E
+tests, 11 release integration tests, 6 statistics tests, and doc tests on
+2026-08-29; formatting and warning-free all-target crate lint also passed.
+
+**Final disposition:** Structurally covered.
 
 ### 19. `803b5489` — Allow loading compiled modules
 
