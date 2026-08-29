@@ -91,7 +91,7 @@ efficiency, and dataplane egress control.
 | 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Integrated | Local `ff73797`; generated rns-git server config and operator docs identify `d7db22f63b453c23bb0688dde565b7c1` for blocking unidentified peers, with generation regression |
 | 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Local `86ec534`; reorders the tuned-control bullet and adds the null-identity example already integrated by entry 45; no runtime or new compatibility claim |
 | 47 | `ad3c06636b8d32afb0e68fe25cc12847c240926f` | Adjusted logging | Non-runtime | Local `af42231`; lowers denied/missing artifact, blob and work-document diagnostics from warning to debug; native handlers return the same denial without equivalent warnings |
-| 48 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` | Prepare release | Non-runtime | Full diff review: regenerates 22 Sphinx outputs from 1.5.1 to 1.5.2 (including inventory/build hashes) without source or runtime changes; this commit is the audited target |
+| 48 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` | Prepare release | Non-runtime | Local `c367329`; regenerates 22 Sphinx outputs from 1.5.1 to 1.5.2 (including inventory/build hashes) without source/runtime changes; this is the audited target |
 
 ## Per-Commit Analysis
 
