@@ -481,12 +481,24 @@ all-target crate lint also passed.
 
 **Final disposition:** Structurally covered.
 
-### 17–18. Runtime correctness fixes already covered structurally
+### 17. `e71c0195` — Fixed stray non-imported variable
 
-Entries 17–18 fix a CLI argument and release-page initialization order.
-The corresponding native CLI exposes only implemented flags, and release-page
-rendering resolves `latest` before it builds navigation. These entries are
-therefore **Structurally covered** rather than independent ports.
+**Upstream change:** Removes rnir's `--exampleconfig` option and its reference
+to the undefined `__example_rns_config__` value, while retaining `--config`.
+
+**Rust applicability and evidence:** rns-rs does not currently ship an `rnir`
+binary, so it exposes neither the broken option nor the undefined value. Native
+argument dispatch is compiled from explicit binary entry points and match arms;
+the separate rnsd `--exampleconfig` option is implemented and is not the
+surface changed upstream.
+
+**Final disposition:** Structurally covered.
+
+### 18. Runtime correctness fix already covered structurally
+
+Entry 18 fixes release-page initialization order. Native release-page rendering
+resolves `latest` before it builds navigation, so it is **Structurally covered**
+rather than an independent port.
 
 ### 19. `803b5489` — Allow loading compiled modules
 
