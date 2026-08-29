@@ -50,7 +50,7 @@ efficiency, and dataplane egress control.
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Local `925413f`; native accepted peers keep read polling independent from a cloned writer, and the strengthened async-writer regression proves queued output progresses without another send trigger |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Local `360f095`; records that the native standalone client's blocking socket is deliberately split between a dedicated reader thread and cloned writer path |
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Integrated | Local `a513526`; the shared native decoder now uses a consumed offset with half-buffer compaction, preserves unknown escape pairs, and covers a 20,000-frame coalesced flood |
-| 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | The test-only contract covers chunk bounds, partial writes, ordering, accounting, concurrency and flood behavior absent from the native per-frame async writer tests |
+| 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | Local `f1fd1a3` stages the architecture-neutral contract with a 50,000-frame ordered async-writer burst; chunk, partial-write, and byte-accounting cases remain coupled to entries 8–9 |
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Needs coordinated port | Native async writers bound a queue by frame count and issue one framed write per item; they have no 64 KiB coalescing chunks or byte/frame/sendable accounting |
 | 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Needs coordinated port | Native Backbone and Local paths already share `hdlc::Decoder`, but both still use the per-frame async writer and therefore lack the new transmit-buffer behavior |
 | 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Needs coordinated port | The test-only contract adds byte-valve, drain ETA, hysteresis, dead-peer and drop-gate scenarios not covered by current queue-full/write-stall tests |
@@ -264,9 +264,14 @@ queue-full `WouldBlock`, worker failure and interface-down notification. They do
 not cover byte chunks, partial chunk resumption, coalescing-tail visibility, or
 byte/frame accounting.
 
-**Local handling and evidence:** Both existing `async_writer` tests passed on
-2026-08-27. Their smaller contract confirms that the upstream scenarios are
-not redundant.
+**Local handling and evidence:** Local `f1fd1a3` adds a 50,000-frame burst
+through the current async writer and proves exact in-order delivery without
+loss in 0.02 seconds. This stages the architecture-neutral portion of the
+upstream test-first commit while leaving tests that require chunks, partial
+chunk resumption, explicit flush, and byte/frame accounting for the actual
+buffer in entries 8–9. The complete `rns-net` feature suite passed 916 unit
+tests, 54 E2E tests, and all interoperability and fixture tests on 2026-08-29;
+formatting and warning-free all-target crate lint also passed.
 
 **Final disposition:** Needs coordinated port with entries 8 and 9. Native
 tests should preserve the protocol and concurrency scenarios while expressing
