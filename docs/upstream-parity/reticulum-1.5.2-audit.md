@@ -53,9 +53,9 @@ efficiency, and dataplane egress control.
 | 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Integrated | Local `f1fd1a3` adds the 50,000-frame ordered async-writer burst; the entry 8 buffer tests complete the chunk, partial-write, tail-release, and accounting contract |
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Integrated | Local `257e162`; a standalone native buffer coalesces below 64 KiB, isolates larger frames, resumes partial writes, releases its tail, and accounts bytes, frames, and chunks |
 | 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Integrated | Local `ce58265`; async writers batch queued frames, Backbone and Local socket writers drain coalesced on-wire chunks, and partial Backbone writes resume without duplicate enqueue |
-| 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Needs coordinated port | Local `f541abe` stages the drain/reopen accounting prerequisite; byte-valve tests land with entry 11 and ETA, hysteresis, dead-peer, and drop-gate tests with entry 12 |
+| 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Integrated | Local `f541abe` stages drain/reopen accounting; entries 11 and 12 complete the hard valve, exact async admission budget, drop gate, hysteresis, and dead-peer scenarios |
 | 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Integrated | Local `7106de0`; optional byte-limited append atomically rejects any frame that would cross the bound, leaves state unchanged, and admits again after drain |
-| 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Needs coordinated port | Native `WouldBlock` backoff and Backbone pending-buffer disconnect cover parts of overload handling, but not the upstream byte HWM, drain-rate gate, drop accounting, hysteresis, or 12-second dead-peer policy |
+| 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Integrated | Local `2ac7733`; Backbone and Local HDLC writers share an exact 4 MiB queued/in-flight byte budget, admission drops while gated, and accepted Backbone peers apply the upstream drain-rate hysteresis and dead-peer policy |
 | 13 | `281c47f3e0998527c22aaf66017b606b91cda5f7` | Fixed invalid reference in exception description | Structurally covered | Rust AES key sizes are enforced by typed inputs and errors do not interpolate an unavailable instance reference |
 | 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Native interface iteration and error logging use typed Rust results rather than Python exception-scope bindings |
 | 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Native retry/logging code resolves dependencies statically; there is no dynamic `RNS` module name to omit |
@@ -348,10 +348,11 @@ accounting prerequisite: a 2,020-byte burst drains to exact zero bytes and zero
 frames, after which a second equal burst is fully visible and admissible. The
 focused test and complete `rns-net` feature suite passed 924 unit tests, 54 E2E
 tests, and all interoperability and fixture tests on 2026-08-29; formatting and
-warning-free all-target crate lint also passed. The hard byte valve remains
-coupled to entry 11, while controller transitions remain coupled to entry 12.
+warning-free all-target crate lint also passed. Entries 11 and 12 subsequently
+completed the hard byte valve and controller-transition coverage.
 
-**Final disposition:** Needs coordinated port with entries 11 and 12.
+**Final disposition:** Integrated by local `f541abe`, with its staged scenarios
+completed by the ordered entry 11 and 12 mappings.
 
 ### 11. `cb9071b4` — Add HWM admission to `TransmitBuffer`
 
@@ -395,15 +396,25 @@ drop bytes/counts are not exposed, client/Local blocking writers have no
 drain-rate monitor, and there is no matching ETA hysteresis or default
 12-second dead-peer rule.
 
-**Local handling and evidence:** Focused async-writer, Backbone
-read-under-backpressure and configurable write-stall tests establish the
-existing partial coverage. They do not justify structural equivalence.
+**Local handling and evidence:** Local `2ac7733` gives each applicable HDLC
+writer one shared egress-control handle spanning the async producer and concrete
+socket writer. Exact escaped on-wire lengths are reserved before enqueue and
+remain charged until the complete batch drains, so queued and in-flight data
+cannot jointly exceed 4 MiB. A full valve or asserted stall gate drops at
+admission and records the exact framed byte count. Accepted Backbone peers
+sample coalesced-buffer drain once per second, gate after three zero-progress
+ticks or a greater-than-ten-second ETA, release below five seconds or 128 KiB,
+and tear down after twelve seconds without progress. Local and standalone
+Backbone writers use the same hard byte valve; entry 41 will apply upstream's
+later Local-interface exemption in ancestry order. Focused tests cover exact
+HDLC sizing, shared queued/in-flight admission, drop accounting, stall-gate
+admission, hard-limit drain/reopen, ETA hysteresis, zero-drain gating, empty
+reset, dead-peer escalation, Backbone read independence, and write-stall event
+delivery. The complete `rns-net` feature suite passed 931 unit tests, 54 E2E
+tests, and all interoperability and fixture tests on 2026-08-29; formatting and
+warning-free all-target crate lint also passed.
 
-**Final disposition:** Needs coordinated port with entries 7–11. The port must
-define a single native overload policy across the async queue, coalesced bytes,
-socket pending state, retry backoff, statistics and interface-down signaling;
-simply adding another buffer would create conflicting bounds and teardown
-owners.
+**Final disposition:** Integrated.
 
 ### 13–18. Runtime correctness fixes already covered structurally
 
