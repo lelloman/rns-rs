@@ -23,6 +23,8 @@ pub mod serial_iface;
 pub mod tcp;
 #[cfg(feature = "iface-tcp")]
 pub mod tcp_server;
+#[allow(dead_code)]
+pub(crate) mod transmit_buffer;
 #[cfg(feature = "iface-udp")]
 pub mod udp;
 #[cfg(all(feature = "iface-weave", target_os = "linux"))]
