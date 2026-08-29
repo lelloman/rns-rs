@@ -1472,6 +1472,10 @@ impl LinkManager {
     }
 
     /// Start a bounded-memory Resource transfer from a sequential reader.
+    ///
+    /// The declared-length reader is consumed directly. Unlike the upstream
+    /// zero-stat compatibility path, no temporary buffered proxy must be
+    /// flushed and rewound before its size or first segment can be observed.
     #[allow(clippy::too_many_arguments)]
     pub fn send_resource_stream(
         &mut self,
