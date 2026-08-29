@@ -59,7 +59,7 @@ efficiency, and dataplane egress control.
 | 13 | `281c47f3e0998527c22aaf66017b606b91cda5f7` | Fixed invalid reference in exception description | Structurally covered | Local `136a2d2`; AES-128 and AES-256 constructors accept only fixed 16-byte and 32-byte array references, so invalid key lengths and an unavailable instance reference are unrepresentable |
 | 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Local `fb23eeb`; egress evaluation is writer-owned and its typed Rust errors cannot lose a dynamically scoped exception binding |
 | 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Local `df857f3`; native retry/logging dependencies resolve statically and rns-rs has no Python rnsh module-global `RNS` binding |
-| 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Native Local physical keepalive sends an empty frame through the shared writer, with focused framing coverage |
+| 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Local `bf4a6fb`; the physical keepalive loop passes a literal empty payload to the shared writer and its focused test observes exactly two HDLC flags |
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Native CLI parsers expose only implemented flags and contain no equivalent dangling example-config reference |
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Native release-page rendering resolves `latest` and its not-found result before constructing navigation output |
 | 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Python/Cython module-loader and namespace-package support does not apply to statically linked Rust crates |
@@ -466,16 +466,27 @@ and the compile-time dependency-resolution invariant.
 
 **Final disposition:** Structurally covered.
 
-### 16–18. Runtime correctness fixes already covered structurally
+### 16. `0a1b9453` — Fixed non-epoll backend keepalive
 
-Entries 16–18 fix keepalive framing, CLI argument,
-and release-page initialization errors. The corresponding native paths do not
-share those failure mechanisms: AES and identity-facing inputs are typed,
-errors and dependencies are lexically resolved, the Local physical keepalive
-uses `Writer::send_frame(&[])`, and release-page rendering resolves `latest`
-before navigation is built. The existing Local keepalive test checks that the
-empty payload becomes the two-flag HDLC frame. These entries are therefore
-**Structurally covered** rather than independent ports.
+**Upstream change:** Changes the non-epoll Local physical keepalive path from
+framing an unrelated `data` value to framing an empty payload.
+
+**Rust applicability and evidence:** Native Local keepalives already call
+`Writer::send_frame(&[])`. Local `bf4a6fb` documents at that call site that the
+literal payload prevents prior application data from being captured or
+retransmitted. The focused socket test observes exactly `[0x7e, 0x7e]`. The
+complete `rns-net` feature suite passed 931 unit tests, 54 E2E tests, and all
+interoperability and fixture tests on 2026-08-29; formatting and warning-free
+all-target crate lint also passed.
+
+**Final disposition:** Structurally covered.
+
+### 17–18. Runtime correctness fixes already covered structurally
+
+Entries 17–18 fix a CLI argument and release-page initialization order.
+The corresponding native CLI exposes only implemented flags, and release-page
+rendering resolves `latest` before it builds navigation. These entries are
+therefore **Structurally covered** rather than independent ports.
 
 ### 19. `803b5489` — Allow loading compiled modules
 
