@@ -47,7 +47,7 @@ efficiency, and dataplane egress control.
 | 1 | `de76b8939fb7e73e0b0c681623d1177d422492b7` | Added dataplane ingress control | Integrated | Local `b953832`; accepted Backbone peers now account production, gate the busiest readable socket at DATA pressure, and release it after queue recovery and its calculated hold |
 | 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Local `9f5edb3`; threshold initialization remains silent and native routing retains one authoritative link table, with no secondary forwarding cache |
 | 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Integrated | Local `a4b426e`; the Backbone poll loop derives and fixes all ingress watermarks from the configured DATA capacity before registering its listener or accepting peers |
-| 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Native accepted peers keep read polling independent from a cloned writer and every async enqueue wakes its writer; focused backpressure and async-writer tests pass |
+| 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Local `925413f`; native accepted peers keep read polling independent from a cloned writer, and the strengthened async-writer regression proves queued output progresses without another send trigger |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Removes a duplicate Python class assignment and adds a TODO comment; no executed behavior changes |
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Needs port | Native decoding is functionally bounded and streaming, but front-drains its `Vec` after every frame and lacks the upstream offset/half-buffer compaction invariant; malformed escape handling also differs |
 | 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | The test-only contract covers chunk bounds, partial writes, ordering, accounting, concurrency and flood behavior absent from the native per-frame async writer tests |
@@ -187,10 +187,13 @@ wakes the dedicated consumer channel; output visibility is not inferred from a
 buffer-empty transition.
 
 **Local handling and evidence:** Local mapping `e095553` documents this
-read-poller/writer separation. On 2026-08-27,
-`backbone_write_backpressure_does_not_starve_reads` and both `async_writer`
-focused tests passed, proving readable interest survives writer pressure and
-every bounded enqueue has an active consumer.
+read-poller/writer separation. Local `925413f` strengthens
+`async_writer_returns_wouldblock_when_queue_is_full` to release the active
+write and prove that the already-queued second frame enters the worker without
+another sender-side trigger. On 2026-08-29, that focused test and the complete
+`rns-net` feature suite passed (913 unit tests, 54 E2E tests, and all
+interoperability and fixture tests), along with formatting and warning-free
+all-target crate lint.
 
 **Final disposition:** Structurally covered.
 
