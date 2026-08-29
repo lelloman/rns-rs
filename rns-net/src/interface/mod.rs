@@ -637,7 +637,12 @@ mod tests {
         let err = writer.send_frame(&[3]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
 
-        let _ = release_tx.send(());
+        release_tx.send(()).unwrap();
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the queued frame must wake the writer without another send trigger");
+        assert_eq!(metrics.queued_frames(), 0);
+        release_tx.send(()).unwrap();
     }
 
     #[test]
