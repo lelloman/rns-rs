@@ -181,6 +181,9 @@ fn spawn_physical_keepalive_loop(
     interface_name: String,
     interval: Duration,
 ) {
+    // A physical keepalive is always an empty logical frame. Keeping that
+    // payload literal at the writer boundary prevents any prior application
+    // data from being captured or retransmitted by the non-polling path.
     thread::Builder::new()
         .name(format!("local-phy-keepalive-{}", interface_id.0))
         .spawn(move || loop {
