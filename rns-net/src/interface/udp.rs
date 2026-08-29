@@ -134,6 +134,9 @@ fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSe
     loop {
         match socket.recv_from(&mut buf) {
             Ok((n, _src)) => {
+                if n == 0 {
+                    continue;
+                }
                 if tx
                     .send(Event::Frame {
                         interface_id: id,
@@ -428,6 +431,31 @@ mod tests {
                 Event::Frame { data, .. } => assert_eq!(data, vec![i]),
                 other => panic!("expected Frame, got {:?}", other),
             }
+        }
+    }
+
+    #[test]
+    fn empty_datagram_is_ignored_before_transport_ingress() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let config = UdpConfig {
+            name: "test-udp-empty".into(),
+            listen_ip: Some("127.0.0.1".into()),
+            listen_port: Some(port),
+            interface_id: InterfaceId(14),
+            ..UdpConfig::default()
+        };
+        let _writer = start(config, tx).unwrap();
+        let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let target = format!("127.0.0.1:{port}");
+        sender.send_to(&[], &target).unwrap();
+        sender.send_to(b"after-empty", &target).unwrap();
+
+        match rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Frame { data, .. } => assert_eq!(data, b"after-empty"),
+            other => panic!("expected non-empty Frame, got {other:?}"),
         }
     }
 
