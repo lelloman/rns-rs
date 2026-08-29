@@ -815,6 +815,9 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
         dynamic_template,
         ifac_size,
     } = context;
+    // Queue capacities are finalized before interfaces start. Derive the
+    // ingress controller's watermarks once, before any listener can read.
+    let ingress_thresholds = ingress_thresholds(tx.inbound_queue_snapshot().capacities[0]);
     let poller = Poller::new()?;
 
     const LISTENER_KEY: usize = 0;
@@ -1076,8 +1079,7 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
                             }
                         }
                         let queue = tx.inbound_queue_snapshot();
-                        let thresholds = ingress_thresholds(queue.capacities[0]);
-                        if queue.heights[0] >= thresholds.immediate {
+                        if queue.heights[0] >= ingress_thresholds.immediate {
                             let _ = throttle_busiest_ingress(
                                 &poller,
                                 &mut clients,
@@ -1122,11 +1124,10 @@ fn poll_loop(context: PollLoopContext) -> io::Result<()> {
         if ingress_snapshot_at.elapsed() >= DP_IC_INTERVAL {
             let now = Instant::now();
             let queue = tx.inbound_queue_snapshot();
-            let thresholds = ingress_thresholds(queue.capacities[0]);
-            if queue.heights[0] > thresholds.mid {
+            if queue.heights[0] > ingress_thresholds.mid {
                 let _ =
                     throttle_busiest_ingress(&poller, &mut clients, ingress_snapshot_at.elapsed())?;
-            } else if queue.heights[0] < thresholds.low {
+            } else if queue.heights[0] < ingress_thresholds.low {
                 let _ = release_one_ingress(&poller, &mut clients, now)?;
             }
             for client in clients.values_mut() {
