@@ -52,7 +52,7 @@ efficiency, and dataplane egress control.
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Integrated | Local `a513526`; the shared native decoder now uses a consumed offset with half-buffer compaction, preserves unknown escape pairs, and covers a 20,000-frame coalesced flood |
 | 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Integrated | Local `f1fd1a3` adds the 50,000-frame ordered async-writer burst; the entry 8 buffer tests complete the chunk, partial-write, tail-release, and accounting contract |
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Integrated | Local `257e162`; a standalone native buffer coalesces below 64 KiB, isolates larger frames, resumes partial writes, releases its tail, and accounts bytes, frames, and chunks |
-| 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Needs coordinated port | Native Backbone and Local paths already share `hdlc::Decoder`, but both still use the per-frame async writer and therefore lack the new transmit-buffer behavior |
+| 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Integrated | Local `ce58265`; async writers batch queued frames, Backbone and Local socket writers drain coalesced on-wire chunks, and partial Backbone writes resume without duplicate enqueue |
 | 10 | `10848b7cffdaf4f604c6899ed9af1db731e0524b` | Added egress control HWM limiter test | Needs coordinated port | The test-only contract adds byte-valve, drain ETA, hysteresis, dead-peer and drop-gate scenarios not covered by current queue-full/write-stall tests |
 | 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Needs coordinated port | The native 256-frame async queue can retain far more than 4 MiB and has no atomic byte-limit admission decision |
 | 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Needs coordinated port | Native `WouldBlock` backoff and Backbone pending-buffer disconnect cover parts of overload handling, but not the upstream byte HWM, drain-rate gate, drop accounting, hysteresis, or 12-second dead-peer policy |
@@ -316,15 +316,18 @@ Backbone and Local readers, including Backbone's MTU/IFAC maximum. Its writer
 side still frames one queue item at a time, so only the decoder-extraction half
 is structurally present.
 
-**Local handling and evidence:** The HDLC-focused suite and
-`backbone_write_backpressure_does_not_starve_reads` passed on 2026-08-27. No
-test or implementation demonstrates coalesced Backbone/Local output, tail
-release, or chunk-level partial-write recovery.
+**Local handling and evidence:** Local `ce58265` extends the native writer
+boundary with batch delivery, drains every batch through `TransmitBuffer` in
+accepted and standalone Backbone writers and TCP/Unix Local writers, and lets
+the dedicated async worker resume a partial nonblocking Backbone chunk without
+re-appending its frame. The pre-existing shared `hdlc::Decoder` remains the
+single receive implementation. Focused tests prove deterministic batching,
+Backbone read progress under write backpressure, standalone Backbone wire
+output, and all 12 Local-interface paths. The complete `rns-net` feature suite
+passed 923 unit tests, 54 E2E tests, and all interoperability and fixture tests
+on 2026-08-29; formatting and warning-free all-target crate lint also passed.
 
-**Final disposition:** Needs coordinated port with entries 6–8. The reader
-optimization can remain generic across every native HDLC interface; transmit
-coalescing must cover at least the upstream Backbone and Local surfaces without
-regressing the independent-read invariant.
+**Final disposition:** Integrated.
 
 ### 10. `10848b7c` — Added egress control HWM limiter test
 
