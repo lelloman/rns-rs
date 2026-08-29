@@ -89,7 +89,7 @@ efficiency, and dataplane egress control.
 | 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Integrated | Local `723077e`; Backbone ingress high/mid/low watermarks now derive as 90/68/10 percent, with exact default/small-capacity and live gate/release regressions |
 | 44 | `d5b2fc56094cadba6bf660d2422c67aa93112383` | Updated changelog | Non-runtime | Local `af445e9`; adds the 1.5.2 maintenance-release narrative and moves unchanged signed-retrieval instructions; its compatibility claims are verified from entries 35, 39 and 43 |
 | 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Integrated | Local `ff73797`; generated rns-git server config and operator docs identify `d7db22f63b453c23bb0688dde565b7c1` for blocking unidentified peers, with generation regression |
-| 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Full three-line diff review: reorders the tuned-control bullet and adds the null-identity configuration example already integrated by entry 45; no runtime or new compatibility claim |
+| 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Local `86ec534`; reorders the tuned-control bullet and adds the null-identity example already integrated by entry 45; no runtime or new compatibility claim |
 | 47 | `ad3c06636b8d32afb0e68fe25cc12847c240926f` | Adjusted logging | Non-runtime | Changes denied/missing rngit artifact and page-download messages from warning to debug without changing responses or access decisions |
 | 48 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` | Prepare release | Non-runtime | Generated documentation and tagged 1.5.2 release metadata |
 
