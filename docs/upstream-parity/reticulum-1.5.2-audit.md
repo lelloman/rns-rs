@@ -63,7 +63,7 @@ efficiency, and dataplane egress control.
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Local `7835313`; rns-rs ships no rnir binary and therefore exposes neither its broken `--exampleconfig` option nor the undefined value |
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Local `1a042a7`; the release page resolves `latest` before constructing output, and the regression pins the resolved tag in both breadcrumb and heading |
 | 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Local `9d0da01`; Python/Cython mirror compilation, extension loading, and package globbing do not apply to statically resolved and linked Rust crates |
-| 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Native persistence uses lexical Rust error values and cannot rebind an active exception variable |
+| 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Local `6f09d8a`; native persistence uses distinct lexical `io::Error` values, so cleanup cannot erase an outer serialization failure |
 | 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Native identity construction has typed fixed-size inputs and return values rather than fall-through `None` behavior |
 | 22 | `75cbc73f64f3d1d020b7e86ec12f6fd0f3cfdca3` | Removed dead Python 2 code from umsgpack | Non-runtime | Removes compatibility code from a vendored Python serializer; native MessagePack handling does not vendor this module |
 | 23 | `e714c559cc00ce4d7abc232a86a62d5d3b5c7376` | Updated tests init | Non-runtime | Upstream-only Python test package initialization change |
@@ -545,6 +545,9 @@ failure to a separate lexical `io::Error`; inner cleanup scopes cannot mutate or
 erase an outer error binding. Atomic known-destination saves return the original
 typed result rather than re-raising a dynamically scoped exception. This is a
 Python exception-lifetime fix with no independent Rust runtime change.
+
+**Local handling:** Mapping commit `6f09d8a` records the complete one-line
+upstream fix and the native lexical-error invariant.
 
 **Final disposition:** Structurally covered.
 
