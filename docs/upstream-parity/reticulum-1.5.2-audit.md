@@ -49,7 +49,7 @@ efficiency, and dataplane egress control.
 | 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Integrated | Local `a4b426e`; the Backbone poll loop derives and fixes all ingress watermarks from the configured DATA capacity before registering its listener or accepting peers |
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Local `925413f`; native accepted peers keep read polling independent from a cloned writer, and the strengthened async-writer regression proves queued output progresses without another send trigger |
 | 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Local `360f095`; records that the native standalone client's blocking socket is deliberately split between a dedicated reader thread and cloned writer path |
-| 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Needs port | Native decoding is functionally bounded and streaming, but front-drains its `Vec` after every frame and lacks the upstream offset/half-buffer compaction invariant; malformed escape handling also differs |
+| 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Integrated | Local `a513526`; the shared native decoder now uses a consumed offset with half-buffer compaction, preserves unknown escape pairs, and covers a 20,000-frame coalesced flood |
 | 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | The test-only contract covers chunk bounds, partial writes, ordering, accounting, concurrency and flood behavior absent from the native per-frame async writer tests |
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Needs coordinated port | Native async writers bound a queue by frame count and issue one framed write per item; they have no 64 KiB coalescing chunks or byte/frame/sendable accounting |
 | 9 | `89e73db94aacc1d7f83fb921438fe90c913b5bbb` | Wired coalescing transmit buffer and optimized HDLC deframer into Backbone and Local interfaces | Needs coordinated port | Native Backbone and Local paths already share `hdlc::Decoder`, but both still use the per-frame async writer and therefore lack the new transmit-buffer behavior |
@@ -238,16 +238,18 @@ XORs every byte following `ESC`, whereas upstream and its legacy implementation
 replace only the two defined escape sequences, so malformed escape sequences
 do not have identical output.
 
-**Local handling and evidence:** All 21 current HDLC-related native tests
-passed on 2026-08-27, including bounded batches, fragmentation, frame-size
-diagnostics and Backbone integration. They establish the existing functional
-base but contain neither malformed-escape parity nor a no-per-frame-front-drain
-invariant.
+**Local handling and evidence:** Local `a513526` ports the consumed-offset model
+to the shared native decoder, compacts only after the offset reaches half of
+the allocation, preserves the closing flag, and bounds only the unconsumed
+tail. Unescaping now replaces only the two defined HDLC pairs, preserving
+unknown and trailing escape bytes like upstream. Nineteen focused HDLC tests
+passed, including new malformed-escape and delayed-compaction regressions; the
+20,000-frame coalesced flood completed in 0.01 seconds. The complete `rns-net`
+feature suite passed 915 unit tests, 54 E2E tests, and all interoperability and
+fixture tests on 2026-08-29. Formatting and warning-free all-target crate lint
+also passed.
 
-**Final disposition:** Needs port. Preserve the public decoder API while adding
-offset-based compaction, exact upstream escape semantics, deterministic
-functional coverage, and a reproducible performance regression rather than
-copying a machine-dependent ten-second threshold.
+**Final disposition:** Integrated.
 
 ### 7. `ac9130f0` — Added coalesced transmit test
 
