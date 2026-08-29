@@ -43,8 +43,20 @@ fn unescape(data: &[u8]) -> Vec<u8> {
     let mut i = 0;
     while i < data.len() {
         if data[i] == ESC && i + 1 < data.len() {
-            out.push(data[i + 1] ^ ESC_MASK);
-            i += 2;
+            match data[i + 1] {
+                byte if byte == FLAG ^ ESC_MASK => {
+                    out.push(FLAG);
+                    i += 2;
+                }
+                byte if byte == ESC ^ ESC_MASK => {
+                    out.push(ESC);
+                    i += 2;
+                }
+                _ => {
+                    out.push(ESC);
+                    i += 1;
+                }
+            }
         } else {
             out.push(data[i]);
             i += 1;
@@ -59,6 +71,7 @@ fn unescape(data: &[u8]) -> Vec<u8> {
 /// Matches the decode loop in `TCPInterface.py:381-394`.
 pub struct Decoder {
     buffer: Vec<u8>,
+    offset: usize,
     min_frame_size: usize,
     max_frame_size: Option<usize>,
     max_buffer_size: usize,
@@ -84,6 +97,7 @@ impl Decoder {
     pub fn with_limits(min_frame_size: usize, max_buffer_size: usize) -> Self {
         Decoder {
             buffer: Vec::new(),
+            offset: 0,
             min_frame_size,
             max_frame_size: None,
             max_buffer_size: max_buffer_size.max(2),
@@ -98,6 +112,7 @@ impl Decoder {
     pub fn reticulum(hardware_mtu: usize, ifac_size: usize) -> Self {
         Decoder {
             buffer: Vec::new(),
+            offset: 0,
             min_frame_size: HEADER_MINSIZE.saturating_add(1),
             max_frame_size: Some(hardware_mtu.saturating_add(ifac_size)),
             max_buffer_size: hardware_mtu.saturating_mul(2).max(2),
@@ -116,29 +131,31 @@ impl Decoder {
         let mut decoded = DecodeBatch::default();
 
         loop {
-            // Find first FLAG
-            let start = match self.buffer.iter().position(|&b| b == FLAG) {
-                Some(pos) => pos,
+            // Find first FLAG in the unconsumed tail.
+            let start = match self.buffer[self.offset..].iter().position(|&b| b == FLAG) {
+                Some(pos) => self.offset + pos,
                 None => {
-                    // No FLAG found, discard buffer
+                    // No FLAG found, discard buffer.
                     self.buffer.clear();
+                    self.offset = 0;
                     break;
                 }
             };
 
-            // Trim garbage before first FLAG
-            if start > 0 {
-                self.buffer.drain(..start);
-            }
-
-            // Find second FLAG (after position 0)
-            let end = match self.buffer[1..].iter().position(|&b| b == FLAG) {
-                Some(pos) => pos + 1, // offset back to buffer index
-                None => break,        // incomplete frame, wait for more data
+            // Find second FLAG after the opening marker.
+            let end = match self.buffer[start + 1..].iter().position(|&b| b == FLAG) {
+                Some(pos) => start + 1 + pos,
+                None => {
+                    if self.buffer.len() - self.offset > self.max_buffer_size {
+                        self.buffer.clear();
+                        self.offset = 0;
+                    }
+                    break;
+                }
             };
 
             // Extract bytes between the two FLAGs
-            let between = &self.buffer[1..end];
+            let between = &self.buffer[start + 1..end];
             let unescaped = unescape(between);
 
             let frame_len = unescaped.len();
@@ -151,22 +168,12 @@ impl Decoder {
                 decoded.invalid_frame_lengths.push(frame_len);
             }
 
-            // Keep the closing FLAG as the opening FLAG of the next frame
-            // (matches Python: frame_buffer = frame_buffer[frame_end:])
-            self.buffer.drain(..end);
-        }
-
-        // Bound only the unconsumed tail. Applying the limit before decoding
-        // can discard a large batch of complete coalesced frames.
-        if self.buffer.len() > self.max_buffer_size {
-            if let Some(last_flag) = self.buffer.iter().rposition(|&byte| byte == FLAG) {
-                if self.buffer.len() - last_flag <= self.max_buffer_size {
-                    self.buffer.drain(..last_flag);
-                } else {
-                    self.buffer.clear();
-                }
-            } else {
-                self.buffer.clear();
+            // Keep the closing FLAG as the next opening marker. Avoid a
+            // front-drain per frame; compact only after consuming half.
+            self.offset = end;
+            if self.offset > 0 && self.offset >= self.buffer.len() / 2 {
+                self.buffer.drain(..self.offset);
+                self.offset = 0;
             }
         }
 
@@ -231,6 +238,15 @@ mod tests {
     }
 
     #[test]
+    fn unescape_preserves_unknown_and_trailing_escape_bytes() {
+        let mut decoder = Decoder::with_min_frame_size(0);
+
+        let frames = decoder.feed(&[FLAG, ESC, 0x00, ESC, FLAG]);
+
+        assert_eq!(frames, vec![vec![ESC, 0x00, ESC]]);
+    }
+
+    #[test]
     fn decoder_single_frame() {
         // A frame with enough data (>= HEADER_MINSIZE = 19 bytes)
         let data: Vec<u8> = (0..32).collect();
@@ -283,7 +299,7 @@ mod tests {
     fn decoder_does_not_drop_large_coalesced_batches() {
         let payload = vec![0x42; 32];
         let encoded = frame(&payload);
-        let count = 3_000;
+        let count = 20_000;
         let mut batch = Vec::with_capacity(encoded.len() * count);
         for index in 0..count {
             if index == 0 {
@@ -296,6 +312,23 @@ mod tests {
         let frames = decoder.feed(&batch);
         assert_eq!(frames.len(), count);
         assert!(frames.iter().all(|decoded| decoded == &payload));
+    }
+
+    #[test]
+    fn decoder_defers_compaction_until_consumed_prefix_reaches_half() {
+        let first = vec![0x31; 32];
+        let second = vec![0x42; 200];
+        let mut stream = frame(&first);
+        stream.extend_from_slice(&escape(&second));
+        let mut decoder = Decoder::with_limits(HEADER_MINSIZE, 1024);
+
+        assert_eq!(decoder.feed(&stream), vec![first]);
+        assert!(decoder.offset > 0);
+        assert!(decoder.buffer.len() - decoder.offset > decoder.offset);
+
+        assert_eq!(decoder.feed(&[FLAG]), vec![second]);
+        assert_eq!(decoder.buffer, vec![FLAG]);
+        assert_eq!(decoder.offset, 0);
     }
 
     #[test]
