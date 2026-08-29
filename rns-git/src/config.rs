@@ -275,7 +275,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n# To reject unidentified scrapers and crawlers, add the null identity hash:\n# blocked_identities = d7db22f63b453c23bb0688dde565b7c1\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -334,6 +334,8 @@ mod tests {
         assert!(created);
         let (_cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
         assert!(!created);
+        let generated = fs::read_to_string(tmp.path().join("server_config")).unwrap();
+        assert!(generated.contains("blocked_identities = d7db22f63b453c23bb0688dde565b7c1"));
     }
 
     #[test]
