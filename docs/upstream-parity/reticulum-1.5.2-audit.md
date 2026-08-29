@@ -57,7 +57,7 @@ efficiency, and dataplane egress control.
 | 11 | `cb9071b478ff54daae210f91796c19b8a54da129` | Added HWM limit option to TransmitBuffer | Integrated | Local `7106de0`; optional byte-limited append atomically rejects any frame that would cross the bound, leaves state unchanged, and admits again after drain |
 | 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Integrated | Local `2ac7733`; Backbone and Local HDLC writers share an exact 4 MiB queued/in-flight byte budget, admission drops while gated, and accepted Backbone peers apply the upstream drain-rate hysteresis and dead-peer policy |
 | 13 | `281c47f3e0998527c22aaf66017b606b91cda5f7` | Fixed invalid reference in exception description | Structurally covered | Local `136a2d2`; AES-128 and AES-256 constructors accept only fixed 16-byte and 32-byte array references, so invalid key lengths and an unavailable instance reference are unrepresentable |
-| 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Native interface iteration and error logging use typed Rust results rather than Python exception-scope bindings |
+| 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Local `fb23eeb`; egress evaluation is writer-owned and its typed Rust errors cannot lose a dynamically scoped exception binding |
 | 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Native retry/logging code resolves dependencies statically; there is no dynamic `RNS` module name to omit |
 | 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Native Local physical keepalive sends an empty frame through the shared writer, with focused framing coverage |
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Native CLI parsers expose only implemented flags and contain no equivalent dangling example-config reference |
@@ -443,6 +443,9 @@ map. Errors are lexical `io::Error` values passed directly to the writer worker
 and interface-down path, so there is no dynamically scoped exception name to
 lose. The complete entry 12 `rns-net` suite exercises egress evaluation and
 write-stall teardown without an unbound diagnostic path.
+
+**Local handling:** Mapping commit `fb23eeb` records this ownership and error
+binding invariant against the complete upstream diff.
 
 **Final disposition:** Structurally covered.
 
