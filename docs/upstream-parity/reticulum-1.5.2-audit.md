@@ -62,7 +62,7 @@ efficiency, and dataplane egress control.
 | 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Local `bf4a6fb`; the physical keepalive loop passes a literal empty payload to the shared writer and its focused test observes exactly two HDLC flags |
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Local `7835313`; rns-rs ships no rnir binary and therefore exposes neither its broken `--exampleconfig` option nor the undefined value |
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Local `1a042a7`; the release page resolves `latest` before constructing output, and the regression pins the resolved tag in both breadcrumb and heading |
-| 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Python/Cython module-loader and namespace-package support does not apply to statically linked Rust crates |
+| 19 | `803b54895186d0396c71dcee57a640351ca9721e` | Allow loading compiled modules | Non-runtime | Local `9d0da01`; Python/Cython mirror compilation, extension loading, and package globbing do not apply to statically resolved and linked Rust crates |
 | 20 | `ff3a72209e5001eb8ecaec836ea4e6c8a80d09f7` | Avoid rebind of exception reference | Structurally covered | Native persistence uses lexical Rust error values and cannot rebind an active exception variable |
 | 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Native identity construction has typed fixed-size inputs and return values rather than fall-through `None` behavior |
 | 22 | `75cbc73f64f3d1d020b7e86ec12f6fd0f3cfdca3` | Removed dead Python 2 code from umsgpack | Non-runtime | Removes compatibility code from a vendored Python serializer; native MessagePack handling does not vendor this module |
@@ -528,6 +528,10 @@ or ABI-suffixed extension modules, so there is no corresponding runtime loader
 or package export list to change. The full upstream diff affects only Python
 development/import machinery and introduces no protocol, persistence, config,
 RPC, or CLI behavior consumed by native code.
+
+**Local handling:** Mapping commit `9d0da01` records the complete loader and
+package-initializer review; no Rust crate changed, so no crate suite was
+triggered for this documentation-only mapping.
 
 **Final disposition:** Non-runtime.
 
