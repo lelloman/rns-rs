@@ -82,7 +82,7 @@ efficiency, and dataplane egress control.
 | 36 | `ccc5468bcc65842f9c44c8d80249df7645033297` | Updated changelog | Non-runtime | Local `e61b701`; adds the 1.5.1 release narrative and moves unchanged signed-retrieval instructions; compatibility claims remain inventory context, not acceptance evidence |
 | 37 | `53ed9c1ed3fd10b4cba477c00786e17d7f1d4a95` | Updated version | Non-runtime | Local `4ab552b`; changes only Python package metadata from 1.5.0 to intermediate 1.5.1; native crate versions remain independently released |
 | 38 | `149e4151095adf098b8f53eab0c03b37169e8559` | Prepare release | Non-runtime | Local `25abe40`; regenerates 1.5.1 docs, fixes documented queue defaults to 1024/128/128/8, and changes no runtime; native defaults are verified from code/tests instead of vendored generated output |
-| 39 | `4eebf0b685322c9240d07e545fb5585e4dfcc16d` | Guard empty keepalive frames | Needs port | Native HDLC decoders reject empty frames, but the raw UDP reader still forwards zero-length datagrams into the driver |
+| 39 | `4eebf0b685322c9240d07e545fb5585e4dfcc16d` | Guard empty keepalive frames | Integrated | Local `c2ee65f`; HDLC readers already discard empty flag pairs and raw UDP now ignores zero-length datagrams while delivering the following non-empty frame |
 | 40 | `6bc0481cdfbd691bc0b5e401da4ad256c2fee42a` | Always remember to flush | Structurally covered | Native streaming Resources read the declared source directly without the upstream temporary proxy; persisted receive files are flushed and synced before publication |
 | 41 | `5b4117dadc3a0ef6deffb87efbe039d1b77f966a` | Skip local shared instance interfaces in ingress/egress control | Needs coordinated port | The future native dataplane controllers must preserve Local client exemption when implementing entries 1 and 12 |
 | 42 | `943771a3f9cf2318401aa469fa42093e01b2d126` | Updated version | Non-runtime | Upstream version metadata only |
@@ -647,9 +647,13 @@ change native runtime behavior. These entries are **Non-runtime**.
 
 Upstream rejects empty payloads before all affected interfaces deliver them to
 Transport. Native HDLC decoders already discard empty flag pairs, but
-`udp_reader_loop()` currently emits an `Event::Frame` for a zero-length UDP
-datagram. This entry **Needs port** at the common ingress boundary or every raw
-datagram path, with a focused zero-length UDP regression.
+`udp_reader_loop()` previously emitted an `Event::Frame` for a zero-length UDP
+datagram. Local `c2ee65f` now ignores that datagram at the raw interface
+boundary, and its regression sends an empty datagram followed by data and
+proves that only the latter reaches Transport. The focused test and complete
+`rns-net` Backbone feature suite passed 933 unit and 54 network E2E tests plus
+all enabled interop/fixture tests; formatting and warning-free all-target lint
+passed. This entry is **Integrated**.
 
 ### 40. `6bc0481c` — Flush proxied Resource streams
 
