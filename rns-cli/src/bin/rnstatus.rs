@@ -451,10 +451,14 @@ fn print_status(response: &PickleValue, options: StatusDisplayOptions<'_>) {
                 println!("{line}");
             }
             println!(
-                "    Traffic   : {} \u{2191}  {} \u{2193}",
+                "    Traffic   : {}{} \u{2191}  {} \u{2193}",
                 size_str(txb),
+                transmit_buffer_suffix(iface),
                 size_str(rxb),
             );
+            if let Some(line) = tx_drop_status_line(iface) {
+                println!("{line}");
+            }
             for line in violation_status_lines(iface) {
                 println!("{line}");
             }
@@ -775,6 +779,14 @@ fn interface_sort_value(iface: &PickleValue, sort_key: &str) -> SortValue {
         }
         "rx" => SortValue::Int(iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0)),
         "tx" => SortValue::Int(iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "txdrp" => SortValue::Int(iface.get("txdrp").and_then(|v| v.as_int()).unwrap_or(0)),
+        "txdrb" => SortValue::Int(iface.get("txdrb").and_then(|v| v.as_int()).unwrap_or(0)),
+        "txbuf" => SortValue::Int(
+            iface
+                .get("txbuffered")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0),
+        ),
         "prx" => SortValue::Float(
             iface
                 .get("ip_freq")
@@ -849,6 +861,42 @@ fn violation_status_lines(iface: &PickleValue) -> Vec<String> {
         lines.push(format!("    Flt. Hits : {filter}"));
     }
     lines
+}
+
+fn transmit_buffer_suffix(iface: &PickleValue) -> String {
+    let buffered = iface
+        .get("txbuffered")
+        .and_then(PickleValue::as_int)
+        .unwrap_or(0);
+    if buffered <= 0 {
+        return String::new();
+    }
+    let stalled = iface
+        .get("txstalled")
+        .and_then(PickleValue::as_bool)
+        .unwrap_or(false);
+    format!(
+        " ({} waiting{})",
+        size_str(buffered as u64),
+        if stalled { ", stalled" } else { "" }
+    )
+}
+
+fn tx_drop_status_line(iface: &PickleValue) -> Option<String> {
+    let drops = iface
+        .get("txdrp")
+        .and_then(PickleValue::as_int)
+        .unwrap_or(0);
+    (drops > 0).then(|| {
+        let bytes = iface
+            .get("txdrb")
+            .and_then(PickleValue::as_int)
+            .unwrap_or(0);
+        format!(
+            "    TX Drops  : {drops} ({})",
+            size_str(bytes.max(0) as u64)
+        )
+    })
 }
 
 fn traffic_count_lines(
@@ -1637,7 +1685,7 @@ fn print_usage(usage_name: &str) {
     println!("  --config PATH, -c PATH  Path to config directory");
     println!("  -a                      Show all interfaces");
     println!("  -j                      JSON output");
-    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc");
+    println!("  -s SORT                 Sort by: rate, traffic, rx, tx, prx, ptx, arxc, atxc, prxc, ptxc, txdrp, txdrb, txbuf");
     println!("  -r                      Reverse sort order");
     println!("  -t                      Show traffic totals");
     println!("  -p, --pps               Show packets per second in traffic totals");
@@ -2112,6 +2160,34 @@ mod tests {
 
         assert_eq!(interface_sort_value(&iface, "prx"), SortValue::Float(1.25));
         assert_eq!(interface_sort_value(&iface, "ptx"), SortValue::Float(2.5));
+    }
+
+    #[test]
+    fn transmit_status_renders_and_sorts_drop_and_buffer_metrics() {
+        let iface = PickleValue::Dict(vec![
+            (PickleValue::String("txdrp".into()), PickleValue::Int(3)),
+            (PickleValue::String("txdrb".into()), PickleValue::Int(4096)),
+            (
+                PickleValue::String("txbuffered".into()),
+                PickleValue::Int(2048),
+            ),
+            (
+                PickleValue::String("txstalled".into()),
+                PickleValue::Bool(true),
+            ),
+        ]);
+
+        assert_eq!(
+            tx_drop_status_line(&iface).as_deref(),
+            Some("    TX Drops  : 3 (4.10 KB)")
+        );
+        assert_eq!(
+            transmit_buffer_suffix(&iface),
+            " (2.05 KB waiting, stalled)"
+        );
+        assert_eq!(interface_sort_value(&iface, "txdrp"), SortValue::Int(3));
+        assert_eq!(interface_sort_value(&iface, "txdrb"), SortValue::Int(4096));
+        assert_eq!(interface_sort_value(&iface, "txbuf"), SortValue::Int(2048));
     }
 
     #[test]

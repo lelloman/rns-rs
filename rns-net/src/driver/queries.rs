@@ -93,6 +93,25 @@ impl Driver {
                 announces_to_internal: entry.info.announces_to_internal,
                 rxb: entry.stats.rxb,
                 txb: entry.stats.txb,
+                tx_drops: entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .map(crate::interface::AsyncWriterMetrics::tx_drops)
+                    .unwrap_or(0),
+                tx_dropped_bytes: entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .map(crate::interface::AsyncWriterMetrics::tx_dropped_bytes)
+                    .unwrap_or(0),
+                tx_stalled: entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .is_some_and(crate::interface::AsyncWriterMetrics::tx_stalled),
+                tx_buffered: entry
+                    .async_writer_metrics
+                    .as_ref()
+                    .map(crate::interface::AsyncWriterMetrics::tx_buffered)
+                    .unwrap_or(0),
                 traffic,
                 protocol_violations: entry.stats.protocol_violations,
                 ifac_violations: entry.stats.ifac_violations,
@@ -145,6 +164,10 @@ impl Driver {
             let mut protocol_violations = 0;
             let mut ifac_violations = 0;
             let mut packet_filter_hits = 0;
+            let mut tx_drops = 0;
+            let mut tx_dropped_bytes = 0;
+            let mut tx_stalled = false;
+            let mut tx_buffered = 0;
             for (child_id, parent_id) in &self.dynamic_interface_parents {
                 if *parent_id == handle.interface_id {
                     if let Some(child) = self.interfaces.get(child_id) {
@@ -152,6 +175,12 @@ impl Driver {
                         protocol_violations += child.stats.protocol_violations;
                         ifac_violations += child.stats.ifac_violations;
                         packet_filter_hits += child.stats.packet_filter_hits;
+                        if let Some(metrics) = &child.async_writer_metrics {
+                            tx_drops += metrics.tx_drops();
+                            tx_dropped_bytes += metrics.tx_dropped_bytes();
+                            tx_stalled |= metrics.tx_stalled();
+                            tx_buffered += metrics.tx_buffered();
+                        }
                     }
                 }
             }
@@ -164,6 +193,10 @@ impl Driver {
                 announces_to_internal: handle.announces_to_internal,
                 rxb: 0,
                 txb: 0,
+                tx_drops,
+                tx_dropped_bytes,
+                tx_stalled,
+                tx_buffered,
                 traffic,
                 protocol_violations,
                 ifac_violations,

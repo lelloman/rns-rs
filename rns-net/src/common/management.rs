@@ -23,6 +23,18 @@ pub trait InterfaceStatusView {
     fn info(&self) -> &InterfaceInfo;
     fn online(&self) -> bool;
     fn stats(&self) -> &InterfaceStats;
+    fn tx_drops(&self) -> u64 {
+        0
+    }
+    fn tx_dropped_bytes(&self) -> u64 {
+        0
+    }
+    fn tx_stalled(&self) -> bool {
+        false
+    }
+    fn tx_buffered(&self) -> usize {
+        0
+    }
 }
 
 /// Get the path hash for "/status".
@@ -214,6 +226,10 @@ pub fn handle_status_request(
             ("mode", Value::UInt(info.mode as u64)),
             ("rxb", Value::UInt(stats.rxb)),
             ("txb", Value::UInt(stats.txb)),
+            ("txdrp", Value::UInt(entry.tx_drops())),
+            ("txdrb", Value::UInt(entry.tx_dropped_bytes())),
+            ("txstalled", Value::Bool(entry.tx_stalled())),
+            ("txbuffered", Value::UInt(entry.tx_buffered() as u64)),
             ("rxs", Value::Float(stats.traffic_rates.rxs)),
             ("txs", Value::Float(stats.traffic_rates.txs)),
             ("arxb", Value::UInt(stats.arxb)),

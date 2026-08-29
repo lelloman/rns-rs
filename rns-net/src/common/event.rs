@@ -791,6 +791,10 @@ pub struct SingleInterfaceStat {
     pub announces_to_internal: Option<bool>,
     pub rxb: u64,
     pub txb: u64,
+    pub tx_drops: u64,
+    pub tx_dropped_bytes: u64,
+    pub tx_stalled: bool,
+    pub tx_buffered: usize,
     /// Byte counters and rates for total, announce and path-request traffic.
     pub traffic: TrafficDetail,
     pub protocol_violations: u64,
