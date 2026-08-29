@@ -20,8 +20,8 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 use crate::event::{Event, EventSender};
 use crate::hdlc;
-use crate::interface::transmit_buffer::TransmitBuffer;
-use crate::interface::{ListenerControl, Writer};
+use crate::interface::transmit_buffer::{TransmitBuffer, EGRESS_HIGH_WATERMARK};
+use crate::interface::{EgressControl, ListenerControl, Writer};
 
 /// Hardware MTU used by both sides of the local shared-instance interface.
 pub(crate) const HW_MTU: u32 = 262_144;
@@ -77,6 +77,7 @@ struct LocalWriter {
     stream: TcpStream,
     sleep_hold: Option<ClientSleepHold>,
     transmit_buffer: TransmitBuffer,
+    egress_control: EgressControl,
 }
 
 impl Writer for LocalWriter {
@@ -93,7 +94,16 @@ impl Writer for LocalWriter {
             log::debug!("TX paused for LocalInterface client, dropping outbound packet");
             return Ok(());
         }
-        append_and_drain(&mut self.transmit_buffer, &mut self.stream, frames)
+        append_and_drain(
+            &mut self.transmit_buffer,
+            &mut self.stream,
+            frames,
+            &self.egress_control,
+        )
+    }
+
+    fn egress_control(&self) -> Option<EgressControl> {
+        Some(self.egress_control.clone())
     }
 }
 
@@ -101,9 +111,14 @@ fn append_and_drain(
     buffer: &mut TransmitBuffer,
     writer: &mut impl Write,
     frames: &[Vec<u8>],
+    egress_control: &EgressControl,
 ) -> io::Result<()> {
     for frame in frames {
-        buffer.append(hdlc::frame(frame));
+        let encoded = hdlc::frame(frame);
+        let encoded_len = encoded.len();
+        if !buffer.append_with_limit(encoded, Some(EGRESS_HIGH_WATERMARK)) {
+            egress_control.record_drop(encoded_len);
+        }
     }
     buffer.flush();
     while buffer.sendable_bytes() > 0 {
@@ -381,6 +396,7 @@ fn unix_server_loop(
             stream: writer_stream,
             sleep_hold: sleep_hold.clone(),
             transmit_buffer: TransmitBuffer::new(),
+            egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
         });
 
         let event = if let Some(template) = &dynamic_template {
@@ -411,6 +427,7 @@ struct UnixLocalWriter {
     stream: std::os::unix::net::UnixStream,
     sleep_hold: Option<ClientSleepHold>,
     transmit_buffer: TransmitBuffer,
+    egress_control: EgressControl,
 }
 
 #[cfg(target_os = "linux")]
@@ -428,7 +445,16 @@ impl Writer for UnixLocalWriter {
             log::debug!("TX paused for LocalInterface client, dropping outbound packet");
             return Ok(());
         }
-        append_and_drain(&mut self.transmit_buffer, &mut self.stream, frames)
+        append_and_drain(
+            &mut self.transmit_buffer,
+            &mut self.stream,
+            frames,
+            &self.egress_control,
+        )
+    }
+
+    fn egress_control(&self) -> Option<EgressControl> {
+        Some(self.egress_control.clone())
     }
 }
 
@@ -496,6 +522,7 @@ fn spawn_local_client_handler(
         stream: writer_stream,
         sleep_hold: sleep_hold.clone(),
         transmit_buffer: TransmitBuffer::new(),
+        egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
     });
 
     let event = if let Some(template) = dynamic_template {
@@ -615,11 +642,13 @@ impl LocalClientStream {
                 stream: stream.try_clone()?,
                 sleep_hold: None,
                 transmit_buffer: TransmitBuffer::new(),
+                egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
             })),
             LocalClientStream::Tcp(stream) => Ok(Box::new(LocalWriter {
                 stream: stream.try_clone()?,
                 sleep_hold: None,
                 transmit_buffer: TransmitBuffer::new(),
+                egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
             })),
         }
     }
@@ -634,6 +663,7 @@ fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn 
         stream: stream.try_clone()?,
         sleep_hold: None,
         transmit_buffer: TransmitBuffer::new(),
+        egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
     }))
 }
 
@@ -1120,6 +1150,7 @@ mod tests {
             stream: server_stream,
             sleep_hold: Some(sleep_hold.clone()),
             transmit_buffer: TransmitBuffer::new(),
+            egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
         };
 
         writer.send_frame(b"live").unwrap();
@@ -1166,6 +1197,7 @@ mod tests {
             stream: writer_stream,
             sleep_hold: Some(sleep_hold),
             transmit_buffer: TransmitBuffer::new(),
+            egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
         };
 
         thread::sleep(Duration::from_millis(50));
@@ -1215,6 +1247,7 @@ mod tests {
             stream: server_stream,
             sleep_hold: None,
             transmit_buffer: TransmitBuffer::new(),
+            egress_control: EgressControl::new(EGRESS_HIGH_WATERMARK),
         });
         spawn_physical_keepalive_loop(
             writer,

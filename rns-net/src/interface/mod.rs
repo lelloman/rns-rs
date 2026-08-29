@@ -87,10 +87,80 @@ pub trait Writer: Send {
         Ok(())
     }
 
+    /// Share an exact byte admission budget with the async producer when this
+    /// writer uses dataplane egress control.
+    fn egress_control(&self) -> Option<EgressControl> {
+        None
+    }
+
     fn shutdown(&mut self) {}
 }
 
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct EgressControl {
+    byte_limit: usize,
+    reserved_bytes: Arc<AtomicUsize>,
+    stalled: Arc<AtomicBool>,
+    dropped_frames: Arc<AtomicU64>,
+    dropped_bytes: Arc<AtomicU64>,
+}
+
+impl EgressControl {
+    pub(crate) fn new(byte_limit: usize) -> Self {
+        Self {
+            byte_limit,
+            reserved_bytes: Arc::new(AtomicUsize::new(0)),
+            stalled: Arc::new(AtomicBool::new(false)),
+            dropped_frames: Arc::new(AtomicU64::new(0)),
+            dropped_bytes: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn try_reserve(&self, bytes: usize) -> bool {
+        if self.stalled.load(Ordering::Relaxed) {
+            return false;
+        }
+        let mut current = self.reserved_bytes.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = current.checked_add(bytes) else {
+                return false;
+            };
+            if next > self.byte_limit {
+                return false;
+            }
+            match self.reserved_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn release(&self, bytes: usize) {
+        self.reserved_bytes.fetch_sub(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn stalled(&self) -> bool {
+        self.stalled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_stalled(&self, stalled: bool) {
+        self.stalled.store(stalled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_drop(&self, bytes: usize) {
+        self.dropped_frames.fetch_add(1, Ordering::Relaxed);
+        self.dropped_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
 
 /// Return whether an interface type normally operates on a shared medium.
 ///
@@ -145,6 +215,7 @@ impl ListenerControl {
 pub struct AsyncWriterMetrics {
     queued_frames: Arc<AtomicUsize>,
     worker_alive: Arc<AtomicBool>,
+    egress_control: Option<EgressControl>,
 }
 
 impl AsyncWriterMetrics {
@@ -158,8 +229,13 @@ impl AsyncWriterMetrics {
 }
 
 struct AsyncWriter {
-    tx: SyncSender<Vec<u8>>,
+    tx: SyncSender<QueuedFrame>,
     metrics: AsyncWriterMetrics,
+}
+
+struct QueuedFrame {
+    data: Vec<u8>,
+    reserved_bytes: usize,
 }
 
 impl Writer for AsyncWriter {
@@ -171,19 +247,39 @@ impl Writer for AsyncWriter {
             ));
         }
 
+        let reserved_bytes = if let Some(control) = &self.metrics.egress_control {
+            let framed_bytes = crate::hdlc::framed_len(data);
+            if !control.try_reserve(framed_bytes) {
+                control.record_drop(framed_bytes);
+                return Ok(());
+            }
+            framed_bytes
+        } else {
+            0
+        };
+
         // Publish accounting before the frame becomes visible to the worker.
         self.metrics.queued_frames.fetch_add(1, Ordering::Relaxed);
-        match self.tx.try_send(data.to_vec()) {
+        match self.tx.try_send(QueuedFrame {
+            data: data.to_vec(),
+            reserved_bytes,
+        }) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
+            Err(TrySendError::Full(frame)) => {
                 self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                if let Some(control) = &self.metrics.egress_control {
+                    control.release(frame.reserved_bytes);
+                }
                 Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "interface writer queue is full",
                 ))
             }
-            Err(TrySendError::Disconnected(_)) => {
+            Err(TrySendError::Disconnected(frame)) => {
                 self.metrics.queued_frames.fetch_sub(1, Ordering::Relaxed);
+                if let Some(control) = &self.metrics.egress_control {
+                    control.release(frame.reserved_bytes);
+                }
                 self.metrics.worker_alive.store(false, Ordering::Relaxed);
                 Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
@@ -201,10 +297,12 @@ pub fn wrap_async_writer(
     event_tx: EventSender,
     queue_capacity: usize,
 ) -> (Box<dyn Writer>, AsyncWriterMetrics) {
-    let (tx, rx) = sync_channel::<Vec<u8>>(queue_capacity.max(1));
+    let egress_control = writer.egress_control();
+    let (tx, rx) = sync_channel::<QueuedFrame>(queue_capacity.max(1));
     let metrics = AsyncWriterMetrics {
         queued_frames: Arc::new(AtomicUsize::new(0)),
         worker_alive: Arc::new(AtomicBool::new(true)),
+        egress_control,
     };
     let metrics_thread = metrics.clone();
     let name = interface_name.to_string();
@@ -243,15 +341,17 @@ impl Writer for DirectWriterFallback {
 
 fn async_writer_loop(
     mut writer: Box<dyn Writer>,
-    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    rx: std::sync::mpsc::Receiver<QueuedFrame>,
     interface_id: InterfaceId,
     interface_name: String,
     event_tx: EventSender,
     metrics: AsyncWriterMetrics,
 ) {
     while let Ok(first) = rx.recv() {
-        let mut frames = vec![first];
-        frames.extend(rx.try_iter());
+        let mut queued = vec![first];
+        queued.extend(rx.try_iter());
+        let reserved_bytes = queued.iter().map(|frame| frame.reserved_bytes).sum();
+        let frames: Vec<_> = queued.into_iter().map(|frame| frame.data).collect();
         metrics
             .queued_frames
             .fetch_sub(frames.len(), Ordering::Relaxed);
@@ -263,6 +363,10 @@ fn async_writer_loop(
         {
             thread::sleep(Duration::from_millis(1));
             result = writer.flush();
+        }
+
+        if let Some(control) = &metrics.egress_control {
+            control.release(reserved_bytes);
         }
 
         if let Err(err) = result {
@@ -630,6 +734,21 @@ mod tests {
         }
     }
 
+    struct EgressControlledBlockingWriter {
+        inner: BlockingWriter,
+        control: EgressControl,
+    }
+
+    impl Writer for EgressControlledBlockingWriter {
+        fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
+            self.inner.send_frame(data)
+        }
+
+        fn egress_control(&self) -> Option<EgressControl> {
+            Some(self.control.clone())
+        }
+    }
+
     struct FailingWriter {
         shutdown_called: Arc<AtomicBool>,
     }
@@ -704,6 +823,54 @@ mod tests {
             .expect("the queued frame must wake the writer without another send trigger");
         assert_eq!(metrics.queued_frames(), 0);
         release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn async_writer_shares_exact_egress_byte_valve_and_stall_gate() {
+        let (event_tx, _event_rx) = crate::event::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let control = EgressControl::new(4);
+        let (mut writer, metrics) = wrap_async_writer(
+            Box::new(EgressControlledBlockingWriter {
+                inner: BlockingWriter {
+                    entered_tx,
+                    release_rx,
+                },
+                control: control.clone(),
+            }),
+            InterfaceId(8),
+            "egress-test",
+            event_tx,
+            8,
+        );
+
+        // Two ordinary bytes occupy exactly four HDLC bytes on wire.
+        writer.send_frame(&[1, 2]).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(control.reserved_bytes.load(Ordering::Relaxed), 4);
+
+        // The hard valve drops instead of retaining another four-byte frame.
+        writer.send_frame(&[3, 4]).unwrap();
+        assert_eq!(control.reserved_bytes.load(Ordering::Relaxed), 4);
+        assert_eq!(control.dropped_frames.load(Ordering::Relaxed), 1);
+        assert_eq!(control.dropped_bytes.load(Ordering::Relaxed), 4);
+
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while control.reserved_bytes.load(Ordering::Relaxed) != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "egress reservation did not drain"
+            );
+            thread::yield_now();
+        }
+
+        control.set_stalled(true);
+        writer.send_frame(&[5]).unwrap();
+        assert_eq!(control.dropped_frames.load(Ordering::Relaxed), 2);
+        assert_eq!(control.dropped_bytes.load(Ordering::Relaxed), 7);
+        assert_eq!(metrics.queued_frames(), 0);
     }
 
     #[test]
