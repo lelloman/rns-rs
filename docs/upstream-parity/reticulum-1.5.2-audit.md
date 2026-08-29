@@ -76,7 +76,7 @@ efficiency, and dataplane egress control.
 | 30 | `dc9cf0c2f4f3432283148abc82146301682aaf99` | Updated setup.py | Non-runtime | Local `2bbeb80`; changes the Cython native-wheel default from `-Os` to `-O3`, while Rust optimization profiles are independently defined by Cargo |
 | 31 | `77c8256a1a8f8e638ff50906b7aa00f6bd450a0a` | Fixed invalid prefix stripping in rngit page server | Integrated | Local `f1bf5ce`; blob paths remove only one exact `./`, retain dotfiles and other leading dots, normalize inner `/./`, and leave absolute paths for rejection |
 | 32 | `b28f5ebf7a4fbedbbedafd539d9d33d2f1992a9e` | Allow inbound queue utilization in drainer benchmarks | Non-runtime | Local `4b0aad3`; benchmark pacing waits to `target - 800`, leaving most of an assumed 1024-entry queue occupied without changing production or native acceptance limits |
-| 33 | `6e8c976421748584b10cf964bfede577370aebd7` | Worker spawn prep | Structurally covered | Full diff review: introduces `TRANSPORT_WORKERS = 1` and wraps unchanged inbound/outbound thread starts in a one-iteration loop; native queue workers already have explicit single-owner lifecycle |
+| 33 | `6e8c976421748584b10cf964bfede577370aebd7` | Worker spawn prep | Structurally covered | Local `5943fbc`; introduces `TRANSPORT_WORKERS = 1` and a one-iteration spawn loop, while native queue workers already have explicit single-owner lifecycle |
 | 34 | `9878b1837726109a3a9a5b4e59db067a3e40ca7a` | Added transmit buffer, TX drops and stalled status output to rnstatus | Needs coordinated port | Native status exposes neither the pending/coalesced byte total nor per-interface dropped-frame, dropped-byte and stalled fields required by the egress-control work |
 | 35 | `c1d7c12b52117cc4c81cb87632556069ef8f878b` | Fixed stream-based resource initialized transfer failing when total sized happened to not fall withing MAX_EFFICIENT_SIZE | Structurally covered | Native stream Resources require an explicit length and split the first metadata-bearing segment and later segments arithmetically, with exact-boundary tests |
 | 36 | `ccc5468bcc65842f9c44c8d80249df7645033297` | Updated changelog | Non-runtime | Release notes only |
@@ -605,6 +605,9 @@ Entry 33 preserves the single Python transport worker while preparing a
 configurable worker count. Native event and async-writer workers are spawned
 from explicit lifecycle owners and do not infer worker count from duplicated
 thread-start statements, so it is **Structurally covered**.
+
+Mapping commit `5943fbc` records the complete two-site spawn refactor; no Rust
+crate changed for this documentation-only structural mapping.
 
 ### 34. Egress status reporting
 
