@@ -699,44 +699,47 @@ The complete `rns-git` suite passed 196 unit, 6 E2E, 11 release and 6 stats
 tests; formatting and warning-free all-target lint passed. This entry is
 **Integrated**.
 
-## Integration Plan
+## Completed Integration
 
-1. Integrate entry 1's Backbone ingress gate and entry 3's initialization-order
-   correction around the existing prioritized queue. Preserve entry 2 as its
-   own non-runtime mapping and entry 4's split-reader/writer invariant as its
-   own structural mapping.
-2. Optimize the shared HDLC decoder for entry 6, then add the entry-7 tests and
-   entry-8 coalescing/accounting primitive before wiring it into Backbone and
-   Local for entry 9. Preserve entry 5 as its own non-runtime mapping.
-3. Add entry 10's native egress regression contract, entry 11's atomic byte
-   admission, and entry 12's unified gate/hysteresis/drop/teardown behavior.
-4. Port entry 31's exact blob-path prefix handling and add focused dotfile and
-   explicit-relative-path page-server regressions.
-5. Reject empty raw-interface ingress for entry 39 and add a zero-length UDP
-   regression.
-6. Add entry 34's status fields, entry 41's Local exemption, and entry 43's
-   final defaults to the coordinated dataplane-control implementation.
-7. Add entry 45's null-identity blocking example to the generated rns-git
-   configuration and operator documentation.
-8. Preserve entries 13–30, 32–33, 35–38, 40, 42, 44, and 46–48 as
-   structural/non-runtime mappings with their
-   recorded source evidence.
-9. Run focused queue, HDLC, Backbone, Local, UDP and rns-git page suites after each ordered
-   mapping, then complete exact-target Python/Rust interoperability and the
-   full promotion gates.
+All 48 upstream commits have one ordered, non-empty local mapping and one final
+disposition: 15 Integrated, 12 Structurally covered, and 21 Non-runtime. The
+runtime work covers Backbone ingress control, optimized HDLC decoding,
+coalesced and bounded transmit buffering, egress control and status, exact blob
+path normalization, empty raw-frame rejection, Local-interface exemption,
+final dataplane defaults, stream-boundary coverage, and the null-identity
+blocking example. Every mapping was followed by a clean-tree check and a fresh
+two-remote drift report.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
+
+- 2026-08-29: final promotion verification proved an exact 48-to-48 sequence
+  of unique full `Upstream-Commit` trailers in upstream ancestry order. Every
+  mapping commit is non-empty, and the working tree was clean.
+- 2026-08-29: exact-target interoperability passed against a detached worktree
+  at `ea98db4f` with `RNS.__version__ == "1.5.2"`: bidirectional packet, link,
+  and Resource traffic plus all five ignored `rncp`/`rnx` utility cases.
+- 2026-08-29: the hook-enabled workspace suite passed serially, including 940
+  `rns-net` unit tests and all 54 network E2E tests. Two earlier parallel runs
+  each exposed a different load-sensitive E2E timeout/mismatch; both tests
+  passed immediately in isolation and the complete serialized run was green.
+- 2026-08-29: warning-free host lint, formatting, `git diff --check`, Python
+  tool tests, web UI smoke tests, TLS tests, built-in hook integration tests,
+  and the hook-enabled host release build passed.
+- 2026-08-29: historical fixture provenance remains unchanged and all fixture
+  suites are byte-stable. The daily dual-VPS smoke passed, but the Docker
+  topology matrix, ARMv7 cross-build, and physical Weave HIL were not rerun and
+  are explicitly unclaimed for this promotion.
 
 - 2026-08-27: both upstream remotes refreshed successfully; drift inventory
   opened from the accepted baseline through the normative rgit tip.

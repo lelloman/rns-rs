@@ -98,6 +98,9 @@ jobs:
           - version: 1.4.2
             commit: b48b96e61676504e0a4e527b33b9a0b4495c6872
             rns_tree: 3286dd665827d2e591b47efaa5706b643e9b8d5a
+          - version: 1.5.2
+            commit: ea98db4f53dcf0defc0e71a16e60d28b1229c4e6
+            rns_tree: 926167c7552b5bb538ff46cdd19b3ee2d16827b3
 
     steps:
       - name: Checkout rns-rs
