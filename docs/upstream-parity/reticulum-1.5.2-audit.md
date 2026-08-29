@@ -58,7 +58,7 @@ efficiency, and dataplane egress control.
 | 12 | `99c428a9f5406560a8ae7247630b2947eba8cc8d` | Added dataplane egress control | Integrated | Local `2ac7733`; Backbone and Local HDLC writers share an exact 4 MiB queued/in-flight byte budget, admission drops while gated, and accepted Backbone peers apply the upstream drain-rate hysteresis and dead-peer policy |
 | 13 | `281c47f3e0998527c22aaf66017b606b91cda5f7` | Fixed invalid reference in exception description | Structurally covered | Local `136a2d2`; AES-128 and AES-256 constructors accept only fixed 16-byte and 32-byte array references, so invalid key lengths and an unavailable instance reference are unrepresentable |
 | 14 | `de0dac695b4fcb19550824b7b8d4cebd8fdb9aa1` | Fixed missing exception reference | Structurally covered | Local `fb23eeb`; egress evaluation is writer-owned and its typed Rust errors cannot lose a dynamically scoped exception binding |
-| 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Native retry/logging code resolves dependencies statically; there is no dynamic `RNS` module name to omit |
+| 15 | `79cad39e7835a24b74d49c92e1caeea82550a9ad` | Fixed missing import | Structurally covered | Local `df857f3`; native retry/logging dependencies resolve statically and rns-rs has no Python rnsh module-global `RNS` binding |
 | 16 | `0a1b9453b278efc537c03ae424f952183b3b66f0` | Fixed non-epoll backend keepalive | Structurally covered | Native Local physical keepalive sends an empty frame through the shared writer, with focused framing coverage |
 | 17 | `e71c01959f1b055ca141570d25862a7ec59212df` | Fixed stray non-imported variable | Structurally covered | Native CLI parsers expose only implemented flags and contain no equivalent dangling example-config reference |
 | 18 | `67a45ac5e9a32cfca5c7fd26c797db185400bb54` | Fixed nav init order | Structurally covered | Native release-page rendering resolves `latest` and its not-found result before constructing navigation output |
@@ -460,6 +460,9 @@ and typed module imports, all checked during compilation; there is no dynamic
 module-global `RNS` name that can be omitted. The entry is therefore a
 source-language/runtime binding fix rather than a wire or CLI compatibility
 change for an implemented native surface.
+
+**Local handling:** Mapping commit `df857f3` records the absent native surface
+and the compile-time dependency-resolution invariant.
 
 **Final disposition:** Structurally covered.
 
