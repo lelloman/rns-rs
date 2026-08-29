@@ -1687,6 +1687,43 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
 }
 
 #[test]
+fn streaming_resource_exact_data_limit_splits_for_first_segment_metadata() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE);
+    let metadata = vec![1, 2, 3, 4, 5];
+    let metadata_overhead = 3 + metadata.len();
+    let bytes_read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let reader = CountingReader {
+        inner: std::io::Cursor::new(data.clone()),
+        bytes_read: bytes_read.clone(),
+    };
+
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(44),
+        Box::new(reader),
+        data.len() as u64,
+        Some(metadata),
+        false,
+        &mut rng,
+    );
+    let advertisement = first_resource_advertisement(&init_mgr, &link_id, &initial);
+
+    assert_eq!(advertisement.total_segments, 2);
+    assert_eq!(advertisement.segment_index, 1);
+    assert_eq!(
+        advertisement.data_size as usize,
+        data.len() + metadata_overhead
+    );
+    assert_eq!(
+        bytes_read.load(std::sync::atomic::Ordering::Relaxed),
+        constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead,
+        "metadata must reduce only the first segment's data capacity"
+    );
+}
+
+#[test]
 fn streaming_compressed_periodic_resource_preserves_segment_boundaries() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
