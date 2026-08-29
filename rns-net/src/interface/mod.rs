@@ -226,6 +226,34 @@ impl AsyncWriterMetrics {
     pub fn worker_alive(&self) -> bool {
         self.worker_alive.load(Ordering::Relaxed)
     }
+
+    /// Exact encoded bytes waiting in the async queue or concrete writer.
+    pub fn tx_buffered(&self) -> usize {
+        self.egress_control
+            .as_ref()
+            .map(|control| control.reserved_bytes.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    pub fn tx_drops(&self) -> u64 {
+        self.egress_control
+            .as_ref()
+            .map(|control| control.dropped_frames.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    pub fn tx_dropped_bytes(&self) -> u64 {
+        self.egress_control
+            .as_ref()
+            .map(|control| control.dropped_bytes.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    pub fn tx_stalled(&self) -> bool {
+        self.egress_control
+            .as_ref()
+            .is_some_and(EgressControl::stalled)
+    }
 }
 
 struct AsyncWriter {
@@ -556,6 +584,29 @@ impl InterfaceStatusView for InterfaceEntry {
     fn stats(&self) -> &InterfaceStats {
         &self.stats
     }
+    fn tx_drops(&self) -> u64 {
+        self.async_writer_metrics
+            .as_ref()
+            .map(AsyncWriterMetrics::tx_drops)
+            .unwrap_or(0)
+    }
+    fn tx_dropped_bytes(&self) -> u64 {
+        self.async_writer_metrics
+            .as_ref()
+            .map(AsyncWriterMetrics::tx_dropped_bytes)
+            .unwrap_or(0)
+    }
+    fn tx_stalled(&self) -> bool {
+        self.async_writer_metrics
+            .as_ref()
+            .is_some_and(AsyncWriterMetrics::tx_stalled)
+    }
+    fn tx_buffered(&self) -> usize {
+        self.async_writer_metrics
+            .as_ref()
+            .map(AsyncWriterMetrics::tx_buffered)
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -849,12 +900,15 @@ mod tests {
         writer.send_frame(&[1, 2]).unwrap();
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(control.reserved_bytes.load(Ordering::Relaxed), 4);
+        assert_eq!(metrics.tx_buffered(), 4);
 
         // The hard valve drops instead of retaining another four-byte frame.
         writer.send_frame(&[3, 4]).unwrap();
         assert_eq!(control.reserved_bytes.load(Ordering::Relaxed), 4);
         assert_eq!(control.dropped_frames.load(Ordering::Relaxed), 1);
         assert_eq!(control.dropped_bytes.load(Ordering::Relaxed), 4);
+        assert_eq!(metrics.tx_drops(), 1);
+        assert_eq!(metrics.tx_dropped_bytes(), 4);
 
         release_tx.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -867,6 +921,7 @@ mod tests {
         }
 
         control.set_stalled(true);
+        assert!(metrics.tx_stalled());
         writer.send_frame(&[5]).unwrap();
         assert_eq!(control.dropped_frames.load(Ordering::Relaxed), 2);
         assert_eq!(control.dropped_bytes.load(Ordering::Relaxed), 7);

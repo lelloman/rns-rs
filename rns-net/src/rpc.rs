@@ -1512,6 +1512,22 @@ fn single_iface_to_pickle(s: &SingleInterfaceStat) -> PickleValue {
             PickleValue::Int(s.txb as i64),
         ),
         (
+            PickleValue::String("txdrp".into()),
+            PickleValue::Int(s.tx_drops as i64),
+        ),
+        (
+            PickleValue::String("txdrb".into()),
+            PickleValue::Int(s.tx_dropped_bytes as i64),
+        ),
+        (
+            PickleValue::String("txstalled".into()),
+            PickleValue::Bool(s.tx_stalled),
+        ),
+        (
+            PickleValue::String("txbuffered".into()),
+            PickleValue::Int(s.tx_buffered as i64),
+        ),
+        (
             PickleValue::String("rxs".into()),
             PickleValue::Float(s.traffic.rxs),
         ),
@@ -3171,6 +3187,10 @@ mod tests {
                             announces_to_internal: Some(true),
                             rxb: 1000,
                             txb: 2000,
+                            tx_drops: 0,
+                            tx_dropped_bytes: 0,
+                            tx_stalled: false,
+                            tx_buffered: 0,
                             traffic: TrafficDetail::default(),
                             protocol_violations: 0,
                             ifac_violations: 0,
@@ -3575,6 +3595,10 @@ mod tests {
                 announces_to_internal: Some(true),
                 rxb: 100,
                 txb: 200,
+                tx_drops: 3,
+                tx_dropped_bytes: 4096,
+                tx_stalled: true,
+                tx_buffered: 8192,
                 traffic,
                 protocol_violations: 11,
                 ifac_violations: 12,
@@ -3637,6 +3661,10 @@ mod tests {
         assert_eq!(ifaces[0].get("name").unwrap().as_str().unwrap(), "TCP");
         assert_eq!(ifaces[0].get("mtu").unwrap().as_int(), Some(131_072));
         assert_eq!(ifaces[0].get("gravity").unwrap().as_int().unwrap(), -2);
+        assert_eq!(ifaces[0].get("txdrp").unwrap().as_int(), Some(3));
+        assert_eq!(ifaces[0].get("txdrb").unwrap().as_int(), Some(4096));
+        assert_eq!(ifaces[0].get("txstalled").unwrap().as_bool(), Some(true));
+        assert_eq!(ifaces[0].get("txbuffered").unwrap().as_int(), Some(8192));
         assert!(ifaces[0]
             .get("announces_to_internal")
             .unwrap()
