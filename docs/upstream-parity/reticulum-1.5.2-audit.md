@@ -67,7 +67,7 @@ efficiency, and dataplane egress control.
 | 21 | `d32ba8c1a17d2b244bc201b2c0cbcda4f7a1d7c1` | Fixed inconsistency against advertised return type | Structurally covered | Local `1d28228`; fixed-width identity constructors return `Self` directly, eliminating fall-through `None` or mismatched boolean contracts |
 | 22 | `75cbc73f64f3d1d020b7e86ec12f6fd0f3cfdca3` | Removed dead Python 2 code from umsgpack | Non-runtime | Local `55ec0c2`; removes Python 2 pack/unpack branches and aliases from vendored `umsgpack.py`, which native MessagePack does not vendor or execute |
 | 23 | `e714c559cc00ce4d7abc232a86a62d5d3b5c7376` | Updated tests init | Non-runtime | Local `94d2b21`; switches upstream tests between CRNS compiled and interpreted imports via `RNS_COMPILE` and prints the Python mode, without a native surface change |
-| 24 | `ae0191578f2ce439e209b8982af7ae033e954e2f` | Updated Cython dev shim | Non-runtime | Python/Cython development shim has no native runtime counterpart |
+| 24 | `ae0191578f2ce439e209b8982af7ae033e954e2f` | Updated Cython dev shim | Non-runtime | Full diff review: parallelizes CRNS mirror compilation, stamps directives/ABI, rebuilds stale modules, and narrows interpreted vendor fallback; Cargo/rustc have no CRNS shim counterpart |
 | 25 | `5fdd661081893cd5b5ce90662ca0ddf40a9c41ad` | Updated makefile | Non-runtime | Upstream Python build convenience target only |
 | 26 | `5b04a880268f8f4e1d136e43dba10b74f1713516` | Updated makefile | Non-runtime | Upstream Python/Cython build convenience targets only |
 | 27 | `3543dc980213770155e86b5d209bfb387fbfc407` | Load module compilation status from buildinfo if available | Non-runtime | Python package build-info reporting has no statically linked Rust runtime analogue |
