@@ -90,7 +90,7 @@ efficiency, and dataplane egress control.
 | 44 | `d5b2fc56094cadba6bf660d2422c67aa93112383` | Updated changelog | Non-runtime | Local `af445e9`; adds the 1.5.2 maintenance-release narrative and moves unchanged signed-retrieval instructions; its compatibility claims are verified from entries 35, 39 and 43 |
 | 45 | `a3cd84111fd5f1bac7afa935edd373a473abef0d` | Updated default config with null_ident blocking example | Integrated | Local `ff73797`; generated rns-git server config and operator docs identify `d7db22f63b453c23bb0688dde565b7c1` for blocking unidentified peers, with generation regression |
 | 46 | `9ce45029612d1781c449a5ad5aa15f24c02cee57` | Updated changelog | Non-runtime | Local `86ec534`; reorders the tuned-control bullet and adds the null-identity example already integrated by entry 45; no runtime or new compatibility claim |
-| 47 | `ad3c06636b8d32afb0e68fe25cc12847c240926f` | Adjusted logging | Non-runtime | Full three-site diff review: lowers denied/missing artifact, blob and work-document download diagnostics from warning to debug; native handlers return the same denial without emitting equivalent warnings |
+| 47 | `ad3c06636b8d32afb0e68fe25cc12847c240926f` | Adjusted logging | Non-runtime | Local `af42231`; lowers denied/missing artifact, blob and work-document diagnostics from warning to debug; native handlers return the same denial without equivalent warnings |
 | 48 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` | Prepare release | Non-runtime | Generated documentation and tagged 1.5.2 release metadata |
 
 ## Per-Commit Analysis
