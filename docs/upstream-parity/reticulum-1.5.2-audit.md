@@ -84,7 +84,7 @@ efficiency, and dataplane egress control.
 | 38 | `149e4151095adf098b8f53eab0c03b37169e8559` | Prepare release | Non-runtime | Local `25abe40`; regenerates 1.5.1 docs, fixes documented queue defaults to 1024/128/128/8, and changes no runtime; native defaults are verified from code/tests instead of vendored generated output |
 | 39 | `4eebf0b685322c9240d07e545fb5585e4dfcc16d` | Guard empty keepalive frames | Integrated | Local `c2ee65f`; HDLC readers already discard empty flag pairs and raw UDP now ignores zero-length datagrams while delivering the following non-empty frame |
 | 40 | `6bc0481cdfbd691bc0b5e401da4ad256c2fee42a` | Always remember to flush | Structurally covered | Local `ae0ddb0`; native declared-length streaming reads the source directly without a buffered proxy to flush/rewind, while receive files are synced before publication |
-| 41 | `5b4117dadc3a0ef6deffb87efbe039d1b77f966a` | Skip local shared instance interfaces in ingress/egress control | Needs coordinated port | The future native dataplane controllers must preserve Local client exemption when implementing entries 1 and 12 |
+| 41 | `5b4117dadc3a0ef6deffb87efbe039d1b77f966a` | Skip local shared instance interfaces in ingress/egress control | Integrated | Local `3a10336`; Local shared-instance writers retain HDLC coalescing but expose no egress-control budget/gate, and Local ingress was already outside the Backbone-only controller |
 | 42 | `943771a3f9cf2318401aa469fa42093e01b2d126` | Updated version | Non-runtime | Upstream version metadata only |
 | 43 | `83a30b187adfef6fa4454dddd940082180be6a7f` | Tuned dataplane control defaults | Needs coordinated port | Changes ingress high/mid/low defaults to 90/68/10 percent and must be applied with the pending ingress-controller port |
 | 44 | `d5b2fc56094cadba6bf660d2422c67aa93112383` | Updated changelog | Non-runtime | Release notes only |
@@ -669,10 +669,15 @@ warning-free all-target lint passed.
 ### 41 and 43. Dataplane-control exclusions and tuned defaults
 
 Entry 41 exempts Local shared-instance clients from global ingress and egress
-control, while entry 43 changes ingress watermarks to 90/68/10 percent. Native
-does not yet implement those controllers. Both entries **Need coordinated
-port** with entries 1, 3, and 7–12 so the exemption and final defaults are part
-of the first native behavior rather than follow-up corrections.
+control. Local `3a10336` removes the shared byte budget and hard valve from all
+Local TCP/Unix writers while retaining coalescing. Local ingress was already
+outside the Backbone accepted-peer controller. The focused exemption test and
+complete `rns-net` Backbone feature suite passed 934 unit and 54 network E2E
+tests plus all enabled interop/fixture tests; formatting and warning-free
+all-target lint passed. Entry 41 is **Integrated**.
+
+Entry 43 changes Backbone ingress watermarks to 90/68/10 percent and remains a
+**Needs coordinated port** follow-up to entries 1 and 3.
 
 ### 42, 44, and 46–48. Final release and logging metadata
 
