@@ -74,7 +74,7 @@ efficiency, and dataplane egress control.
 | 28 | `b7fe01237d8189c54931cdd302d9835e81f55440` | Updated setup.py | Non-runtime | Local `f0f1b2e`; adds Cython discovery/exclusions, compiler flags, stripping, build info, and `--native` wheel plumbing, while Cargo packaging remains independent |
 | 29 | `fa07c8c87c33d2408e9560e1e8367cab1991b85c` | Updated setup.py | Non-runtime | Local `03bf58d`; refines native-wheel exclusions to explicit utility modules and adds rnpath, rnprobe, rnstatus, and `_version`, without changing Rust artifacts |
 | 30 | `dc9cf0c2f4f3432283148abc82146301682aaf99` | Updated setup.py | Non-runtime | Local `2bbeb80`; changes the Cython native-wheel default from `-Os` to `-O3`, while Rust optimization profiles are independently defined by Cargo |
-| 31 | `77c8256a1a8f8e638ff50906b7aa00f6bd450a0a` | Fixed invalid prefix stripping in rngit page server | Needs port | Native `normalize_blob_path()` uses `trim_start_matches(['.', '/'])`, the same over-broad character stripping fixed upstream |
+| 31 | `77c8256a1a8f8e638ff50906b7aa00f6bd450a0a` | Fixed invalid prefix stripping in rngit page server | Integrated | Local `f1bf5ce`; blob paths remove only one exact `./`, retain dotfiles and other leading dots, normalize inner `/./`, and leave absolute paths for rejection |
 | 32 | `b28f5ebf7a4fbedbbedafd539d9d33d2f1992a9e` | Allow inbound queue utilization in drainer benchmarks | Non-runtime | Upstream-only throughput benchmark pacing adjustment; no production behavior changes |
 | 33 | `6e8c976421748584b10cf964bfede577370aebd7` | Worker spawn prep | Structurally covered | Refactors one Python worker start into a one-iteration loop; native queue workers already have explicit lifecycle ownership |
 | 34 | `9878b1837726109a3a9a5b4e59db067a3e40ca7a` | Added transmit buffer, TX drops and stalled status output to rnstatus | Needs coordinated port | Native status exposes neither the pending/coalesced byte total nor per-interface dropped-frame, dropped-byte and stalled fields required by the egress-control work |
@@ -581,15 +581,17 @@ the affected Python modules.
 **Upstream change:** Replaces `lstrip("./")`, which treats its argument as a set
 of removable leading characters, with exact `removeprefix("./")` handling.
 
-**Rust applicability and evidence:** `rns-git/src/pages.rs` currently performs
-the equivalent over-broad operation in `normalize_blob_path()` via
-`trim_start_matches(['.', '/'])`. A legitimate leading-dot path can therefore
-be rewritten instead of having only one explicit `./` prefix removed.
+**Rust applicability and evidence:** Native `normalize_blob_path()` performed
+the equivalent over-broad `trim_start_matches(['.', '/'])`, rewriting dotfiles
+and turning absolute paths into relative ones. Local `f1bf5ce` now removes only
+one exact `./`, retains the later `/./` normalization, and leaves other leading
+dots and slashes untouched. The focused regression covers explicit relative
+paths, inner dot components, dotfiles, repeated dots, and absolute-path
+rejection. The complete `rns-git` suite passed 196 unit tests, 6 E2E tests, 11
+release integration tests, 6 statistics tests, and doc tests on 2026-08-29;
+formatting and warning-free all-target crate lint also passed.
 
-**Final disposition:** **Needs port.** Replace the character-set trimming with
-one exact optional `./` removal while retaining the later `/./` component
-normalization, and add regression coverage for dotfiles and explicit relative
-prefixes.
+**Final disposition:** Integrated.
 
 ### 32. `b28f5ebf` — Allow inbound queue utilization in drainer benchmarks
 
