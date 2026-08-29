@@ -79,9 +79,9 @@ pub(crate) const SERVER_PEER_MTU: u32 = match auto_mtu_for_bitrate(SERVER_BITRAT
     None => 1_048_576,
 };
 
-const DP_IC_HIGH_WM_PCT: usize = 85;
-const DP_IC_MID_WM_PCT: usize = 10;
-const DP_IC_LOW_WM_PCT: usize = 1;
+const DP_IC_HIGH_WM_PCT: usize = 90;
+const DP_IC_MID_WM_PCT: usize = 68;
+const DP_IC_LOW_WM_PCT: usize = 10;
 const DP_IC_INTERVAL: Duration = Duration::from_millis(250);
 const DP_IC_RCVBUF: usize = 32_768;
 const DP_IC_IF_HEADROOM: usize = 32;
@@ -2396,18 +2396,18 @@ mod tests {
         assert_eq!(
             ingress_thresholds(1024),
             IngressThresholds {
-                high: 870,
-                immediate: 870,
-                mid: 102,
-                low: 10,
+                high: 921,
+                immediate: 921,
+                mid: 696,
+                low: 102,
             }
         );
         assert_eq!(
             ingress_thresholds(8),
             IngressThresholds {
-                high: 6,
+                high: 7,
                 immediate: 128,
-                mid: 2,
+                mid: 5,
                 low: 0,
             }
         );
@@ -2450,13 +2450,13 @@ mod tests {
         client.write_all(&burst).unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while observer.inbound_queue_snapshot().heights[0] < 170 && Instant::now() < deadline {
+        while observer.inbound_queue_snapshot().heights[0] < 180 && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
         thread::sleep(Duration::from_millis(100));
         let gated = observer.inbound_queue_snapshot();
         assert!(
-            gated.heights[0] >= 170,
+            gated.heights[0] >= 180,
             "DATA queue never reached the high watermark"
         );
         assert_eq!(gated.dropped[0], 0);
