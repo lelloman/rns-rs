@@ -48,7 +48,7 @@ efficiency, and dataplane egress control.
 | 2 | `3b7cfc066689b540ca306f06c3aff68fd9d09f1a` | Cleanup | Non-runtime | Local `9f5edb3`; threshold initialization remains silent and native routing retains one authoritative link table, with no secondary forwarding cache |
 | 3 | `1a16fdb727da242a3c258c3566c0994240eeaf85` | Fixed inbound queue high-water mark initialization order | Integrated | Local `a4b426e`; the Backbone poll loop derives and fixes all ingress watermarks from the configured DATA capacity before registering its listener or accepting peers |
 | 4 | `419956bada9a21d082b9faf54cc83a4a99e16057` | Over-optimization is the root of all evil | Structurally covered | Local `925413f`; native accepted peers keep read polling independent from a cloned writer, and the strengthened async-writer regression proves queued output progresses without another send trigger |
-| 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Removes a duplicate Python class assignment and adds a TODO comment; no executed behavior changes |
+| 5 | `bafc09d3a6e61137cd5e302314d8ce710af4c28d` | Cleanup | Non-runtime | Local `360f095`; records that the native standalone client's blocking socket is deliberately split between a dedicated reader thread and cloned writer path |
 | 6 | `54a919f04564cb0e9bcc291a558ab8aad403cb95` | Added optimized HDLC implementation | Needs port | Native decoding is functionally bounded and streaming, but front-drains its `Vec` after every frame and lacks the upstream offset/half-buffer compaction invariant; malformed escape handling also differs |
 | 7 | `ac9130f01fff37d25a60c7984d94ace32f1e26fc` | Added coalesced transmit test | Needs coordinated port | The test-only contract covers chunk bounds, partial writes, ordering, accounting, concurrency and flood behavior absent from the native per-frame async writer tests |
 | 8 | `0ec84c7491433b25031741988382646489767d1b` | Added coalescing transmit buffer | Needs coordinated port | Native async writers bound a queue by frame count and issue one framed write per item; they have no 64 KiB coalescing chunks or byte/frame/sendable accounting |
@@ -209,7 +209,13 @@ writer use blocking I/O by design and are isolated from the driver by their own
 threads; the upstream TODO is not a behavior change to port.
 
 **Local handling and evidence:** The complete two-line source diff was
-reviewed; it changes no executed branch or value.
+reviewed; it changes no executed branch or value. Local `360f095` records the
+native ownership invariant at `client_reader_loop`: the blocking socket is
+intentional because the dedicated thread owns reads and the cloned interface
+writer owns writes. Focused client connect, receive, and send tests passed on
+2026-08-29. The complete `rns-net` feature suite also passed (913 unit tests,
+54 E2E tests, and all interoperability and fixture tests), along with
+formatting and warning-free all-target crate lint.
 
 **Final disposition:** Non-runtime.
 
