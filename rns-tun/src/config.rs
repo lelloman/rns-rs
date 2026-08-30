@@ -257,7 +257,7 @@ pub fn validate_full_tunnel_node_config(config_dir: &Path) -> Result<(), ConfigE
 }
 
 pub fn validate_full_tunnel_node_config_text(content: &str) -> Result<(), ConfigError> {
-    let parsed = rns_net::config::parse(&content)
+    let parsed = rns_net::config::parse(content)
         .map_err(|error| ConfigError::Invalid(format!("invalid Reticulum config: {error}")))?;
     for interface in parsed
         .interfaces

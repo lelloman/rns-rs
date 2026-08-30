@@ -281,6 +281,11 @@ pub fn status_json(handle: u64) -> io::Result<String> {
 }
 
 /// Create a host handle. Returns zero for null, non-UTF-8, or malformed input.
+///
+/// # Safety
+///
+/// `config_json` must be null or point to a valid NUL-terminated byte string
+/// for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn rntun_android_create(config_json: *const c_char) -> u64 {
     if config_json.is_null() {
@@ -315,6 +320,11 @@ pub extern "C" fn rntun_android_start(handle: u64) -> libc::c_int {
 /// Poll one UTF-8 JSON event. Returns zero when no event is ready, a positive
 /// byte count including NUL on success, or the required size when `capacity`
 /// is too small (the event remains queued).
+///
+/// # Safety
+///
+/// When `output` is non-null and `capacity` is large enough for the reported
+/// event, it must point to writable memory spanning at least `capacity` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn rntun_android_poll_event(
     handle: u64,
@@ -348,6 +358,12 @@ pub unsafe extern "C" fn rntun_android_poll_event(
 }
 
 /// Transfer ownership of `fd` to Rust. Rust closes it with the handle.
+///
+/// # Safety
+///
+/// `fd` must be either negative or a valid, open file descriptor owned by the
+/// caller. For a non-negative descriptor, ownership is transferred on entry
+/// and the caller must not use or close it afterward, even if this call fails.
 #[no_mangle]
 pub unsafe extern "C" fn rntun_android_attach_tun_owned(
     handle: u64,
@@ -368,6 +384,11 @@ pub extern "C" fn rntun_android_attach_tun_dup(handle: u64, fd: libc::c_int) -> 
 
 /// Duplicate `fd` and require a JSON acknowledgement of the exact TUN
 /// configuration applied by the host before the protocol becomes ready.
+///
+/// # Safety
+///
+/// `applied_json` must be null or point to a valid NUL-terminated byte string
+/// for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn rntun_android_attach_tun_dup_v2(
     handle: u64,

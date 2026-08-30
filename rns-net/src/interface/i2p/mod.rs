@@ -291,16 +291,16 @@ fn coordinator(
         thread::Builder::new()
             .name("i2p-acceptor".into())
             .spawn(move || {
-                acceptor_loop(
-                    sam_addr2,
-                    &session_id2,
-                    &iface_name,
-                    tx2,
-                    next_id2,
+                acceptor_loop(AcceptorContext {
+                    sam_addr: sam_addr2,
+                    session_id: session_id2,
+                    iface_name,
+                    tx: tx2,
+                    next_id: next_id2,
                     ingress_control,
                     dynamic_template,
-                    config.underlay_mark,
-                );
+                    underlay_mark: config.underlay_mark,
+                });
             })
             .ok();
     }
@@ -456,18 +456,31 @@ fn outbound_peer_loop(context: OutboundPeerContext) {
 }
 
 /// Acceptor thread: loops accepting inbound connections on the session.
-fn acceptor_loop(
+struct AcceptorContext {
     sam_addr: SocketAddr,
-    session_id: &str,
-    iface_name: &str,
+    session_id: String,
+    iface_name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     ingress_control: rns_core::transport::types::IngressControlConfig,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
-) {
+}
+
+fn acceptor_loop(context: AcceptorContext) {
+    let AcceptorContext {
+        sam_addr,
+        session_id,
+        iface_name,
+        tx,
+        next_id,
+        ingress_control,
+        dynamic_template,
+        underlay_mark,
+    } = context;
+
     loop {
-        match sam::stream_accept_with_mark(&sam_addr, session_id, underlay_mark) {
+        match sam::stream_accept_with_mark(&sam_addr, &session_id, underlay_mark) {
             Ok((stream, remote_dest)) => {
                 let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
                 let remote_b32 = remote_dest.base32_address();
