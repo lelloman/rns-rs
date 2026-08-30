@@ -216,7 +216,11 @@ pub fn run_linux_client(
                         Err(error) => record_transport_error(&status, &error),
                     }
                 }
-                Ok(NodeEvent::LinkClosed(id)) if id == link_id => loop {
+                Ok(NodeEvent::LinkClosed {
+                    link_id: id,
+                    reason,
+                }) if id == link_id => loop {
+                    log::warn!("rntun Link closed while active: reason={reason:?}");
                     status.update(|value| {
                         value.lifecycle = "reconnecting".into();
                         value.reconnecting = true;
@@ -406,7 +410,7 @@ fn wait_for_accept(
                     }
                 }
             }
-            Ok(NodeEvent::LinkClosed(id)) if id == link_id => {
+            Ok(NodeEvent::LinkClosed { link_id: id, .. }) if id == link_id => {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "Link closed",
@@ -444,7 +448,7 @@ fn wait_for_server_ready(
                     return session.server_ready(session_epoch).map_err(session_error);
                 }
             }
-            Ok(NodeEvent::LinkClosed(id)) if id == link_id => {
+            Ok(NodeEvent::LinkClosed { link_id: id, .. }) if id == link_id => {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "Link closed",

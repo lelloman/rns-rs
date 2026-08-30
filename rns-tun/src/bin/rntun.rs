@@ -9,6 +9,9 @@ fn main() {
     }
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .format_timestamp_secs()
+        .try_init()?;
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else {
         print_help();

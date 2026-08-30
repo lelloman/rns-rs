@@ -253,6 +253,10 @@ pub fn default_config_path() -> PathBuf {
 /// the private node's socket mark and are rejected.
 pub fn validate_full_tunnel_node_config(config_dir: &Path) -> Result<(), ConfigError> {
     let content = fs::read_to_string(config_dir.join("config"))?;
+    validate_full_tunnel_node_config_text(&content)
+}
+
+pub fn validate_full_tunnel_node_config_text(content: &str) -> Result<(), ConfigError> {
     let parsed = rns_net::config::parse(&content)
         .map_err(|error| ConfigError::Invalid(format!("invalid Reticulum config: {error}")))?;
     for interface in parsed

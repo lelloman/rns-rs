@@ -3,16 +3,19 @@
 //! The C ABI has explicit descriptor ownership. Protocol and session logic
 //! remains in `rns-tun`; Java/Kotlin can bind this directly or via thin JNI.
 
+mod bundle;
+mod jni_api;
 mod session;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_void, CStr};
+use std::fs;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rns_tun::{SocketProtector, SocketProtectorGuard};
-use session::{AndroidConfig, AndroidRuntime};
+use session::{AndroidConfig, AndroidRuntime, AppliedTunConfig, TunAttachment};
 
 pub type ProtectCallback = unsafe extern "C" fn(fd: libc::c_int, user_data: *mut c_void) -> bool;
 
@@ -62,10 +65,9 @@ pub fn create_handle(config_json: String) -> io::Result<u64> {
     Ok(id)
 }
 
-pub fn install_protector(
+pub fn install_protector_object(
     handle: u64,
-    callback: ProtectCallback,
-    user_data: *mut c_void,
+    protector: Arc<dyn SocketProtector>,
 ) -> io::Result<()> {
     let mut map = handles().lock().unwrap_or_else(|p| p.into_inner());
     let entry = map
@@ -77,15 +79,113 @@ pub fn install_protector(
             "protector already installed",
         ));
     }
-    let guard = rns_tun::install_socket_protector(Arc::new(HostProtector {
-        callback,
-        user_data: user_data as usize,
-    }))?;
-    entry.protector = Some(guard);
+    entry.protector = Some(rns_tun::install_socket_protector(protector)?);
     Ok(())
 }
 
-pub fn attach_owned_tun(handle: u64, fd: OwnedFd) -> io::Result<()> {
+pub fn install_protector(
+    handle: u64,
+    callback: ProtectCallback,
+    user_data: *mut c_void,
+) -> io::Result<()> {
+    install_protector_object(
+        handle,
+        Arc::new(HostProtector {
+            callback,
+            user_data: user_data as usize,
+        }),
+    )
+}
+
+pub fn ensure_identity(path: &std::path::Path) -> io::Result<String> {
+    let identity = rns_tun::identity::load_or_create(path)?;
+    Ok(hex(identity.hash()))
+}
+
+pub fn export_identity(path: &std::path::Path) -> io::Result<Vec<u8>> {
+    let identity = rns_net::storage::load_identity(path)?;
+    identity
+        .get_private_key()
+        .map(|key| key.to_vec())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "identity has no private key"))
+}
+
+pub fn import_identity(path: &std::path::Path, bytes: &[u8]) -> io::Result<String> {
+    if handles()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .values()
+        .any(|handle| handle.runtime.is_some())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "identity cannot be replaced while a tunnel is running",
+        ));
+    }
+    let key: [u8; 64] = bytes.try_into().map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidData, "identity must contain 64 bytes")
+    })?;
+    let identity = rns_crypto::identity::Identity::from_private_key(&key);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension(format!("import-{}", std::process::id()));
+    rns_net::storage::save_identity(&identity, &temporary)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(&temporary, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })?;
+    Ok(hex(identity.hash()))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn validate_node_config_text(text: &str, full_tunnel: bool) -> io::Result<()> {
+    let parsed = rns_net::config::parse(text)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    let enabled: Vec<_> = parsed
+        .interfaces
+        .iter()
+        .filter(|interface| interface.enabled)
+        .collect();
+    if enabled.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Reticulum configuration has no enabled interface",
+        ));
+    }
+    for interface in enabled {
+        if !matches!(
+            interface.interface_type.as_str(),
+            "TCPClientInterface" | "TCPServerInterface" | "UDPInterface" | "AutoInterface"
+        ) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Android does not support enabled interface type '{}'",
+                    interface.interface_type
+                ),
+            ));
+        }
+    }
+    if full_tunnel {
+        rns_tun::config::validate_full_tunnel_node_config_text(text)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    }
+    Ok(())
+}
+
+pub fn attach_owned_tun(
+    handle: u64,
+    fd: OwnedFd,
+    applied: Option<AppliedTunConfig>,
+) -> io::Result<()> {
     let mut map = handles().lock().unwrap_or_else(|p| p.into_inner());
     let entry = map
         .get_mut(&handle)
@@ -96,16 +196,20 @@ pub fn attach_owned_tun(handle: u64, fd: OwnedFd) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "session is not started"))?;
     runtime
         .tun_tx
-        .try_send(fd)
+        .try_send(TunAttachment { fd, applied })
         .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "TUN is already attached"))
 }
 
-pub fn attach_duplicated_tun(handle: u64, fd: RawFd) -> io::Result<()> {
+pub fn attach_duplicated_tun(
+    handle: u64,
+    fd: RawFd,
+    applied: Option<AppliedTunConfig>,
+) -> io::Result<()> {
     let duplicate = unsafe { libc::dup(fd) };
     if duplicate < 0 {
         return Err(io::Error::last_os_error());
     }
-    attach_owned_tun(handle, unsafe { OwnedFd::from_raw_fd(duplicate) })
+    attach_owned_tun(handle, unsafe { OwnedFd::from_raw_fd(duplicate) }, applied)
 }
 
 pub fn destroy_handle(handle: u64) -> bool {
@@ -113,14 +217,13 @@ pub fn destroy_handle(handle: u64) -> bool {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .remove(&handle);
-    if let Some(entry) = &removed {
-        if let Some(runtime) = &entry.runtime {
-            runtime
-                .stop
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(mut entry) = removed {
+        if let Some(runtime) = entry.runtime.take() {
+            runtime.shutdown();
         }
+        return true;
     }
-    removed.is_some()
+    false
 }
 
 pub fn start_handle(handle: u64) -> io::Result<()> {
@@ -159,6 +262,22 @@ pub fn poll_event(handle: u64) -> io::Result<Option<String>> {
         return Ok(None);
     };
     Ok(runtime.events.try_recv().ok())
+}
+
+pub fn status_json(handle: u64) -> io::Result<String> {
+    let map = handles().lock().unwrap_or_else(|p| p.into_inner());
+    let entry = map
+        .get(&handle)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown handle"))?;
+    let status = entry
+        .runtime
+        .as_ref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "session is not started"))?
+        .status
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    serde_json::to_string(&status).map_err(io::Error::other)
 }
 
 /// Create a host handle. Returns zero for null, non-UTF-8, or malformed input.
@@ -238,13 +357,33 @@ pub unsafe extern "C" fn rntun_android_attach_tun_owned(
         return libc::EBADF;
     }
     let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    attach_owned_tun(handle, owned).map_or_else(|_| libc::EINVAL, |_| 0)
+    attach_owned_tun(handle, owned, None).map_or_else(|_| libc::EINVAL, |_| 0)
 }
 
 /// Duplicate `fd`; the host retains ownership of the original descriptor.
 #[no_mangle]
 pub extern "C" fn rntun_android_attach_tun_dup(handle: u64, fd: libc::c_int) -> libc::c_int {
-    attach_duplicated_tun(handle, fd).map_or_else(|_| libc::EINVAL, |_| 0)
+    attach_duplicated_tun(handle, fd, None).map_or_else(|_| libc::EINVAL, |_| 0)
+}
+
+/// Duplicate `fd` and require a JSON acknowledgement of the exact TUN
+/// configuration applied by the host before the protocol becomes ready.
+#[no_mangle]
+pub unsafe extern "C" fn rntun_android_attach_tun_dup_v2(
+    handle: u64,
+    fd: libc::c_int,
+    applied_json: *const c_char,
+) -> libc::c_int {
+    if applied_json.is_null() {
+        return libc::EINVAL;
+    }
+    let Ok(value) = unsafe { CStr::from_ptr(applied_json) }.to_str() else {
+        return libc::EINVAL;
+    };
+    let Ok(applied) = serde_json::from_str::<AppliedTunConfig>(value) else {
+        return libc::EINVAL;
+    };
+    attach_duplicated_tun(handle, fd, Some(applied)).map_or_else(|_| libc::EINVAL, |_| 0)
 }
 
 #[no_mangle]

@@ -2830,7 +2830,7 @@ fn test_channel_send_drops_packet_when_encrypt_fails() {
 
 #[test]
 fn test_channel_proof_reopens_send_window() {
-    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let (mut init_mgr, resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
 
     init_mgr
@@ -2855,7 +2855,11 @@ fn test_channel_proof_reopens_send_window() {
     for tracked_hash in queued_packets.keys().take(1) {
         let mut proof_data = Vec::with_capacity(96);
         proof_data.extend_from_slice(tracked_hash);
-        proof_data.extend_from_slice(&[0x11; 64]);
+        proof_data.extend_from_slice(
+            &resp_mgr.links[&link_id]
+                .engine
+                .sign_packet_hash(tracked_hash),
+        );
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
             context_flag: constants::FLAG_UNSET,
@@ -2888,6 +2892,57 @@ fn test_channel_proof_reopens_send_window() {
     init_mgr
         .send_channel_message(&link_id, 42, b"third", &mut rng)
         .expect("proof should free one channel slot");
+}
+
+#[test]
+fn responder_channel_message_receives_initiator_delivery_proof() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+
+    let sent = resp_mgr
+        .send_channel_message(&link_id, 42, b"final server message", &mut rng)
+        .expect("responder channel send should succeed");
+    let message_raw = extract_any_send_packet(&sent);
+    let message = RawPacket::unpack(&message_raw).unwrap();
+    let received = init_mgr.handle_local_delivery(
+        message.destination_hash,
+        &message_raw,
+        message.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    assert!(received.iter().any(|action| matches!(
+        action,
+        LinkManagerAction::ChannelMessageReceived { payload, .. }
+            if payload == b"final server message"
+    )));
+
+    let proof_raw = received
+        .iter()
+        .find_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. }
+                if RawPacket::unpack(raw).is_ok_and(|packet| {
+                    packet.flags.packet_type == constants::PACKET_TYPE_PROOF
+                }) =>
+            {
+                Some(raw.clone())
+            }
+            _ => None,
+        })
+        .expect("initiator must prove responder-to-initiator channel delivery");
+    let proof = RawPacket::unpack(&proof_raw).unwrap();
+    resp_mgr.handle_local_delivery(
+        proof.destination_hash,
+        &proof_raw,
+        proof.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+
+    let responder = &resp_mgr.links[&link_id];
+    assert!(responder.pending_channel_packets.is_empty());
+    assert_eq!(responder.channel.as_ref().unwrap().outstanding(), 0);
+    assert_eq!(responder.channel_proofs_received, 1);
 }
 
 #[test]

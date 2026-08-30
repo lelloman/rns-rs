@@ -31,7 +31,10 @@ Version 1 provides:
 - Reticulum identity authentication and per-client authorization;
 - a portable Rust library that cross-compiles for Android;
 - an Android adapter contract in which `VpnService` creates the TUN file
-  descriptor and passes it to Rust.
+  descriptor and passes it to Rust;
+- a store-neutral Android client application with multiple profiles, guided TCP
+  and advanced Reticulum configuration, always-on/lockdown support, encrypted
+  profile transfer, and encrypted shared-identity backup.
 
 Not in version 1:
 
@@ -42,10 +45,11 @@ Not in version 1:
 - transparent DNS interception, proxying, or split-domain DNS routing;
 - automatic gateway firewall/NAT mutation;
 - roaming between multiple gateways;
-- a user-facing Android application.
+- an Android gateway application (reserved for version 2).
 
-The Android library and host contract are part of version 1; packaging a full
-Android UI can be a separate project or milestone.
+The Android library and full client application are part of version 1. Android
+gateway mode is intentionally deferred: it requires a userspace IPv4 forwarding
+and NAT engine in addition to the existing client tunnel runtime.
 
 ## Process architecture
 
@@ -345,6 +349,33 @@ The Rust Android API must accept an owned or duplicated file descriptor with
 explicit ownership rules. It must not assume `/dev/net/tun`, shell commands,
 systemd, Unix signals, or writable conventional home directories.
 
+The version 1 application is `com.lelloman.rntun`, targets Android API 36, and
+supports API 26 and later. It is a client-only, all-apps VPN. Profiles persist a
+versioned `role` field so a later gateway profile can migrate without an
+incompatible storage rewrite, but version 1 rejects every role except `client`.
+Guided setup generates a dedicated `TCPClientInterface`; advanced setup accepts
+raw private-node configuration after native parsing and Android interface-type
+validation. Neither mode reads a shared Reticulum configuration.
+
+One application identity is shared across profiles. Identity and profile
+exports use an authenticated `rntun-bundle` version 1 envelope with Argon2id
+(32 MiB, three iterations, one lane) and XChaCha20-Poly1305. QR transfer carries
+the same encrypted profile envelope as file transfer. Imports receive a fresh
+local profile ID, and identity replacement is refused while any native tunnel
+runtime is active. Diagnostics are local, size-bounded, redacted, and never
+contain bundle passwords or private key material.
+
+For full-tunnel startup the service establishes an IPv4 default-route
+blackhole TUN before beginning Reticulum negotiation. It replaces that device
+only after `ServerAccept`, configures exactly the accepted IPv4 address, routes,
+MTU and approved DNS servers, then sends the applied configuration and a
+duplicated descriptor to Rust. It never calls `allowBypass`. It does not call
+`allowFamily(AF_INET6)` for full tunnels, so Android blocks the uncovered family
+for covered applications; split profiles explicitly allow IPv6 to bypass and
+do not install tunnel DNS. The final descriptor remains established across Link
+reconnects, providing fail-closed behavior. An always-on service start without
+a profile identifier selects the profile marked as default.
+
 Android build acceptance starts with:
 
 ```text
@@ -410,16 +441,20 @@ As of 2026-08-30, the workspace contains the portable codec, policy and session
 state machines; strict IPv4 validation and replay-safe reassembly; private-node
 startup; Linux client reconnect and multi-client gateway forwarding; atomic
 policy reload; TUN, split/full policy routing, `systemd-resolved` setup, IPv6
-prohibition, durable cleanup journal, live status socket, and an Android C ABI
-that negotiates before accepting an owned or duplicated `VpnService` TUN
-descriptor. Android underlay sockets fail closed through an exclusive host
-`VpnService.protect()` callback installed in `rns-net`.
+prohibition, durable cleanup journal, live status socket, and an Android JNI/C
+ABI that negotiates before accepting an owned or duplicated `VpnService` TUN
+descriptor. The Android client includes profile persistence, Compose UI,
+always-on default-profile selection, a fail-closed provisional full-tunnel TUN,
+exact accepted-configuration acknowledgement, shared identity management,
+encrypted QR/file transfers, and redacted local diagnostics. Android underlay
+sockets fail closed through an exclusive host `VpnService.protect()` callback
+installed in `rns-net`.
 
 This is not yet a release-complete claim. Linux network-namespace acceptance,
 forced-crash reconciliation tests, DNS/IPv6 leak tests, constrained-link MTU
-benchmarks, fuzzing, and an instrumented Android `VpnService` test remain. The
-local Android Rust target is installed, but the cross-check requires an Android
-NDK clang toolchain that is not present in the current development environment.
+benchmarks, fuzzing, and an instrumented Android `VpnService` packet-exchange
+test remain. JVM profile tests and host Rust/JNI tests exist; the Gradle app
+compile is exercised locally and CI builds the four Android ABIs.
 
 ## Open design items
 
@@ -913,6 +948,9 @@ deny, spoofing, duplicate-address, forbidden-route, and cross-client tests pass.
   and reconnect.
 - Apply negotiated DNS and prevent IPv6 or reconnect fallback for applications
   covered by a full-tunnel VPN.
+- Ship the store-neutral Compose client with multi-profile editing, connection
+  status, shared identity backup/restore, encrypted file/QR profile transfer,
+  and redacted diagnostics. Reserve, but do not implement, gateway role.
 
 Exit criteria: Android cross-compilation is in CI and an instrumented device or
 emulator test exchanges packets through a `VpnService` descriptor.
@@ -968,7 +1006,8 @@ Every phase adds tests at the lowest practical layer:
   reconciliation;
 - Android: cross-compile on every change and instrument the descriptor lifecycle
   when an Android test environment is available, including DNS selection and
-  IPv6/reconnect leak prevention.
+  IPv6/reconnect leak prevention; run JVM validation tests for profile policy and
+  build all four application ABIs in CI.
 
 ## Decisions intentionally deferred
 
@@ -976,6 +1015,7 @@ Every phase adds tests at the lowest practical layer:
 - IPv6 payload support.
 - Split-domain and other split-tunnel DNS configuration.
 - Gateway discovery aliases beyond an explicit destination hash.
+- Android gateway mode, including userspace IPv4 forwarding and NAT.
 - Alternative node backends, including an owned child process or connection to
   an existing shared `rnsd`.
 - Supervision of the complete `rntun` process by `rns-server` or another service

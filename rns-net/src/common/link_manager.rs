@@ -775,16 +775,22 @@ impl LinkManager {
         packet: &RawPacket,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        if packet.data.len() < 32 {
+        if packet.data.len() != 96 {
             return Vec::new();
         }
 
         let mut tracked_hash = [0u8; 32];
         tracked_hash.copy_from_slice(&packet.data[..32]);
 
+        let mut signature = [0u8; 64];
+        signature.copy_from_slice(&packet.data[32..]);
+
         let Some(link) = self.links.get_mut(link_id) else {
             return Vec::new();
         };
+        if !link.engine.validate_packet_proof(&tracked_hash, &signature) {
+            return Vec::new();
+        }
         let Some(sequence) = link.pending_channel_packets.remove(&tracked_hash) else {
             return Vec::new();
         };
@@ -804,18 +810,13 @@ impl LinkManager {
         link_id: &LinkId,
         packet_hash: &[u8; 32],
     ) -> Vec<LinkManagerAction> {
-        let dest_hash = match self.links.get(link_id) {
-            Some(link) => link.dest_hash,
+        let signature = match self.links.get_mut(link_id) {
+            Some(link) => {
+                link.channel_proofs_sent += 1;
+                link.engine.sign_packet_hash(packet_hash)
+            }
             None => return Vec::new(),
         };
-        let Some(ld) = self.link_destinations.get(&dest_hash) else {
-            return Vec::new();
-        };
-        if let Some(link) = self.links.get_mut(link_id) {
-            link.channel_proofs_sent += 1;
-        }
-
-        let signature = ld.sig_prv.sign(packet_hash);
         let mut proof_data = Vec::with_capacity(96);
         proof_data.extend_from_slice(packet_hash);
         proof_data.extend_from_slice(&signature);
@@ -1278,6 +1279,10 @@ impl LinkManager {
                 reply,
                 received_at,
             } => {
+                log::debug!(
+                    "Link keepalive received: link={:02x?} reply={reply}",
+                    &link_id[..4]
+                );
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 if reply {
                     let flags = PacketFlags {
@@ -1644,6 +1649,7 @@ impl LinkManager {
                 None => continue,
             };
             if link.engine.needs_keepalive(now) {
+                log::debug!("Link keepalive probe queued: link={:02x?}", &link_id[..4]);
                 // Only initiators reach this branch. Send the upstream 0xff
                 // probe; responders conditionally return 0xfe on receipt.
                 let flags = PacketFlags {
@@ -1983,6 +1989,10 @@ impl LinkManager {
                 LinkAction::StateChanged {
                     new_state, reason, ..
                 } => {
+                    log::debug!(
+                        "Link state changed: link={:02x?} state={new_state:?} reason={reason:?}",
+                        &link_id[..4]
+                    );
                     if new_state == &LinkState::Closed {
                         result.push(LinkManagerAction::LinkClosed {
                             link_id: *link_id,
@@ -1993,6 +2003,16 @@ impl LinkManager {
                 LinkAction::LinkEstablished {
                     rtt, is_initiator, ..
                 } => {
+                    let keepalive = self
+                        .links
+                        .get(link_id)
+                        .map(|link| link.engine.keepalive_interval())
+                        .unwrap_or_default();
+                    log::debug!(
+                        "Link timers established: link={:02x?} rtt={rtt:.6} keepalive={keepalive:.6} stale={:.6} initiator={is_initiator}",
+                        &link_id[..4],
+                        keepalive * rns_core::constants::LINK_STALE_FACTOR
+                    );
                     let dest_hash = self
                         .links
                         .get(link_id)
