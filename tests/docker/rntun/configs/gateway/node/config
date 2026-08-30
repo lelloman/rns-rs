@@ -1,0 +1,9 @@
+[reticulum]
+enable_transport = True
+share_instance = No
+
+[interfaces]
+  [[rntun TCP server]]
+    type = TCPServerInterface
+    listen_ip = 0.0.0.0
+    listen_port = 4242

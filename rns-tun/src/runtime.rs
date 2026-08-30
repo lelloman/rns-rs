@@ -48,10 +48,26 @@ pub mod status_socket {
                 fs::create_dir_all(parent)?;
             }
             if path.exists() {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!("status socket already exists: {}", path.display()),
-                ));
+                // Unix socket pathnames survive an unclean process exit. Only
+                // replace the pathname when it no longer has a live listener;
+                // a successful connection still means another rntun owns it.
+                match UnixStream::connect(&path) {
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("status socket already exists: {}", path.display()),
+                        ))
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                        ) =>
+                    {
+                        fs::remove_file(&path)?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             let listener = UnixListener::bind(&path)?;
             #[cfg(unix)]
@@ -140,6 +156,23 @@ pub mod status_socket {
             let response = query(&path).unwrap();
             assert_eq!(response.mode, "client");
             assert_eq!(response.lifecycle, "active");
+        }
+
+        #[test]
+        fn replaces_stale_socket_but_not_live_server() {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("status.sock");
+            let stale = UnixListener::bind(&path).unwrap();
+            drop(stale);
+            let status = SharedStatus::new(RuntimeStatus::default());
+            let server = StatusServer::start(path.clone(), status.clone()).unwrap();
+            assert_eq!(query(&path).unwrap().schema_version, 1);
+            let error = match StatusServer::start(path, status) {
+                Ok(_) => panic!("a second live status server must be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+            drop(server);
         }
     }
 }

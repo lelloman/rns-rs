@@ -250,6 +250,9 @@ run_standalone "${SCRIPT_DIR}/rns-server" \
 run_standalone "${SCRIPT_DIR}/nat-punch" \
   "Direct Link NAT hole punching (accept_all default)"
 
+run_standalone "${SCRIPT_DIR}/rntun" \
+  "rntun Linux split/full tunnel, DNS, reconnect, and cleanup"
+
 ELAPSED=$(( SECONDS - START_TIME ))
 
 # ── Summary ───────────────────────────────────────────────────────────────────

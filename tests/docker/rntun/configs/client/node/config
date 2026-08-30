@@ -1,0 +1,9 @@
+[reticulum]
+enable_transport = False
+share_instance = No
+
+[interfaces]
+  [[rntun TCP client]]
+    type = TCPClientInterface
+    target_host = 172.31.76.3
+    target_port = 4242

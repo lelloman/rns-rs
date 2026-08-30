@@ -73,6 +73,7 @@ pub fn run_linux_gateway(
         110,
         config.state_dir.join("gateway-linux-ownership.json"),
     )?;
+    configurator.cleanup_stale()?;
     let tunnel = TunnelConfig {
         interface_name: gateway.tun_name.clone(),
         address: policy.gateway_address,

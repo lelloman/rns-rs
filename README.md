@@ -102,14 +102,17 @@ machines. ESP32 validation remains separate under `rns-esp32/`.
 
 ### Docker E2E Tests
 
-There are 20 numbered Docker-based end-to-end suites that validate multi-node behaviour across chain, mesh, and star topologies. The full runner also includes standalone shared-client reconnection and `rns-server` supervision scenarios:
+There are 20 numbered Docker-based end-to-end suites that validate multi-node behaviour across chain, mesh, and star topologies. The full runner also includes standalone shared-client reconnection, `rns-server` supervision, NAT traversal, and privileged Linux `rntun` split/full-tunnel scenarios:
 
 ```bash
 # Run all Docker e2e tests
-cd tests/docker && ./run-all.sh
+./tests/docker/run-all.sh
 
 # Run a specific suite on the default 3-node chain
-cd tests/docker && ./run.sh --topology chain-3 --suite 01
+./tests/docker/run.sh --topology chain-3 --suite 01
+
+# Run only the privileged Linux rntun acceptance suite
+./tests/docker/rntun/run.sh
 ```
 
 ## rns-server

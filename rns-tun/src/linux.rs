@@ -273,8 +273,26 @@ impl LinuxConfigurator {
     fn cleanup_commands(&mut self, commands: &[OwnedCommand]) -> io::Result<()> {
         let mut first_error = None;
         for command in commands.iter().rev() {
-            if let Err(error) = self.run(&command.program, command.remove_args.clone()) {
-                first_error.get_or_insert(error);
+            match self.runner.output(&command.program, &command.remove_args) {
+                Ok(output) if output.status.success() => {}
+                Ok(output)
+                    if cleanup_target_is_absent(
+                        &command.program,
+                        &String::from_utf8_lossy(&output.stderr),
+                    ) => {}
+                Ok(output) => {
+                    first_error.get_or_insert_with(|| {
+                        io::Error::other(format!(
+                            "{} {} failed: {}",
+                            command.program,
+                            command.remove_args.join(" "),
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        ))
+                    });
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
         }
         first_error.map_or(Ok(()), Err)
@@ -602,6 +620,17 @@ fn process_is_alive(process_id: u32) -> bool {
     result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+fn cleanup_target_is_absent(program: &str, stderr: &str) -> bool {
+    program == "ip"
+        && [
+            "Cannot find device",
+            "No such process",
+            "Cannot assign requested address",
+        ]
+        .iter()
+        .any(|message| stderr.contains(message))
+}
+
 fn write_journal(path: &Path, journal: &OwnershipJournal) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -643,5 +672,18 @@ mod tests {
     #[test]
     fn rejects_policy_priority_inversion() {
         assert!(LinuxConfigurator::new(1, 2, 254, 110, 100, "x".into()).is_err());
+    }
+    #[test]
+    fn stale_ip_cleanup_accepts_only_absent_targets() {
+        assert!(cleanup_target_is_absent(
+            "ip",
+            "Cannot find device \"rntun0\""
+        ));
+        assert!(cleanup_target_is_absent(
+            "ip",
+            "RTNETLINK answers: No such process"
+        ));
+        assert!(!cleanup_target_is_absent("ip", "Operation not permitted"));
+        assert!(!cleanup_target_is_absent("resolvectl", "No such process"));
     }
 }
