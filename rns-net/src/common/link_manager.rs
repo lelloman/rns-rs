@@ -1454,18 +1454,38 @@ impl LinkManager {
         context: u8,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
+        self.try_send_on_link(link_id, plaintext, context, rng)
+            .unwrap_or_default()
+    }
+
+    /// Prepare a best-effort direct Link packet and report admission failures.
+    pub fn try_send_on_link(
+        &self,
+        link_id: &LinkId,
+        plaintext: &[u8],
+        context: u8,
+        rng: &mut dyn Rng,
+    ) -> Result<Vec<LinkManagerAction>, crate::event::LinkDatagramError> {
+        use crate::event::LinkDatagramError;
         let link = match self.links.get(link_id) {
             Some(l) => l,
-            None => return Vec::new(),
+            None => return Err(LinkDatagramError::LinkNotFound),
         };
 
         if link.engine.state() != LinkState::Active {
-            return Vec::new();
+            return Err(LinkDatagramError::LinkNotActive);
+        }
+        let maximum = link.engine.mdu();
+        if plaintext.len() > maximum {
+            return Err(LinkDatagramError::PayloadTooLarge {
+                maximum,
+                actual: plaintext.len(),
+            });
         }
 
         let encrypted = match link.engine.encrypt(plaintext, rng) {
             Ok(e) => e,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err(LinkDatagramError::EncryptionFailed),
         };
 
         let flags = PacketFlags {
@@ -1477,16 +1497,15 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok((raw, _packet_hash)) =
+        let (raw, _packet_hash) =
             RawPacket::pack_raw_with_hash(flags, 0, link_id, None, context, &encrypted)
-        {
-            actions.push(LinkManagerAction::SendPacket {
-                raw,
-                dest_type: constants::DESTINATION_LINK,
-                attached_interface: None,
-            });
-        }
-        actions
+                .map_err(|_| LinkDatagramError::PacketEncodingFailed)?;
+        actions.push(LinkManagerAction::SendPacket {
+            raw,
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: None,
+        });
+        Ok(actions)
     }
 
     /// Send an identify message on a link (initiator reveals identity to responder).
@@ -1865,6 +1884,7 @@ impl LinkManager {
                     remote_identity: managed.remote_identity.as_ref().map(|(h, _)| *h),
                     rtt: managed.engine.rtt(),
                     expected_hops: managed.engine.expected_hops(),
+                    mdu: managed.engine.mdu(),
                     tx_packets: managed.engine.tx_packets(),
                     rx_packets: managed.engine.rx_packets(),
                     tx_bytes: managed.engine.tx_bytes(),

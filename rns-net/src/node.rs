@@ -747,7 +747,33 @@ impl RnsNode {
         callbacks: Box<dyn Callbacks>,
     ) -> io::Result<Self> {
         let config_dir = storage::resolve_config_dir(config_path);
-        let paths = storage::ensure_storage_dirs(&config_dir)?;
+        Self::from_config_dirs(&config_dir, &config_dir, None, false, callbacks)
+    }
+
+    /// Start an application-private node from a dedicated configuration and
+    /// state root.
+    ///
+    /// Private nodes never expose the shared-instance or management servers,
+    /// never load hooks, fail on unsupported/malformed enabled interfaces, and
+    /// force runtime interface failures to stop startup. `underlay_mark`
+    /// overrides the value in the Reticulum configuration.
+    pub fn from_private_config(
+        config_dir: &Path,
+        state_dir: &Path,
+        underlay_mark: Option<u32>,
+        callbacks: Box<dyn Callbacks>,
+    ) -> io::Result<Self> {
+        Self::from_config_dirs(config_dir, state_dir, underlay_mark, true, callbacks)
+    }
+
+    fn from_config_dirs(
+        config_dir: &Path,
+        state_dir: &Path,
+        underlay_mark: Option<u32>,
+        private: bool,
+        callbacks: Box<dyn Callbacks>,
+    ) -> io::Result<Self> {
+        let paths = storage::ensure_storage_dirs(state_dir)?;
         let known_destinations_path = paths.storage.join("known_destinations");
         let ratchet_store: Arc<dyn storage::RatchetStore> =
             Arc::new(storage::FsRatchetStore::new(paths.ratchets.clone()));
@@ -794,6 +820,15 @@ impl RnsNode {
             let factory = match registry.get(&iface.interface_type) {
                 Some(f) => f,
                 None => {
+                    if private {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "unsupported enabled interface type '{}' for '{}'",
+                                iface.interface_type, iface.name
+                            ),
+                        ));
+                    }
                     log::warn!(
                         "Unsupported interface type '{}' for '{}'",
                         iface.interface_type,
@@ -842,6 +877,12 @@ impl RnsNode {
                 match parse_ingress_control_config(&iface.interface_type, &iface.params) {
                     Ok(config) => config,
                     Err(e) => {
+                        if private {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("invalid ingress control for '{}': {e}", iface.name),
+                            ));
+                        }
                         log::warn!(
                             "Failed to parse ingress control config for '{}': {}",
                             iface.name,
@@ -894,6 +935,12 @@ impl RnsNode {
             ) {
                 Ok(data) => data,
                 Err(e) => {
+                    if private {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid interface '{}': {e}", iface.name),
+                        ));
+                    }
                     log::warn!("Failed to parse config for '{}': {}", iface.name, e);
                     continue;
                 }
@@ -1004,25 +1051,33 @@ impl RnsNode {
             static_transport_identity: rns_config.reticulum.static_transport_identity,
             local_hops_delta: rns_config.reticulum.local_hops_delta,
             identity: Some(identity),
-            share_instance: rns_config.reticulum.share_instance,
+            share_instance: !private && rns_config.reticulum.share_instance,
             instance_name: rns_config.reticulum.instance_name.clone(),
             shared_instance_port: rns_config.reticulum.shared_instance_port,
             rpc_port: rns_config.reticulum.instance_control_port,
             cache_dir: Some(paths.cache),
             ratchet_store: Some(Arc::clone(&ratchet_store)),
             ratchet_expiry: Duration::from_secs(rns_config.reticulum.ratchet_expiry),
-            management: crate::management::ManagementConfig {
-                enable_remote_management: rns_config.reticulum.enable_remote_management,
-                remote_management_allowed: mgmt_allowed,
-                publish_blackhole: rns_config.reticulum.publish_blackhole,
+            management: if private {
+                crate::management::ManagementConfig::default()
+            } else {
+                crate::management::ManagementConfig {
+                    enable_remote_management: rns_config.reticulum.enable_remote_management,
+                    remote_management_allowed: mgmt_allowed,
+                    publish_blackhole: rns_config.reticulum.publish_blackhole,
+                }
             },
             probe_port: rns_config.reticulum.probe_port,
             probe_addrs,
             probe_protocol,
             direct_connect_policy: rns_config.reticulum.direct_connect_policy,
             device: rns_config.reticulum.device.clone(),
-            underlay_mark: rns_config.reticulum.underlay_mark,
-            hooks: rns_config.hooks.clone(),
+            underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
+            hooks: if private {
+                Vec::new()
+            } else {
+                rns_config.hooks.clone()
+            },
             discover_interfaces: rns_config.reticulum.discover_interfaces,
             autoconnect_interface_mode: rns_config
                 .reticulum
@@ -1089,9 +1144,9 @@ impl RnsNode {
             ),
             interfaces: interface_configs,
             registry: None,
-            panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
+            panic_on_interface_error: private || rns_config.reticulum.panic_on_interface_error,
             #[cfg(feature = "hooks")]
-            provider_bridge: if rns_config.reticulum.provider_bridge {
+            provider_bridge: if !private && rns_config.reticulum.provider_bridge {
                 Some(crate::provider_bridge::ProviderBridgeConfig {
                     enabled: true,
                     socket_path: rns_config
@@ -2078,6 +2133,14 @@ impl RnsNode {
         resp_rx.recv().map_err(|_| SendError)
     }
 
+    /// Snapshot active Link metadata, including the negotiated direct-data MDU.
+    pub fn links(&self) -> Result<Vec<crate::event::LinkInfoEntry>, SendError> {
+        match self.query(QueryRequest::Links)? {
+            QueryResponse::Links(links) => Ok(links),
+            _ => Err(SendError),
+        }
+    }
+
     /// Return the slowest positive bitrate among currently registered interfaces.
     ///
     /// Returns `Ok(None)` when no registered interface advertises a usable
@@ -2535,8 +2598,44 @@ impl RnsNode {
                 link_id,
                 data,
                 context,
+                response_tx: None,
             })
             .map_err(|_| SendError)
+    }
+
+    /// Admit a best-effort direct Link datagram without blocking on queue space.
+    ///
+    /// Success means the driver accepted and encoded the packet. It does not
+    /// imply remote delivery, acknowledgement, or interface transmission.
+    pub fn try_send_link_datagram(
+        &self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        context: u8,
+        timeout: Duration,
+    ) -> Result<(), crate::event::LinkDatagramError> {
+        use crate::event::LinkDatagramError;
+        if self.reject_new_work_if_draining().is_err() {
+            return Err(LinkDatagramError::DriverStopped);
+        }
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .try_send(Event::SendOnLink {
+                link_id,
+                data,
+                context,
+                response_tx: Some(response_tx),
+            })
+            .map_err(|error| match error {
+                std::sync::mpsc::TrySendError::Full(_) => LinkDatagramError::DriverQueueFull,
+                std::sync::mpsc::TrySendError::Disconnected(_) => LinkDatagramError::DriverStopped,
+            })?;
+        response_rx
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => LinkDatagramError::AdmissionTimedOut,
+                std::sync::mpsc::RecvTimeoutError::Disconnected => LinkDatagramError::DriverStopped,
+            })?
     }
 
     /// Build and broadcast an announce for a destination.
@@ -3110,6 +3209,17 @@ impl RnsNode {
 
     /// Shut down the node. Blocks until the driver thread exits.
     pub fn shutdown(mut self) {
+        self.shutdown_inner();
+    }
+
+    fn shutdown_inner(&mut self) {
+        if self.driver_handle.is_none()
+            && self.verify_handle.is_none()
+            && self.persist_handle.is_none()
+            && self.rpc_server.is_none()
+        {
+            return;
+        }
         // Stop RPC server first
         if let Some(mut rpc) = self.rpc_server.take() {
             rpc.stop();
@@ -3130,6 +3240,12 @@ impl RnsNode {
         if let Some(handle) = self.verify_handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+impl Drop for RnsNode {
+    fn drop(&mut self) {
+        self.shutdown_inner();
     }
 }
 
@@ -4056,6 +4172,25 @@ share_instance = False
 
         node.shutdown();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn private_config_keeps_state_out_of_config_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join("config");
+        let state_dir = root.path().join("state");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config"),
+            "[reticulum]\nenable_transport = False\nshare_instance = Yes\n",
+        )
+        .unwrap();
+        let node =
+            RnsNode::from_private_config(&config_dir, &state_dir, None, Box::new(NoopCallbacks))
+                .unwrap();
+        assert!(state_dir.join("storage/identities/identity").exists());
+        assert!(!config_dir.join("storage").exists());
+        node.shutdown();
     }
 
     #[test]

@@ -1331,16 +1331,31 @@ impl Driver {
                     link_id,
                     data,
                     context,
+                    response_tx,
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send link payload");
-                        let _ = (link_id, data, context);
+                        if let Some(tx) = response_tx {
+                            let _ = tx.send(Err(crate::event::LinkDatagramError::DriverStopped));
+                        }
                         continue;
                     }
-                    let link_actions =
+                    let result =
                         self.link_manager
-                            .send_on_link(&link_id, &data, context, &mut self.rng);
-                    self.dispatch_link_actions(link_actions);
+                            .try_send_on_link(&link_id, &data, context, &mut self.rng);
+                    match result {
+                        Ok(link_actions) => {
+                            self.dispatch_link_actions(link_actions);
+                            if let Some(tx) = response_tx {
+                                let _ = tx.send(Ok(()));
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(tx) = response_tx {
+                                let _ = tx.send(Err(error));
+                            }
+                        }
+                    }
                 }
                 Event::RequestPath { dest_hash } => {
                     if self.is_draining() {

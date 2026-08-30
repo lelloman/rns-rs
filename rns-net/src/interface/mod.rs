@@ -42,6 +42,95 @@ use crate::event::EventSender;
 use crate::ifac::IfacState;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
+/// Host callback used where every Reticulum underlay socket must be explicitly
+/// excluded from an application VPN, notably Android `VpnService.protect()`.
+pub trait SocketProtector: Send + Sync {
+    fn protect(&self, fd: std::os::unix::io::RawFd) -> io::Result<()>;
+}
+
+fn socket_protector_slot() -> &'static std::sync::RwLock<Option<Arc<dyn SocketProtector>>> {
+    static SLOT: std::sync::OnceLock<std::sync::RwLock<Option<Arc<dyn SocketProtector>>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// Exclusive process-scoped socket protection registration.
+///
+/// Android VPN services should run their private node in a dedicated process.
+/// A second registration fails instead of replacing a callback used by live
+/// sockets.
+pub struct SocketProtectorGuard {
+    protector: Arc<dyn SocketProtector>,
+}
+
+pub fn install_socket_protector(
+    protector: Arc<dyn SocketProtector>,
+) -> io::Result<SocketProtectorGuard> {
+    let mut slot = socket_protector_slot()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "an underlay socket protector is already installed",
+        ));
+    }
+    *slot = Some(Arc::clone(&protector));
+    Ok(SocketProtectorGuard { protector })
+}
+
+#[cfg(test)]
+mod socket_protector_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    struct CountingProtector(Arc<AtomicUsize>);
+    impl SocketProtector for CountingProtector {
+        fn protect(&self, _fd: std::os::unix::io::RawFd) -> io::Result<()> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn underlay_helper_invokes_installed_protector_without_mark() {
+        use std::os::fd::AsRawFd;
+        let _lock = TEST_LOCK.lock().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let _guard =
+            install_socket_protector(Arc::new(CountingProtector(Arc::clone(&calls)))).unwrap();
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        apply_underlay_mark(socket.as_raw_fd(), None).unwrap();
+        assert!(calls.load(Ordering::Relaxed) >= 1);
+    }
+}
+
+impl Drop for SocketProtectorGuard {
+    fn drop(&mut self) {
+        let mut slot = socket_protector_slot()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|installed| Arc::ptr_eq(installed, &self.protector))
+        {
+            *slot = None;
+        }
+    }
+}
+
+fn protect_underlay_socket(fd: std::os::unix::io::RawFd) -> io::Result<()> {
+    let protector = socket_protector_slot()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if let Some(protector) = protector {
+        protector.protect(fd)?;
+    }
+    Ok(())
+}
+
 /// Bind a socket to a specific network interface using `SO_BINDTODEVICE`.
 ///
 /// Requires `CAP_NET_RAW` or root on Linux.
@@ -77,6 +166,7 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// operation is not permitted.
 #[cfg(target_os = "linux")]
 pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
+    protect_underlay_socket(fd)?;
     let Some(mark) = mark else {
         return Ok(());
     };
@@ -96,7 +186,8 @@ pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> i
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn apply_underlay_mark(_fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
+pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
+    protect_underlay_socket(fd)?;
     if mark.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,

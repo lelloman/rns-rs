@@ -334,6 +334,7 @@ impl Driver {
         }
     }
 
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_runtime(&mut self, handle: BackboneRuntimeConfigHandle) {
         self.backbone_runtime
             .insert(handle.interface_name.clone(), handle);
@@ -1011,6 +1012,14 @@ impl Driver {
         entries
     }
 
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn list_backbone_peer_state(
+        &self,
+        _interface_name: Option<&str>,
+    ) -> Vec<BackbonePeerStateEntry> {
+        Vec::new()
+    }
+
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
         let mut entries: Vec<_> = self
@@ -1023,6 +1032,11 @@ impl Driver {
             .collect();
         entries.sort_by(|a, b| a.interface_name.cmp(&b.interface_name));
         entries
+    }
+
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
+        Vec::new()
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -1044,6 +1058,16 @@ impl Driver {
             .unwrap_or(false)
     }
 
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn clear_backbone_peer_state(
+        &mut self,
+        _interface_name: &str,
+        _peer_ip: std::net::IpAddr,
+    ) -> bool {
+        false
+    }
+
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn blacklist_backbone_peer(
         &mut self,
         interface_name: &str,
@@ -1098,6 +1122,18 @@ impl Driver {
             let _ = (peer_ip, capped_duration, penalty_level);
         }
         ok
+    }
+
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn blacklist_backbone_peer(
+        &mut self,
+        _interface_name: &str,
+        _peer_ip: std::net::IpAddr,
+        _duration: std::time::Duration,
+        _reason: String,
+        _penalty_level: u8,
+    ) -> bool {
+        false
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -1499,7 +1535,6 @@ impl Driver {
         }
     }
 
-    #[cfg(feature = "iface-backbone")]
     pub(crate) fn set_optional_usize(
         value: RuntimeConfigValue,
         key: &str,

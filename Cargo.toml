@@ -1,6 +1,6 @@
 [workspace]
-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-hooks", "rns-stats-hook", "rns-sentinel-hook", "rns-git"]
-default-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-git"]
+members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-hooks", "rns-stats-hook", "rns-sentinel-hook", "rns-git", "rns-tun", "rns-tun-android"]
+default-members = ["rns-crypto", "rns-core", "rns-net", "rns-cli", "rns-ctl", "rns-server", "rns-git", "rns-tun"]
 exclude = ["rns-esp32", "vendor/maybe-async-cfg"]
 resolver = "2"
 
@@ -15,8 +15,9 @@ authors = ["rns-rs contributors"]
 [workspace.dependencies]
 rns-crypto = { version = "0.1.9", path = "rns-crypto" }
 rns-core = { version = "0.1.16", path = "rns-core" }
-rns-net = { version = "0.7.0", path = "rns-net" }
+rns-net = { version = "0.7.0", path = "rns-net", default-features = false }
 rns-hooks = { version = "0.1.9", path = "rns-hooks", default-features = false }
+rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 
 # Compile crypto crate with optimizations even in debug/test builds.
 # Helps curve25519-dalek performance in debug mode.

@@ -1,0 +1,16 @@
+[package]
+name = "rns-tun-android"
+description = "Android JNI host boundary for rns-tun"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rns-tun = { workspace = true, features = ["android-node"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
