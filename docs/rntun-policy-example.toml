@@ -1,0 +1,14 @@
+[gateway]
+address = "10.77.0.1/24"
+
+[clients.00112233445566778899aabbccddeeff]
+enabled = true
+address = "10.77.0.2"
+allow_routes = ["10.20.0.0/16"]
+allow_internet = false
+allow_peers = []
+idle_timeout_seconds = 900
+
+# Full tunnel requires both the default route and the explicit internet grant:
+# allow_routes = ["0.0.0.0/0"]
+# allow_internet = true

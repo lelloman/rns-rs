@@ -2389,6 +2389,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rns-tun"
+version = "0.1.0"
+dependencies = [
+ "ctrlc",
+ "env_logger",
+ "libc",
+ "log",
+ "rns-core",
+ "rns-crypto",
+ "rns-net",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "rns-tun-android"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rns-tun",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rsqlite-vfs"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

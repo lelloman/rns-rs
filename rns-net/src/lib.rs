@@ -53,11 +53,11 @@ pub use driver::BackbonePeerPoolSettings;
 pub use driver::{AnnounceRateDefaults, Callbacks};
 pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
-    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat, TrafficDetail,
+    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse,
+    LinkDatagramError, LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry,
+    QueryRequest, QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat, TrafficDetail,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]
@@ -99,6 +99,7 @@ pub use interface::weave::{
     parse_device_frame as parse_weave_device_frame, WdclFrame, WeaveConfig, WeaveFactory,
     WeaveInput, WeaveLogFrame, WeavePeerState, WeaveState,
 };
+pub use interface::{install_socket_protector, SocketProtector, SocketProtectorGuard};
 pub use interface::{
     InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
 };

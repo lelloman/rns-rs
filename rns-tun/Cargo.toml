@@ -1,0 +1,51 @@
+[package]
+name = "rns-tun"
+description = "Authenticated IPv4 tunnelling over Reticulum"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+publish = false
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["linux-cli", "node-standard"]
+linux-cli = ["dep:ctrlc", "dep:env_logger"]
+node-standard = [
+    "rns-net/iface-tcp",
+    "rns-net/iface-udp",
+    "rns-net/iface-auto",
+    "rns-net/iface-serial",
+    "rns-net/iface-kiss",
+    "rns-net/iface-ax25-kiss",
+    "rns-net/iface-rnode",
+    "rns-net/iface-backbone",
+    "rns-net/iface-weave",
+    "rns-net/iface-pipe",
+    "rns-net/iface-i2p",
+]
+android-node = [
+    "rns-net/iface-tcp",
+    "rns-net/iface-udp",
+    "rns-net/iface-auto",
+]
+
+[dependencies]
+rns-core.workspace = true
+rns-crypto.workspace = true
+rns-net = { workspace = true, default-features = false }
+log = "0.4"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+ctrlc = { version = "3", optional = true }
+env_logger = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "rntun"
+path = "src/bin/rntun.rs"
+required-features = ["linux-cli"]

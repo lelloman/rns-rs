@@ -24,6 +24,41 @@ pub type ResponseRequestHandler =
 pub type DeferredRequestHandler =
     dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&RequestRemoteIdentity>) + Send;
 
+/// Why a best-effort link datagram could not be admitted by the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkDatagramError {
+    DriverQueueFull,
+    DriverStopped,
+    AdmissionTimedOut,
+    LinkNotFound,
+    LinkNotActive,
+    PayloadTooLarge { maximum: usize, actual: usize },
+    EncryptionFailed,
+    PacketEncodingFailed,
+}
+
+impl fmt::Display for LinkDatagramError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DriverQueueFull => write!(f, "driver queue is full"),
+            Self::DriverStopped => write!(f, "driver has stopped"),
+            Self::AdmissionTimedOut => write!(f, "driver admission timed out"),
+            Self::LinkNotFound => write!(f, "link was not found"),
+            Self::LinkNotActive => write!(f, "link is not active"),
+            Self::PayloadTooLarge { maximum, actual } => {
+                write!(
+                    f,
+                    "payload is too large ({actual} bytes, maximum {maximum})"
+                )
+            }
+            Self::EncryptionFailed => write!(f, "link encryption failed"),
+            Self::PacketEncodingFailed => write!(f, "link packet encoding failed"),
+        }
+    }
+}
+
+impl std::error::Error for LinkDatagramError {}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InterfaceTelemetry {
     pub cpu_load: Option<f64>,
@@ -294,6 +329,8 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         data: Vec<u8>,
         context: u8,
+        /// Present when the caller needs explicit driver-level admission.
+        response_tx: Option<mpsc::Sender<Result<(), LinkDatagramError>>>,
     },
     /// Request a path to a destination from the network.
     RequestPath { dest_hash: [u8; 16] },
@@ -864,6 +901,8 @@ pub struct LinkInfoEntry {
     pub remote_identity: Option<[u8; 16]>,
     pub rtt: Option<f64>,
     pub expected_hops: u8,
+    /// Maximum plaintext bytes accepted by one direct Link data packet.
+    pub mdu: usize,
     pub tx_packets: u64,
     pub rx_packets: u64,
     pub tx_bytes: u64,
@@ -1107,6 +1146,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 link_id,
                 data,
                 context,
+                ..
             } => f
                 .debug_struct("SendOnLink")
                 .field("link_id", link_id)
