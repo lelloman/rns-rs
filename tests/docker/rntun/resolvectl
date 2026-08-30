@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Minimal deterministic systemd-resolved facade for the disposable E2E client.
+# It records per-link state so rntun exercises its real resolver command path
+# without requiring systemd as PID 1 inside the test container.
+set -euo pipefail
+
+STATE_DIR=/run/rntun-resolved
+LOG_FILE=${STATE_DIR}/commands.log
+mkdir -p "$STATE_DIR"
+printf '%s\n' "$*" >> "$LOG_FILE"
+
+command=${1:-}
+shift || true
+
+if [[ "${RNTUN_TEST_RESOLVECTL_FAIL:-}" == "$command" ]]; then
+  echo "injected resolvectl ${command} failure" >&2
+  exit 1
+fi
+
+case "$command" in
+  dns)
+    interface=${1:?missing interface}
+    shift
+    printf 'DNS Servers: %s\n' "$*" > "${STATE_DIR}/${interface}"
+    ;;
+  domain)
+    interface=${1:?missing interface}
+    domain=${2:?missing domain}
+    printf 'DNS Domain: %s\n' "$domain" >> "${STATE_DIR}/${interface}"
+    ;;
+  status)
+    interface=${1:?missing interface}
+    [[ -f "${STATE_DIR}/${interface}" ]]
+    cat "${STATE_DIR}/${interface}"
+    ;;
+  revert)
+    interface=${1:?missing interface}
+    rm -f "${STATE_DIR}/${interface}"
+    ;;
+  flush-caches)
+    ;;
+  *)
+    echo "unsupported resolvectl test command: ${command}" >&2
+    exit 2
+    ;;
+esac

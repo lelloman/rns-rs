@@ -1,0 +1,18 @@
+version = 1
+state_dir = "/data/client-split"
+node_config_dir = "/etc/rntun/node"
+underlay_mark = 21076
+status_socket = "/run/rntun/client-split.sock"
+
+[client]
+identity_file = "/data/client_identity"
+allowed_routes = ["198.18.0.0/24"]
+requested_routes = ["198.18.0.0/24"]
+allow_default_route = false
+allowed_dns = []
+tun_name = "rntun-split"
+tun_mtu = 1280
+routing_table = 21076
+physical_table = 254
+underlay_rule_priority = 100
+tunnel_rule_priority = 110

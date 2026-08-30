@@ -450,11 +450,15 @@ encrypted QR/file transfers, and redacted local diagnostics. Android underlay
 sockets fail closed through an exclusive host `VpnService.protect()` callback
 installed in `rns-net`.
 
-This is not yet a release-complete claim. Linux network-namespace acceptance,
-forced-crash reconciliation tests, DNS/IPv6 leak tests, constrained-link MTU
-benchmarks, fuzzing, and an instrumented Android `VpnService` packet-exchange
-test remain. JVM profile tests and host Rust/JNI tests exist; the Gradle app
-compile is exercised locally and CI builds the four Android ABIs.
+This is not yet a release-complete claim. A privileged Docker acceptance suite
+now exercises Linux split and full tunnels over a private Reticulum TCP
+underlay, routed/NAT packet exchange, hard-coded DNS traffic, resolver selection,
+IPv6 blocking, Link-loss fail-closed behavior, automatic reconnect, orderly
+teardown, forced-crash reconciliation, and partial-setup rollback. Constrained-
+link MTU benchmarks, fuzzing, a real systemd-resolved host test, and an
+instrumented Android `VpnService` packet-exchange test remain. JVM profile tests
+and host Rust/JNI tests exist; the Gradle app compile is exercised locally and
+CI builds the four Android ABIs.
 
 ## Open design items
 
@@ -736,8 +740,9 @@ Resolution gate: before Phase 4 reload implementation.
 
 ### O-13: route ownership, crash recovery, and reconciliation
 
-Status: implemented for exact-operation journaling; namespace acceptance still
-needs to validate reconciliation against externally changed state.
+Status: implemented for exact-operation journaling and crash reconciliation;
+ownership conflicts with externally replaced objects still need acceptance
+coverage.
 
 Recording routes in process memory supports orderly teardown but cannot clean up
 after `SIGKILL`, a crash, or power loss. Decide how routes and related network
@@ -748,23 +753,24 @@ administrator or process now owns.
 Decision in part recorded 2026-08-30: Linux full-tunnel setup writes a durable
 ownership journal covering its routing rules and tables, unreachable defaults,
 IPv6 block, TUN metadata, and `systemd-resolved` link settings. The exact journal
-schema, object tagging, safe ownership checks, and reconciliation algorithm
-remain unresolved under this item.
+schema and reconciliation behavior are recorded below; stronger kernel-level
+object tagging remains a possible future hardening.
 
 Implementation decision recorded 2026-08-30: schema 1 stores the owner PID,
 TUN name, and the exact inverse argument vector after every successful mutation.
-The mode-0600 file is atomically replaced and fsynced. Normal teardown and the
-explicit `cleanup` command replay inverses in reverse order; cleanup refuses to
-run while a different owning PID is alive, retains the journal if any inverse
-fails, and never flushes an entire routing table. Startup refuses to overwrite
-an existing journal. Privileged tests must still prove behavior when an
-administrator replaces an otherwise identical object after a crash.
+The mode-0600 file is atomically replaced and fsynced. Normal teardown, startup,
+and the explicit `cleanup` command replay inverses in reverse order; cleanup
+refuses to run while a different owning PID is alive, accepts only narrowly
+classified already-absent `ip` objects, retains the journal on any other inverse
+failure, and never flushes an entire routing table. The privileged Docker suite
+proves forced-client-death reconciliation. Tests must still prove behavior when
+an administrator replaces an otherwise identical object after a crash.
 
 Resolution gate: before Phase 3 Linux acceptance tests are finalized.
 
 ### O-14: Linux privilege and configuration mechanism
 
-Status: implemented provisionally; privileged acceptance remains. Linux uses
+Status: implemented and covered by privileged Docker acceptance. Linux uses
 direct, argument-vector `ip` and `resolvectl` execution without a shell. It
 supports opening `/dev/net/tun` or taking/duplicating an inherited descriptor;
 the process configures either form. Deployments require access to the TUN
@@ -843,8 +849,9 @@ all are required or explicitly waived with rationale before Phase 6 exits.
 
 ### O-19: full-tunnel DNS and fallback protection
 
-Status: resolved; Linux implementation and tests remain Phase 3 work and Android
-host implementation and tests remain Phase 5 work.
+Status: resolved and implemented on Linux with privileged Docker acceptance;
+validation against a real systemd-resolved host remains. Android host
+instrumentation remains Phase 5 work.
 
 Application DNS can escape a nominal IPv4 full tunnel through retained resolver
 configuration, a physical-interface-specific route, reconnect fallback, or the
@@ -874,6 +881,14 @@ Resolution gate: before claiming full-tunnel support on either platform. Tests
 must cover hard-coded IPv4 DNS, retained physical DNS, Link loss and reconnect,
 IPv6 DNS and general IPv6 bypass, setup failure, orderly restoration, and stale
 state reconciliation.
+
+Linux coverage recorded 2026-08-30: `tests/docker/rntun` exercises hard-coded
+DNS-address delivery over the TUN, approved resolver and `~.` selection through
+a deterministic `resolvectl` facade, marked underlay preservation, unmarked IPv4
+and IPv6 fail-closed behavior during Link loss, automatic reconnect, setup
+rollback, orderly restoration, and forced-crash reconciliation. A host test with
+real systemd-resolved and a pre-existing physical-link resolver is still
+required before treating resolver-daemon integration as release-complete.
 
 ## Implementation phases
 

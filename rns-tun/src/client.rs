@@ -84,6 +84,7 @@ pub fn run_linux_client(
         client.tunnel_rule_priority,
         config.state_dir.join("linux-ownership.json"),
     )?;
+    configurator.cleanup_stale()?;
     let (mut device, applied) = configurator.apply(&tunnel_config)?;
     let result = (|| {
         let ready = session

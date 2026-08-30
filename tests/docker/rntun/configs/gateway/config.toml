@@ -1,0 +1,14 @@
+version = 1
+state_dir = "/data/gateway"
+node_config_dir = "/etc/rntun/node"
+underlay_mark = 21076
+status_socket = "/run/rntun/gateway.sock"
+
+[gateway]
+address = "10.77.0.1/24"
+policy_file = "/data/gateway-policy.toml"
+dns_servers = ["198.18.0.53"]
+tun_name = "rntung0"
+announce_interval_seconds = 5
+max_pending_links = 16
+max_active_sessions = 8
