@@ -23,7 +23,10 @@ pub enum NodeEvent {
         link_id: [u8; 16],
         initiator: bool,
     },
-    LinkClosed([u8; 16]),
+    LinkClosed {
+        link_id: [u8; 16],
+        reason: Option<rns_core::link::TeardownReason>,
+    },
     RemoteIdentified {
         link_id: [u8; 16],
         identity: [u8; 16],
@@ -65,8 +68,11 @@ impl Callbacks for NodeCallbacks {
             initiator,
         });
     }
-    fn on_link_closed(&mut self, link_id: LinkId, _: Option<rns_core::link::TeardownReason>) {
-        self.emit(NodeEvent::LinkClosed(link_id.0));
+    fn on_link_closed(&mut self, link_id: LinkId, reason: Option<rns_core::link::TeardownReason>) {
+        self.emit(NodeEvent::LinkClosed {
+            link_id: link_id.0,
+            reason,
+        });
     }
     fn on_remote_identified(&mut self, link_id: LinkId, identity: IdentityHash, _: [u8; 64]) {
         self.emit(NodeEvent::RemoteIdentified {
@@ -155,12 +161,39 @@ impl PrivateNode {
     }
 
     pub fn connect(&self, destination: [u8; 16], timeout: Duration) -> io::Result<[u8; 16]> {
+        self.connect_with_cancel(destination, timeout, || false)
+    }
+
+    /// Establish and identify a Link while periodically checking cancellation.
+    /// This is used by embedded hosts whose service lifecycle must not wait for
+    /// the complete path or Link timeout before shutting down.
+    pub fn connect_cancellable(
+        &self,
+        destination: [u8; 16],
+        timeout: Duration,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> io::Result<[u8; 16]> {
+        self.connect_with_cancel(destination, timeout, || cancelled.load(Ordering::Relaxed))
+    }
+
+    fn connect_with_cancel(
+        &self,
+        destination: [u8; 16],
+        timeout: Duration,
+        is_cancelled: impl Fn() -> bool,
+    ) -> io::Result<[u8; 16]> {
         let deadline = Instant::now() + timeout;
         let hash = DestHash(destination);
         if !self.node.has_path(&hash).map_err(node_error)? {
             self.node.request_path(&hash).map_err(node_error)?;
         }
         while !self.node.has_path(&hash).map_err(node_error)? {
+            if is_cancelled() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Link setup cancelled",
+                ));
+            }
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -183,19 +216,29 @@ impl PrivateNode {
             .create_link(destination, signature_public)
             .map_err(node_error)?;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            if is_cancelled() {
+                let _ = self.node.teardown_link(link_id);
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Link setup cancelled",
+                ));
+            }
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100));
             match self.events.recv_timeout(remaining) {
                 Ok(NodeEvent::LinkEstablished {
                     link_id: id,
                     initiator: true,
                 }) if id == link_id => break,
-                Ok(NodeEvent::LinkClosed(id)) if id == link_id => {
+                Ok(NodeEvent::LinkClosed { link_id: id, .. }) if id == link_id => {
                     return Err(io::Error::new(
                         io::ErrorKind::ConnectionAborted,
                         "link closed during setup",
                     ));
                 }
                 Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 Err(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,

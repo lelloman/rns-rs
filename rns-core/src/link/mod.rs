@@ -39,6 +39,7 @@ pub struct LinkEngine {
 
     // Ephemeral keys
     prv: X25519PrivateKey,
+    sig_prv: Ed25519PrivateKey,
 
     // Peer keys
     peer_pub_bytes: Option<[u8; 32]>,
@@ -106,6 +107,7 @@ impl LinkEngine {
             is_initiator: true,
             mode,
             prv,
+            sig_prv,
             peer_pub_bytes: None,
             peer_sig_pub_bytes: None,
             derived_key: None,
@@ -198,6 +200,7 @@ impl LinkEngine {
             is_initiator: false,
             mode,
             prv,
+            sig_prv: Ed25519PrivateKey::from_bytes(&owner_sig_prv.private_bytes()),
             peer_pub_bytes: Some(peer_pub),
             peer_sig_pub_bytes: Some(peer_sig_pub),
             derived_key: Some(derived_key),
@@ -386,6 +389,18 @@ impl LinkEngine {
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, LinkError> {
         let token = self.token.as_ref().ok_or(LinkError::NoSessionKey)?;
         link_decrypt(token, ciphertext)
+    }
+
+    /// Sign an explicit delivery proof for a packet sent over this Link.
+    pub fn sign_packet_hash(&self, packet_hash: &[u8; 32]) -> [u8; 64] {
+        self.sig_prv.sign(packet_hash)
+    }
+
+    /// Validate a delivery proof using the remote endpoint's Link signing key.
+    pub fn validate_packet_proof(&self, packet_hash: &[u8; 32], signature: &[u8; 64]) -> bool {
+        self.peer_sig_pub_bytes
+            .map(|bytes| Ed25519PublicKey::from_bytes(&bytes).verify(signature, packet_hash))
+            .unwrap_or(false)
     }
 
     /// Build LINKIDENTIFY data (encrypted).
@@ -1220,6 +1235,21 @@ mod tests {
         initiator.record_outbound(now - keepalive - 0.1, false);
 
         assert!(!initiator.should_reply_keepalive(&[0xff], now));
+    }
+
+    #[test]
+    fn packet_delivery_proofs_are_bidirectional_and_peer_authenticated() {
+        let (initiator, responder, _) = active_link_pair();
+        let packet_hash = [0x42; 32];
+
+        let initiator_proof = initiator.sign_packet_hash(&packet_hash);
+        assert!(responder.validate_packet_proof(&packet_hash, &initiator_proof));
+        assert!(!initiator.validate_packet_proof(&packet_hash, &initiator_proof));
+
+        let responder_proof = responder.sign_packet_hash(&packet_hash);
+        assert!(initiator.validate_packet_proof(&packet_hash, &responder_proof));
+        assert!(!responder.validate_packet_proof(&packet_hash, &responder_proof));
+        assert!(!initiator.validate_packet_proof(&[0x43; 32], &responder_proof));
     }
 
     #[test]

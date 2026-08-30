@@ -11,6 +11,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  android-client:
+    name: Android Client
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK and NDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Install Rust Android targets
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test and assemble Android client
+        working-directory: rns-tun-android
+        run: ./gradlew testDebugUnitTest assembleDebug
+
   python-tools:
     name: Python Tools
     runs-on: ubuntu-latest

@@ -140,6 +140,10 @@ pub fn run_linux_gateway(
                                     replacement.grant(&identity) == entry.grant.as_ref()
                                 });
                                 if !unchanged {
+                                    log::warn!(
+                                        "rntun gateway session revoked by policy reload: link={}",
+                                        hex(link_id)
+                                    );
                                     let _ = private.node.teardown_link(*link_id);
                                 }
                                 unchanged
@@ -210,6 +214,11 @@ pub fn run_linux_gateway(
                     link_id,
                     initiator: false,
                 }) => {
+                    log::info!(
+                        "rntun gateway Link established: link={} duplicate={}",
+                        hex(&link_id),
+                        sessions.contains_key(&link_id)
+                    );
                     if sessions.len() >= gateway.max_pending_links + gateway.max_active_sessions {
                         let _ = private.node.teardown_link(link_id);
                         continue;
@@ -242,6 +251,11 @@ pub fn run_linux_gateway(
                         continue;
                     };
                     let Some(grant) = policy.grant(&identity).cloned() else {
+                        log::warn!(
+                            "rntun gateway rejected unauthorized identity: link={} identity={}",
+                            hex(&link_id),
+                            hex(&identity)
+                        );
                         reject(&private, link_id, 1, "identity is not authorized");
                         sessions.remove(&link_id);
                         continue;
@@ -273,6 +287,10 @@ pub fn run_linux_gateway(
                     let message = match ControlMessage::decode(&payload) {
                         Ok(message) => message,
                         Err(_) => {
+                            log::warn!(
+                                "rntun gateway rejected malformed control message: link={}",
+                                hex(&link_id)
+                            );
                             reject(&private, link_id, 2, "malformed control message");
                             sessions.remove(&link_id);
                             continue;
@@ -304,11 +322,19 @@ pub fn run_linux_gateway(
                             if entry.machine.state() != GatewayState::Active
                                 && active_count >= gateway.max_active_sessions
                             {
+                                log::warn!(
+                                    "rntun gateway rejected session at capacity: link={}",
+                                    hex(&link_id)
+                                );
                                 reject(&private, link_id, 6, "gateway session capacity reached");
                                 sessions.remove(&link_id);
                                 continue;
                             }
                             if dns_servers != entry.advertised_dns {
+                                log::warn!(
+                                    "rntun gateway rejected DNS mismatch: link={}",
+                                    hex(&link_id)
+                                );
                                 reject(&private, link_id, 3, "DNS configuration mismatch");
                                 sessions.remove(&link_id);
                                 continue;
@@ -332,6 +358,10 @@ pub fn run_linux_gateway(
                             send_control(&private, link_id, ready)?;
                         }
                         ControlMessage::Close { session_epoch, .. } => {
+                            log::info!(
+                                "rntun gateway received session close: link={}",
+                                hex(&link_id)
+                            );
                             let _ = send_control(
                                 &private,
                                 link_id,
@@ -370,7 +400,8 @@ pub fn run_linux_gateway(
                         Err(error) => record_transport_error(&status, &error),
                     }
                 }
-                Ok(NodeEvent::LinkClosed(link_id)) => {
+                Ok(NodeEvent::LinkClosed { link_id, reason }) => {
+                    log::warn!("rntun gateway Link closed: reason={reason:?}");
                     sessions.remove(&link_id);
                 }
                 Ok(_) => {}
@@ -392,7 +423,12 @@ pub fn run_linux_gateway(
                             started.elapsed().saturating_sub(entry.last_activity)
                                 >= Duration::from_secs(seconds as u64)
                         });
-                if idle_expired || entry.machine.check_timeout(started.elapsed()).is_err() {
+                let protocol_expired = entry.machine.check_timeout(started.elapsed()).is_err();
+                if idle_expired || protocol_expired {
+                    log::warn!(
+                        "rntun gateway session expired: idle_expired={idle_expired} protocol_expired={protocol_expired} state={:?}",
+                        entry.machine.state()
+                    );
                     let _ = private.node.teardown_link(*link_id);
                     false
                 } else {

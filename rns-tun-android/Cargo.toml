@@ -11,6 +11,14 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rns-tun = { workspace = true, features = ["android-node"] }
+rns-crypto.workspace = true
+rns-net.workspace = true
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 libc = "0.2"
+jni = "0.21.1"
+argon2 = "0.5.3"
+chacha20poly1305 = "0.10.1"
+base64 = "0.22.1"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+zeroize = "1.8.2"

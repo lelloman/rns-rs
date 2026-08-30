@@ -21,6 +21,9 @@ intptr_t rntun_android_poll_event(uint64_t handle, char *output, uintptr_t capac
 int rntun_android_attach_tun_owned(uint64_t handle, int fd);
 /* Rust duplicates fd; the caller keeps ownership of the original. */
 int rntun_android_attach_tun_dup(uint64_t handle, int fd);
+/* Preferred API: confirms the exact applied address/routes/DNS/MTU as JSON. */
+int rntun_android_attach_tun_dup_v2(uint64_t handle, int fd,
+                                    const char *applied_json);
 bool rntun_android_destroy(uint64_t handle);
 
 #ifdef __cplusplus
