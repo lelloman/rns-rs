@@ -13,6 +13,8 @@ COPY rns-hooks rns-hooks
 COPY rns-stats-hook rns-stats-hook
 COPY rns-sentinel-hook rns-sentinel-hook
 COPY rns-server rns-server
+COPY rns-tun rns-tun
+COPY rns-tun-android rns-tun-android
 RUN for feature in $RNS_SERVER_FEATURES; do \
       case "$feature" in rns-hooks-wasm) rustup target add wasm32-unknown-unknown; exit 0 ;; esac; \
     done
