@@ -63,13 +63,29 @@ for trial in $(seq 1 5); do
   # explicit path request after the hub has converged.
   if ! poll_until "$src_port" "/api/identity/${dst_hash}" ".dest_hash" "$dst_hash" 5; then
     echo "  Trial ${trial}: requesting path discovery from source spoke..."
-    if ! request_path "$src_port" "$dst_hash" >/dev/null; then
-      fail_test "Trial ${trial}: source path request failed"
+    path_learned=false
+    path_request_failed=false
+    for attempt in $(seq 1 4); do
+      if ! request_path "$src_port" "$dst_hash" >/dev/null; then
+        fail_test "Trial ${trial}: source path request failed"
+        path_request_failed=true
+        break
+      fi
+
+      if poll_until "$src_port" "/api/paths?dest_hash=${dst_hash}" \
+        ".paths[]? | .hash" "$dst_hash" 15; then
+        path_learned=true
+        break
+      fi
+
+      echo "  Trial ${trial}: path discovery attempt ${attempt} did not converge; retrying..."
+    done
+
+    if [[ "$path_request_failed" == "true" ]]; then
       continue
     fi
 
-    if ! poll_until "$src_port" "/api/paths?dest_hash=${dst_hash}" \
-      ".paths[]? | .hash" "$dst_hash" 30; then
+    if [[ "$path_learned" != "true" ]]; then
       fail_test "Trial ${trial}: source did not learn destination path"
       continue
     fi
