@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "aes",
  "cbc",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "rns-ctl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "env_logger",
  "libc",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "rns-git"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "env_logger",
  "log",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "rns-hooks"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "criterion",
  "libloading 0.9.0",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bzip2",
  "criterion",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "rns-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "env_logger",
  "libc",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "rns-stats-hook"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rns-hooks",
  "rns-hooks-abi",

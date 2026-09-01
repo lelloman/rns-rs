@@ -30,7 +30,7 @@ rns-net.workspace = true
 rns-core.workspace = true
 rns-crypto.workspace = true
 rns-hooks-abi = { version = "0.1.5", path = "../rns-hooks/sdk/rns-hooks-abi", optional = true }
-rns-stats-hook = { version = "0.1.5", path = "../rns-stats-hook", default-features = false, optional = true }
+rns-stats-hook = { version = "0.1.6", path = "../rns-stats-hook", default-features = false, optional = true }
 rns-sentinel-hook = { version = "0.1.5", path = "../rns-sentinel-hook", default-features = false, optional = true }
 log = "0.4"
 env_logger = "0.11"

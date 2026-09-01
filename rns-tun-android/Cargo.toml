@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rns-tun = { workspace = true, features = ["android-node"] }
 rns-crypto.workspace = true
-rns-net = { version = "0.7.0", path = "../rns-net", default-features = false }
+rns-net = { version = "0.7.1", path = "../rns-net", default-features = false }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 libc = "0.2"
