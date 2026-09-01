@@ -33,7 +33,7 @@ android-node = [
 [dependencies]
 rns-core.workspace = true
 rns-crypto.workspace = true
-rns-net = { version = "0.7.0", path = "../rns-net", default-features = false }
+rns-net = { version = "0.7.1", path = "../rns-net", default-features = false }
 log = "0.4"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

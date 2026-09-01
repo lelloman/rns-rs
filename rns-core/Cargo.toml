@@ -13,7 +13,7 @@ default = ["std"]
 std = ["rns-crypto/std"]
 
 [dependencies]
-rns-crypto = { version = "0.1.9", path = "../rns-crypto", default-features = false }
+rns-crypto = { version = "0.1.10", path = "../rns-crypto", default-features = false }
 log = "0.4"
 libm = "0.2"
 
