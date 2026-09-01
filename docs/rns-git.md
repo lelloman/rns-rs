@@ -88,6 +88,8 @@ Important config paths:
   placed in the configured
   `templates_dir` with names such as `base.mu`, `repo.mu`, `blob.mu`,
   `releases.mu`, `release.mu`, `work.mu`, and `work_doc.mu`.
+  Use `no_ident.mu` to customize the page shown to unidentified requesters when
+  the null identity hash is listed in `blocked_identities`.
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
   `{NAVIGATION}`, and `{GEN_TIME}`. Set `unicode_icons = yes` in `[pages]` to
   add simple Unicode icons to page navigation.

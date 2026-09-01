@@ -45,6 +45,9 @@ const RCLR_VIEW: &str = "3b82f6";
 const RCLR_VIEW_G: &str = "13428A";
 const RCLR_DOWNLOAD: &str = "7831E0";
 const RCLR_DOWNLOAD_G: &str = "c5754d";
+const NULL_IDENTITY_HASH: [u8; 16] = [
+    0xd7, 0xdb, 0x22, 0xf6, 0x3b, 0x45, 0x3c, 0x23, 0xbb, 0x06, 0x88, 0xdd, 0xe5, 0x65, 0xb7, 0xc1,
+];
 
 const PAGE_PATHS: &[&str] = &[
     PATH_INDEX,
@@ -167,6 +170,16 @@ pub fn render_page(
     remote: Option<&[u8; 16]>,
 ) -> Result<String> {
     let vars = parse_page_vars(data)?;
+    if PAGE_PATHS.contains(&path)
+        && remote.is_none()
+        && config
+            .blocked_identities
+            .iter()
+            .any(|identity| identity == &NULL_IDENTITY_HASH)
+    {
+        record_page_view(path, config, &vars, remote);
+        return Ok(render_template(config, "no_ident", ""));
+    }
     let (template, content) = match path {
         PATH_INDEX => ("front", render_front_page(config, access, remote)?),
         PATH_GROUP => ("group", render_group_page(config, access, remote, &vars)?),
@@ -278,7 +291,16 @@ fn base_template(config: &ServerConfig) -> String {
 }
 
 fn page_template(config: &ServerConfig, template: &str) -> String {
-    load_template(config, template).unwrap_or_else(|| "{PAGE_CONTENT}".to_string())
+    load_template(config, template).unwrap_or_else(|| default_page_template(template).to_string())
+}
+
+fn default_page_template(template: &str) -> &'static str {
+    match template {
+        "no_ident" => {
+            ">>No Identity\n\nThis page requires identification, and none was received.\n"
+        }
+        _ => "{PAGE_CONTENT}",
+    }
 }
 
 fn load_template(config: &ServerConfig, template: &str) -> Option<String> {
@@ -3641,6 +3663,67 @@ mod tests {
         assert!(repo.contains(env!("CARGO_PKG_VERSION")));
         assert!(repo.contains("0ms"));
         assert!(!repo.ends_with("   \n"));
+    }
+
+    #[test]
+    fn blocked_unidentified_requests_use_no_ident_page_for_every_page_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.blocked_identities.push(NULL_IDENTITY_HASH);
+        let access = access(&config);
+
+        for path in PAGE_PATHS {
+            let page = render_page(path, &config, &access, &page_request(&[]), None).unwrap();
+            assert!(
+                page.contains(
+                    ">>No Identity\n\nThis page requires identification, and none was received."
+                ),
+                "{path} did not render the no-ident page: {page}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_ident_page_requires_both_missing_identity_and_blocked_null_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        let access = access(&config);
+
+        let allowed_unidentified =
+            render_page(PATH_INDEX, &config, &access, &page_request(&[]), None).unwrap();
+        assert!(!allowed_unidentified.contains(">>No Identity"));
+
+        config.blocked_identities.push(NULL_IDENTITY_HASH);
+        let identified = [0x42; 16];
+        let allowed_identified = render_page(
+            PATH_INDEX,
+            &config,
+            &access,
+            &page_request(&[]),
+            Some(&identified),
+        )
+        .unwrap();
+        assert!(!allowed_identified.contains(">>No Identity"));
+    }
+
+    #[test]
+    fn custom_no_ident_template_overrides_the_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        config.blocked_identities.push(NULL_IDENTITY_HASH);
+        fs::create_dir_all(&config.templates_dir).unwrap();
+        fs::write(
+            config.templates_dir.join("no_ident.mu"),
+            ">>Identify First\n\nCustom unidentified response for {NODE_NAME}.\n",
+        )
+        .unwrap();
+        let access = access(&config);
+
+        let page = render_page(PATH_INDEX, &config, &access, &page_request(&[]), None).unwrap();
+
+        assert!(page.contains(">>Identify First"));
+        assert!(page.contains("Custom unidentified response for Test Git Node."));
+        assert!(!page.contains(">>No Identity"));
     }
 
     #[test]
