@@ -40,10 +40,17 @@ pub fn escape(data: &[u8]) -> Vec<u8> {
 
 /// Wrap data in HDLC frame: [FLAG] + escape(data) + [FLAG].
 pub fn frame(data: &[u8]) -> Vec<u8> {
-    let escaped = escape(data);
     let mut out = Vec::with_capacity(framed_len(data));
     out.push(FLAG);
-    out.extend_from_slice(&escaped);
+    for &byte in data {
+        match byte {
+            ESC | FLAG => {
+                out.push(ESC);
+                out.push(byte ^ ESC_MASK);
+            }
+            _ => out.push(byte),
+        }
+    }
     out.push(FLAG);
     out
 }
@@ -234,6 +241,20 @@ mod tests {
         assert_eq!(framed[0], FLAG);
         assert_eq!(*framed.last().unwrap(), FLAG);
         assert_eq!(&framed[1..framed.len() - 1], &escape(data));
+    }
+
+    #[test]
+    fn canonical_frame_matches_wrapped_escape_for_every_byte() {
+        let data: Vec<u8> = (0..=u8::MAX).collect();
+        let mut expected = Vec::with_capacity(escape(&data).len() + 2);
+        expected.push(FLAG);
+        expected.extend_from_slice(&escape(&data));
+        expected.push(FLAG);
+
+        let framed = frame(&data);
+
+        assert_eq!(framed, expected);
+        assert_eq!(framed.capacity(), framed.len());
     }
 
     #[test]
