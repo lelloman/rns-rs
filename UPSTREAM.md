@@ -10,25 +10,26 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.5.2`
 - Version metadata commit: `943771a3f9cf2318401aa469fa42093e01b2d126`
-- Normative commit: `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6`
-- Commit date: `2026-08-29 04:16:13 +0200`
-- Subject: `Prepare release`
+- Normative commit: `3bc149e3d587695f52e695f18edb11751b21c005`
+- Commit date: `2026-09-01 17:05:28 +0200`
+- Subject: `Added no_ident template support to rngit`
 
-The normative baseline is the tagged Reticulum 1.5.2 release accepted on
-2026-08-29. Canonical rgit and the GitHub mirror agreed at the exact target,
-whose `RNS` tree is `926167c7552b5bb538ff46cdd19b3ee2d16827b3` and root
-tree is `c2471478c17f2723a7dd6eabd0b85942c9402baf`. Exact-target packet,
-link, Resource, and utility interoperability passed before promotion, and the
-CI interop matrix is pinned to the same commit and `RNS` tree. Historical
-conformance fixtures retain their recorded source provenance.
+The normative baseline is the canonical rgit development tip accepted on
+2026-09-01 while retaining Reticulum version 1.5.2. Its `RNS` tree is
+`7ec05287f5a6d9a476d3aba3aaf5789dd5766011` and root tree is
+`56c3051a72f953fd55f90e09c28ff33c09e1f002`. Exact-target packet, link,
+Resource, and utility interoperability passed before promotion. GitHub still
+points at the preceding signed 1.5.2 release, so the GitHub-backed CI interop
+matrix remains pinned to that fetchable target until the mirror catches up.
+Historical conformance fixtures retain their recorded source provenance.
 
 The current disposition and acceptance record is in
-[`docs/upstream-parity/reticulum-1.5.2-parity.md`](docs/upstream-parity/reticulum-1.5.2-parity.md),
+[`docs/upstream-parity/reticulum-1.5.2-rgit-parity.md`](docs/upstream-parity/reticulum-1.5.2-rgit-parity.md),
 with the detailed audit in
-[`docs/upstream-parity/reticulum-1.5.2-audit.md`](docs/upstream-parity/reticulum-1.5.2-audit.md).
-The hook-enabled host release build and dual-VPS daily smoke passed. The Docker
-topology matrix, local ARMv7 cross-build, and physical Weave HIL were not rerun
-for this promotion and are explicitly unclaimed.
+[`docs/upstream-parity/reticulum-1.5.2-rgit-audit.md`](docs/upstream-parity/reticulum-1.5.2-rgit-audit.md).
+The hook-enabled host release build, ARMv7 cross-builds, complete Docker matrix,
+and dual-VPS daily smoke passed. Physical Weave HIL was not available and is
+explicitly unclaimed.
 
 ## Completed 1.5.0 rgit Development Porting Queue
 
