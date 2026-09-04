@@ -12,6 +12,7 @@ use rns_net::{RpcAddr, RpcClient};
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
+const FILE_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 static HARNESS_START_LOCK: Mutex<()> = Mutex::new(());
 
 struct TcpPortReservation {
@@ -509,18 +510,34 @@ fn patterned_file(path: &Path, size: usize) -> Vec<u8> {
 }
 
 fn assert_file_contents(path: &Path, expected: &[u8]) {
-    let actual = fs::read(path).unwrap();
-    let first_difference = actual
-        .iter()
-        .zip(expected)
-        .position(|(actual, expected)| actual != expected);
-    assert!(
-        actual == expected,
-        "file contents differ: actual length {}, expected length {}, first differing byte {:?}",
-        actual.len(),
-        expected.len(),
-        first_difference
-    );
+    // A sender can observe Resource completion immediately before the receiver's
+    // event loop persists the completed temporary file. Allow that asynchronous
+    // handoff to settle instead of racing the listener under CI load.
+    let deadline = Instant::now() + FILE_SETTLE_TIMEOUT;
+    loop {
+        match fs::read(path) {
+            Ok(actual) if actual == expected => return,
+            result if Instant::now() >= deadline => match result {
+                Ok(actual) => {
+                    let first_difference = actual
+                        .iter()
+                        .zip(expected)
+                        .position(|(actual, expected)| actual != expected);
+                    panic!(
+                        "file contents differ after waiting {FILE_SETTLE_TIMEOUT:?}: actual length {}, expected length {}, first differing byte {:?}",
+                        actual.len(),
+                        expected.len(),
+                        first_difference
+                    );
+                }
+                Err(error) => panic!(
+                    "{} did not become readable within {FILE_SETTLE_TIMEOUT:?}: {error}",
+                    path.display()
+                ),
+            },
+            _ => thread::sleep(Duration::from_millis(25)),
+        }
+    }
 }
 
 fn rncp_send(
