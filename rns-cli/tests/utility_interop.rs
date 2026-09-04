@@ -188,6 +188,7 @@ impl Harness {
     fn rust_command(&self, binary: &str, side: Side) -> Command {
         let executable = match binary {
             "rncp" => env!("CARGO_BIN_EXE_rncp"),
+            "rnsh" => env!("CARGO_BIN_EXE_rnsh"),
             "rnx" => env!("CARGO_BIN_EXE_rnx"),
             _ => panic!("unknown Rust utility {binary}"),
         };
@@ -330,6 +331,18 @@ impl Harness {
             Side::Listener => &self.listener_home,
         }
     }
+
+    fn rnsh_command(&self, side: Side, app_config: &Path, identity: &Path) -> Command {
+        let mut command = self.rust_command("rnsh", side);
+        command
+            .arg("--config")
+            .arg(app_config)
+            .arg("--rnsconfig")
+            .arg(self.config(side))
+            .arg("--identity")
+            .arg(identity);
+        command
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -443,8 +456,9 @@ fn run(mut command: Command) -> Output {
             let _ = child.kill();
             let output = child.wait_with_output().expect("collect timed-out output");
             panic!(
-                "{program} timed out:\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
+                "{program} timed out ({} stdout bytes):\nstdout prefix:\n{}\nstderr:\n{}",
+                output.stdout.len(),
+                String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(4096)]),
                 String::from_utf8_lossy(&output.stderr)
             );
         }
@@ -705,6 +719,86 @@ fn rust_rnx_executes_end_to_end() {
         "/usr/bin/seq 1 1000",
     );
     assert_large_rnx_response(&large, "Rust rnx Resource response");
+}
+
+#[test]
+fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
+    const OUTPUT_SIZE: usize = 16 * 1024;
+
+    let harness = Harness::start("rust-rnsh-backpressure");
+    let listener_identity = harness.path("rnsh-listener.identity");
+    let client_identity = harness.path("rnsh-client.identity");
+    let listener_app_config = harness.path("rnsh-listener");
+    let client_app_config = harness.path("rnsh-client");
+
+    let mut identity_command =
+        harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
+    identity_command.args(["--listen", "--print-identity"]);
+    let identity_output = run(identity_command);
+    assert_success(&identity_output, "print rnsh listener identity");
+    let destination = parse_destination(&identity_output);
+
+    let mut listener_command =
+        harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
+    listener_command.args([
+        "--verbose",
+        "--listen",
+        "--no-auth",
+        "--announce",
+        "0",
+        "--",
+        "/bin/sh",
+    ]);
+    let listener_log = harness.path("rnsh-listener.log");
+    let mut listener = spawn_logged(listener_command, &listener_log);
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        listener.assert_running("rnsh listener");
+        if fs::read_to_string(&listener_log)
+            .unwrap_or_default()
+            .contains("rnsh listening on")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "rnsh listener did not become ready:\n{}",
+            fs::read_to_string(&listener_log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    harness.wait_for_client_path(&destination, &listener);
+
+    let mut burst = harness.rnsh_command(Side::Client, &client_app_config, &client_identity);
+    burst.args([
+        &destination,
+        "--",
+        "/bin/sh",
+        "-c",
+        &format!("head -c {OUTPUT_SIZE} /dev/zero"),
+    ]);
+    let burst_output = run(burst);
+    assert_success_with_process(&burst_output, "rnsh burst output", &listener, &harness);
+    assert_eq!(burst_output.stdout.len(), OUTPUT_SIZE);
+    assert!(burst_output.stdout.iter().all(|byte| *byte == 0));
+    assert!(
+        fs::read_to_string(listener_app_config.join("logfile"))
+            .unwrap_or_default()
+            .contains("Channel send failed: NotReady"),
+        "burst did not exercise channel backpressure"
+    );
+    listener.assert_running("rnsh listener after burst output");
+
+    let mut followup = harness.rnsh_command(Side::Client, &client_app_config, &client_identity);
+    followup.args([&destination, "--", "/bin/printf", "rnsh-still-available"]);
+    let followup_output = run(followup);
+    assert_success_with_process(
+        &followup_output,
+        "rnsh follow-up session",
+        &listener,
+        &harness,
+    );
+    assert_eq!(followup_output.stdout, b"rnsh-still-available");
 }
 
 #[test]

@@ -10,7 +10,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use rns_core::buffer::StreamDataMessage;
@@ -46,8 +46,74 @@ const CHANNEL_PAYLOAD_MAX: usize =
     rns_core::constants::LINK_MDU - rns_core::constants::CHANNEL_ENVELOPE_OVERHEAD;
 const STREAM_CHUNK_MAX: usize = CHANNEL_PAYLOAD_MAX - 2;
 const MAX_DECOMPRESSED_STREAM_CHUNK: usize = 64 * 1024;
+const PROCESS_OUTPUT_BUFFER_MAX: usize = 1024 * 1024;
 
 static SIGWINCH_SEEN: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct OutputBudget {
+    state: Mutex<OutputBudgetState>,
+    available: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct OutputBudgetState {
+    buffered: usize,
+    closed: bool,
+}
+
+impl OutputBudget {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(OutputBudgetState::default()),
+            available: Condvar::new(),
+        }
+    }
+
+    fn reserve(&self, bytes: usize) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !state.closed && state.buffered.saturating_add(bytes) > PROCESS_OUTPUT_BUFFER_MAX {
+            state = self
+                .available
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        if state.closed {
+            return false;
+        }
+        state.buffered += bytes;
+        true
+    }
+
+    fn release(&self, bytes: usize) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.buffered = state.buffered.saturating_sub(bytes);
+        self.available.notify_all();
+    }
+
+    fn close(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.closed = true;
+        self.available.notify_all();
+    }
+
+    #[cfg(test)]
+    fn buffered(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .buffered
+    }
+}
 
 extern "C" fn sigwinch_handler(_: libc::c_int) {
     SIGWINCH_SEEN.store(true, Ordering::SeqCst);
@@ -900,6 +966,7 @@ enum RnshEvent {
         link_id: [u8; 16],
         stream_id: u16,
         data: Vec<u8>,
+        budget: Arc<OutputBudget>,
     },
     ProcessExited {
         link_id: [u8; 16],
@@ -993,6 +1060,7 @@ struct ChildProcess {
     stdin_fd: Option<RawFd>,
     stdout_fd: Option<RawFd>,
     stderr_fd: Option<RawFd>,
+    output_budget: Arc<OutputBudget>,
 }
 
 impl ChildProcess {
@@ -1115,12 +1183,25 @@ impl ChildProcess {
             None
         };
 
+        let output_budget = Arc::new(OutputBudget::new());
         let mut reader_handles = Vec::new();
         if let Some(fd) = stdout_fd {
-            reader_handles.push(spawn_reader(link_id, STREAM_STDOUT, fd, event_tx.clone()));
+            reader_handles.push(spawn_reader(
+                link_id,
+                STREAM_STDOUT,
+                fd,
+                event_tx.clone(),
+                output_budget.clone(),
+            ));
         }
         if let Some(fd) = stderr_fd {
-            reader_handles.push(spawn_reader(link_id, STREAM_STDERR, fd, event_tx.clone()));
+            reader_handles.push(spawn_reader(
+                link_id,
+                STREAM_STDERR,
+                fd,
+                event_tx.clone(),
+                output_budget.clone(),
+            ));
         }
         spawn_waiter(link_id, pid, reader_handles, event_tx);
 
@@ -1129,6 +1210,7 @@ impl ChildProcess {
             stdin_fd: (parent_stdin >= 0).then_some(parent_stdin),
             stdout_fd,
             stderr_fd,
+            output_budget,
         })
     }
 
@@ -1176,6 +1258,7 @@ impl ChildProcess {
 
 impl Drop for ChildProcess {
     fn drop(&mut self) {
+        self.output_budget.close();
         close_unique(&[
             self.stdin_fd.take(),
             self.stdout_fd.take(),
@@ -1208,17 +1291,29 @@ fn spawn_reader(
     stream_id: u16,
     fd: RawFd,
     event_tx: mpsc::Sender<RnshEvent>,
+    output_budget: Arc<OutputBudget>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n > 0 {
-                let _ = event_tx.send(RnshEvent::ProcessOutput {
-                    link_id,
-                    stream_id,
-                    data: buf[..n as usize].to_vec(),
-                });
+                let bytes = n as usize;
+                if !output_budget.reserve(bytes) {
+                    break;
+                }
+                if event_tx
+                    .send(RnshEvent::ProcessOutput {
+                        link_id,
+                        stream_id,
+                        data: buf[..bytes].to_vec(),
+                        budget: output_budget.clone(),
+                    })
+                    .is_err()
+                {
+                    output_budget.release(bytes);
+                    break;
+                }
             } else {
                 break;
             }
@@ -1343,43 +1438,83 @@ enum ListenerState {
     Closed,
 }
 
-// Service queued output in batches so a slow session cannot monopolize
-// the listener loop. Like Python rnsh, keep pending output until it can be sent.
+// Service queued output in batches so a slow session cannot monopolize the
+// listener loop. Reader threads stop at the per-process budget until accepted
+// messages release capacity.
 const OUTPUT_SEND_BATCH: usize = 16;
 
 #[derive(Default)]
 struct PendingOutput {
-    messages: VecDeque<RnshMessage>,
+    messages: VecDeque<PendingMessage>,
+}
+
+struct PendingMessage {
+    message: RnshMessage,
+    reservation: Option<(Arc<OutputBudget>, usize)>,
+}
+
+impl PendingMessage {
+    fn control(message: RnshMessage) -> Self {
+        Self {
+            message,
+            reservation: None,
+        }
+    }
+}
+
+impl Drop for PendingMessage {
+    fn drop(&mut self) {
+        if let Some((budget, bytes)) = self.reservation.take() {
+            budget.release(bytes);
+        }
+    }
 }
 
 impl PendingOutput {
     fn stream(&mut self, stream_id: u16, data: &[u8], eof: bool) {
+        self.stream_inner(stream_id, data, eof, None);
+    }
+
+    fn reserved_stream(&mut self, stream_id: u16, data: &[u8], budget: Arc<OutputBudget>) {
+        self.stream_inner(stream_id, data, false, Some(budget));
+    }
+
+    fn stream_inner(
+        &mut self,
+        stream_id: u16,
+        data: &[u8],
+        eof: bool,
+        budget: Option<Arc<OutputBudget>>,
+    ) {
         for chunk in data.chunks(STREAM_CHUNK_MAX) {
-            self.messages
-                .push_back(RnshMessage::StreamData(StreamDataMessage::new(
+            self.messages.push_back(PendingMessage {
+                message: RnshMessage::StreamData(StreamDataMessage::new(
                     stream_id,
                     chunk.to_vec(),
                     false,
                     false,
-                )));
+                )),
+                reservation: budget.as_ref().map(|budget| (budget.clone(), chunk.len())),
+            });
         }
         if eof {
             self.messages
-                .push_back(RnshMessage::StreamData(StreamDataMessage::new(
-                    stream_id,
-                    Vec::new(),
-                    true,
-                    false,
+                .push_back(PendingMessage::control(RnshMessage::StreamData(
+                    StreamDataMessage::new(stream_id, Vec::new(), true, false),
                 )));
         }
     }
 
+    fn push_control(&mut self, message: RnshMessage) {
+        self.messages.push_back(PendingMessage::control(message));
+    }
+
     fn flush(&mut self, transport: &dyn RnshTransport, link_id: [u8; 16]) -> Result<(), RnshError> {
         for _ in 0..OUTPUT_SEND_BATCH {
-            let Some(message) = self.messages.front() else {
+            let Some(pending) = self.messages.front() else {
                 break;
             };
-            match send_message(transport, link_id, message) {
+            match send_message(transport, link_id, &pending.message) {
                 Ok(()) => {
                     self.messages.pop_front();
                 }
@@ -1659,14 +1794,19 @@ fn handle_listener_process_event(
             link_id,
             stream_id,
             data,
+            budget,
         } => {
             let Some(session) = sessions.get_mut(&link_id) else {
+                budget.release(data.len());
                 return;
             };
             if session.state != ListenerState::Running || session.process_exited {
+                budget.release(data.len());
                 return;
             }
-            session.pending_output.stream(stream_id, &data, false);
+            session
+                .pending_output
+                .reserved_stream(stream_id, &data, budget);
             link_id
         }
         RnshEvent::ProcessExited { link_id, code } => {
@@ -1683,8 +1823,7 @@ fn handle_listener_process_event(
             session.pending_output.stream(STREAM_STDOUT, &[], true);
             session
                 .pending_output
-                .messages
-                .push_back(RnshMessage::CommandExited(code));
+                .push_control(RnshMessage::CommandExited(code));
             link_id
         }
         RnshEvent::LinkClosed(link_id) => {
@@ -2225,7 +2364,6 @@ fn extract_sig_keys(identity: &Identity) -> Result<([u8; 32], [u8; 32]), RnshErr
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-    use std::sync::Mutex;
 
     const TEST_LINK: [u8; 16] = [0x42; 16];
     static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2333,10 +2471,17 @@ mod tests {
     }
 
     fn output_event(link_id: [u8; 16]) -> RnshEvent {
+        output_event_with_data(link_id, STREAM_STDOUT, b"hello".to_vec())
+    }
+
+    fn output_event_with_data(link_id: [u8; 16], stream_id: u16, data: Vec<u8>) -> RnshEvent {
+        let budget = Arc::new(OutputBudget::new());
+        assert!(budget.reserve(data.len()));
         RnshEvent::ProcessOutput {
             link_id,
-            stream_id: STREAM_STDOUT,
-            data: b"hello".to_vec(),
+            stream_id,
+            data,
+            budget,
         }
     }
 
@@ -2480,20 +2625,12 @@ mod tests {
         handle_listener_process_event(
             &fake,
             &mut sessions,
-            RnshEvent::ProcessOutput {
-                link_id: TEST_LINK,
-                stream_id: STREAM_STDOUT,
-                data: data.clone(),
-            },
+            output_event_with_data(TEST_LINK, STREAM_STDOUT, data.clone()),
         );
         handle_listener_process_event(
             &fake,
             &mut sessions,
-            RnshEvent::ProcessOutput {
-                link_id: TEST_LINK,
-                stream_id: STREAM_STDERR,
-                data: b"stderr tail".to_vec(),
-            },
+            output_event_with_data(TEST_LINK, STREAM_STDERR, b"stderr tail".to_vec()),
         );
         handle_listener_process_event(
             &fake,
@@ -2563,16 +2700,21 @@ mod tests {
         let fake = FakeTransport::default();
         *fake.window.lock().unwrap() = Some((TEST_LINK, rns_core::channel::Channel::new(2.0)));
         let mut sessions = HashMap::from([(TEST_LINK, running_session(TEST_LINK))]);
+        let data = vec![1; STREAM_CHUNK_MAX * 2];
+        let budget = Arc::new(OutputBudget::new());
+        assert!(budget.reserve(data.len()));
         handle_listener_process_event(
             &fake,
             &mut sessions,
             RnshEvent::ProcessOutput {
                 link_id: TEST_LINK,
                 stream_id: STREAM_STDOUT,
-                data: vec![1; STREAM_CHUNK_MAX * 2],
+                data,
+                budget: budget.clone(),
             },
         );
         assert!(!sessions[&TEST_LINK].pending_output.messages.is_empty());
+        assert!(budget.buffered() > 0);
         handle_listener_process_event(&fake, &mut sessions, RnshEvent::LinkClosed(TEST_LINK));
         handle_listener_process_event(
             &fake,
@@ -2585,43 +2727,87 @@ mod tests {
         flush_listener_output(&fake, &mut sessions);
         assert!(sessions.is_empty());
         assert_eq!(fake.sent_messages().len(), 1);
+        assert_eq!(budget.buffered(), 0);
     }
 
     #[test]
-    fn listener_keeps_large_output_queued_under_backpressure() {
-        let fake = FakeTransport::default();
-        *fake.window.lock().unwrap() = Some((TEST_LINK, rns_core::channel::Channel::new(2.0)));
-        let other = [0x43; 16];
-        let mut sessions = HashMap::from([
-            (TEST_LINK, running_session(TEST_LINK)),
-            (other, running_session(other)),
-        ]);
-        // Exceed both former queue cutoffs (1 MiB and 4096 messages).
-        handle_listener_process_event(
-            &fake,
-            &mut sessions,
-            RnshEvent::ProcessOutput {
-                link_id: TEST_LINK,
-                stream_id: STREAM_STDOUT,
-                data: vec![1; STREAM_CHUNK_MAX * 4097],
-            },
-        );
-        handle_listener_process_event(
-            &fake,
-            &mut sessions,
-            RnshEvent::ProcessExited {
-                link_id: TEST_LINK,
-                code: 17,
-            },
-        );
-        assert_eq!(sessions[&TEST_LINK].pending_output.messages.len(), 4098);
-        assert!(sessions[&TEST_LINK].process_exited);
-        assert!(fake.teardowns.lock().unwrap().is_empty());
-        handle_listener_process_event(&fake, &mut sessions, output_event(other));
-        flush_listener_output(&fake, &mut sessions);
-        assert_eq!(fake.sent_messages().len(), 2);
-        assert_eq!(fake.sent_messages()[1].0, other);
-        assert_eq!(sessions[&TEST_LINK].pending_output.messages.len(), 4098);
+    fn process_output_budget_blocks_and_resumes_producers() {
+        let budget = Arc::new(OutputBudget::new());
+        assert!(budget.reserve(PROCESS_OUTPUT_BUFFER_MAX));
+        let waiting_budget = budget.clone();
+        let (tx, rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let reserved = waiting_budget.reserve(1);
+            let _ = tx.send(reserved);
+        });
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        budget.release(1);
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        budget.close();
+        waiter.join().unwrap();
+    }
+
+    #[test]
+    fn process_output_budget_bounds_reader_events_and_allows_completion() {
+        const EXTRA_OUTPUT: usize = 8192;
+
+        let (tx, rx) = mpsc::channel();
+        let command = ExecuteCommand {
+            cmdline: Vec::new(),
+            pipe_stdin: true,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            term: None,
+            rows: None,
+            cols: None,
+            hpix: None,
+            vpix: None,
+        };
+        let process = ChildProcess::spawn(
+            TEST_LINK,
+            &[
+                "/bin/sh".into(),
+                "-c".into(),
+                format!(
+                    "head -c {} /dev/zero",
+                    PROCESS_OUTPUT_BUFFER_MAX + EXTRA_OUTPUT
+                ),
+            ],
+            &[],
+            &command,
+            tx,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process.output_budget.buffered() < PROCESS_OUTPUT_BUFFER_MAX
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(process.output_budget.buffered(), PROCESS_OUTPUT_BUFFER_MAX);
+
+        let mut received = 0;
+        let mut exit = None;
+        while exit.is_none() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(RnshEvent::ProcessOutput { data, budget, .. }) => {
+                    received += data.len();
+                    budget.release(data.len());
+                    assert!(process.output_budget.buffered() <= PROCESS_OUTPUT_BUFFER_MAX);
+                }
+                Ok(RnshEvent::ProcessExited { code, .. }) => exit = Some(code),
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert_eq!(received, PROCESS_OUTPUT_BUFFER_MAX + EXTRA_OUTPUT);
+        assert_eq!(exit, Some(0));
     }
 
     #[test]
