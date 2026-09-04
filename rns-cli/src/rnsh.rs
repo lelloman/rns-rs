@@ -3,7 +3,7 @@
 //! Protocol and behaviour are based on the first-party Python `rnsh` utility,
 //! which itself credits Aaron Heise's original `rnsh` program.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -19,7 +19,7 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::compressor::Bzip2Compressor;
 use rns_net::destination::Destination;
-use rns_net::{Callbacks, RnsNode, SendError};
+use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
 use crate::format::{prettyb256rep, prettyhexrep};
 
@@ -57,12 +57,19 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
 enum RnshError {
     Io(io::Error),
     Protocol(String),
+    Channel(ChannelSendError),
     Send,
 }
 
 impl From<io::Error> for RnshError {
     fn from(value: io::Error) -> Self {
         RnshError::Io(value)
+    }
+}
+
+impl From<ChannelSendError> for RnshError {
+    fn from(error: ChannelSendError) -> Self {
+        Self::Channel(error)
     }
 }
 
@@ -77,6 +84,7 @@ impl std::fmt::Display for RnshError {
         match self {
             RnshError::Io(err) => write!(f, "{err}"),
             RnshError::Protocol(err) => write!(f, "{err}"),
+            RnshError::Channel(error) => write!(f, "RNS channel send failed: {error}"),
             RnshError::Send => write!(f, "RNS send failed"),
         }
     }
@@ -970,7 +978,7 @@ trait RnshTransport {
 
 impl RnshTransport for RnsNode {
     fn send_rnsh_message(&self, link_id: [u8; 16], message: &RnshMessage) -> Result<(), RnshError> {
-        self.send_channel_message(link_id, message.msgtype(), message.pack())?;
+        self.try_send_channel_message(link_id, message.msgtype(), message.pack())?;
         Ok(())
     }
 
@@ -1010,8 +1018,8 @@ impl ChildProcess {
                     &mut master,
                     &mut child,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                 )
             };
             if rc != 0 {
@@ -1064,7 +1072,9 @@ impl ChildProcess {
                     } else {
                         2
                     };
-                    libc::ioctl(tty_fd, libc::TIOCSCTTY, 0);
+                    // The ioctl request type differs between Linux and macOS.
+                    #[allow(clippy::useless_conversion)]
+                    libc::ioctl(tty_fd, libc::TIOCSCTTY.into(), 0);
                 }
                 for fd in 3..1024 {
                     libc::close(fd);
@@ -1333,12 +1343,77 @@ enum ListenerState {
     Closed,
 }
 
+// Bound queued payloads per session, including empty/control messages. A slow
+// session is serviced in batches so it cannot monopolize the listener loop.
+const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_PENDING_OUTPUT_MESSAGES: usize = 4096;
+const OUTPUT_SEND_BATCH: usize = 16;
+
+#[derive(Default)]
+struct PendingOutput {
+    messages: VecDeque<RnshMessage>,
+    bytes: usize,
+}
+
+impl PendingOutput {
+    fn push(&mut self, message: RnshMessage) -> Result<(), RnshError> {
+        let bytes = message.pack().len();
+        if bytes > MAX_PENDING_OUTPUT_BYTES.saturating_sub(self.bytes)
+            || self.messages.len() >= MAX_PENDING_OUTPUT_MESSAGES
+        {
+            return Err(RnshError::Protocol("pending output limit exceeded".into()));
+        }
+        self.bytes += bytes;
+        self.messages.push_back(message);
+        Ok(())
+    }
+
+    fn stream(&mut self, stream_id: u16, data: &[u8], eof: bool) -> Result<(), RnshError> {
+        for chunk in data.chunks(STREAM_CHUNK_MAX) {
+            self.push(RnshMessage::StreamData(StreamDataMessage::new(
+                stream_id,
+                chunk.to_vec(),
+                false,
+                false,
+            )))?;
+        }
+        if eof {
+            self.push(RnshMessage::StreamData(StreamDataMessage::new(
+                stream_id,
+                Vec::new(),
+                true,
+                false,
+            )))?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, transport: &dyn RnshTransport, link_id: [u8; 16]) -> Result<(), RnshError> {
+        for _ in 0..OUTPUT_SEND_BATCH {
+            let Some(message) = self.messages.front() else {
+                break;
+            };
+            match send_message(transport, link_id, message) {
+                Ok(()) => {
+                    self.bytes -= message.pack().len();
+                    self.messages.pop_front();
+                }
+                Err(RnshError::Channel(ChannelSendError::NotReady)) => break,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
+
 struct ListenerSession {
     link_id: [u8; 16],
     state: ListenerState,
     remote_identity: Option<IdentityHash>,
     config: ListenerConfig,
     process: Option<ChildProcess>,
+    pending_output: PendingOutput,
+    process_exited: bool,
 }
 
 impl ListenerSession {
@@ -1354,6 +1429,8 @@ impl ListenerSession {
             remote_identity: None,
             config,
             process: None,
+            pending_output: PendingOutput::default(),
+            process_exited: false,
         }
     }
 
@@ -1533,7 +1610,118 @@ impl ListenerSession {
         if let Some(process) = &mut self.process {
             process.terminate();
         }
+        self.pending_output = PendingOutput::default();
         self.state = ListenerState::Closed;
+    }
+}
+
+fn close_listener_session(
+    transport: &dyn RnshTransport,
+    sessions: &mut HashMap<[u8; 16], ListenerSession>,
+    link_id: [u8; 16],
+) {
+    if let Some(mut session) = sessions.remove(&link_id) {
+        if let Some(process) = &mut session.process {
+            process.terminate();
+        }
+    }
+    let _ = transport.teardown_rnsh_link(link_id);
+}
+
+fn flush_listener_session(
+    transport: &dyn RnshTransport,
+    sessions: &mut HashMap<[u8; 16], ListenerSession>,
+    link_id: [u8; 16],
+) {
+    let Some(session) = sessions.get_mut(&link_id) else {
+        return;
+    };
+    if session.state != ListenerState::Running {
+        return;
+    }
+    if let Err(error) = session.pending_output.flush(transport, link_id) {
+        log::warn!(
+            "Closing rnsh session {} after output send failed: {error}",
+            prettyhexrep(&link_id)
+        );
+        close_listener_session(transport, sessions, link_id);
+    } else if session.process_exited && session.pending_output.messages.is_empty() {
+        // CommandExited was accepted after all output and EOF. The channel still
+        // owns in-flight frames; the initiator closes the link after receiving it.
+        sessions.remove(&link_id);
+    }
+}
+
+fn flush_listener_output(
+    transport: &dyn RnshTransport,
+    sessions: &mut HashMap<[u8; 16], ListenerSession>,
+) {
+    let links: Vec<_> = sessions.keys().copied().collect();
+    for link_id in links {
+        flush_listener_session(transport, sessions, link_id);
+    }
+}
+
+// Events can outlive a link. Keep unsent output on its session, and retry only
+// NotReady. Fatal errors and queue-limit violations remain session-local.
+fn handle_listener_process_event(
+    transport: &dyn RnshTransport,
+    sessions: &mut HashMap<[u8; 16], ListenerSession>,
+    event: RnshEvent,
+) {
+    let (link_id, result) = match event {
+        RnshEvent::ProcessOutput {
+            link_id,
+            stream_id,
+            data,
+        } => {
+            let Some(session) = sessions.get_mut(&link_id) else {
+                return;
+            };
+            if session.state != ListenerState::Running || session.process_exited {
+                return;
+            }
+            (
+                link_id,
+                session.pending_output.stream(stream_id, &data, false),
+            )
+        }
+        RnshEvent::ProcessExited { link_id, code } => {
+            let Some(session) = sessions.get_mut(&link_id) else {
+                return;
+            };
+            // The waiter already reaped this PID. Never signal it on a later
+            // send failure or disconnect while the remaining output drains.
+            session.process.take();
+            if session.state != ListenerState::Running || session.process_exited {
+                return;
+            }
+            session.process_exited = true;
+            let result = session
+                .pending_output
+                .stream(STREAM_STDOUT, &[], true)
+                .and_then(|()| {
+                    session
+                        .pending_output
+                        .push(RnshMessage::CommandExited(code))
+                });
+            (link_id, result)
+        }
+        RnshEvent::LinkClosed(link_id) => {
+            if let Some(mut session) = sessions.remove(&link_id) {
+                if let Some(process) = &mut session.process {
+                    process.terminate();
+                }
+            }
+            return;
+        }
+        _ => return,
+    };
+    if let Err(error) = result {
+        log::warn!("Closing rnsh session {}: {error}", prettyhexrep(&link_id));
+        close_listener_session(transport, sessions, link_id);
+    } else {
+        flush_listener_session(transport, sessions, link_id);
     }
 }
 
@@ -1632,28 +1820,17 @@ fn listen(opts: CliOptions) -> Result<(), RnshError> {
                     session.handle_message(&node, &event_tx, msgtype, payload);
                 }
             }
-            Ok(RnshEvent::ProcessOutput {
-                link_id,
-                stream_id,
-                data,
-            }) => {
-                send_stream_chunks(&node, link_id, stream_id, &data, false)?;
-            }
-            Ok(RnshEvent::ProcessExited { link_id, code }) => {
-                send_stream_chunks(&node, link_id, STREAM_STDOUT, &[], true)?;
-                let _ = send_message(&node, link_id, &RnshMessage::CommandExited(code));
-                sessions.remove(&link_id);
-            }
-            Ok(RnshEvent::LinkClosed(link_id)) => {
-                if let Some(mut session) = sessions.remove(&link_id) {
-                    if let Some(process) = &mut session.process {
-                        process.terminate();
-                    }
-                }
+            Ok(
+                event @ (RnshEvent::ProcessOutput { .. }
+                | RnshEvent::ProcessExited { .. }
+                | RnshEvent::LinkClosed(_)),
+            ) => {
+                handle_listener_process_event(&node, &mut sessions, event);
             }
             Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        flush_listener_output(&node, &mut sessions);
     }
     Ok(())
 }
@@ -2091,6 +2268,8 @@ mod tests {
     struct FakeTransport {
         sent: Mutex<Vec<SentFrame>>,
         teardowns: Mutex<Vec<[u8; 16]>>,
+        fail_send: Mutex<Option<([u8; 16], u16)>>,
+        window: Mutex<Option<([u8; 16], rns_core::channel::Channel)>>,
     }
 
     type SentFrame = ([u8; 16], u16, Vec<u8>);
@@ -2118,6 +2297,23 @@ mod tests {
             link_id: [u8; 16],
             message: &RnshMessage,
         ) -> Result<(), RnshError> {
+            if *self.fail_send.lock().unwrap() == Some((link_id, message.msgtype())) {
+                return Err(RnshError::Send);
+            }
+            if let Some((limited_link, channel)) = self.window.lock().unwrap().as_mut() {
+                if *limited_link == link_id {
+                    channel
+                        .send(
+                            message.msgtype(),
+                            &message.pack(),
+                            0.0,
+                            rns_core::constants::LINK_MDU,
+                        )
+                        .map_err(|error| {
+                            RnshError::from(ChannelSendError::from(error.to_string()))
+                        })?;
+                }
+            }
             self.sent
                 .lock()
                 .unwrap()
@@ -2153,6 +2349,308 @@ mod tests {
             hpix: None,
             vpix: None,
         })
+    }
+
+    fn running_session(link_id: [u8; 16]) -> ListenerSession {
+        let mut session = ListenerSession::new(link_id, test_config());
+        session.state = ListenerState::Running;
+        session
+    }
+
+    fn output_event(link_id: [u8; 16]) -> RnshEvent {
+        RnshEvent::ProcessOutput {
+            link_id,
+            stream_id: STREAM_STDOUT,
+            data: b"hello".to_vec(),
+        }
+    }
+
+    #[test]
+    fn listener_ignores_queued_process_events_after_link_closed() {
+        let fake = FakeTransport::default();
+        let other = [0x43; 16];
+        let mut sessions = HashMap::from([
+            (TEST_LINK, running_session(TEST_LINK)),
+            (other, running_session(other)),
+        ]);
+        handle_listener_process_event(&fake, &mut sessions, RnshEvent::LinkClosed(TEST_LINK));
+        handle_listener_process_event(&fake, &mut sessions, output_event(TEST_LINK));
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 0,
+            },
+        );
+        assert!(fake.sent_messages().is_empty());
+        assert!(fake.teardowns.lock().unwrap().is_empty());
+        assert!(!sessions.contains_key(&TEST_LINK));
+        handle_listener_process_event(&fake, &mut sessions, output_event(other));
+        assert_eq!(fake.sent_messages()[0].0, other);
+        assert_eq!(sessions[&other].state, ListenerState::Running);
+    }
+
+    #[test]
+    fn listener_isolates_process_send_errors_and_accepts_next_session() {
+        for event in [
+            output_event(TEST_LINK),
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 0,
+            },
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 0,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (case, event) = event;
+            let fake = FakeTransport::default();
+            let failure_type = if case == 2 {
+                MSG_COMMAND_EXITED
+            } else {
+                MSG_STREAM_DATA
+            };
+            *fake.fail_send.lock().unwrap() = Some((TEST_LINK, failure_type));
+            let other = [0x43; 16];
+            let mut sessions = HashMap::from([
+                (TEST_LINK, running_session(TEST_LINK)),
+                (other, running_session(other)),
+            ]);
+            handle_listener_process_event(&fake, &mut sessions, event);
+            assert!(!sessions.contains_key(&TEST_LINK));
+            assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+            let sent_before = fake.sent_messages().len();
+            handle_listener_process_event(&fake, &mut sessions, output_event(TEST_LINK));
+            handle_listener_process_event(
+                &fake,
+                &mut sessions,
+                RnshEvent::ProcessExited {
+                    link_id: TEST_LINK,
+                    code: 0,
+                },
+            );
+            assert_eq!(fake.sent_messages().len(), sent_before);
+            handle_listener_process_event(&fake, &mut sessions, output_event(other));
+            assert_eq!(fake.sent_messages().last().unwrap().0, other);
+            assert_eq!(sessions[&other].state, ListenerState::Running);
+
+            let new_link = [0x44; 16];
+            let mut next = ListenerSession::new(new_link, test_config());
+            let (tx, _rx) = mpsc::channel();
+            let version = version_message();
+            next.handle_message(&fake, &tx, version.msgtype(), version.pack());
+            assert_eq!(next.state, ListenerState::WaitCommand);
+            assert_eq!(fake.sent_messages().last().unwrap().0, new_link);
+        }
+    }
+
+    #[test]
+    fn listener_process_exit_sends_eof_and_status_before_removal() {
+        let fake = FakeTransport::default();
+        let mut sessions = HashMap::from([(TEST_LINK, running_session(TEST_LINK))]);
+        handle_listener_process_event(&fake, &mut sessions, output_event(TEST_LINK));
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 17,
+            },
+        );
+        let messages = fake.sent_messages();
+        assert_eq!(messages.len(), 3);
+        assert!(
+            matches!(&messages[0].1, RnshMessage::StreamData(data) if data.data == b"hello" && !data.eof)
+        );
+        assert!(
+            matches!(&messages[1].1, RnshMessage::StreamData(data) if data.data.is_empty() && data.eof)
+        );
+        assert!(matches!(&messages[2].1, RnshMessage::CommandExited(17)));
+        assert!(sessions.is_empty());
+        assert!(fake.teardowns.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn channel_send_error_preserves_backpressure() {
+        assert_eq!(
+            ChannelSendError::from(rns_core::channel::ChannelError::NotReady.to_string()),
+            ChannelSendError::NotReady
+        );
+        assert_eq!(
+            ChannelSendError::from("unknown link".to_string()),
+            ChannelSendError::Rejected("unknown link".to_string())
+        );
+        assert!(matches!(
+            ChannelSendError::from(rns_core::channel::ChannelError::MessageTooBig.to_string()),
+            ChannelSendError::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn listener_drains_real_channel_window_without_losing_output_or_exit() {
+        let fake = FakeTransport::default();
+        *fake.window.lock().unwrap() = Some((TEST_LINK, rns_core::channel::Channel::new(2.0)));
+        let other = [0x43; 16];
+        let mut sessions = HashMap::from([
+            (TEST_LINK, running_session(TEST_LINK)),
+            (other, running_session(other)),
+        ]);
+        let data: Vec<_> = (0..STREAM_CHUNK_MAX * 3 + 7)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessOutput {
+                link_id: TEST_LINK,
+                stream_id: STREAM_STDOUT,
+                data: data.clone(),
+            },
+        );
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessOutput {
+                link_id: TEST_LINK,
+                stream_id: STREAM_STDERR,
+                data: b"stderr tail".to_vec(),
+            },
+        );
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 17,
+            },
+        );
+        assert_eq!(fake.sent_messages().len(), 1);
+        assert!(sessions[&TEST_LINK].process_exited);
+        assert!(!sessions[&TEST_LINK].pending_output.messages.is_empty());
+        for _ in 0..3 {
+            flush_listener_output(&fake, &mut sessions);
+        }
+        assert_eq!(
+            fake.sent_messages().len(),
+            1,
+            "NotReady must not duplicate accepted frames"
+        );
+        handle_listener_process_event(&fake, &mut sessions, output_event(other));
+        assert_eq!(fake.sent_messages().last().unwrap().0, other);
+        for sequence in 0..7 {
+            fake.window
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .1
+                .packet_delivered(sequence);
+            // Drive retries with idle ticks, without new child events.
+            flush_listener_output(&fake, &mut sessions);
+        }
+        assert!(!sessions.contains_key(&TEST_LINK));
+        assert_eq!(sessions[&other].state, ListenerState::Running);
+        assert!(fake.teardowns.lock().unwrap().is_empty());
+        let messages: Vec<_> = fake
+            .sent_messages()
+            .into_iter()
+            .filter(|(link, _)| *link == TEST_LINK)
+            .map(|(_, msg)| msg)
+            .collect();
+        assert_eq!(messages.len(), 7);
+        let output: Vec<_> = messages[..4]
+            .iter()
+            .flat_map(|msg| match msg {
+                RnshMessage::StreamData(stream) => {
+                    assert_eq!(stream.stream_id, STREAM_STDOUT);
+                    assert!(!stream.eof);
+                    stream.data.clone()
+                }
+                _ => panic!("expected stdout"),
+            })
+            .collect();
+        assert_eq!(output, data);
+        assert!(
+            matches!(&messages[4], RnshMessage::StreamData(stream) if stream.stream_id == STREAM_STDERR && stream.data == b"stderr tail")
+        );
+        assert!(
+            matches!(&messages[5], RnshMessage::StreamData(stream) if stream.eof && stream.data.is_empty())
+        );
+        assert!(matches!(&messages[6], RnshMessage::CommandExited(17)));
+    }
+
+    #[test]
+    fn listener_discards_blocked_output_on_link_close() {
+        let fake = FakeTransport::default();
+        *fake.window.lock().unwrap() = Some((TEST_LINK, rns_core::channel::Channel::new(2.0)));
+        let mut sessions = HashMap::from([(TEST_LINK, running_session(TEST_LINK))]);
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessOutput {
+                link_id: TEST_LINK,
+                stream_id: STREAM_STDOUT,
+                data: vec![1; STREAM_CHUNK_MAX * 2],
+            },
+        );
+        assert!(!sessions[&TEST_LINK].pending_output.messages.is_empty());
+        handle_listener_process_event(&fake, &mut sessions, RnshEvent::LinkClosed(TEST_LINK));
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 0,
+            },
+        );
+        flush_listener_output(&fake, &mut sessions);
+        assert!(sessions.is_empty());
+        assert_eq!(fake.sent_messages().len(), 1);
+    }
+
+    #[test]
+    fn listener_output_limit_is_session_local() {
+        let fake = FakeTransport::default();
+        let other = [0x43; 16];
+        let mut sessions = HashMap::from([
+            (TEST_LINK, running_session(TEST_LINK)),
+            (other, running_session(other)),
+        ]);
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessOutput {
+                link_id: TEST_LINK,
+                stream_id: STREAM_STDOUT,
+                data: vec![1; MAX_PENDING_OUTPUT_BYTES + 1],
+            },
+        );
+        assert!(!sessions.contains_key(&TEST_LINK));
+        assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+        handle_listener_process_event(&fake, &mut sessions, output_event(other));
+        assert_eq!(fake.sent_messages().len(), 1);
+        assert_eq!(fake.sent_messages()[0].0, other);
+    }
+
+    #[test]
+    fn pending_output_bounds_empty_messages_and_flush_work() {
+        let mut pending = PendingOutput::default();
+        for _ in 0..MAX_PENDING_OUTPUT_MESSAGES {
+            pending.push(RnshMessage::CommandExited(0)).unwrap();
+        }
+        assert!(pending.push(RnshMessage::CommandExited(0)).is_err());
+        assert!(pending.bytes <= MAX_PENDING_OUTPUT_BYTES);
+        let fake = FakeTransport::default();
+        pending.flush(&fake, TEST_LINK).unwrap();
+        assert_eq!(fake.sent_messages().len(), OUTPUT_SEND_BATCH);
+        assert_eq!(
+            pending.messages.len(),
+            MAX_PENDING_OUTPUT_MESSAGES - OUTPUT_SEND_BATCH
+        );
     }
 
     #[test]
