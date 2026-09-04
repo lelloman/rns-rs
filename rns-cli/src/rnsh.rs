@@ -1343,49 +1343,35 @@ enum ListenerState {
     Closed,
 }
 
-// Bound queued payloads per session, including empty/control messages. A slow
-// session is serviced in batches so it cannot monopolize the listener loop.
-const MAX_PENDING_OUTPUT_BYTES: usize = 1024 * 1024;
-const MAX_PENDING_OUTPUT_MESSAGES: usize = 4096;
+// Service queued output in batches so a slow session cannot monopolize
+// the listener loop. Like Python rnsh, keep pending output until it can be sent.
 const OUTPUT_SEND_BATCH: usize = 16;
 
 #[derive(Default)]
 struct PendingOutput {
     messages: VecDeque<RnshMessage>,
-    bytes: usize,
 }
 
 impl PendingOutput {
-    fn push(&mut self, message: RnshMessage) -> Result<(), RnshError> {
-        let bytes = message.pack().len();
-        if bytes > MAX_PENDING_OUTPUT_BYTES.saturating_sub(self.bytes)
-            || self.messages.len() >= MAX_PENDING_OUTPUT_MESSAGES
-        {
-            return Err(RnshError::Protocol("pending output limit exceeded".into()));
-        }
-        self.bytes += bytes;
-        self.messages.push_back(message);
-        Ok(())
-    }
-
-    fn stream(&mut self, stream_id: u16, data: &[u8], eof: bool) -> Result<(), RnshError> {
+    fn stream(&mut self, stream_id: u16, data: &[u8], eof: bool) {
         for chunk in data.chunks(STREAM_CHUNK_MAX) {
-            self.push(RnshMessage::StreamData(StreamDataMessage::new(
-                stream_id,
-                chunk.to_vec(),
-                false,
-                false,
-            )))?;
+            self.messages
+                .push_back(RnshMessage::StreamData(StreamDataMessage::new(
+                    stream_id,
+                    chunk.to_vec(),
+                    false,
+                    false,
+                )));
         }
         if eof {
-            self.push(RnshMessage::StreamData(StreamDataMessage::new(
-                stream_id,
-                Vec::new(),
-                true,
-                false,
-            )))?;
+            self.messages
+                .push_back(RnshMessage::StreamData(StreamDataMessage::new(
+                    stream_id,
+                    Vec::new(),
+                    true,
+                    false,
+                )));
         }
-        Ok(())
     }
 
     fn flush(&mut self, transport: &dyn RnshTransport, link_id: [u8; 16]) -> Result<(), RnshError> {
@@ -1395,7 +1381,6 @@ impl PendingOutput {
             };
             match send_message(transport, link_id, message) {
                 Ok(()) => {
-                    self.bytes -= message.pack().len();
                     self.messages.pop_front();
                 }
                 Err(RnshError::Channel(ChannelSendError::NotReady)) => break,
@@ -1663,13 +1648,13 @@ fn flush_listener_output(
 }
 
 // Events can outlive a link. Keep unsent output on its session, and retry only
-// NotReady. Fatal errors and queue-limit violations remain session-local.
+// NotReady. Fatal errors remain session-local.
 fn handle_listener_process_event(
     transport: &dyn RnshTransport,
     sessions: &mut HashMap<[u8; 16], ListenerSession>,
     event: RnshEvent,
 ) {
-    let (link_id, result) = match event {
+    let link_id = match event {
         RnshEvent::ProcessOutput {
             link_id,
             stream_id,
@@ -1681,10 +1666,8 @@ fn handle_listener_process_event(
             if session.state != ListenerState::Running || session.process_exited {
                 return;
             }
-            (
-                link_id,
-                session.pending_output.stream(stream_id, &data, false),
-            )
+            session.pending_output.stream(stream_id, &data, false);
+            link_id
         }
         RnshEvent::ProcessExited { link_id, code } => {
             let Some(session) = sessions.get_mut(&link_id) else {
@@ -1697,15 +1680,12 @@ fn handle_listener_process_event(
                 return;
             }
             session.process_exited = true;
-            let result = session
+            session.pending_output.stream(STREAM_STDOUT, &[], true);
+            session
                 .pending_output
-                .stream(STREAM_STDOUT, &[], true)
-                .and_then(|()| {
-                    session
-                        .pending_output
-                        .push(RnshMessage::CommandExited(code))
-                });
-            (link_id, result)
+                .messages
+                .push_back(RnshMessage::CommandExited(code));
+            link_id
         }
         RnshEvent::LinkClosed(link_id) => {
             if let Some(mut session) = sessions.remove(&link_id) {
@@ -1717,12 +1697,7 @@ fn handle_listener_process_event(
         }
         _ => return,
     };
-    if let Err(error) = result {
-        log::warn!("Closing rnsh session {}: {error}", prettyhexrep(&link_id));
-        close_listener_session(transport, sessions, link_id);
-    } else {
-        flush_listener_session(transport, sessions, link_id);
-    }
+    flush_listener_session(transport, sessions, link_id);
 }
 
 fn listen(opts: CliOptions) -> Result<(), RnshError> {
@@ -2613,44 +2588,54 @@ mod tests {
     }
 
     #[test]
-    fn listener_output_limit_is_session_local() {
+    fn listener_keeps_large_output_queued_under_backpressure() {
         let fake = FakeTransport::default();
+        *fake.window.lock().unwrap() = Some((TEST_LINK, rns_core::channel::Channel::new(2.0)));
         let other = [0x43; 16];
         let mut sessions = HashMap::from([
             (TEST_LINK, running_session(TEST_LINK)),
             (other, running_session(other)),
         ]);
+        // Exceed both former queue cutoffs (1 MiB and 4096 messages).
         handle_listener_process_event(
             &fake,
             &mut sessions,
             RnshEvent::ProcessOutput {
                 link_id: TEST_LINK,
                 stream_id: STREAM_STDOUT,
-                data: vec![1; MAX_PENDING_OUTPUT_BYTES + 1],
+                data: vec![1; STREAM_CHUNK_MAX * 4097],
             },
         );
-        assert!(!sessions.contains_key(&TEST_LINK));
-        assert_eq!(fake.teardowns.lock().unwrap().as_slice(), &[TEST_LINK]);
+        handle_listener_process_event(
+            &fake,
+            &mut sessions,
+            RnshEvent::ProcessExited {
+                link_id: TEST_LINK,
+                code: 17,
+            },
+        );
+        assert_eq!(sessions[&TEST_LINK].pending_output.messages.len(), 4098);
+        assert!(sessions[&TEST_LINK].process_exited);
+        assert!(fake.teardowns.lock().unwrap().is_empty());
         handle_listener_process_event(&fake, &mut sessions, output_event(other));
-        assert_eq!(fake.sent_messages().len(), 1);
-        assert_eq!(fake.sent_messages()[0].0, other);
+        flush_listener_output(&fake, &mut sessions);
+        assert_eq!(fake.sent_messages().len(), 2);
+        assert_eq!(fake.sent_messages()[1].0, other);
+        assert_eq!(sessions[&TEST_LINK].pending_output.messages.len(), 4098);
     }
 
     #[test]
-    fn pending_output_bounds_empty_messages_and_flush_work() {
+    fn pending_output_limits_work_per_flush() {
         let mut pending = PendingOutput::default();
-        for _ in 0..MAX_PENDING_OUTPUT_MESSAGES {
-            pending.push(RnshMessage::CommandExited(0)).unwrap();
-        }
-        assert!(pending.push(RnshMessage::CommandExited(0)).is_err());
-        assert!(pending.bytes <= MAX_PENDING_OUTPUT_BYTES);
+        pending.stream(
+            STREAM_STDOUT,
+            &vec![0; STREAM_CHUNK_MAX * (OUTPUT_SEND_BATCH + 1)],
+            false,
+        );
         let fake = FakeTransport::default();
         pending.flush(&fake, TEST_LINK).unwrap();
         assert_eq!(fake.sent_messages().len(), OUTPUT_SEND_BATCH);
-        assert_eq!(
-            pending.messages.len(),
-            MAX_PENDING_OUTPUT_MESSAGES - OUTPUT_SEND_BATCH
-        );
+        assert_eq!(pending.messages.len(), 1);
     }
 
     #[test]
