@@ -105,7 +105,7 @@ pub use interface::{
 };
 pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
 pub use management::ManagementConfig;
-pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
+pub use node::{ChannelSendError, IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
 #[cfg(feature = "hooks")]
 pub use provider_bridge::{
     HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,

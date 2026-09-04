@@ -721,6 +721,36 @@ impl std::fmt::Display for SendError {
 
 impl std::error::Error for SendError {}
 
+/// A channel send can be temporarily blocked without the link having failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelSendError {
+    NotReady,
+    Rejected(String),
+    Unavailable,
+}
+
+impl From<String> for ChannelSendError {
+    fn from(error: String) -> Self {
+        if error == rns_core::channel::ChannelError::NotReady.to_string() {
+            Self::NotReady
+        } else {
+            Self::Rejected(error)
+        }
+    }
+}
+
+impl std::fmt::Display for ChannelSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady => write!(f, "channel is not ready to send"),
+            Self::Rejected(error) => write!(f, "{error}"),
+            Self::Unavailable => write!(f, "driver is stopped or draining"),
+        }
+    }
+}
+
+impl std::error::Error for ChannelSendError {}
+
 /// A running RNS node.
 pub struct RnsNode {
     tx: EventSender,
@@ -2541,14 +2571,28 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
-    /// Send a channel message on a link.
+    /// Send a channel message on a link (compatibility API).
     pub fn send_channel_message(
         &self,
         link_id: [u8; 16],
         msgtype: u16,
         payload: Vec<u8>,
     ) -> Result<(), SendError> {
-        self.reject_new_work_if_draining()?;
+        self.try_send_channel_message(link_id, msgtype, payload)
+            .map_err(|_| SendError)
+    }
+
+    /// Attempt to enqueue a channel message, preserving temporary backpressure.
+    /// A NotReady result means no sequence was reserved; callers can retry the
+    /// same payload when capacity is available. Other failures are terminal.
+    pub fn try_send_channel_message(
+        &self,
+        link_id: [u8; 16],
+        msgtype: u16,
+        payload: Vec<u8>,
+    ) -> Result<(), ChannelSendError> {
+        self.reject_new_work_if_draining()
+            .map_err(|_| ChannelSendError::Unavailable)?;
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::SendChannelMessage {
@@ -2557,11 +2601,11 @@ impl RnsNode {
                 payload,
                 response_tx,
             })
-            .map_err(|_| SendError)?;
+            .map_err(|_| ChannelSendError::Unavailable)?;
         response_rx
             .recv()
-            .map_err(|_| SendError)?
-            .map_err(|_| SendError)
+            .map_err(|_| ChannelSendError::Unavailable)?
+            .map_err(ChannelSendError::from)
     }
 
     /// Propose a direct P2P connection to a peer via NAT hole punching.
