@@ -339,6 +339,9 @@ impl Driver {
                     .unwrap_or(false)
             );
         }
+        // Keep targeted-send failures interface-specific. In particular, an
+        // attached interface that disappeared must not fall back to broadcast
+        // or be reported as a generic inability of every interface to send.
         let Some(entry) = self.interfaces.get_mut(&interface) else {
             log::warn!("[{}] cannot send on missing interface", interface.0);
             return;

@@ -2064,6 +2064,38 @@ fn offline_attached_interface_does_not_fall_back_to_other_interfaces() {
 }
 
 #[test]
+fn missing_attached_interface_does_not_fall_back_to_other_interfaces() {
+    let mut driver = new_test_driver();
+    driver.engine.register_interface(make_interface_info(2));
+    let (other_writer, other_sent) = MockWriter::new();
+    driver
+        .interfaces
+        .insert(InterfaceId(2), make_entry(2, Box::new(other_writer), true));
+
+    let raw = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &[0xbc; 16],
+        None,
+        constants::CONTEXT_NONE,
+        b"missing attached only",
+    )
+    .unwrap()
+    .raw;
+
+    driver.handle_send_outbound_event(raw, constants::DESTINATION_SINGLE, Some(InterfaceId(1)));
+
+    assert!(other_sent.lock().unwrap().is_empty());
+    assert_eq!(driver.interfaces[&InterfaceId(2)].stats.tx_packets, 0);
+}
+
+#[test]
 fn dispatch_broadcast() {
     let (tx, rx) = event::channel();
     let (cbs, _, _, _, _, _) = MockCallbacks::new();
