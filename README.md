@@ -326,9 +326,8 @@ The protocol uses a STUN-like probe to discover public endpoints, negotiates the
   responder's public endpoint until the peer has completed Reticulum
   `LINKIDENTIFY`; `ask_app` fails closed unless the application callback accepts.
 
-The new public policy variant and `NodeConfig` field are planned for the next
-`rns-net` publish as version 0.8.0; this repository change does not publish or
-deploy that release.
+The public policy variant and `NodeConfig::direct_connect_policy` field are
+available in `rns-net` 0.7.1 and later.
 
 **API (via rns-ctl):**
 - `POST /api/direct_connect {"link_id": "..."}` — initiate upgrade
