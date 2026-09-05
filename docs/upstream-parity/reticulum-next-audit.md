@@ -42,7 +42,7 @@ the accepted baseline; the target object was inspected without advancing it.
 
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
-| 1 | `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258` | Adjusted logging | Needs decision | Rust logs routed action counts in `rns-net/src/driver/events.rs`; focused behavior and logging-policy review pending. |
+| 1 | `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258` | Adjusted logging | Structurally covered | `4fad68c`; targeted missing/offline interfaces retain interface-specific diagnostics and never fall back to another interface. |
 
 ## Per-Commit Analysis
 
@@ -55,33 +55,27 @@ changed.
 
 **Rust applicability:** Rust routes attached-interface traffic explicitly and
 logs the resulting outbound action count, rather than emitting the same Python
-failure message. Whether a failed targeted dispatch can currently produce a
-misleading native diagnostic must be checked at the interface-dispatch layer
-before declaring this structurally covered or adding a logging change.
+failure message. The dispatch layer reports a missing target as `cannot send on
+missing interface` and an offline or disabled target as `cannot send on
+unavailable interface`; it never substitutes the misleading generic claim
+that no interface could process the packet.
 
-**Local handling and evidence:** Initial source search found attached-interface
-routing coverage in `rns-core/src/transport/outbound.rs` and outbound action
-logging in `rns-net/src/driver/events.rs`. A focused failure-path regression and
-the required one-commit upstream mapping have not yet been completed.
+**Local handling and evidence:** Commit `4fad68c` documents the native
+interface-specific diagnostic invariant and adds
+`missing_attached_interface_does_not_fall_back_to_other_interfaces`, complementing
+the existing offline-interface regression. The focused test passed. The full
+`rns-net` suite passed with 941 unit tests, 54 network E2E tests, Python interop,
+IFAC interop, and fixture suites; `cargo fmt --all -- --check` and
+`cargo clippy -p rns-net --all-targets -- -D warnings` also passed.
 
-**Final disposition:** Needs decision.
-
-## Integration Plan
-
-1. Trace attached-interface send failures through native dispatch and identify
-   every emitted diagnostic.
-2. Add or identify a focused regression for targeted dispatch failure.
-3. Decide whether the native logging is structurally covered or requires a
-   compatible change, then create the required non-empty mapping commit with
-   the canonical `Upstream-Commit` trailer.
-4. Run the applicable focused, crate, formatting, lint, and parity gates.
+**Final disposition:** Structurally covered.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop is not required for this logging-only change; the existing Python interop suite passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
 - [x] Required daily live dual-VPS manual gate is recorded honestly.
 - [ ] Native documentation is updated for user-visible behavior.
@@ -95,3 +89,7 @@ the required one-commit upstream mapping have not yet been completed.
   propagation, bidirectional packets, Channels, Resource boundary sizes,
   concurrent/repeated links, controlled impairment, and forced reconnect
   recovery. This operational result does not promote the new upstream commit.
+- `2026-09-05`: Commit `4fad68c` mapped upstream commit
+  `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258` as structurally covered. The
+  focused missing-attached-interface regression, the complete `rns-net` test
+  suite, formatting, and warning-free host clippy all passed.
