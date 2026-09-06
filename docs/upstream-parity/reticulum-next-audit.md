@@ -93,3 +93,12 @@ IFAC interop, and fixture suites; `cargo fmt --all -- --check` and
   `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258` as structurally covered. The
   focused missing-attached-interface regression, the complete `rns-net` test
   suite, formatting, and warning-free host clippy all passed.
+- `2026-09-06`: Both remotes refreshed successfully (GitHub at 07:03:31 UTC,
+  rgit at 07:03:39 UTC); their tips and the one-commit inventory are unchanged.
+  Both daily VPS snapshots were healthy and complete, with one capture per
+  host and no failed-query sentinel values. The daily live Backbone smoke
+  passed all Resource boundaries, two link batches at concurrency three,
+  controlled impairment, and one forced disconnect/recovery cycle using
+  local `master@70deb22`. Both VPS nodes still run `57d9d52`, differing from
+  refreshed `origin/master` and `origin/dev`. This daily operational check
+  does not complete the remaining promotion gates or advance the baseline.
