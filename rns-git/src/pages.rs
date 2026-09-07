@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -33,6 +34,7 @@ pub const PATH_RELEASES: &str = "/page/releases.mu";
 pub const PATH_RELEASE: &str = "/page/release.mu";
 pub const PATH_WORK: &str = "/page/work.mu";
 pub const PATH_WORK_DOC: &str = "/page/work_doc.mu";
+pub const PATH_MEDIA: &str = "/media";
 pub const PATH_DOWNLOAD: &str = "/file/download";
 pub const PATH_WORK_DOC_DOWNLOAD: &str = "/file/workdoc";
 
@@ -111,6 +113,20 @@ pub fn register_nomadnet_destination(
 }
 
 fn register_page_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Result<()> {
+    let media_config = config.clone();
+    let media_access = access.clone();
+    node.register_request_handler_response(PATH_MEDIA, None, move |_link, _path, data, remote| {
+        Some(
+            serve_media(
+                &media_config,
+                &media_access,
+                data,
+                remote.map(|(hash, _)| hash),
+            )
+            .unwrap_or_else(|_| RequestResponse::Bytes(msgpack::pack(&Value::Bool(false)))),
+        )
+    })
+    .map_err(|_| Error::msg("failed to register media handler"))?;
     for path in PAGE_PATHS {
         let handler_path = *path;
         let handler_config = config.clone();
@@ -804,7 +820,12 @@ fn render_blob_page(
             icon_sep(config)
         ))
     };
-    let content = if !blob.displayable {
+    let content = if blob.binary && is_image_path(&path) {
+        format!(
+            "`(Image file`w=n`a=c`:/media/{group}/{repo}/{reference}/{})\n",
+            quote_media_path(&path)
+        )
+    } else if !blob.displayable {
         crate::highlight::plain_literal_block(&blob.content)
     } else if render {
         match renderable {
@@ -1581,6 +1602,105 @@ pub fn download_work_document(
     Ok(RequestResponse::Resource {
         data: document.content.into_bytes(),
         metadata: Some(protocol::metadata_status(protocol::RES_OK)),
+        auto_compress: true,
+    })
+}
+
+fn is_image_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "webp" | "png" | "jpg" | "jpeg" | "gif" | "tiff" | "tif" | "bmp"
+            )
+        })
+}
+
+fn quote_media_path(path: &str) -> String {
+    let mut out = String::new();
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// Nomad Network media requests carry a presence-only key and an encoded blob
+/// path. The repository ACL is the authority, just as for ordinary downloads.
+pub fn serve_media(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&[u8; 16]>,
+) -> Result<RequestResponse> {
+    let rejected = || RequestResponse::Bytes(msgpack::pack(&Value::Bool(false)));
+    let Ok(Value::Map(fields)) = msgpack::unpack_exact(data) else {
+        return Ok(rejected());
+    };
+    if !fields.iter().any(|(key, _)| key.as_str() == Some("key")) {
+        return Ok(rejected());
+    }
+    let Some(path) = fields
+        .iter()
+        .find(|(key, _)| key.as_str() == Some("path"))
+        .and_then(|(_, value)| value.as_str())
+    else {
+        return Ok(rejected());
+    };
+    let components: Vec<_> = path
+        .strip_prefix("/media")
+        .unwrap_or(path)
+        .trim_start_matches('/')
+        .splitn(4, '/')
+        .collect();
+    if components.len() != 4 {
+        return Ok(rejected());
+    }
+    let vars = BTreeMap::from([
+        ("g".into(), components[0].into()),
+        ("r".into(), components[1].into()),
+    ]);
+    let Ok((_, _, repository)) = accessible_repository(config, access, remote, &vars) else {
+        return Ok(rejected());
+    };
+    let path = decode_url_component(components[3]);
+    if path.is_empty() || validate_git_path(&path).is_err() {
+        return Ok(rejected());
+    }
+    let Ok(resolved) = resolve_ref(&repository, components[2]) else {
+        return Ok(rejected());
+    };
+    if !matches!(
+        git_object_kind(&repository, &resolved, &path).as_deref(),
+        Ok("blob")
+    ) {
+        return Ok(rejected());
+    }
+    let output = run_git_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&repository)
+            .arg("show")
+            .arg(format!("{resolved}:{path}")),
+        GIT_COMMAND_TIMEOUT,
+    )?;
+    if !output.status.success() {
+        return Ok(rejected());
+    }
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    Ok(RequestResponse::File {
+        data: output.stdout,
+        metadata: msgpack::pack(&Value::Map(vec![(
+            Value::Str("name".into()),
+            Value::Bin(name.as_bytes().to_vec()),
+        )])),
         auto_compress: true,
     })
 }
@@ -2949,7 +3069,7 @@ fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
     .trim()
     .parse::<u64>()
     .unwrap_or(0);
-    if size > 256 * 1024 {
+    if size > 256 * 1024 && !is_image_path(path) {
         return Ok(BlobInfo {
             content: format!("File is too large to display ({size} bytes)."),
             size,
@@ -2969,6 +3089,14 @@ fn blob_info(repo: &Path, reference: &str, path: &str) -> Result<BlobInfo> {
         return Err(Error::msg(String::from_utf8_lossy(&output.stderr)));
     }
     let binary = output.stdout.contains(&0);
+    if size > 256 * 1024 && !binary {
+        return Ok(BlobInfo {
+            content: format!("File is too large to display ({size} bytes)."),
+            size,
+            binary: false,
+            displayable: false,
+        });
+    }
     Ok(BlobInfo {
         content: if binary {
             "Binary file is not displayed.".to_string()
@@ -3106,12 +3234,29 @@ fn run_git(cmd: &mut Command) -> Result<String> {
 }
 
 fn run_git_output(cmd: &mut Command, timeout: Duration) -> Result<Output> {
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    // Spool both outputs while Git runs: waiting before draining a pipe would
+    // deadlock once a media blob fills the pipe buffer. Owned files also let
+    // timeout cleanup finish without waiting on pipe-reader threads.
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    let mut child = cmd
+        .stdout(Stdio::from(stdout.try_clone()?))
+        .stderr(Stdio::from(stderr.try_clone()?))
+        .spawn()?;
     let deadline = Instant::now() + timeout;
 
     loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map_err(Error::from);
+        if let Some(status) = child.try_wait()? {
+            stdout.seek(SeekFrom::Start(0))?;
+            stderr.seek(SeekFrom::Start(0))?;
+            let mut output = Output {
+                status,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            };
+            stdout.read_to_end(&mut output.stdout)?;
+            stderr.read_to_end(&mut output.stderr)?;
+            return Ok(output);
         }
 
         if Instant::now() >= deadline {
@@ -3135,6 +3280,99 @@ mod tests {
     use super::*;
     use crate::acl::Access;
     use crate::config::ServerConfig;
+
+    #[test]
+    fn media_serves_decoded_blob_with_filename_and_checks_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = cfg(tmp.path());
+        let payload = b"RIFF\0image bytes";
+        create_repo_bytes(
+            config.repositories_dir.join("public/images"),
+            "docs/a + b.webp",
+            payload,
+        );
+        let request = msgpack::pack(&Value::Map(vec![
+            (Value::Str("key".into()), Value::Bin(vec![1, 2, 3])),
+            (
+                Value::Str("path".into()),
+                Value::Str("/media/public/images/HEAD/docs%2Fa+%2B+b.webp".into()),
+            ),
+        ]));
+        match serve_media(&config, &access(&config), &request, None).unwrap() {
+            RequestResponse::File { data, metadata, .. } => {
+                assert_eq!(data, payload);
+                assert_eq!(
+                    msgpack::unpack_exact(&metadata).unwrap(),
+                    Value::Map(vec![(
+                        Value::Str("name".into()),
+                        Value::Bin(b"a + b.webp".to_vec())
+                    ),])
+                );
+            }
+            _ => panic!("expected media resource"),
+        }
+        config.allow_read = vec!["none".into()];
+        assert!(
+            matches!(serve_media(&config, &access(&config), &request, None).unwrap(), RequestResponse::Bytes(data) if data == msgpack::pack(&Value::Bool(false)))
+        );
+    }
+
+    #[test]
+    fn media_rejects_missing_key_bad_paths_and_unknown_objects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo_bytes(
+            config.repositories_dir.join("public/images"),
+            "image.webp",
+            b"RIFF\0data",
+        );
+        let access = access(&config);
+        let mut requests = vec![
+            page_request(&[("path", "/media/public/images/HEAD/image.webp")]),
+            msgpack::pack(&Value::Bool(true)),
+        ];
+        for path in [
+            "/media/public/images",
+            "/media/public/images/HEAD/../secret",
+            "/media/public/images/missing/image.webp",
+            "/media/public/images/HEAD/missing.webp",
+            "/media/../images/HEAD/image.webp",
+        ] {
+            requests.push(page_request(&[("key", "k"), ("path", path)]));
+        }
+        for request in requests {
+            assert!(
+                matches!(serve_media(&config, &access, &request, None).unwrap(), RequestResponse::Bytes(data) if data == msgpack::pack(&Value::Bool(false)))
+            );
+        }
+    }
+
+    #[test]
+    fn binary_image_blob_renders_micron_media_reference() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = cfg(tmp.path());
+        create_repo_bytes(
+            config.repositories_dir.join("public/images"),
+            "docs/a + b.PNG",
+            &vec![0; 256 * 1024 + 1],
+        );
+        let page = render_page(
+            PATH_BLOB,
+            &config,
+            &access(&config),
+            &page_request(&[
+                ("var_g", "public"),
+                ("var_r", "images"),
+                ("var_path", "docs/a + b.PNG"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(
+            page.contains("`(Image file`w=n`a=c`:/media/public/images/HEAD/docs%2Fa+%2B+b.PNG)")
+        );
+        assert!(!page.contains("Binary file is not displayed"));
+    }
 
     #[test]
     fn blob_path_normalization_removes_only_the_explicit_relative_prefix() {
@@ -4739,6 +4977,7 @@ Unmatched * marker\n\
                 );
             }
             RequestResponse::Bytes(bytes) => panic!("expected resource response, got {bytes:?}"),
+            RequestResponse::File { .. } => panic!("expected value response, got file"),
         }
     }
 

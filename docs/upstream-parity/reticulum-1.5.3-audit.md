@@ -67,6 +67,33 @@ claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
+### 6. `7396e399` — Basic rngit media handling
+
+**Upstream change:** Complete `pages.py` diff and surrounding blob/ref/ACL code
+reviewed. Adds `/media` with a presence-only key, repository/ref/blob path, URL
+decoding, access checks, raw file responses and binary filename metadata. Binary
+image blob pages emit a Micron media reference. No runtime dependency on the
+README content commits.
+
+**Local handling:** `pages::serve_media` and registered `/media` handler preserve
+those semantics, including large-image previews. Media does not increment the
+ordinary download counter, matching upstream. A new `RequestResponse::File`
+variant sends raw bytes; existing `Resource` value-envelope semantics remain
+unchanged. The live Python test exposed the need for that distinction. Git
+output is spooled to owned temporary files to avoid the pipe-buffer deadlock
+exposed by the large-image regression. Invalid requests return MessagePack false.
+
+**Evidence:** Three focused media regressions pass; the complete rngit suite
+passes (202 unit, 6 E2E, 11 release and 6 stats tests). The complete rns-net suite
+passes (941 unit tests before the additional file-response regression, 54 E2E,
+Python/IFAC interoperability and fixtures); the added raw-file response regression
+also passes. The live Python client at exact target `0bb41bf` passes file bytes,
+filename metadata and missing-key rejection over a Reticulum link. Command:
+`RNS_MEDIA_INTEROP=1 PYTHONPATH=/tmp/rns-upstream-media-1.5.3 cargo test -p rns-git --test e2e rngit_nomadnet_pages_render_over_rns_link -- --nocapture`.
+
+**Final disposition:** Integrated. Ordered mapping is this code/evidence commit;
+the canonical trailer identifies it. Compression and conversion remain rows 7–8.
+
 ### 5. `8a82a50f` — Updated readme
 
 **Upstream change:** Moves the Micron logo after the introduction, changes its

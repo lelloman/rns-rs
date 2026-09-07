@@ -689,7 +689,7 @@ pub fn handle_release(
 ) -> Result<Vec<u8>> {
     match handle_release_response(config, access, data, remote)? {
         RequestResponse::Bytes(data) => Ok(data),
-        RequestResponse::Resource { data, .. } => {
+        RequestResponse::Resource { data, .. } | RequestResponse::File { data, .. } => {
             Ok(protocol::status_bytes(protocol::RES_OK, data))
         }
     }
@@ -2087,6 +2087,7 @@ mod tests {
         git::ensure_bare_repository(&repo).unwrap();
         let req = protocol::fetch_request("repo", &[]);
         match handle_fetch(&config, &access, &req, None).unwrap() {
+            RequestResponse::File { .. } => panic!("fetch should return a value"),
             RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_OK),
             RequestResponse::Resource { metadata, .. } => assert!(metadata.is_some()),
         }

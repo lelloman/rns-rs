@@ -95,6 +95,13 @@ pub enum RequestResponse {
         metadata: Option<Vec<u8>>,
         auto_compress: bool,
     },
+    /// Send raw file bytes with MessagePack metadata, matching Python's
+    /// `[file_handle, metadata]` response. No response-value envelope is added.
+    File {
+        data: Vec<u8>,
+        metadata: Vec<u8>,
+        auto_compress: bool,
+    },
 }
 
 /// Reason an outbound request failed before receiving an accepted response.
