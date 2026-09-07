@@ -3984,20 +3984,37 @@ fn response_resource_one_byte_over_declared_size_limit_is_rejected() {
 
 #[test]
 fn test_response_resource_preserves_metadata() {
+    response_resource_metadata_roundtrip(false);
+}
+
+#[test]
+fn test_file_response_preserves_raw_bytes_and_metadata() {
+    response_resource_metadata_roundtrip(true);
+}
+
+fn response_resource_metadata_roundtrip(file: bool) {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
 
     let payload = b"bundle-data".to_vec();
     let metadata = b"git-status-ok".to_vec();
-    let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload));
+    let response_value = rns_core::msgpack::pack(&rns_core::msgpack::Value::Bin(payload.clone()));
     resp_mgr.register_request_handler_response("/fetch", None, {
         let response_value = response_value.clone();
         let metadata = metadata.clone();
         move |_link_id, _path, _data, _remote| {
-            Some(RequestResponse::Resource {
-                data: response_value.clone(),
-                metadata: Some(metadata.clone()),
-                auto_compress: false,
+            Some(if file {
+                RequestResponse::File {
+                    data: payload.clone(),
+                    metadata: metadata.clone(),
+                    auto_compress: false,
+                }
+            } else {
+                RequestResponse::Resource {
+                    data: response_value.clone(),
+                    metadata: Some(metadata.clone()),
+                    auto_compress: false,
+                }
             })
         }
     });

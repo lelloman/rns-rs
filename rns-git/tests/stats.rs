@@ -260,7 +260,9 @@ fn denied_and_failed_operations_do_not_record_stats() {
     .unwrap();
     match denied_fetch {
         RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_DISALLOWED),
-        RequestResponse::Resource { .. } => panic!("denied fetch unexpectedly returned resource"),
+        RequestResponse::Resource { .. } | RequestResponse::File { .. } => {
+            panic!("denied fetch unexpectedly returned resource")
+        }
     }
 
     config.allow_read = vec!["all".into()];
@@ -285,7 +287,9 @@ fn denied_and_failed_operations_do_not_record_stats() {
     .unwrap();
     match missing_fetch {
         RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], protocol::RES_NOT_FOUND),
-        RequestResponse::Resource { .. } => panic!("missing fetch unexpectedly returned resource"),
+        RequestResponse::Resource { .. } | RequestResponse::File { .. } => {
+            panic!("missing fetch unexpectedly returned resource")
+        }
     }
 
     assert!(!config.dir.join("stats").exists());
@@ -559,6 +563,7 @@ fn run_git(cmd: &mut Command) -> String {
 
 fn assert_fetch_ok(response: RequestResponse) {
     match response {
+        RequestResponse::File { .. } => panic!("fetch should return a value"),
         RequestResponse::Resource { metadata, .. } => {
             assert_eq!(
                 metadata.as_deref(),
@@ -579,6 +584,7 @@ fn assert_resource_bytes(response: RequestResponse, expected: &[u8]) {
             );
         }
         RequestResponse::Bytes(bytes) => panic!("expected resource response, got {bytes:?}"),
+        RequestResponse::File { .. } => panic!("expected value response, got file"),
     }
 }
 

@@ -334,6 +334,53 @@ fn rngit_nomadnet_pages_render_over_rns_link() {
     );
 
     let index = harness.request(page_link, pages::PATH_INDEX, &page_request(&[]));
+    if std::env::var_os("RNS_MEDIA_INTEROP").is_some() {
+        let mut python = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/media_client.py"
+            ))
+            .arg(harness.tmp.path().join("client-rns"))
+            .arg(hex(&page_destination.hash.0))
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            if let Some(status) = python.try_wait().unwrap() {
+                assert!(status.success(), "Python media client failed: {status}");
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = python.kill();
+                let _ = python.wait();
+                panic!("Python media client timed out");
+            }
+            harness
+                .server_node
+                .announce(page_destination, &harness.server_identity, None)
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    let media = harness.request(
+        page_link,
+        pages::PATH_MEDIA,
+        &page_request(&[
+            ("key", "request-key"),
+            ("path", "/media/group/repo/HEAD/README.md"),
+        ]),
+    );
+    assert_eq!(
+        protocol::response_bin(&media.data).unwrap(),
+        b"hello over rns\n"
+    );
+    assert_eq!(
+        msgpack::unpack_exact(&media.metadata.unwrap()).unwrap(),
+        Value::Map(vec![(
+            Value::Str("name".into()),
+            Value::Bin(b"README.md".to_vec())
+        )])
+    );
     let index_page = decode_page_response(&index.data);
     assert!(
         index_page.contains("RNS Git Test Node"),
@@ -1083,6 +1130,7 @@ fn client_rns_config(port: u16) -> String {
 [interfaces]
   [[RNGit Client TCP]]
     type = TCPClientInterface
+    enabled = Yes
     target_host = 127.0.0.1
     target_port = {port}
     mode = full

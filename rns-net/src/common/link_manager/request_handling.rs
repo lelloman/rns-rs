@@ -135,6 +135,20 @@ impl LinkManager {
                         rng,
                     ));
                 }
+                RequestResponse::File {
+                    data,
+                    metadata,
+                    auto_compress,
+                } => {
+                    actions.extend(self.send_file_response_resource(
+                        link_id,
+                        &request_id,
+                        &data,
+                        Some(&metadata),
+                        auto_compress,
+                        rng,
+                    ));
+                }
             }
         }
 
@@ -200,6 +214,29 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         use rns_core::msgpack::{self, Value};
 
+        let response_value = msgpack::unpack_exact(response_data)
+            .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
+        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
+        let resource_payload = msgpack::pack(&response_array);
+        self.send_file_response_resource(
+            link_id,
+            request_id,
+            &resource_payload,
+            metadata,
+            auto_compress,
+            rng,
+        )
+    }
+
+    fn send_file_response_resource(
+        &mut self,
+        link_id: &LinkId,
+        request_id: &[u8; 16],
+        resource_payload: &[u8],
+        metadata: Option<&[u8]>,
+        auto_compress: bool,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -211,18 +248,10 @@ impl LinkManager {
 
         let now = time::now();
 
-        // Match Python resource response format from Link.handle_request:
-        // packed_response = msgpack([request_id, response_value])
-        // where response_value is decoded msgpack value, or Bin(raw bytes).
-        let response_value = msgpack::unpack_exact(response_data)
-            .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
-        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
-        let resource_payload = msgpack::pack(&response_array);
-
         let senders = match Self::build_resource_senders(
             link,
             ResourceSendParams {
-                data: &resource_payload,
+                data: resource_payload,
                 metadata,
                 auto_compress,
                 is_response: true,

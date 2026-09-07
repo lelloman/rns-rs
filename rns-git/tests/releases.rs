@@ -984,6 +984,7 @@ fn map_array<'a>(map: &'a [(Value, Value)], key: &str) -> &'a [Value] {
 
 fn assert_response_bytes(response: RequestResponse, expected: &[u8]) {
     match response {
+        RequestResponse::File { .. } => panic!("expected value response"),
         RequestResponse::Bytes(bytes) => assert_eq!(bytes, expected),
         RequestResponse::Resource { data, metadata, .. } => {
             assert_eq!(
@@ -998,7 +999,9 @@ fn assert_response_bytes(response: RequestResponse, expected: &[u8]) {
 fn assert_response_status(response: RequestResponse, status: u8) {
     match response {
         RequestResponse::Bytes(bytes) => assert_eq!(bytes[0], status),
-        RequestResponse::Resource { .. } => panic!("expected status response"),
+        RequestResponse::Resource { .. } | RequestResponse::File { .. } => {
+            panic!("expected status response")
+        }
     }
 }
 
