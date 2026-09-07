@@ -1,25 +1,25 @@
-# Reticulum 1.5.2 Upstream Audit
+# Reticulum 1.5.3 Upstream Audit
 
 ## Scope and Baseline
 
-- audit date: `2026-09-05`
+- audit date: `2026-09-07`
 - previous accepted version: `1.5.2`
 - previous normative commit: `3bc149e3d587695f52e695f18edb11751b21c005`
-- target version: `1.5.2`
+- target version: `1.5.3`
 - target tag or ref: `rgit/master`
-- target normative commit: `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258`
-- target root tree: `42980ea74bf2d2907659a0aedce514b7cd4aa070`
-- target `RNS` tree: `a2c1e238967e965a32b622b65db6e2ca346823cd`
-- version assertion: `RNS.__version__ == "1.5.2"`
-- audited range: `3bc149e3d587695f52e695f18edb11751b21c005..2f29b56e96bfa6fd3fc61518e4e5710ac8e92258`
-- commits in range: `1`
+- target normative commit: `0bb41bf9486c1469854876a3c1d7c57324efc7c4`
+- target root tree: `9b8fb0e518ed627685c9508773ceca156452cad8`
+- target `RNS` tree: `86976fc8b62b79d08e2174557744e636be74ed9e`
+- version assertion: `RNS.__version__ == "1.5.3"`
+- audited range: `3bc149e3d587695f52e695f18edb11751b21c005..0bb41bf9486c1469854876a3c1d7c57324efc7c4`
+- commits in range: `9`
 - repositories checked: canonical rgit repository and GitHub mirror
-- local branch and revision inspected: `dev@b0a656c858213c804827f1f4a4e4a32f4a1c98ed`
+- local branch and revision inspected: `master@9ecf1c3ac8e1da9ca9e48ad53f1200e5feb62398`
 
-The canonical rgit `master` tip is one commit ahead of the accepted baseline.
+The canonical rgit `master` tip is nine commits ahead of the accepted baseline.
 The GitHub mirror remains behind the accepted baseline at
 `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6`. Both remote tips were refreshed
-successfully on 2026-09-05. The configured upstream checkout remains pinned at
+successfully on 2026-09-07 (12:15:53 UTC and 12:15:59 UTC). The configured upstream checkout remains pinned at
 the accepted baseline; the target object was inspected without advancing it.
 
 ## Audit Vocabulary
@@ -43,6 +43,27 @@ the accepted baseline; the target object was inspected without advancing it.
 | # | Upstream commit | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|
 | 1 | `2f29b56e96bfa6fd3fc61518e4e5710ac8e92258` | Adjusted logging | Structurally covered | `4fad68c`; targeted missing/offline interfaces retain interface-specific diagnostics and never fall back to another interface. |
+| 2 | `1a7e9e31a1c1682732ee84953acd3a3d758d22d5` | Fixed typo | Non-runtime | `RNS/Link.py` docstring only; ordered mapping pending. |
+| 3 | `6b6dd73bc86fedb945f6d0d55d83dc8d5e4a3241` | Updated readme | Non-runtime | `README.mu` and logo asset; ordered mapping pending. |
+| 4 | `5c1141d1cefd99cf17042e2b147b62abeb05526a` | Updated readme | Non-runtime | `README.mu` image path correction; ordered mapping pending. |
+| 5 | `8a82a50fc96354dc9df77d95af8aca97099629d2` | Updated readme | Non-runtime | `README.mu` and smaller logo asset; ordered mapping pending. |
+| 6 | `7396e3994e678a7ad009f146fca1d645b31f3e67` | Basic rngit media handling | Needs port | `RNS/Utilities/rngit/pages.py`; native `pages.rs` lacks `/media` and image previews. |
+| 7 | `602d52f17813f3b55e78629cc83121349be72467` | Don't auto-compress media responses | Needs port | `pages.py`; depends on row 6; native Resource responses expose `auto_compress`. |
+| 8 | `27910f25a1d028359851fb8f512254cccfece7e3` | Added rngit media conversion | Needs port | `media.py`, `pages.py`, `server.py`; depends on rows 6–7; conversion, config, lifetime and fallback handling required. |
+| 9 | `0bb41bf9486c1469854876a3c1d7c57324efc7c4` | Updated version | Non-runtime | `RNS/_version.py` changes 1.5.2 to 1.5.3; ordered mapping pending; Cargo versions independent. |
+
+The existing ordered mapping for row 1 is `c28faa11480374ae234c5534325171d9f420d568`;
+`4fad68c` is the earlier implementation evidence. Do not create another mapping.
+
+## Integration Plan
+
+Process rows 2–9 in ancestry order, recording each exact trailer and its evidence.
+Media requests must preserve repository ACLs, key/path validation, URL decoding,
+filename metadata and raw-byte fidelity. Cover image previews, disabled media
+compression, conversion backend selection and timeout, invalid-output fallback,
+and the lifetime of conversion output. Run changed-crate suites, formatting,
+warning-free lint and exact-target Python/Rust interoperability for media before
+claiming acceptance. The earlier daily smoke predates this work.
 
 ## Per-Commit Analysis
 
@@ -72,10 +93,10 @@ IFAC interop, and fixture suites; `cargo fmt --all -- --check` and
 
 ## Promotion Gates
 
-- [x] Every upstream commit has a final disposition.
-- [x] Focused regressions pass for every applicable behavior change.
-- [x] Fixture provenance and byte stability are checked where applicable.
-- [x] Exact-target live Python/Rust interop is not required for this logging-only change; the existing Python interop suite passes.
+- [ ] Every upstream commit has a final disposition and ordered local mapping.
+- [ ] Focused regressions pass for every applicable behavior change.
+- [ ] Fixture provenance and byte stability are checked where applicable.
+- [ ] Exact-target live Python/Rust media interop passes.
 - [ ] Workspace tests, feature suites, formatting, and lint pass.
 - [x] Required daily live dual-VPS manual gate is recorded honestly.
 - [ ] Native documentation is updated for user-visible behavior.
@@ -102,3 +123,21 @@ IFAC interop, and fixture suites; `cargo fmt --all -- --check` and
   local `master@70deb22`. Both VPS nodes still run `57d9d52`, differing from
   refreshed `origin/master` and `origin/dev`. This daily operational check
   does not complete the remaining promotion gates or advance the baseline.
+- `2026-09-07`: Both remotes refreshed successfully (GitHub at 12:13:26 UTC,
+  rgit at 12:13:33 UTC). GitHub remains behind the accepted baseline; rgit is
+  now nine commits ahead. The newly observed rgit commits are
+  `0bb41bf9486c1469854876a3c1d7c57324efc7c4`,
+  `1a7e9e31a1c1682732ee84953acd3a3d758d22d5`,
+  `27910f25a1d028359851fb8f512254cccfece7e3`,
+  `5c1141d1cefd99cf17042e2b147b62abeb05526a`,
+  `602d52f17813f3b55e78629cc83121349be72467`,
+  `6b6dd73bc86fedb945f6d0d55d83dc8d5e4a3241`,
+  `7396e3994e678a7ad009f146fca1d645b31f3e67`, and
+  `8a82a50fc96354dc9df77d95af8aca97099629d2`; their dispositions remain to
+  be inventoried. Both daily VPS snapshots were healthy and complete, with
+  one capture per host and no failed-query sentinel values. The extended live
+  Backbone smoke passed all Resource boundaries, two link batches at
+  concurrency three, controlled impairment, and one forced
+  disconnect/recovery cycle. EU runs `57d9d52`; US runs `30fb756`, matching
+  the captured `origin/dev` reference. This daily
+  operational check does not promote upstream or advance the baseline.
