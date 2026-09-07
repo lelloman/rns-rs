@@ -178,7 +178,7 @@ rns-rs commit must contain exactly one `Upstream-Commit` trailer.
 
 | Version | Audit | Final parity record |
 |---|---|---|
-| 1.5.3 (integration in progress) | [Audit](reticulum-1.5.3-audit.md) | Pending promotion gates |
+| 1.5.3 | [Audit](reticulum-1.5.3-audit.md) | [Parity](reticulum-1.5.3-parity.md) |
 | 1.3.8 | Not retained | [Parity](reticulum-1.3.8-parity.md) |
 | 1.3.9 | Not retained | [Parity](reticulum-1.3.9-parity.md) |
 | 1.4.0 | [Audit](reticulum-1.4.0-audit.md) | [Parity](reticulum-1.4.0-parity.md) |
